@@ -26729,6 +26729,7 @@ _spawn_mode() {   # id -> `new` or `resume`: what a spawn of the row passes Clau
   if [[ -n "$f" && "$f" == "$u" ]]; then echo new; else echo resume; fi
 }
 # @ccd-lib:aliaslaunch — the launch marker `$REG/<id>.aliaslaunch` and the tick's step that fills it (D-8744) live in ccd/lib/model-aliases.sh
+# @ccd-lib:held — a held Anthropic class's launch environment, `_held_model_env_to` (D24), lives in ccd/lib/model-aliases.sh; `_spawn_start` splices it
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -26869,7 +26870,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
   rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
   rm -f -- "$REG/$id.aliaslaunch"   # the previous process's launch marker (D-8744) goes before this process exists, on every spawn
-  local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
+  local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied heldenv
+  _held_model_env_to heldenv "$wrapper" "$id"   # D24: the env words of a held class, and HELD_MODEL_PAIRS for the routeapplied word below (ccd/lib/model-aliases.sh)
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class)
     # THE CLASS SERVED (routing spec §5.4, last paragraph; §5.1 `degraded`). The
@@ -27078,6 +27080,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     rapplied="${rapplied% }"
     _route_inert_has "$inert" subagent || { [[ -n "$rsub" ]] && rapplied="${rapplied:+$rapplied }subagent=$rsub"; }
     _route_inert_has "$inert" workflow || { [[ -n "$rwf" ]] && rapplied="${rapplied:+$rapplied }workflow=$rwf"; }
+    [[ -n "$HELD_MODEL_PAIRS" ]] && rapplied="${rapplied:+$rapplied }held=$HELD_MODEL_PAIRS"
     _reg_set "$id" routeapplied "$rapplied"
     # THE RETRY COUNTER DIES WITH THE SPAWN IT COUNTED (ruling S4-R7): whatever
     # the old pane refused to be typed, this argv composed, so the next tick's
@@ -27120,7 +27123,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # work tree. A quote in the path would break the single-quoted splice: such a path is not exported.
   local sesstmp="${ctmp:-${TMPDIR:-/tmp}}" sesstmpenv=""
   [[ "$sesstmp" == *"'"* ]] || sesstmpenv="CCRC_SESSION_TMPDIR='$sesstmp'"
-  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}${sesstmpenv:+ $sesstmpenv}"
+  resenv="$resenv${adjenv:+ $adjenv}${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}${sesstmpenv:+ $sesstmpenv}${heldenv:+ ${heldenv% }}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # THE CHILD'S DENY FILE AND SHELL PIN (plan Task 15, D-5299, D-5391), composed
   # ONCE, here, into the flags and the `env` string BOTH spawn lines splice, for

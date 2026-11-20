@@ -68,6 +68,7 @@ _graceful_stop_before -> _ci_proc_start
 _graceful_stop_same -> _ci_proc_start
 _hard_block_dated -> _pane_born
 _hard_block_dated -> _transcript_path
+_held_model_env_to -> _is_anthropic_backend
 _hib_wake_clear -> _reg_set
 _idle_for_keystroke -> _cfg_dir_to
 _idle_for_keystroke -> _reg_get
@@ -204,6 +205,7 @@ _spawn_start -> _compact_lock_acquire
 _spawn_start -> _compact_lock_release
 _spawn_start -> _delegation_spool_dir
 _spawn_start -> _delegation_spool_prune_absent
+_spawn_start -> _held_model_env_to
 _spawn_start -> _is_anthropic_backend
 _spawn_start -> _is_codex_backend
 _spawn_start -> _lc_done

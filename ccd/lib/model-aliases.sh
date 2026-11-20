@@ -258,3 +258,36 @@ _alias_observe() {   # id -> the supervise tick's own step (never inside `_route
   (( $? == 2 )) || _ALIAS_JUDGED["$id"]="$key"
   return 0
 }
+
+# A HELD ID AT LAUNCH (plan Task A3.4, D24, spec §2.5.7): while a class's advance-file hold names a model, every launch of the lane carries
+# `ANTHROPIC_DEFAULT_<CLASS>_MODEL='<held id>'` in its environment, so `--model <class>`, the picker's alias row and a subagent naming the
+# alias all resolve to the held id (A3.0 Step 1 measured that Claude Code honours the key, in the main session, a subagent and after
+# `--resume`). One key per held class, for every class, never only the session's own. The id is only ever one the reader (`_alias_facts_to`,
+# whose jq program applies `MODEL_ID_RE`) answered as `facts`: a refused id answers `invalid hold.model` and is never spliced. A hold ccd
+# cannot read (`unreadable`/`invalid` for the aliases or the advance file) launches that class on the alias and is said once, floored.
+# `HELD_MODEL_PAIRS` is the second answer, for `_spawn_start`'s `routeapplied` word `held=<class>:<id>[,<class>:<id>...]`.
+# @ccd-lib:held
+HELD_MODEL_PAIRS=""
+_held_model_env_to() {   # var wrapper [id] -> var = the env words (each followed by one space, so the caller splices them as it does `$tmpenv`), empty when nothing is held or the lane is no Anthropic backend; sets HELD_MODEL_PAIRS; with an id, writes the floored `held-unread` line for a file it could not read; always rc 0
+  local IFS=$' \t\n' __hm_w="$2" __hm_id="${3-}" __hm_c __hm_ans __hm_a __hm_h __hm_env='' __hm_unread=''
+  HELD_MODEL_PAIRS=''
+  printf -v "$1" ''
+  _is_anthropic_backend "$__hm_w" || return 0
+  for __hm_c in $ROUTE_CLASSES; do
+    [[ "$__hm_c" == default ]] && continue
+    _alias_facts_to __hm_ans "$__hm_w" "$__hm_c"
+    read -r __hm_a _ _ __hm_h _ <<< "$__hm_ans"
+    case "$__hm_a" in
+      facts) [[ "$__hm_h" != - ]] || continue
+             __hm_env+="ANTHROPIC_DEFAULT_${__hm_c^^}_MODEL='$__hm_h' "
+             HELD_MODEL_PAIRS+="${HELD_MODEL_PAIRS:+,}$__hm_c:$__hm_h" ;;
+      absent) ;;
+      *) __hm_unread="$__hm_ans" ;;
+    esac
+  done
+  printf -v "$1" '%s' "$__hm_env"
+  if [[ -n "$__hm_unread" && -n "$__hm_id" ]] && ! _route_note_floored "$__hm_id" heldunread; then
+    echo "$(date '+%F %T') held-unread $__hm_id: $__hm_w's aliases or advance file could not be read ($__hm_unread) — launched on the alias, no held id; ccrc doctor names the file" >> "$REG/swap.log"
+  fi
+  return 0
+}
