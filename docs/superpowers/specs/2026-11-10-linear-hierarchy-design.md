@@ -198,9 +198,11 @@ first project to set a shared key owns the team (§7.5).
   (`wave-epic-mismatch`). Waves keep their programme-wide numbering, so ledgers, branch names and the runs screen are
   unchanged.
   **Amended 2026-11-16 (the operator's answer to desktop-polish item 359):** an epic may list no waves. A run into
-  such an epic names one of its tickets, and its wave is not checked against the epic. A run that names no ticket,
-  into a plan where any epic lists no waves, is refused `ticket-required`. Epics that list waves keep every rule
-  above. The work-map plan's Task WM6 builds this (`docs/superpowers/plans/2026-11-16-programme-work-map.md`).
+  such an epic names one of its tickets, and its wave is not checked against the epic. A run that names no ticket, at
+  a wave no live epic lists, in a plan where a live epic lists no waves, is refused `ticket-required`. A run at a wave
+  some live epic lists opens as before, and a dropped epic that lists no waves counts for nothing (a run at a wave no
+  live epic lists is then `wave-epic-mismatch`). Epics that list waves keep every rule above. The work-map plan's
+  Task WM6 built this (`docs/superpowers/plans/2026-11-16-programme-work-map.md`, #3075).
 - **Run.** A work run attaches to exactly one ticket of a programme, never to a ticket in a team's Upkeep epic (§7.6).
   A review run is never filed: it attaches to the run it reviews, as today. A wave of three parallel work runs is three
   tickets. **Design call.**
@@ -760,8 +762,8 @@ Both skins use the same components; nothing in this design is skin-specific.
 ## 12. The skills
 
 - **Coordinator** (`ccd/coordinator-skill/SKILL.md` §Linear and its wave-lifecycle references): a new programme's plan
-  is declared with `plan put` before its first run opens, epics plan-sized with their waves listed and checkpoints as
-  the gates inside them; every run opens with its ticket, and a ticket names its project when the work lands outside
+  is declared with `plan put` before its first run opens, epics plan-sized, each with its waves when it runs in waves
+  (an epic may list none, §4.1), and checkpoints as the gates inside them; every run opens with its ticket, and a ticket names its project when the work lands outside
   the home project; a checkpoint is recorded with `plan met` and its evidence when it is met; a handed issue or an
   Upkeep ticket it wants is taken with `plan take`; `linear create` is not used in a managed team. As a project's
   Linear owner, it routes inbound mail with `plan triage` and drafts the team's map with `plan map propose`, and it
@@ -829,7 +831,8 @@ Every call the author made without a ruling, for the operator to check:
 1. A ticket files into the team of the project its work lands in (a per-ticket `project`, default the home project);
    an epic belongs to one workspace; a programme spanning two workspaces gets one initiative in each, same name (§3).
 2. The plan declares each epic's waves; a run in a wave no epic lists is refused `wave-epic-mismatch`; waves keep
-   programme-wide numbering (§4.1). *Amended 2026-11-16:* an epic may list no waves, and a run into one names its ticket (§4.1).
+   programme-wide numbering (§4.1). *Amended 2026-11-16:* an epic may list no waves, and a run into one names its ticket; only live epics count, and a
+   run with no ticket at a wave no live epic lists, in a plan with such an epic, is refused `ticket-required` (§4.1).
 3. One ticket per work run, never an Upkeep ticket; review runs are never filed (§4.1).
 4. An operator-act checkpoint tied to an item is marked met when the item is done (§4.1).
 5. One binding table for every Linear id (§4.2).
