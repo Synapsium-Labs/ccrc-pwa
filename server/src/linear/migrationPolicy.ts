@@ -35,11 +35,11 @@ export interface MapContext {
    *  exists in the map or here (review 2892 F6). Absent: none. */
   heldIssues?: ReadonlySet<string>;
 }
-/** A finished entry's pull request: `<owner>/<repo>#<number>` (review 2892 F7). */
+/** A finished entry's pull request: `<owner>/<repo>#<number>` (review 2892 F7, D-8801): its shape only, as L1 cannot ask GitHub. */
 const PR_REF = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,8})$/u;
 /** The longest one-line reason a finished entry may give for having no pull request. */
 export const FINISHED_REASON_MAX_CHARS = 200;
-/** Whether a finished entry carries its evidence (spec §10.3, review 2892 F7): a pull request, or a one-line reason. */
+/** Whether a finished entry carries its evidence (spec §10.3, review 2892 F7, D-8801): a pull request, or a one-line reason. */
 const hasEvidence = (t: MapEntry['target']): boolean =>
   (typeof t?.pr === 'string' && PR_REF.test(t.pr))
   || (typeof t?.reason === 'string' && t.reason.trim() !== '' && !/[\r\n]/u.test(t.reason) && t.reason.length <= FINISHED_REASON_MAX_CHARS);
@@ -284,7 +284,23 @@ export function replacementComment(home: string, mode: LinkingMode, url: string 
   return `This issue now lives in “${home}”${link}. ccrc's migration closed it; nothing was deleted.`;
 }
 
-/** The comment on an issue closed as finished (spec §10.3, review 2892 F7): it names its evidence. A private team's names the
+/** What a replaced level's close relates to (spec §10.4 and Task 7.3: "closed, related to the first ticket placed under it"; the
+ *  coordinator's ruling on review 2918 F2). The leaves under it are the map's `leaf` entries in its programme, its epic for an
+ *  epic or checkpoint, and its checkpoint for a checkpoint. `relate` names the first of them, in map order, whose move row is
+ *  applied (`applied`, by Linear issue id); `wait` while one of them is neither applied nor skipped (`skipped`, by identifier):
+ *  it is adopted and its write not yet settled, or it is still to be placed, so its ticket comes and the close waits for it;
+ *  `none` when no leaf under it is placed (none listed, or every one skipped), and the close goes ahead with no relation. */
+export type CloserRelation = { kind: 'relate'; issue: string } | { kind: 'wait' } | { kind: 'none' };
+export function closerRelation(e: MapEntry, entries: readonly MapEntry[], applied: ReadonlySet<string>, skipped: ReadonlySet<string>): CloserRelation {
+  const t = e.target ?? {};
+  const under = entries.filter((x) => x.class === 'leaf' && x.target?.programme === t.programme
+    && (e.class === 'programme' || x.target?.epic === t.epic) && (e.class !== 'checkpoint' || x.target?.checkpoint === t.checkpoint));
+  const first = under.find((x) => applied.has(x.issue));
+  if (first !== undefined) return { kind: 'relate', issue: first.issue };
+  return under.some((x) => !skipped.has(x.identifier)) ? { kind: 'wait' } : { kind: 'none' };
+}
+
+/** The comment on an issue closed as finished (spec §10.3, review 2892 F7, D-8801): it names its evidence. A private team's names the
  *  pull request; a public (or unmeasured) team's names it only when it is in the project's own repository (`repo`, measured),
  *  and says "a pull request" for any other, which may be private. The text passes the public-text check for the team, or the
  *  comment names no evidence. */

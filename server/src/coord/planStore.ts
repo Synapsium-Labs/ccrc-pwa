@@ -413,7 +413,7 @@ function applyPlanChangesInTx(
 
     // `planBy` names who declared the plan. A plan a migration's map declared (`MIGRATION_PLAN_BY`) becomes its coordinator's at
     // the coordinator's first plan write, so put back never ends a programme its coordinator has since taken over (review 2892
-    // F1); a coordinator's plan stays theirs.
+    // F1, D-8802: Task 2.2 sets them on the first call only); a coordinator's plan stays theirs.
     db.prepare('UPDATE programs SET planBy = ?, planAt = ? WHERE slug = ? AND (planBy IS NULL OR (planBy = ? AND ? <> ?))')
       .run(by, now, program, MIGRATION_PLAN_BY, by, MIGRATION_PLAN_BY);
     for (const epicId of touched) settleEpicInTx(db, epicId, now);
@@ -656,11 +656,11 @@ export function bindingsOf(db: DatabaseSync, program: string): BindingRow[] {
   ).all(program, program, program, program) as unknown as BindingRow[];
 }
 
-/** Every binding of a workspace, whatever its state, in id order (D-8183): the drift pass reads them BEFORE it reads Linear, so a
- *  sync write landing after its Linear read is seen as a moved fingerprint and never as drift; the inbound lane reads its
- *  `pending` ticket bindings, whose create may have been sent with its reply lost. */
-/** Every binding holding a Linear object in a workspace; a `retired` one holds none (review 2892 F5), here and in the three
- *  readers below, so the issue it held is inbound again and no longer `plan-owned`. */
+/** Every binding of a workspace that holds a Linear object, whatever its other state, in id order (D-8183): the drift pass reads
+ *  them BEFORE it reads Linear, so a sync write landing after its Linear read is seen as a moved fingerprint and never as drift;
+ *  the inbound lane reads its `pending` ticket bindings, whose create may have been sent with its reply lost. A `retired` one
+ *  holds none (review 2892 F5), here and in the readers below (`graceBindingsOf` too, review 2918 A2), so the issue it held is
+ *  inbound again and no longer `plan-owned`. */
 export function bindingsInWorkspace(db: DatabaseSync, workspaceId: string): BindingRow[] {
   return db.prepare("SELECT * FROM linear_bindings WHERE workspaceId = ? AND state <> 'retired' ORDER BY id").all(workspaceId) as unknown as BindingRow[];
 }
@@ -824,9 +824,10 @@ export function setDriftMark(db: DatabaseSync, workspaceId: string, w: DriftWate
     + 'milestones = excluded.milestones, issues = excluded.issues, passAt = excluded.passAt')
     .run(workspaceId, w.initiative, w.project, w.milestone, w.issue, passAt);
 }
-/** The ticket bindings of a workspace whose grace stands (`driftSince` set): the drift pass re-reads each by id (review 2386 F1). */
+/** The ticket bindings of a workspace whose grace stands (`driftSince` set): the drift pass re-reads each by id (review 2386 F1).
+ *  A `retired` one holds no issue, so its grace is never read (review 2918 A2). */
 export function graceBindingsOf(db: DatabaseSync, workspaceId: string): BindingRow[] {
-  return db.prepare("SELECT * FROM linear_bindings WHERE workspaceId = ? AND localKind = 'ticket' AND driftSince IS NOT NULL AND linearId IS NOT NULL ORDER BY id")
+  return db.prepare("SELECT * FROM linear_bindings WHERE workspaceId = ? AND localKind = 'ticket' AND state <> 'retired' AND driftSince IS NOT NULL AND linearId IS NOT NULL ORDER BY id")
     .all(workspaceId) as unknown as BindingRow[];
 }
 
@@ -1172,6 +1173,8 @@ export interface MigrationReport {
   skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[];
   /** Why each waiting issue waits, by identifier (review 2892 F3). Absent in a report written before it. */
   waitingWhy?: Record<string, MigrationWaitingWhy>;
+  /** The replaced levels closed with no relation, as no ticket was placed under them (review 2918 F2). Absent before it. */
+  unrelated?: string[];
 }
 export const EMPTY_MIGRATION_REPORT = (): MigrationReport => ({ skipped: [], waiting: [], movedSince: [], milestonesLeft: [] });
 export interface MigrationRow {
@@ -1246,18 +1249,24 @@ export function setMove(db: DatabaseSync, id: number, p: Partial<{ linearId: str
   if (p.revertedAt !== undefined) db.prepare('UPDATE linear_migration_moves SET revertedAt = ? WHERE id = ? AND revertedAt IS NULL').run(p.revertedAt, id);
 }
 
+/** The adoption was asked of an issue a live binding already holds (review 2918 F1): one issue never gets a second ticket or a
+ *  second binding, so nothing is written and the caller skips it. */
+export class IssueHeldError extends Error {
+  constructor(readonly identifier: string) { super(`plan store: ${identifier} is held by a live binding`); }
+}
 /** Task 7.3's adoption of an existing open issue as a ticket (D-8186; D-8796: inside the caller's transaction, with its move
  *  row): a `plan_tickets` row (the key and kind the map gives, the issue's title and body fitted to the ticket bounds, the epic's
  *  project, `source` `plan` for a leaf and `inbound` for an upkeep entry, `started` when the issue's state type is `started`,
  *  else `open`) and a binding already `bound` to the issue with the adopted fingerprint, so the next pass of the key sends one
  *  absolute update and never creates a second issue (`adoptIssueBindingInTx`, the inbound path's). The key is marked due.
- *  Opens no transaction. */
+ *  An issue a live binding already holds is refused with `IssueHeldError`, before any write (review 2918 F1). Opens no transaction. */
 export function adoptIssueAsTicketInTx(
   db: DatabaseSync,
   a: { issue: IssueSnapshot & { linearId: string; identifier: string }; programme: string | null; epicId: number; checkpointId: number | null; key: string; kind: TicketKind; source: 'plan' | 'inbound'; mask?: (text: string) => string },
   binding: { workspaceId: string; teamKey: string },
   now: number,
 ): number {
+  if (issueBound(db, binding.workspaceId, { id: a.issue.linearId, identifier: a.issue.identifier })) throw new IssueHeldError(a.issue.identifier);
   const e = epicById(db, a.epicId);
   if (e === null) throw new Error(`plan store: no epic ${a.epicId} to adopt ${a.issue.identifier} into`);
   const mask = a.mask ?? ((x: string) => x);

@@ -299,7 +299,7 @@ export interface MapEntry {
   issue: string;
   identifier: string;
   class: MapClass;
-  /** `pr` and `reason` are a `finished` entry's evidence (review 2892 F7, design §10.3): the merged pull request as
+  /** `pr` and `reason` are a `finished` entry's evidence (review 2892 F7, design §10.3; D-8801): the merged pull request as
    *  `<owner>/<repo>#<number>`, or, when there is none, one line saying why. */
   target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind; pr?: string; reason?: string };
 }
@@ -307,8 +307,9 @@ export interface MapEntry {
  *  coordinator's own declaration by the apply (the map's rule judged again) and by put back (review 2892 F1). */
 export const MIGRATION_PLAN_BY = 'ccrc-migration';
 /** Why a listed issue still waits in a migration's report (review 2892 F3): its live programme's wave boundary, or the Linear
- *  object it is placed under (its epic's project, or the project's Upkeep epic) not created yet. */
-export const MIGRATION_WAITING_WHY = ['live-programme', 'epic-not-in-linear', 'upkeep-not-in-linear'] as const;
+ *  object it is placed under (its epic's project, or the project's Upkeep epic) not created yet; and for a replaced level, a
+ *  ticket placed under it whose write has not settled yet, so its close can relate to it (review 2918 F2). */
+export const MIGRATION_WAITING_WHY = ['live-programme', 'epic-not-in-linear', 'upkeep-not-in-linear', 'placed-ticket-not-applied'] as const;
 export type MigrationWaitingWhy = (typeof MIGRATION_WAITING_WHY)[number];
 export interface MapCounts { created: number; moved: number; closed: number; left: number; skipped: number }
 /** An open issue as the map's draft read it (design §10.3): its state TYPE, its team KEY, the ids of its project, parent
@@ -337,5 +338,9 @@ export interface MigrationStructure {
  *  moved since and the milestones left under their canceled project). Every title and identifier is Linear text or plan text. */
 export interface MigrationView {
   ok: true; id: number; team: string; state: MigrationState; counts: MapCounts; entries: MapEntry[]; structure: MigrationStructure[];
-  report: { skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[]; waitingWhy?: Record<string, MigrationWaitingWhy> } | null;
+  report: {
+    skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[]; waitingWhy?: Record<string, MigrationWaitingWhy>;
+    /** The replaced levels closed with no relation, as no ticket was placed under them (review 2918 F2). */
+    unrelated?: string[];
+  } | null;
 }

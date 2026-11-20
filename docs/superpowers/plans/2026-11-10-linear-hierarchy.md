@@ -374,10 +374,14 @@ number from `POST /api/ledger/deviations`.
   when every move row is applied or its issue skipped and listed. An adopted issue a person changes before the sync's write is
   put aside in one transaction: its ticket dropped "put back", so the sync never writes over the change; its binding `retired`
   (a binding state, the row kept), so the issue reaches the team's Linear owner as inbound, as §10.3 step 5 says; and it is
-  listed as skipped (fix round 1, review 2892 F5). Every Linear call of an apply tick counts against
-  `MIGRATION_CALLS_PER_TICK` besides the write cap, and a rate refusal of any of them rests the lane; a step that cannot be
-  placed now (its epic's or the Upkeep epic's Linear project not created yet) spends nothing and is listed as waiting with its
-  reason (review 2892 F3, A7). The
+  listed as skipped (fix round 1, review 2892 F5). The migration's own issue reads and writes of an apply tick count against
+  `MIGRATION_CALLS_PER_TICK` besides the write cap, and a rate refusal of any of them rests the lane. The plan sync's own two
+  passes on lane `migration` are not counted there: step 1's structure pass (only until the plan's objects exist, bounded by its
+  pass deadline) and the Upkeep epic's pass. They stay bounded by the writes cap, the lane and the one rate service (review 2892
+  A7, narrowed by the coordinator's ruling on review 2918 F3). A step that cannot be placed now (its epic's or the Upkeep epic's
+  Linear project not created yet) spends none of the tick's issue reads and writes and is listed as waiting with its reason
+  (review 2892 F3); a replaced level whose placed ticket has not settled waits the same way and then closes related to it, as
+  Task 7.3 says (review 2918 F2). The
   project's Upkeep epic, shared with the inbound path, is no object of the migration's: it has no move row and put back leaves
   it. Put back is asked by the report's act (`putBackAskedAt`) and run by the migration lane, a few issues a tick, its records
   dropped "put back" with `putBackAt` before its writes; a programme whose initiative it created has its plan end recorded
@@ -406,6 +410,20 @@ number from `POST /api/ledger/deviations`.
   may start only then, §10.2). Its slot is 112 on this branch (`main` took 110 and 111 first) and is renumbered at landing if
   another migration lands first. One writer, `planStore.ts#setMigration`. Record: the wave 7 note (the coordinator's ruling on review
   2892 A5, mail of 2026-11-20).
+- **D-8801 (2026-11-20)** — finished-evidence: a map's `finished` entry carries its evidence as `target.pr` (`<owner>/<repo>#<n>`)
+  or, with no pull request, a one-line `target.reason` (at most `FINISHED_REASON_MAX_CHARS`), or `checkMap` refuses the map
+  `plan-bad-body` `finished-needs-evidence:<id>`. Spec §10 and Task 7.3 name the merged pull request as the evidence. `target.pr`
+  and `target.reason` are new members of `MapEntry.target` beyond Task 7.1's interface, and `checkMap` checks the pull request's
+  shape only: L1 cannot ask GitHub whether it exists or merged. The close's comment names the evidence through the public-text
+  check (`migrationPolicy.ts#finishedComment`): a private team's names the pull request in full, a public or unmeasured team's
+  names one outside the project's own measured repository as "a pull request", and a text that fails the check falls back to
+  the bare sentence. Record: the wave 7 note (the coordinator's rulings on review 2892 F7 and review 2918 F4, mails of
+  2026-11-20).
+- **D-8802 (2026-11-20)** — plan-by-follows-the-last-put: a coordinator's first plan write after a migration's map declared the
+  plan rewrites `planBy` and `planAt` (the stored `planBy` is the migration's, `MIGRATION_PLAN_BY`, and the writer is someone
+  else), where Task 2.2 says `applyPlanChanges` sets them on the first call only. Put back reads `planBy` and ends only a plan
+  that is still the map's, so a programme its coordinator has since taken over keeps its plan and its initiative. Record: the
+  wave 7 note (the coordinator's rulings on review 2892 F1 and review 2918 F4, mails of 2026-11-20).
 
 ## Global Constraints
 

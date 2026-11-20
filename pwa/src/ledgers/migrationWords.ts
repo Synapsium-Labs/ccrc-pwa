@@ -34,9 +34,11 @@ export const MIGRATION_BODY_TEXT = {
 } as const;
 
 /** The report's lists in the order they read, each only when it holds something (design §11.4): the issues skipped because they
- *  had changed, those still waiting, and after a put back the issues moved since and the milestones left under the canceled project. */
+ *  had changed, those still waiting, the replaced levels closed with no ticket placed under them (review 2918 F2), and after a
+ *  put back the issues moved since and the milestones left under the canceled project. */
 export const REPORT_LISTS = [
   { key: 'skipped', title: 'Skipped as changed' }, { key: 'waiting', title: 'Still waiting' },
+  { key: 'unrelated', title: 'Closed with no ticket placed under them' },
   { key: 'movedSince', title: 'Moved since' }, { key: 'milestonesLeft', title: 'Milestones left' },
 ] as const;
 /** Why a waiting issue waits, as the report says it (review 2892 F3). */
@@ -44,11 +46,12 @@ export const WAITING_WHY_WORDS: Readonly<Record<MigrationWaitingWhy, string>> = 
   'live-programme': 'its programme is mid-wave; it moves at the wave boundary',
   'epic-not-in-linear': 'its epic is not in Linear yet',
   'upkeep-not-in-linear': 'the project\'s Upkeep epic is not in Linear yet',
+  'placed-ticket-not-applied': 'a ticket placed under it is not settled yet; it closes related to that ticket',
 };
 export const reportLists = (r: NonNullable<MigrationView['report']> | null | undefined): { key: (typeof REPORT_LISTS)[number]['key']; title: string; items: string[] }[] =>
   r === null || r === undefined ? [] : REPORT_LISTS.map((l) => ({
     key: l.key, title: l.title,
-    items: l.key === 'waiting' ? r.waiting.map((id) => { const why = r.waitingWhy?.[id]; return why === undefined ? id : `${id}: ${WAITING_WHY_WORDS[why]}`; }) : r[l.key],
+    items: l.key === 'waiting' ? r.waiting.map((id) => { const why = r.waitingWhy?.[id]; return why === undefined ? id : `${id}: ${WAITING_WHY_WORDS[why]}`; }) : r[l.key] ?? [],
   })).filter((l) => l.items.length > 0);
 
 export const nameConsequence = (project: string, id: string): string => `${id} becomes the Linear owner of ${project}.`;

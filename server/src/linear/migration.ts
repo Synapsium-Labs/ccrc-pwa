@@ -25,7 +25,7 @@ import {
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import type { CoordStore } from '../coord/store.js';
 import type { MigrationRow, MoveRowStored, PlanStorePort } from '../coord/planStore.js';
-import { EMPTY_MIGRATION_REPORT, MIGRATION_PLAN_BY } from '../coord/planStore.js';
+import { EMPTY_MIGRATION_REPORT, IssueHeldError, MIGRATION_PLAN_BY } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
 import { diffPlan, linearOwnerOfTeam, teamOwnerProject } from '../coord/planPolicy.js';
@@ -41,23 +41,26 @@ import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type SlotInfo } from
 import { egress, uuidOf } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
 import {
-  applySteps, checkMap, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOf, mapItemInput, migrationSettled, parseMapProposal,
+  applySteps, checkMap, closerRelation, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOf, mapItemInput, migrationSettled, parseMapProposal,
   programmeOfEntry, proposeMail, putBackSteps, putBackVerdict, reconcileMove, replacementComment, reportCounts,
   reportItemInput, returnMail, startVerdict, ticketKeyOf, ticketKindOf,
-  snapshotHolds, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
+  snapshotHolds, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from './migrationPolicy.js';
 
 /** How long one apply tick lets a key's pass run when it waits for it (the sync's own budget is its own). */
 export const MIGRATION_PASS_BUDGET_MS = 20_000;
 /** D-8796 (condition 1, spec §10.6): the issue writes one apply tick starts (an adoption's pass, a close, a redo). Lane `migration`
- *  holds 100 calls an hour and the lane ticks every 30 s (120 ticks an hour); an adoption costs one update and a close up to
- *  three calls, so two a tick stays near the lane's share and the sync's own lane is never spent. The pilot's ~220 issues take
- *  about two hours. */
+ *  holds 100 calls an hour and the lane ticks every 30 s (120 ticks an hour). An adoption costs its read and one update, and a
+ *  close up to four calls (read, comment, relation, state), so under `MIGRATION_CALLS_PER_TICK` two closes never share a tick:
+ *  closes go one a tick, an adoption beside one (review 2918 A1). An adopted issue's row settles on a later tick's read, so the
+ *  pilot's ~220 issues take about two to four hours, and the sync's own lane is never spent. */
 export const MIGRATION_WRITES_PER_TICK = 2;
-/** Review 2892 A7: every Linear call an apply tick makes counts here (a read, a comment, a relation, a state write, and one for
- *  the update an adoption's pass sends). A step starts only when the calls it may need are left: an adoption two, a close up to
- *  four (read, comment, relation, state), so an adoption and a close fit one tick. The lane's rate service is the hard bound;
- *  this keeps one tick from spending it. */
+/** Review 2892 A7, narrowed by the coordinator's ruling on review 2918 F3: the migration's own issue reads and writes of a tick
+ *  count here (a read, a comment, a relation, a state write, and one for the update an adoption's pass sends). A step starts only
+ *  when the calls it may need are left: an adoption two, a close up to four, so an adoption and a close fit one tick. The two
+ *  passes of the plan sync's own that run on lane `migration` are not counted here: step 1's structure pass (only until the
+ *  plan's objects exist, bounded by its pass deadline) and the Upkeep epic's pass. They, and every call of the tick, stay
+ *  bounded by the writes cap, the lane and the one rate service (D-8796). */
 export const MIGRATION_CALLS_PER_TICK = 6;
 const ADOPT_CALLS = 2;
 const CLOSE_CALLS = 4;
@@ -102,6 +105,8 @@ const snapshotOf = (r: IssueSnapshotRow): IssueSnapshot => ({
 });
 const asMoveRow = (m: MoveRowStored): MoveRow => m;
 const CLOSERS: ReadonlySet<MapEntry['class']> = new Set(['programme', 'epic', 'checkpoint', 'finished', 'superseded', 'stale']);
+/** The closers that stood for a level of the new shape: each is related to the first ticket placed under it (§10.4). */
+const REPLACED: ReadonlySet<MapEntry['class']> = new Set(['programme', 'epic', 'checkpoint']);
 /** A tick's budget (review 2892 A7): the issue writes it may start, the Linear calls it may make, and whether a rate refusal ended
  *  it (the lane then rests until Linear's retry time). */
 interface TickBudget { writes: number; calls: number; stopped: boolean }
@@ -232,11 +237,11 @@ export class LinearMigration {
     // An issue ccrc's sync already holds (a programme born in the new shape, §10.5) is no part of a map: one writer per Linear object.
     const held = new Set(plan.boundLinearIdsOf(open.workspaceId));
     const heldIssues = new Set(plan.bindingsInWorkspace(open.workspaceId).flatMap((b) => (b.localKind === 'ticket' ? [b.linearId, b.identifier].filter((x): x is string => x !== null) : [])));
-    // A follow-up's issues are the ones the apply skipped: one this migration adopted and then set aside keeps its binding (its
-    // ticket dropped "put back"), so exactly those, by this migration's own set-aside rows, are not hidden by it; any other bound
-    // issue stays out on both paths (the wave's security review).
-    const setAside = new Set(plan.movesOf(row.id).filter((x) => x.subject.includes(':skipped:') && x.linearId !== null).map((x) => x.linearId!));
-    const mappable = open.rows.filter((r) => !held.has(r.linearId) || setAside.has(r.linearId));
+    // A follow-up's issues are the ones the apply skipped. One this migration adopted and then set aside holds no live binding
+    // (its binding is retired, review 2892 F5), so it is mappable again; one a live binding holds is not, on either path, though
+    // the report still lists it as skipped: the owner may have taken it through inbound since (review 2918 F1; the wave's
+    // security review).
+    const mappable = open.rows.filter((r) => !held.has(r.linearId));
     const rows = followUp === null ? mappable : mappable.filter((r) => followUp.includes(r.identifier));
     const runs = this.runFacts();
     if (runs === null) return { ok: false, word: 'unreachable', detail: 'the runs could not be read' };
@@ -424,8 +429,9 @@ export class LinearMigration {
     const runs = this.runFacts();
     if (entries === null || runs === null) return;
     const map = m.map;
-    const report = m.report ?? EMPTY_MIGRATION_REPORT();
+    const report = { ...(m.report ?? EMPTY_MIGRATION_REPORT()) };
     const skipped = new Set(report.skipped);
+    const unrelated = new Set(report.unrelated ?? []);
     const initiativesOff = entries.initiatives === 'off' || plan.hierarchySettingsOf(m.project ?? '').initiatives === 'off';
 
     // 1. The structure the map declares: plan rows and their move rows, then the sync's pass creates and binds the objects. The
@@ -452,15 +458,19 @@ export class LinearMigration {
     }
 
     // 2. A row written before a crash, or one whose pass has not landed yet: reconciled against a fresh read by id (D-8795's
-    //    `reconcileMove`). Every Linear call of a tick counts against its budget (spec §10.6, review 2892 A7), and a rate refusal
-    //    ends the tick and rests the lane.
+    //    `reconcileMove`). The migration's own issue reads and writes count against the tick's budget (spec §10.6, review 2892
+    //    A7, as the coordinator narrowed it on review 2918 F3), and a rate refusal ends the tick and rests the lane. A replaced
+    //    level's close waits while a ticket under it has not settled (review 2918 F2), listed with its reason.
     const moves = plan.movesOf(m.id).filter((x) => !x.subject.includes(':skipped:'));
     const moveOf = new Map(moves.map((x) => [x.subject, x]));
     const budget = freshBudget();
     const affords = (calls: number): boolean => !budget.stopped && budget.writes > 0 && budget.calls >= calls;
+    const held = new Map<string, MigrationWaitingWhy>();
     for (const e of map.entries) {
       const row = moveOf.get(`issue:${e.issue}`);
       if (row === undefined || row.appliedAt !== null || skipped.has(e.identifier)) continue;
+      const relation = this.relationOf(m, e, row, skipped);
+      if (relation?.kind === 'wait') { held.set(e.identifier, 'placed-ticket-not-applied'); continue; }
       if (!affords(CLOSERS.has(e.class) ? CLOSE_CALLS : ADOPT_CALLS)) break;
       budget.writes -= 1;
       const seen = await this.readIssue(m, slot, e.issue, budget);
@@ -468,7 +478,7 @@ export class LinearMigration {
       const v = reconcileMove(asMoveRow(row), seen === 'gone' ? 'closed' : seen);
       if (v === 'applied') plan.setMove(row.id, { appliedAt: now });
       else if (v === 'skip') this.skipAdopted(row, e, skipped, now);
-      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget);
+      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget, relation, unrelated);
       else { budget.calls -= 1; await this.deps.planSync.passFor(String(row.after['key'] ?? ''), now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred'); }
     }
 
@@ -480,7 +490,7 @@ export class LinearMigration {
     const steps = applySteps(fresh, live, asDrafted, (e) => (CLOSERS.has(e.class) || e.class === 'leaf' || e.class === 'upkeep' ? { expect: {} } : null));
     for (const id of steps.skipped) skipped.add(map.entries.find((e) => e.issue === id)?.identifier ?? id);
     const identOf = (id: string): string => map.entries.find((e) => e.issue === id)?.identifier ?? id;
-    const waitingWhy = new Map<string, MigrationWaitingWhy>(steps.waiting.map((id) => [identOf(id), 'live-programme']));
+    const waitingWhy = new Map<string, MigrationWaitingWhy>([...steps.waiting.map((id) => [identOf(id), 'live-programme'] as const), ...held]);
     // A step that cannot be placed now (its epic's Linear project, or the Upkeep epic's, not created yet) is asked BEFORE any
     // Linear call: it spends nothing of the tick, is listed as waiting with its reason, and the steps behind it run (review 2892 F3).
     let upkeepNow: boolean | null = null;
@@ -492,6 +502,9 @@ export class LinearMigration {
         const why = e.class === 'upkeep' ? (upkeepNow ? null : 'upkeep-not-in-linear' as const) : this.epicPlaceable(m, e) ? null : 'epic-not-in-linear' as const;
         if (why !== null) { waitingWhy.set(e.identifier, why); continue; }
       }
+      // A replaced level waits, before any call, while a ticket under it has not settled (review 2918 F2).
+      const relation = this.relationOf(m, e, null, skipped);
+      if (relation?.kind === 'wait') { waitingWhy.set(e.identifier, 'placed-ticket-not-applied'); continue; }
       if (!affords(CLOSERS.has(e.class) ? CLOSE_CALLS : ADOPT_CALLS)) break;
       budget.writes -= 1;
       if (CLOSERS.has(e.class)) {
@@ -503,7 +516,7 @@ export class LinearMigration {
         });
         if (out === 'unread') { this.saveReport(m, report, skipped, now); return; }
         if (out === 'changed') { skipped.add(e.identifier); continue; }
-        await this.closeIssue(m, e, out, slot, entries, budget);
+        await this.closeIssue(m, e, out, slot, entries, budget, relation, unrelated);
       } else {
         const out = await this.adopt(m, e, was, store, slot, budget);
         if (out === 'unread') { this.saveReport(m, report, skipped, now); return; }
@@ -514,7 +527,7 @@ export class LinearMigration {
       }
     }
     const waiting = [...waitingWhy.keys()];
-    const nextReport = this.saveReport(m, { ...report, waiting, waitingWhy: Object.fromEntries(waitingWhy) }, skipped, now);
+    const nextReport = this.saveReport(m, { ...report, waiting, waitingWhy: Object.fromEntries(waitingWhy), ...(unrelated.size === 0 ? {} : { unrelated: [...unrelated] }) }, skipped, now);
 
     // 4. Done (D-8796 condition 4) when nothing waits, every structure object is bound, no listed issue is left unwritten, and
     //    every move row is applied or its issue is skipped and listed; a row still waiting on its pass holds `applying`.
@@ -651,6 +664,9 @@ export class LinearMigration {
         });
       } catch (err) {
         if (err instanceof Error && err.message === 'not-placeable') return null;
+        // A live binding came to hold the issue since the map was stored (the owner's take, say): it is skipped and listed, and
+        // never gets a second ticket or a second binding (review 2918 F1; the store refuses it, `adoptIssueAsTicketInTx`).
+        if (err instanceof IssueHeldError) return 'changed';
         throw err;
       }
     });
@@ -665,8 +681,12 @@ export class LinearMigration {
   /** Close one issue the map retires (§10.4), its move row written already: the comment, the relation, then the state. A refused
    *  write leaves the row unapplied; the next tick reconciles it. Each call counts against the tick's budget, and a rate refusal
    *  rests the lane and ends the tick (review 2892 A7). The relation is sent once: its send is marked on the move row, as Linear's
-   *  relation create takes no request id (review 2892 A1). */
-  private async closeIssue(m: MigrationRow, e: MapEntry, row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>, budget: TickBudget): Promise<void> {
+   *  relation create takes no request id (review 2892 A1). A replaced level relates to the ticket `relation` names; one with no
+   *  ticket placed under it closes with none and joins the report's `unrelated` list (review 2918 F2). */
+  private async closeIssue(
+    m: MigrationRow, e: MapEntry, row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>, budget: TickBudget,
+    relation: CloserRelation | null, unrelated: Set<string>,
+  ): Promise<void> {
     const { plan, coord } = this.deps;
     const state = String((row.after['expect'] as Record<string, unknown> | undefined)?.['state'] ?? 'canceled');
     const status = statusOfType(entries, 'issue', state, m.teamKey);
@@ -683,7 +703,8 @@ export class LinearMigration {
       const comment = await this.callIn(budget, { ...base, op: 'issueComment', fields: ['body'], input: { requestId: uuidOf(`migration:${m.id}:${e.issue}:comment`), issueId: e.issue, body: withCcrcProvenance(egress(text)) } });
       if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) return;
       const related = row.after['related'] === true ? null
-        : e.class === 'superseded' ? e.target?.successor ?? null : CLOSERS.has(e.class) && e.class !== 'finished' && e.class !== 'stale' ? this.firstTicketUnder(m, e) : null;
+        : e.class === 'superseded' ? e.target?.successor ?? null : relation?.kind === 'relate' ? relation.issue : null;
+      if (relation?.kind === 'none') unrelated.add(e.identifier);
       if (related !== null) {
         // A relation is evidence, not the close: a refused one is not retried and does not stop the close.
         const rel = await this.callIn(budget, { ...base, op: 'issueRelationCreate', fields: ['type', 'related'], input: { issueId: e.issue, relatedIssueId: related, type: 'related' } });
@@ -703,15 +724,13 @@ export class LinearMigration {
     const cp = epic === undefined || t.checkpoint === undefined ? undefined : epic.checkpoints.find((c) => c.key === t.checkpoint);
     return cp?.title ?? epic?.title ?? this.deps.coord.programs().find((p) => p.slug === t.programme)?.title ?? t.programme;
   }
-  /** The first issue placed under a replaced level's home, by its applied move row (the relation's other end), or null: an issue
-   *  the migration skipped, set aside or has not placed yet is never named (review 2892 A1). */
-  private firstTicketUnder(m: MigrationRow, e: MapEntry): string | null {
-    const t = e.target ?? {};
-    const applied = new Set(this.deps.plan.movesOf(m.id).filter((x) => x.kind === 'issue' && x.appliedAt !== null && !x.subject.includes(':skipped:')).map((x) => x.subject));
-    const placed = (m.map?.entries ?? []).find((x) => x.class === 'leaf' && x.target?.programme === t.programme
-      && (e.class === 'programme' || x.target?.epic === t.epic) && (e.class !== 'checkpoint' || x.target?.checkpoint === t.checkpoint)
-      && applied.has(`issue:${x.issue}`));
-    return placed?.issue ?? null;
+  /** What a replaced level's close relates to (`closerRelation`, review 2918 F2), from this migration's move rows read now: a leaf's
+   *  issue is applied by its applied row, never one skipped, set aside or not placed yet (review 2892 A1). Null for any other
+   *  class, and for a row whose relation is already sent. */
+  private relationOf(m: MigrationRow, e: MapEntry, row: MoveRowStored | null, skipped: ReadonlySet<string>): CloserRelation | null {
+    if (!REPLACED.has(e.class) || row?.after['related'] === true) return null;
+    const applied = new Set(this.deps.plan.movesOf(m.id).flatMap((x) => (x.kind === 'issue' && x.appliedAt !== null && !x.subject.includes(':skipped:') && x.linearId !== null ? [x.linearId] : [])));
+    return closerRelation(e, m.map?.entries ?? [], applied, skipped);
   }
 
   /** The apply is done: the report item is raised, and `planRequired` is set for the programmes the map names and the team's

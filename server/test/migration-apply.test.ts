@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MIGRATION_CALLS_PER_TICK, MIGRATION_WRITES_PER_TICK } from '../src/linear/migration.js';
 import { InboundLane } from '../src/linear/inboundLane.js';
 import { readLinearStore } from '../src/linear/store.js';
-import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket, type PlanChanges } from '../src/coord/planStore.js';
+import { adoptIssueBindingInTx, applyPlanChanges, NO_PLAN_CHANGES, takeInboundIntoEpic, type NewTicket, type PlanChanges } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, leaf, migRig, ok, fail, SLUG, T, U, OWNER, type MigRig } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
 import type { CcrcOpOutcome } from '../src/linear/ccrcCall.js';
@@ -604,5 +604,128 @@ describe('review 2892 fix round 1: the apply (D-8186)', () => {
     await q.tick(600_000);
     await q.until(() => q.stateOf(qid) === 'applied', 10);
     expect(q.stateOf(qid)).toBe('applied');
+  });
+});
+
+describe('review 2918 fix round 2 (D-8186)', () => {
+  const liveTicketBindings = (r: MigRig, linearId: string) => ticketBindings(r).filter((b) => b.linearId === linearId && b.state !== 'retired');
+  const comments = (r: MigRig, id: string) => r.opsOf('issueComment').filter((a) => a.input['issueId'] === id).map((a) => String(a.input['body']));
+
+  it('F1: an issue set aside and then taken by the owner through inbound is not opened again by a follow-up map', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => (ask.op === 'issueUpdate' ? fail('unreachable') : undefined);
+    const id = await r.approved([leaf(1, 'k1')]);
+    await r.tick();
+    r.override.current = null;
+    r.issues.get(U(101))!.title = 'A person renamed it between the adoption and the write';
+    await r.until(() => r.stateOf(id) === 'applied', 10);
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);   // set aside: its binding retired
+    // the owner takes it through the inbound path: a new live binding holds it
+    const lane = new InboundLane({
+      coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir), call: async () => fail('not-found'),
+      now: () => r.t.now, presenceOf: () => 'alive', viaFleet: () => new Set(), directory: { get: () => null, filledAt: () => null, projectStatusesRead: () => 'none' },
+    } as unknown as ConstructorParameters<typeof InboundLane>[0]);
+    lane.detect(WS.a.id, [{ ...r.issues.get(U(101))! }], new Set(['AAA']), r.t.now);
+    await lane.tick(r.t.now);
+    const e1 = r.plan.planOf(SLUG).epics.find((e) => e.key === 'e1')!;
+    expect(takeInboundIntoEpic(r.db, { linearId: U(101), program: SLUG, epicId: e1.id, checkpointId: null, project: 'project-a', now: r.t.now })).toMatchObject({ ok: true });
+    expect(liveTicketBindings(r, U(101))).toHaveLength(1);
+    // the report still lists it as skipped, but a follow-up map naming it is refused: a live binding holds it
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: false, word: 'map-incomplete', detail: 'not-open:AAA-1' });
+    expect(liveTicketBindings(r, U(101))).toHaveLength(1);
+  });
+
+  it('F1: the adoption refuses an issue a live binding holds: one issue never gets a second ticket or a second bound binding', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2')]);
+    // between Approve and the apply, a live binding comes to hold AAA-1 (the owner's take, say)
+    const t: NewTicket = { program: SLUG, epicKey: 'e1', checkpointKey: 'c1', key: 'taken', kind: 'work', title: 'Taken', body: 'x', project: 'project-a', source: 'inbound' };
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [t], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const taken = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === 'taken')!.id;
+    adoptIssueBindingInTx(r.db, taken, WS.a.id, 'AAA', U(101), 'AAA-1', r.t.now);
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(liveTicketBindings(r, U(101))).toHaveLength(1);
+    expect(r.plan.movesOf(id).map((x) => x.identifier)).toEqual(['AAA-2']);
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+  });
+
+  it('F2: a replaced level whose leaf is adopted in the same tick waits, listed, and closes related to that leaf once it is applied', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), entry(2, 'epic', { programme: SLUG, epic: 'e1' })]);
+    await r.tick();
+    expect(r.plan.movesOf(id).map((x) => x.identifier)).toEqual(['AAA-1']);   // the leaf adopted, the closer not started
+    expect(comments(r, U(102))).toEqual([]);
+    expect(updates(r, U(102))).toEqual([]);
+    expect(r.plan.migrationById(id)!.report!.waitingWhy).toEqual({ 'AAA-2': 'placed-ticket-not-applied' });
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    const rel = r.opsOf('issueRelationCreate');
+    expect(rel.map((a) => a.input)).toEqual([expect.objectContaining({ issueId: U(102), relatedIssueId: U(101) })]);
+    expect(r.issues.get(U(102))!.stateType).toBe('canceled');
+    expect(r.plan.migrationById(id)!.report!.unrelated ?? []).toEqual([]);
+  });
+
+  it('F2: a replaced level with every leaf under it skipped closes with no relation, and the report says so', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), entry(2, 'epic', { programme: SLUG, epic: 'e1' })]);
+    r.issues.get(U(101))!.title = 'Changed before the apply';      // the only leaf under e1 is skipped
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.opsOf('issueRelationCreate')).toEqual([]);
+    expect(r.issues.get(U(102))!.stateType).toBe('canceled');
+    expect(r.plan.migrationById(id)!.report!.unrelated).toEqual(['AAA-2']);
+  });
+
+  it('F5 (1): a finished close comments with its evidence, built at the call site (a private team names the pull request)', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([entry(1, 'finished', { pr: 'org-a/repo-a#12' }), entry(2, 'finished', { reason: 'shipped before ccrc kept a plan' })]);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(comments(r, U(101))).toEqual([expect.stringContaining('org-a/repo-a#12')]);
+    expect(comments(r, U(102))).toEqual([expect.stringContaining('no pull request: shipped before ccrc kept a plan')]);
+  });
+
+  it('F5 (3): the call budget bounds a tick that the writes cap alone does not (two closes with relations are 8 calls)', async () => {
+    const r = await migRig();
+    for (let n = 1; n <= 4; n += 1) r.addIssue(n);
+    // the leaf settles on tick 2, beside the first close; the other two closes are then due together
+    const id = await r.approved([leaf(1, 'k1'), entry(2, 'epic', { programme: SLUG, epic: 'e1' }), entry(3, 'checkpoint', { programme: SLUG, epic: 'e1', checkpoint: 'c1' }), entry(4, 'programme', { programme: SLUG })]);
+    const per: number[] = [];
+    for (let i = 0; i < 12 && r.stateOf(id) !== 'applied'; i += 1) {
+      const from = r.asks.length;
+      await r.tick();
+      per.push(r.asks.slice(from).filter((a) => a.lane === 'migration').length);
+    }
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.opsOf('issueRelationCreate')).toHaveLength(3);                  // every close relates: 4 calls each
+    expect(Math.max(...per)).toBeLessThanOrEqual(MIGRATION_CALLS_PER_TICK);
+  });
+
+  it('A6: the report item names a done programme the map placed open tickets into', async () => {
+    const r = await migRig();
+    r.addProgramme('prog-b', 'done');
+    r.addIssue(1);
+    const id = await r.applied([leaf(1, 'k1', { programme: 'prog-b', epic: 'eb', checkpoint: 'cb' })],
+      { epics: [{ programme: 'prog-b', epics: [{ key: 'eb', title: 'Epic B', summary: 'S', project: 'project-a', waves: [], checkpoints: [{ key: 'cb', title: 'CB', kind: 'acceptance' }] }] }] });
+    const m = r.plan.migrationById(id)!;
+    expect((r.db.prepare('SELECT why FROM operator_items WHERE id = ?').get(m.reportItemId!) as { why: string }).why)
+      .toContain('Programme prog-b is done: each one\'s initiative stays active in Linear while its placed tickets are open.');
+  });
+
+  it('F8: a programme named only by an unclear entry is not made plan-required', async () => {
+    const r = await migRig();
+    r.addProgramme('prog-c', 'active', { home: 'project-x' });   // homed outside the team: never "declared"
+    r.db.prepare("UPDATE programs SET planRequired = 0 WHERE slug = 'prog-c'").run();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([leaf(1, 'k1'), entry(2, 'unclear', { programme: 'prog-c' })]);
+    expect(r.stateOf(id)).toBe('applied');
+    expect((r.db.prepare("SELECT planRequired FROM programs WHERE slug = 'prog-c'").get() as { planRequired: number }).planRequired).toBe(0);
   });
 });

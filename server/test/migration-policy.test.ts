@@ -251,6 +251,8 @@ describe('review 2892 fix round 1 (D-8186)', () => {
     expect(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: 'AAA-77' })]), open, facts, ctx()))
       .toEqual({ ok: false, word: 'plan-bad-body', detail: 'unknown-successor:AAA-2' });
     expect(bad(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: 'AAA-2' })]), open, facts, ctx())).detail).toBe('unknown-successor:AAA-2');   // not itself
+    // review 2918 A5: itself by its issue id too, though that id is on the map
+    expect(bad(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: U(2) })]), open, facts, ctx())).detail).toBe('unknown-successor:AAA-2');
   });
 
   it('F7: a finished entry carries a pull request or a one-line reason, or the map is plan-bad-body finished-needs-evidence', () => {

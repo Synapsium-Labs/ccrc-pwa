@@ -34,6 +34,13 @@ the operator's, in the console, after this lands.
   | 5. put back and the sync | `a sync pass between two put-back writes writes nothing to a restored issue` |
   | 6. a done programme's initiative | D-8796's text and the report item's words; no forced state is written |
 - **D-8798, D-8799, D-8800** (fix round 1, the coordinator's rulings on review 2892): see the table below.
+- **D-8801, finished-evidence** (the coordinator's rulings on review 2892 F7 and review 2918 F4): a finished entry carries a
+  pull request (`target.pr`) or, with none, a one-line reason (`target.reason`). Both are new members of `MapEntry.target`
+  beyond Task 7.1's interface, where the spec and Task 7.3 name the merged pull request alone, and `checkMap` checks the pull
+  request's shape only (L1 cannot ask GitHub whether it exists or merged).
+- **D-8802, plan-by-follows-the-last-put** (the coordinator's rulings on review 2892 F1 and review 2918 F4): a coordinator's
+  first plan write after the map's rewrites `planBy` and `planAt`, where Task 2.2 sets them on the first call only, so put back
+  never ends a programme its coordinator has since taken over.
 - **D-8797, upkeep-link-with-key** (the coordinator's ruling): the Upkeep link shows with a team key; the inbound count only
   when issues wait; pinned both ways in `project-linking-card.test.tsx`.
 
@@ -87,7 +94,7 @@ Every code fix has a test seen red before it (one run over the six server files,
 |---|---|---|
 | F1 | a coordinator's first plan write after a map's makes `planBy` theirs (`planStore.ts#applyPlanChangesInTx`); put back reads it | `migration-putback.test.ts` drives the coordinator's write; `plan-store.test.ts` pins the writer |
 | F2 | put back saves the issues found moved since before its early return | `migration-putback.test.ts`, a refused second read |
-| F3 | a step that cannot be placed now is asked before any call, spends nothing, and is listed as waiting with its reason (`waitingWhy`) | `migration-apply.test.ts`: two unplaceable issues ahead, the closers run |
+| F3 | a step that cannot be placed now is asked before any of the migration's own issue reads and writes, spends none of them, and is listed as waiting with its reason (`waitingWhy`); for an upkeep step the ask may run the Upkeep epic's own pass (review 2918 F3) | `migration-apply.test.ts`: two unplaceable issues ahead, the closers run |
 | F4 | a retired move row is not a move: Return puts the follow-up's issues back on the skipped list | `migration-propose.test.ts` |
 | F5 (ruled) | the set-aside issue's binding is `retired` (a new binding state, the row kept), with its ticket put back and its row set aside, in one transaction (`setAsideAdopted`); every reader that takes a binding as holding its issue skips a retired one | `migration-apply.test.ts`: the owner is mailed once and the issue never written; `plan-store.test.ts` |
 | F6 | a successor exists on the map or in ccrc's plan, or `plan-bad-body` `unknown-successor` | `migration-policy.test.ts` |
@@ -105,18 +112,42 @@ Every code fix has a test seen red before it (one run over the six server files,
 Also in this round: `main` merged after #3088 (migration 110 is `main`'s, so this run's is 111; the gate's route counts and the
 census words recounted), and the wave 3 F3/F5 carry (below).
 
+## Fix round 2 (review 2918, the coordinator's mail of 2026-11-20)
+
+Every code fix has a test seen red before it (one run over the five server files: F1's two cases and F2's two, red; the
+console's report list, red), and green after it. Each wiring the panel mutated green now has a case that goes red under that
+mutation, measured one mutation at a time from a saved copy:
+
+| Finding | Built | Test, and the mutation that reds it |
+|---|---|---|
+| F1 | a follow-up map no longer opens a set-aside issue by its set-aside row (its retired binding already leaves it out of the held issues), so an issue a live binding holds stays out on both paths; the store's adoption refuses an issue a live binding holds (`IssueHeldError`), and the apply skips and lists it | `migration-apply.test.ts`: set aside, taken by the owner through inbound, then a follow-up map naming it; and a live binding that comes to hold an approved map's issue before the apply |
+| F2 (ruled: keep the spec) | a replaced level relates to the first ticket placed under it (`migrationPolicy.ts#closerRelation`): while a leaf under it is adopted and not applied, or not placed yet, its close waits before any call, listed `placed-ticket-not-applied`; with no leaf under it placed (none listed, or every one skipped) it closes with no relation and the report lists it under `unrelated` ("Closed with no ticket placed under them" in the console) | `migration-apply.test.ts`: the same-tick map `[leaf, epic]`, and the all-skipped case; `migration-body.test.tsx` |
+| F3 (ruled: narrow the text) | `MIGRATION_CALLS_PER_TICK` counts the migration's own issue reads and writes; the structure pass and the Upkeep epic's pass are the plan sync's own passes on lane `migration`, bounded by the writes cap, the lane and the one rate service. D-8796's amended sentence and the step 2 comment say so | — |
+| F4 (ruled) | D-8801 and D-8802 defined in the plan, cited in `migrationPolicy.ts`, `shared/plan.ts` and `planStore.ts`, and named above | — |
+| F5 (1) | the finished close's comment, built by `finishedComment` at the call site | `migration-apply.test.ts` "F5 (1)": red with the call replaced by a fixed sentence |
+| F5 (2) | `putBackTickets` passed from the plan sync's snapshot into the policy | `plan-sync.test.ts` "review 2918 F5 (2)": red with the field removed |
+| F5 (3) | the call budget's `budget.calls >= calls` | `migration-apply.test.ts` "F5 (3)": three replaced levels relating to one leaf, two of them due in one tick (8 calls); red with the check removed |
+| A1 | `MIGRATION_WRITES_PER_TICK`'s doc: a close is up to four calls, closes go one a tick, the pilot takes about two to four hours | — |
+| A2 | `bindingsInWorkspace`'s one JSDoc; `graceBindingsOf` skips a retired binding | the existing drift-pass suite |
+| A3 | `single-definition/plan.test.ts` rows for `MIGRATION_WAITING_WHY`, `MigrationWaitingWhy` and `MIGRATION_PLAN_BY` | — |
+| A4 to A7 | the four wirings the panel mutated green: round 1's A6 done-programme sentence, F6's `heldIssues` wiring in the proposal, F6's self-reference by issue id with F8's `unclear` exclusion, and A4's newest-first sort in `stateOfTeam` | `migration-apply.test.ts` "A6" (red with `done` dropped) and "F8: a programme named only by an unclear entry" (red without the exclusion); `migration-propose.test.ts` "F6: a superseded entry may name a successor ccrc already holds" (red without `heldIssues`) and "A4: of two rows" (red with the sort reversed); `migration-policy.test.ts` F6, by issue id (red without the check) |
+
+Also in this round: `main` merged again (it took migration 111, the waiting workers' lane-arm row), so this run's migration is
+112; the gate's route counts and the census words did not move with this merge. README's count word is applied (see below), so
+the census case red since round 1 is green.
+
 ## Follow-ups and open points
 
 - **The F3/F5 interaction, built in fix round 1** (wave 3's carry: a bound ticket put back could take its held team off its
   project). The sync's snapshot keeps the epic ids of tickets put back (`putBackTicketsOf`), and F3's team list keeps the teams
   of bound tickets put back; a retired binding holds none (`plan-sync-policy.test.ts`).
-- **Pending: README's machine-lane count word** ("ninety-three" to "ninety-four" since the merge of `main`, forced by
-  `box-token-census.test.ts`). It is held by run 1850's freeze until the operator answers item 496. README is untouched here,
-  and one census case is red on this branch: `box-token-census.test.ts`, "README states the DERIVED lane counts".
-- **Three minor points left**, each named by the review and judged not worth a change now: a worker's follow-up ticket and
+- **README's machine-lane count word**, "ninety-three" to "ninety-four" (forced by `box-token-census.test.ts` since the merge
+  of `main`): applied in fix round 2 as the one-line packet run 1850's coordinator said yes to (item 496 answered, mail of
+  2026-11-20), at its frozen terms; a later run that lands second rebuilds the word to the count the census derives then.
+- **Two minor points left**, each named by the review and judged not worth a change now: a worker's follow-up ticket and
   its mail are two transactions (a crash between them loses the mail, never the ticket); a follow-up's earlier report item
-  is settled in its own transaction after the new one is raised; a replaced level's close does not wait for the issues placed
-  under it to settle, so with none applied yet it relates to none (the relation is evidence only).
+  is settled in its own transaction after the new one is raised. The third, a replaced level's close that did not wait for
+  the issues placed under it, is built in fix round 2 (review 2918 F2).
 - **The suites under load.** `coord-db`, `secret-mask` and `mail-routes` failed only by timeouts (20 s to 235 s per case) in a
   test slice at its memory cap, with OOM kills from other sessions' runs. `hierarchy-routes` and `plan-store` failed the same
   way in one batch and pass alone (73 of 73). CI on the quiet box is the arbiter.

@@ -70,6 +70,14 @@ describe('the report body\'s lists', () => {
     expect(items).toEqual([`AAA-6: ${WAITING_WHY_WORDS['upkeep-not-in-linear']}`, 'AAA-7']);
   });
 
+  it('lists the replaced levels closed with no ticket placed under them, after the waiting ones (review 2918 F2)', () => {
+    const report = { ...REPORT, unrelated: ['AAA-8'], waitingWhy: { 'AAA-7': 'placed-ticket-not-applied' as const } };
+    const { container } = render(<MigrationBody kind="report" counts={COUNTS} entries={ENTRIES} report={report} />);
+    expect([...container.querySelectorAll('[data-report-list]')].map((l) => l.getAttribute('data-report-list'))).toEqual(['skipped', 'waiting', 'unrelated', 'milestonesLeft']);
+    expect(container.querySelector('[data-report-list="unrelated"]')!.textContent).toContain('AAA-8');
+    expect([...container.querySelectorAll('[data-report-list="waiting"] li')].map((l) => l.textContent)).toContain(`AAA-7: ${WAITING_WHY_WORDS['placed-ticket-not-applied']}`);
+  });
+
   it('after put back, the issues moved since are listed too', () => {
     const { container } = render(<MigrationBody kind="report" counts={COUNTS} entries={ENTRIES} report={{ ...REPORT, movedSince: ['AAA-9'] }} />);
     expect([...container.querySelectorAll('[data-report-list]')].map((l) => l.getAttribute('data-report-list'))).toEqual(['skipped', 'waiting', 'movedSince', 'milestonesLeft']);

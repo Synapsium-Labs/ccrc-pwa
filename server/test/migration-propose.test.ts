@@ -277,3 +277,27 @@ describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)'
     expect(await r.mig.stateOfTeam('AAA')).toMatchObject({ state: 'map-waiting', itemId: r.plan.migrationById(migrationId)!.itemId });
   });
 });
+
+describe('review 2918 fix round 2: wiring the panel mutated green (D-8186)', () => {
+  it("A4: of two rows of the team in one workspace, the project row's state is the newer one's", async () => {
+    const r = await migRig();
+    const older = r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
+    r.db.prepare("UPDATE linear_migrations SET state = 'put-back', putBackAt = ? WHERE id = ?").run(r.t.now, older);
+    r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now + 1 });
+    expect(await r.mig.stateOfTeam('AAA')).toMatchObject({ state: 'migrating' });
+  });
+
+  it('F6: a superseded entry may name a successor ccrc already holds (a bound issue outside the map)', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    const t: NewTicket = { program: SLUG, epicKey: 'e1', checkpointKey: 'c1', key: 'own', kind: 'work', title: 'Our own ticket', body: 'Do it', project: 'project-a', source: 'plan' };
+    applyPlanChanges(r.db, SLUG, { ...NO_PLAN_CHANGES(), tickets: { insert: [t], update: [], drop: [] } }, OWNER, r.t.now, null);
+    await r.sync.passFor(SLUG, r.t.now + 60_000);
+    const bound = r.plan.bindingOf('ticket', r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id, WS.a.id)!;
+    r.issues.set(bound.linearId!, { id: bound.linearId!, identifier: 'AAA-50', title: 'Our own ticket', description: 'x', teamKey: 'AAA', stateType: 'unstarted', projectId: null, milestoneId: null, parentId: null });
+    expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [entry(1, 'superseded', { successor: bound.linearId! })] }, open)).toMatchObject({ ok: true });
+  });
+});
