@@ -248,7 +248,7 @@ describe('H4: no liveness word and no bare "unmeasured", ever', () => {
   it('draws no liveness word for any liveness the wire carries, on either kind of row', () => {
     draw(frame({
       unowned: [unowned({ workspace: 'unmeasured' }), unowned({ adminRecord: 'agent-u2', canonicalPath: null })],
-      leases: (['live', 'ended', 'unmeasured', 'absent' as never]).map((liveness, i) =>
+      leases: (['live', 'ended', 'unmeasured', 'absent'] as never[]).map((liveness, i) =>
         orphanLease({ leaseId: `lease-${i}`, adminRecord: `wt-${i}`, liveness, workspace: i === 2 ? 'unmeasured' : 'present' })),
     }));
     expect(section().textContent).not.toMatch(LIVENESS_WORDS);

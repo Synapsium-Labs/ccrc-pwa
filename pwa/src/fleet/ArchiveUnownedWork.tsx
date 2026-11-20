@@ -8,39 +8,38 @@ import { useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Section } from '@ccrc/ui';
 import type { DelegationProjectionWire, FleetSession } from '../../../shared/api';
-import { offerOf, presenceWord, unownedWork, type UnlistedLeaseRow, type UnownedTreeRow } from './delegationWords';
+import { offerOf, presenceWord, unownedWork, type WorktreeControl } from './delegationWords';
 import { WorktreeControls } from './WorktreeControls';
 import './archiveUnownedWork.css';
 
 export const UNOWNED_TITLE = 'Work no session owns';
 export const UNOWNED_PURPOSE = 'Delegated worktrees the broker could not give one owner, and worktrees whose two sessions are both gone.';
 
-function TreeRow({ row, nowMs, getHeading }: { row: UnownedTreeRow; nowMs: number; getHeading: () => HTMLElement | null }): ReactNode {
+/** One row, whichever kind: where it is, one line of words, and the acts the words module gave it. */
+function UnownedRow({ kind, project, where, meta, act, offer, nowMs, getHeading }: {
+  kind: 'tree' | 'lease'; project: string; where: string; meta: readonly string[];
+  act: { readonly leaseId: string; readonly worktree: string; readonly controls: readonly WorktreeControl[] } | null;
+  offer: string; nowMs: number; getHeading: () => HTMLElement | null;
+}): ReactNode {
   return (
-    <div className="archive-unowned-row" data-unowned-row="tree">
+    <div className="archive-unowned-row" data-unowned-row={kind}>
       <div className="archive-unowned-what">
-        <span className="archive-unowned-where"><span>{row.project}</span> · <span className="archive-unowned-path">{row.where}</span></span>
-        <span className="archive-unowned-meta">{[row.verdict, row.tried].filter((p): p is string => p !== null).join(' · ')}</span>
+        <span className="archive-unowned-where"><span>{project}</span> · <span className="archive-unowned-path">{where}</span></span>
+        {meta.length > 0 && <span className="archive-unowned-meta">{meta.join(' · ')}</span>}
       </div>
-      {row.act !== null && (
-        <WorktreeControls leaseId={row.act.leaseId} worktree={row.worktree} controls={row.act.controls}
-          offer={offerOf(row.act.leaseId, row.act.controls)} nowMs={nowMs} getHeading={getHeading} />
+      {act !== null && act.controls.length > 0 && (
+        <WorktreeControls leaseId={act.leaseId} worktree={act.worktree} controls={act.controls} offer={offer} nowMs={nowMs} getHeading={getHeading} />
       )}
     </div>
   );
 }
 
-function LeaseRow({ row, nowMs, getHeading }: { row: UnlistedLeaseRow; nowMs: number; getHeading: () => HTMLElement | null }): ReactNode {
+/** A kind of row under its subhead and its count. */
+function Group({ title, count, children }: { title: string; count: number; children: ReactNode }): ReactNode {
   return (
-    <div className="archive-unowned-row" data-unowned-row="lease">
-      <div className="archive-unowned-what">
-        <span className="archive-unowned-where"><span>{row.project}</span> · <span className="archive-unowned-path">{row.where}</span></span>
-        {row.state.length > 0 && <span className="archive-unowned-meta">{row.state.join(' · ')}</span>}
-      </div>
-      {row.controls !== null && row.controls.length > 0 && (
-        <WorktreeControls leaseId={row.lease.leaseId} worktree={row.worktree} controls={row.controls}
-          offer={offerOf(row.lease.leaseId, row.controls, row.lease)} nowMs={nowMs} getHeading={getHeading} />
-      )}
+    <div className="archive-unowned-group">
+      <h3 className="archive-unowned-sub">{title}<span className="archive-unowned-count">{count}</span></h3>
+      {children}
     </div>
   );
 }
@@ -66,16 +65,22 @@ export function ArchiveUnownedWork({ delegation, sessions, nowMs }: {
       </span>}
       purpose={UNOWNED_PURPOSE}>
       {work.trees.length > 0 && (
-        <div className="archive-unowned-group">
-          <h3 className="archive-unowned-sub">No single owner<span className="archive-unowned-count">{work.trees.length}</span></h3>
-          {work.trees.map((r) => <TreeRow key={r.key} row={r} nowMs={now} getHeading={getHeading} />)}
-        </div>
+        <Group title="No single owner" count={work.trees.length}>
+          {work.trees.map((r) => (
+            <UnownedRow key={r.key} kind="tree" project={r.project} where={r.where} meta={r.meta}
+              act={r.act === null ? null : { leaseId: r.act.leaseId, worktree: r.worktree, controls: r.act.controls }}
+              offer={r.act === null ? '' : offerOf(r.act.leaseId, r.act.controls)} nowMs={now} getHeading={getHeading} />
+          ))}
+        </Group>
       )}
       {work.leases.length > 0 && (
-        <div className="archive-unowned-group">
-          <h3 className="archive-unowned-sub">Neither session listed<span className="archive-unowned-count">{work.leases.length}</span></h3>
-          {work.leases.map((r) => <LeaseRow key={r.key} row={r} nowMs={now} getHeading={getHeading} />)}
-        </div>
+        <Group title="Neither session listed" count={work.leases.length}>
+          {work.leases.map((r) => (
+            <UnownedRow key={r.key} kind="lease" project={r.project} where={r.where} meta={r.state}
+              act={r.controls === null ? null : { leaseId: r.lease.leaseId, worktree: r.worktree, controls: r.controls }}
+              offer={r.controls === null ? '' : offerOf(r.lease.leaseId, r.controls, r.lease)} nowMs={now} getHeading={getHeading} />
+          ))}
+        </Group>
       )}
     </Section>
   );

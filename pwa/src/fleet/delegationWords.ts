@@ -478,15 +478,15 @@ export function triedWord(attemptedAt: string, now: number): string | null {
   return `tried ${n} ${unit}${n === 1 ? '' : 's'} ago`;
 }
 
-/** An unowned tree's row: where it is (its path, else its admin record), its verdict, its age, and its one act. */
+/** An unowned tree's row: where it is (its path, else its admin record), its verdict and age, and its one act. */
 export interface UnownedTreeRow {
   readonly key: string;
   readonly project: string;
   readonly where: string;
   /** The admin record: the control's accessible name, the worktree the act is about. */
   readonly worktree: string;
-  readonly verdict: string;
-  readonly tried: string | null;
+  /** The row's one line of words: the verdict, then the attempt's age when its time could be read. */
+  readonly meta: readonly string[];
   readonly act: { readonly leaseId: string; readonly controls: readonly WorktreeControl[] } | null;
 }
 /** A worktree row whose two sessions are both unlisted: its path, its disposition and its controls (never Attach: it needs
@@ -526,8 +526,7 @@ export function unownedWork(
       project: u.project,
       where: u.canonicalPath ?? u.adminRecord,
       worktree: u.adminRecord,
-      verdict: wordOf(VERDICT_WORD, u.verdict),
-      tried: triedWord(u.attemptedAt, now),
+      meta: [wordOf(VERDICT_WORD, u.verdict), ...[triedWord(u.attemptedAt, now)].filter((t): t is string => t !== null)],
       act: unownedControls(u),
     }));
   const leases = unlistedLeases(w, sessions).map((l): UnlistedLeaseRow => ({
