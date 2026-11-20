@@ -133,6 +133,7 @@ _resupervise_live -> _session_state
 _role_long_lived -> _fresh_pick_field_to
 _route_applied_before_write -> _route_apply_seed
 _route_applied_get_to -> _reg_get_to
+_route_applied_put -> _reg_set
 _route_applied_set -> _reg_get
 _route_apply_now -> _is_codex_backend
 _route_apply_now -> _reg_get
