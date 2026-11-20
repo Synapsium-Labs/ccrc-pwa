@@ -746,6 +746,30 @@ describe('review 2955 (D-8186)', () => {
     const id = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === key)!.id;
     adoptIssueBindingInTx(r.db, id, WS.a.id, 'AAA', U(100 + n), `AAA-${n}`, r.t.now);
   };
+  it('F1: a no-relation level settled in step 2 stays listed when step 2\'s own next read is refused', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    applyPlanChanges(r.db, SLUG, changes({ checkpoints: { insert: [{ epicKey: 'e1', key: 'c2', ordinal: 1, title: 'Checkpoint two', kind: 'acceptance', proves: [], itemId: null }], update: [], drop: [] } }), OWNER, r.t.now, null);
+    // map order: the checkpoint close (no leaf under c2), then the leaf under c1
+    const id = await r.approved([entry(1, 'checkpoint', { programme: SLUG, epic: 'e1', checkpoint: 'c2' }), leaf(2, 'k2')]);
+    // tick 1: step 3 adopts the leaf (its row stays unapplied) and starts the close, whose state write lands but its answer is lost
+    r.override.current = (ask) => {
+      if (ask.op !== 'issueUpdate' || ask.input['id'] !== U(101)) return undefined;
+      r.issues.get(U(101))!.stateType = 'canceled';
+      return fail('unreachable');
+    };
+    await r.tick();
+    expect(r.plan.movesOf(id).map((x) => [x.identifier, x.appliedAt === null])).toEqual([['AAA-2', true], ['AAA-1', true]]);
+    // tick 2: step 2 settles the close as applied (joins `unrelated`), then the leaf row's read is refused: step 2's own early return
+    r.override.current = (ask) => (ask.op === 'issueOwned' && ask.input['id'] === U(102) ? fail('unreachable') : undefined);
+    await r.tick();
+    expect(r.plan.migrationById(id)!.report!.unrelated).toEqual(['AAA-1']);
+    r.override.current = null;
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.plan.migrationById(id)!.report!.unrelated).toEqual(['AAA-1']);
+  });
+
   it('F1: a no-relation level settled in step 2 stays listed when step 3\'s closer read is then refused', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);
