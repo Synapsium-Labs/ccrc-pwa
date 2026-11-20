@@ -15,7 +15,7 @@ import { createFleetStore } from '../src/stores/fleet';
 import { backgroundWords, type RunSummary } from '../../shared/api';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import {
-  COORDINATOR_WORD, HEADER_COUNT_ALLOWANCES, MARKER_ORDER, NAME_BUDGET, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers,
+  COORDINATOR_WORD, HEADER_COUNT_ALLOWANCES, MARKER_ORDER, NAME_BUDGET, ROLE_CELL_CHARS, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers,
   sessionFacts, shortenByToken, type FactInput,
 } from '../src/fleet/sessionFacts';
 import type { ChildRunContext } from '../src/fleet/runWords';
@@ -154,16 +154,29 @@ describe('the model (D-5545)', () => {
     expect(cardFacts(sessionFacts({ session: s({ role: null as never }), now: NOW })).role).toBeNull();
   });
 
-  it('a coordinator with a long branch keeps both whole on the card (D-8142)', () => {
+  it('a coordinator with a long branch keeps both whole on the card (D-8142, D-8817)', () => {
     const branch = 'feat/a-long-descriptive-branch-name-for-the-sidebar';
     const f = sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'coordinator', branch }), now: NOW });
     const c = cardFacts(f);
     expect(c.role?.text).toBe('coordinator');
+    // As at main, the shortened branch spelt out; the budget is the badge's cell (`ROLE_CELL_CHARS`), no longer the word's.
     expect(c.context).toMatchObject({ key: 'branch', text: branch, short: 'feat/a-long…' });
-    expect(c.context!.short!.length + c.role!.text.length + 3).toBeLessThanOrEqual(NAME_BUDGET);
+    expect(c.context!.short!.length + ROLE_CELL_CHARS).toBeLessThanOrEqual(NAME_BUDGET);
     // A child, and a coordinator with no role cell to make room for, keep the full budget.
     const kid = cardFacts(sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'child', branch }), now: NOW }));
     expect(kid.context?.short).toBe(shortenByToken(branch, NAME_BUDGET));
+  });
+
+  it('the role cell is the badge\'s width: a branch the word\'s 14 characters cut shorter is kept longer beside the badge (D-8817)', () => {
+    // At main (budget 28 - 14 = 14) this branch shortened to `feat/garden…`; at the badge's cell (28 - 6 = 22) it keeps
+    // another token, and the child's full budget (28) keeps one more still. Each is spelt out, so a wrong cell width reds here.
+    const branch = 'feat/garden-stone-silver-harbor-morning-cedars-quiet-river-run';
+    const lead = cardFacts(sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'coordinator', branch }), now: NOW }));
+    expect(lead.context).toMatchObject({ key: 'branch', short: 'feat/garden-stone…' });
+    expect(lead.context!.short!.length + ROLE_CELL_CHARS).toBeLessThanOrEqual(NAME_BUDGET);
+    const kid = cardFacts(sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'child', branch }), now: NOW }));
+    expect(kid.context?.short).toBe('feat/garden-stone-silver…');
+    expect(lead.context!.short).not.toBe(kid.context!.short);
   });
 
   it('a child names its programme and wave on the card; the header keeps the verbatim hold and the coordinator', () => {
@@ -297,17 +310,19 @@ describe('the rendered card is a glance, and the rendered header holds all of it
         // Both forms, as the rule has them (L1-1): the header's status as it is, or with the count set aside.
         expect([headerStatus, headerStatus.replace(allow.count, allow.card)].some((t) => t.includes(cardWord)),
           'the card\'s status word is missing from the header').toBe(true);
-        for (const fact of [c.name, c.context, c.marker, c.workingOn, c.role]) {
+        for (const fact of [c.name, c.context, c.marker, c.workingOn]) {
           if (fact !== null) expect(text, `${fact.key} missing from the header`).toContain(fact.text);
         }
-        // D-8142: a coordinator's context line begins with the one role cell; a child has none.
+        // D-8142, D-8817: a coordinator's context line begins with the one role badge, which draws no word; the header
+        // draws the same badge in its details, by its accessible name. A child has none.
         const roles = card.querySelectorAll('.sess-role');
         if (input.session.role === 'coordinator') {
           expect(roles.length).toBe(1);
           const ctxLine = card.querySelector('.sess-meta--context')!;
           expect(ctxLine.firstElementChild).toBe(roles[0]);
-          expect(visible(ctxLine).trim().startsWith('coordinator')).toBe(true);
-          expect(text).toContain('coordinator');
+          expect(roles[0]!.getAttribute('aria-label')).toBe(c.role!.text);
+          expect(visible(ctxLine)).not.toMatch(/coordinator/i);
+          expect(head.querySelector(`[role="img"][aria-label="${c.role!.text}"]`), 'the header draws the role badge').not.toBeNull();
         } else {
           expect(roles.length).toBe(0);
         }

@@ -574,10 +574,12 @@ const RUNG_AVAILABLE_SET = set(highestHeldRungCases, [
 ]);
 
 const DEGRADED_SET = set(degradedReadingCases, [
-  { id: 'D1 designation unreadable lifts', old: "if (designation.kind === 'unmeasured') return 'unmeasured';", new: "if (designation.kind === 'unmeasured') return 'lifted';" },
-  { id: 'D2 no designation stands', old: "if (designation.kind === 'not-designated') return 'lifted';", new: "if (designation.kind === 'not-designated') return 'standing';" },
-  { id: 'D3 live unreadable lifts', old: "if (live === 'unmeasured') return 'unmeasured';", new: "if (live === 'unmeasured') return 'lifted';" },
-  { id: 'D4 no generation stands', old: "if (live === 'no-generation') return 'lifted';", new: "if (live === 'no-generation') return 'standing';" },
+  // The four gate lines open offModelReading too (Overlord W1 door process B1), so each old text runs on to this decider's own
+  // last line, which makes it occur once.
+  { id: 'D1 designation unreadable lifts', old: "  if (designation.kind === 'unmeasured') return 'unmeasured';\n  if (designation.kind === 'not-designated') return 'lifted';\n  if (live === 'unmeasured') return 'unmeasured';\n  if (live === 'no-generation') return 'lifted';\n  return live.state", new: "  if (designation.kind === 'unmeasured') return 'lifted';\n  if (designation.kind === 'not-designated') return 'lifted';\n  if (live === 'unmeasured') return 'unmeasured';\n  if (live === 'no-generation') return 'lifted';\n  return live.state" },
+  { id: 'D2 no designation stands', old: "  if (designation.kind === 'unmeasured') return 'unmeasured';\n  if (designation.kind === 'not-designated') return 'lifted';\n  if (live === 'unmeasured') return 'unmeasured';\n  if (live === 'no-generation') return 'lifted';\n  return live.state", new: "  if (designation.kind === 'unmeasured') return 'unmeasured';\n  if (designation.kind === 'not-designated') return 'standing';\n  if (live === 'unmeasured') return 'unmeasured';\n  if (live === 'no-generation') return 'lifted';\n  return live.state" },
+  { id: 'D3 live unreadable lifts', old: "  if (designation.kind === 'unmeasured') return 'unmeasured';\n  if (designation.kind === 'not-designated') return 'lifted';\n  if (live === 'unmeasured') return 'unmeasured';\n  if (live === 'no-generation') return 'lifted';\n  return live.state", new: "  if (designation.kind === 'unmeasured') return 'unmeasured';\n  if (designation.kind === 'not-designated') return 'lifted';\n  if (live === 'unmeasured') return 'lifted';\n  if (live === 'no-generation') return 'lifted';\n  return live.state" },
+  { id: 'D4 no generation stands', old: "  if (designation.kind === 'unmeasured') return 'unmeasured';\n  if (designation.kind === 'not-designated') return 'lifted';\n  if (live === 'unmeasured') return 'unmeasured';\n  if (live === 'no-generation') return 'lifted';\n  return live.state", new: "  if (designation.kind === 'unmeasured') return 'unmeasured';\n  if (designation.kind === 'not-designated') return 'lifted';\n  if (live === 'unmeasured') return 'unmeasured';\n  if (live === 'no-generation') return 'standing';\n  return live.state" },
   { id: 'D5 degraded lifts', old: "live.state === 'degraded' ? 'standing' : 'lifted'", new: "live.state === 'degraded' ? 'lifted' : 'standing'" },
 ]);
 

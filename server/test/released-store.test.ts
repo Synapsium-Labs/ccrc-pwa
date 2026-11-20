@@ -41,7 +41,7 @@ describe('CoordStore.lastRunBySession (workspace lifecycle spec §5.1)', () => {
     s.bindSession(r, 'someone-else');
     const read = s.lastRunBySession(['demo-worker']);
     expect(read).toEqual({
-      ok: true, last: [], openWorkers: [], openClaimants: ['demo-coordinator'], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+      ok: true, last: [], openWorkers: [], openClaimants: ['demo-coordinator'], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [], otherOpenPlacedWorkers: [],
     });
   });
 
@@ -68,7 +68,7 @@ describe('CoordStore.lastRunBySession (workspace lifecycle spec §5.1)', () => {
 
   it('reads nothing for an empty id list', () => {
     expect(store().lastRunBySession([])).toEqual({
-      ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+      ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [], otherOpenPlacedWorkers: [],
     });
   });
 

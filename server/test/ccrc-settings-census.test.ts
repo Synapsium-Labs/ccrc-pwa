@@ -595,6 +595,7 @@ const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_ACT_KEY: { cls: 'per-run', why: 'ccrc-api reads it as the act key the door process hands one fenced call\'s child, and sends it only as a header on curl\'s stdin config.' },
   CCRC_ACT_GENERATION: { cls: 'per-run', why: 'ccrc-api reads it as the generation the door process hands one fenced call\'s child, sent beside the act key.' },
   CCRC_ACT_COUNTER: { cls: 'per-run', why: 'ccrc-api reads it as the counter the door process raises before one fenced call and hands that call\'s child.' },
+  CCRC_WITNESS_KEY: { cls: 'per-run', why: 'ccrc-api reads it as the witness key (the call digest) the door process hands one fenced call\'s child, sent only as a header on curl\'s stdin config (Overlord W1 door process B1).' },
 };
 
 /** The graph settings ccd-graph-sweep read by its own `: "${NAME:=default}"` line between the graphify r2 wave's GR2 and

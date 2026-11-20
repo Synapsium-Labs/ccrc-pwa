@@ -27,8 +27,12 @@ export const LAUNCH_PROFILE_LANE = 'launch-profile';
  *  anchor, which the hook prints in its first slot at every start of a session that is not a child, a fork's one refusal
  *  line, and the anchor once after an automatic compaction that brought no start. */
 export const ANCHOR_SLOT_LANE = 'anchor-slot';
+/** The waiting workers' row (D-8790; waiting workers spec 2026-11-19, Part 2): the run-done sleep's
+ *  case for a dispatched worker on a `working` run whose turn marker has been quiet 30 minutes. In shadow the sleep lane
+ *  logs the worker it would put to sleep; live, it puts it to sleep and mails the run's coordinator once. */
+export const WORKING_IDLE_SLEEP_LANE = 'working-idle-sleep';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, WORKING_IDLE_SLEEP_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -211,6 +215,18 @@ export const LANE_ARM_TEXT = {
       liveNote: 'Each start of a session that is not a child begins with its anchor (its role, its canaries and counts, '
         + 'and to read its card) in place of the role card; a fork gets one line saying it has no card, and the first '
         + 'prompt after an automatic compaction carries the anchor once.',
+      gate: null,
+    },
+    [WORKING_IDLE_SLEEP_LANE]: {
+      legend: 'Sleep waiting workers',
+      shadowNote: 'A worker on a working run whose last turn ended 30 minutes ago, with nothing running, scheduled, unread '
+        + 'or open on a screen, is left awake; the server logs it to the server journal, as lines beginning '
+        + '"ccrc-server: stop-done shadow:".',
+      liveNote: 'A worker on a working run whose last turn ended 30 minutes ago, with nothing running, scheduled, unread '
+        + 'or open on a screen, is put to sleep, and its coordinator is mailed once for that sleep. Its session ends; its '
+        + 'workspace, branch and transcript are kept, and mail or a send-back starts it again. A worker holding a live '
+        + 'claim, or named by a second active run, keeps running. While mail is switched off (mail-disabled), no waiting '
+        + 'worker is put to sleep, because its coordinator could not be told.',
       gate: null,
     },
   },

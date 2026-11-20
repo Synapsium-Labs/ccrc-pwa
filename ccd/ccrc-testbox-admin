@@ -995,9 +995,12 @@ _tba_run_preflight() {
   code=""; [ "$PF_RC" = 0 ] || code=no-nftables
   _tba_pf_row nftables "$code"
 
-  # CCRC_TESTBOX_ROOT's parent: XFS with reflink=1 (nearest existing directory, read with xfs_info)
+  # CCRC_TESTBOX_ROOT itself: XFS with reflink=1, read with xfs_info on the mount of the root, or of its nearest existing
+  # ancestor while the root does not exist yet. The walk starts at the ROOT, as the installer's own check does
+  # (`deploy/testbox/install.sh`), so a filesystem mounted exactly at the root passes; starting at the parent read the
+  # filesystem BESIDE such a mount and refused a box the installer accepts.
   root="$(_tba_state_get box_root 2>/dev/null)"; : "${root:=$TBA_BOX_ROOT_DEFAULT}"
-  _tba_pfx sh -c 'p=$1; case $p in "~/"*) p=$HOME/${p#"~/"};; esac; d=$(dirname "$p"); while [ ! -d "$d" ]; do d=$(dirname "$d"); done; m=$(findmnt -n -o TARGET -T "$d" 2>/dev/null) || m=$d; xfs_info "$m"' sh "$root"
+  _tba_pfx sh -c 'p=$1; case $p in "~/"*) p=$HOME/${p#"~/"};; esac; d=$p; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; m=$(findmnt -n -o TARGET -T "$d" 2>/dev/null) || m=$d; xfs_info "$m"' sh "$root"
   [ -z "$PF_FATAL" ] || { _tba_refuse "$PF_FATAL"; return 0; }
   code=""; { [ "$PF_RC" = 0 ] && [[ "$PF_OUT" == *"reflink=1"* ]]; } || code=not-xfs-reflink
   _tba_pf_row storage "$code"

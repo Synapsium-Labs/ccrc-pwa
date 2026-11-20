@@ -35,6 +35,7 @@ export declare const MODELS_RESERVED_IDS: readonly string[];
 export declare const MODELS_DIR_NAME: string;
 export declare function registryFileName(id: string): string;
 export declare function catalogueFileName(id: string): string;
+export declare function aliasesFileName(id: string): string;
 export declare function laneClassModels(reg: Registry, catalogue: Catalogue | null): LaneClassModels;
 // Auto-advance plan W2 Task 12: the one reader of a models push line, its length cap and the pure policy of
 // `/api/notify`'s `push: true`, each defined once in `shared/models.mjs`.
@@ -46,7 +47,7 @@ export declare function modelsPushOf(
 /** What the policy asks of a roster: a lane id to its row, or `undefined`. The server's `roster.byId` (a
  *  `ReadonlyMap<string, AccountDef>`) is one. */
 export interface ModelsPushRoster {
-  get(lane: string): { readonly exec: { readonly kind: string } } | undefined;
+  get(lane: string): { readonly exec: { readonly kind: string }; readonly telemetry?: string } | undefined;
 }
 export type ModelsPushDecision =
   | { verdict: 'pushable'; lane: string; cls: ModelClass; kind: ModelsPushKind; tag: string }

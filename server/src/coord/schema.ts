@@ -4038,6 +4038,44 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
   `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The session hook's reports and the witness checks (Overlord W1 door process B1, plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-door-process.md` Task 7). `continuity_hook_reports`: what the hook says
+  // its session did (a door tool call's witness, a reader's start and stop, a quiet turn's end clearing the readers, a model
+  // switch), one row a report; `receivedAt` is the server's clock and the one every window reads, `at` the hook's own. One
+  // writer, `hookReportStore.ts#insertHookReport`, which prunes its own rows past their keep (witness 24 h, the rest 7 days) in
+  // the same transaction. `picked-up` is never a row: it moves the operator's message. Its id is AUTOINCREMENT, so a pruned
+  // witness's id is never handed to a new one, whose check would then read `used` (review 2870 F2). `continuity_witness_checks`:
+  // gates B's check of a witness (Task 9), written by `recordWitnessCheck`; its `witnessId` is UNIQUE so a witness is used once.
+  // TWO NEW TABLES AND ONE INDEX, nothing else: an older build opening a file at this `user_version` takes rule 3 and never names
+  // them. The slot is the next free one by position (after 109); whoever lands second renumbers (the standing license).
+  `
+  CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT,
+    agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);
+  CREATE INDEX continuity_hook_reports_by_key ON continuity_hook_reports (sessionId, kind, key, receivedAt);
+  CREATE TABLE continuity_witness_checks (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, generationId INTEGER NOT NULL, witnessKey TEXT,
+    witnessId INTEGER UNIQUE, outcome TEXT NOT NULL, why TEXT, at INTEGER NOT NULL);
+  `,
+
+  // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
+  // The waiting workers' sleep (waiting workers spec 2026-11-19, Part 2; D-8790): the seed row `working-idle-sleep` =
+  // `shadow` adds the case's switch to the Shadow lanes card. Shadow, the run-done sleep lane logs a dispatched worker on a
+  // `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else, and `OR IGNORE`: a file that already carries the row (a database rolled back below this
+  // entry with its rows kept, as a test rebuilds one) keeps the stored choice and migrates, where a plain INSERT would
+  // refuse to start on the lane's primary key. An older build opening a file at this entry's version takes rule 3 (it
+  // warns, reads as-is and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`; door B1 took 110 first, so this entry moved up to
+  // 111; approvals PR 3 builds on the slots after 110 too, so whoever lands second moves up. RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

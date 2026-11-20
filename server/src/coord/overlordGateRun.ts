@@ -32,6 +32,9 @@ import type { ActKeyFact, CounterAnswer, FenceRefusalRow } from './overlordGateS
 export interface WitnessCheck {
   readonly sessionId: string; readonly generationId: number; readonly door: string;
   readonly outcome: WitnessRecord['outcome']; readonly witnessId: number | null; readonly why: string | null; readonly at: number;
+  /** The attributed caller whose write was checked: the actor of a latch the checks raise (a brake takes only a minted actor,
+   *  and the server has none of its own; slug latch-raised-under-the-callers-actor). */
+  readonly actor: SessionCaller['actor'];
 }
 
 /** The facts the runner reads and records, each a port filled at L5 (`server.ts`). */
@@ -54,8 +57,9 @@ export interface OverlordGateDeps {
   readonly counter: (generationId: number, counter: number) => CounterAnswer;
   /** Door process B's witness lookup. */
   readonly witness: (sessionId: string, generationId: number, witnessKey: string | null) => WitnessVerdict;
-  /** Door process B's `recordWitnessCheck`. */
-  readonly recordWitness: (check: WitnessCheck) => void;
+  /** Door process B's `recordWitnessCheck`: true when the check was recorded, false when it was not (a witness already used, or
+   *  a write that failed). On a passing write a false answer refuses it, as a throw does (review 2803 F2-a). */
+  readonly recordWitness: (check: WitnessCheck) => boolean;
   /** `overlordGateStore.ts#recordFenceRefusal`. */
   readonly recordFenceRefusal: (row: FenceRefusalRow) => void;
   /** `SERVER_CAPS`, read at the call. */
@@ -92,13 +96,14 @@ export function overlordGateRun(deps: OverlordGateDeps):
     void refuseRoute(reply, v.word, { detail: v.detail, step: v.step });
     return { kind: 'refused' };
   };
-  const recordWitness = (r: WitnessRecord | null, live: GenRow | null, sessionId: string, door: string): void => {
+  const recordWitness = (r: WitnessRecord | null, live: GenRow | null, caller: SessionCaller, door: string): void => {
     if (r === null || live === null) return;
-    attempt(() => deps.recordWitness({ sessionId, generationId: live.id, door, ...r, at: deps.now() }), () => undefined);
+    attempt(() => deps.recordWitness({ sessionId: caller.sessionId, generationId: live.id, door, ...r, at: deps.now(), actor: caller.actor }), () => false);
   };
-  /** The witness spend on a passing write: true when it was recorded, false when the recorder threw (which refuses). */
-  const spendWitness = (r: WitnessRecord | null, live: GenRow, sessionId: string, door: string): boolean =>
-    r === null || attempt(() => { deps.recordWitness({ sessionId, generationId: live.id, door, ...r, at: deps.now() }); return true; }, () => false);
+  /** The witness spend on a passing write: true when the recorder answered that it recorded, false when it answered not or
+   *  threw (which refuses). */
+  const spendWitness = (r: WitnessRecord | null, live: GenRow, caller: SessionCaller, door: string): boolean =>
+    r === null || attempt(() => deps.recordWitness({ sessionId: caller.sessionId, generationId: live.id, door, ...r, at: deps.now(), actor: caller.actor }), () => false);
   const refusedFence = (reply: FastifyReply, v: FenceVerdict, step: GateStep): GateRun => {
     if (v.kind === 'refuse') void refuseRoute(reply, v.word, { detail: v.detail, step });
     return { kind: 'refused' };
@@ -183,7 +188,7 @@ export function overlordGateRun(deps: OverlordGateDeps):
     const verdict = overlordGate({ door, standing, serverWords, authority, ladder, term, fence, witness, card, generation });
     if (verdict.kind === 'refuse') {
       if (verdict.record === 'fence-refusal') recordFence(claim.sessionId, live?.id ?? null, key, verdict.why);
-      recordWitness(witnessRecordOf(verdict, witness), live, claim.sessionId, key);
+      recordWitness(witnessRecordOf(verdict, witness), live, caller, key);
       return refused(reply, verdict);
     }
     if (verdict.kind === 'hook') return { kind: 'hook', caller };
@@ -199,7 +204,7 @@ export function overlordGateRun(deps: OverlordGateDeps):
       recordFence(claim.sessionId, live.id, key, counted.why);
       return refusedFence(reply, counted, '7');
     }
-    const spent = spendVerdict(spendWitness(witnessRecordOf(verdict, witness), live, claim.sessionId, key));
+    const spent = spendVerdict(spendWitness(witnessRecordOf(verdict, witness), live, caller, key));
     if (spent.kind === 'refuse') return refused(reply, spent);
     return { kind: 'pass', caller, generation: { id: live.id, n: live.n, term: live.term } };
   };

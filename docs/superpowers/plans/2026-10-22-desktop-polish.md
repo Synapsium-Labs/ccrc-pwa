@@ -4428,6 +4428,92 @@ an offline coordinator's own page, opened as the real `SessionScreen`, lists the
 
 **Rollback.** A plain revert.
 
+### Task C49: the session's helpers, designed (D-8794) — now
+
+**What.** A design task, and no product code. The operator, 2026-11-19: "inside the session in the right hand panel I still
+want to see actual information about any running workflows and subagents, for the session i'm inside of, in a useful way
+though please". The spec is `docs/superpowers/specs/2026-11-19-session-helpers-design.md`, with its mockups in
+`docs/design/2026-11-19-session-helpers-design/`. A **Helpers** section in the session panel lists each subagent and
+workflow, running ones first, with its description, kind, model, effort, measured state, elapsed time and last activity, and
+for a workflow its phase and agents done out of total. A finished helper keeps a one-line outcome for ten minutes, folded.
+The facts come from the reader of the session's workflow files, extended to the session's Agent helpers (`server/src/workflows/`)
+with a bounded scan of the transcript at stream start, and travel as additive fields on the `workflows` frame. The broker's
+activity records and the `N delegated` chip leave the session panel, and a worktree row there says its path, disposition and
+controls. Unowned
+delegated worktrees, and leases whose two sessions are both gone, get a section of the Archive screen (the coordinator's
+call). The broker gains an end from an Agent's task report, plus a one-time, dry-run-first pass that closes the old records
+it never closed (the coordinator's call, designed and not done here). The build is seven PRs (H4, H1a, H1b, H2, H3, S1 and
+S2), listed in the spec's §11. The measurements are in the spec's §2, which also says what was not measured: why the old
+records never closed.
+
+- **D-8794** — `session-panel-carries-helpers`: Task C49, issued on 2026-11-19. The session's own panel, not the fleet list,
+  carries a session's helper information, subagents and workflows alike, by the operator's ruling of 2026-11-19. This line is
+  the ledger's definition; the spec's §12 carries the same entry with its full text.
+
+This section was added beside Task C48 with that task's consent (its worker's mail of 2026-11-19), which covered this one
+section only. Its revision after review 2861 has C48's consent too (its worker's mail of 2026-11-20), for this section
+only. Its revision after review 2888 has the consent of Task C50's worker, who holds the plan's claim now (its mail of
+2026-11-20), for this section only.
+
+### Task C50: the operator's tidying notes (D-8817) — now
+
+**Why.** The operator, 2026-11-19, two notes on the fleet list. First: "We don't need to write the word "Programme" when we use
+the programme icon and colours and also the wave timer." Second: "instead of writing the word "coordinator" let's come up with a
+badge to give to the workspace". The programme box's header drew the workflow icon, the word PROGRAMME, a middot, the title and
+the waves bar, all in the programme's hue, so the word said what the icon and the hue already said. A coordinator's row and
+header wrote the word "coordinator", which is a role and so reads better as a mark than as a label.
+
+**Files.** `ui/design/make-icons.mjs` and the generated `ui/src/icons/lucide.ts` (one new vendored icon, `network`, from
+lucide-static 1.59.0; the diff is that icon alone), a new primitive `ui/src/primitives/role-badge.tsx` with its story, exported
+from `ui/src/index.ts`; `pwa/src/fleet/ProgrammeBox.tsx` (no visible word; the icon is drawn by the same `RoleBadge` primitive, named
+"Programme" with the hover title "Programme", and the leading middot that only separated the word from the title is gone), `pwa/src/fleet/programmeBox.css` (the
+`.pg-word` rule removed; four hue rules colour the coordinator's badge inside its box), `pwa/src/fleet/sessionFacts.ts` (the word
+stays as `COORDINATOR_WORD`, now the badge's accessible name and the palette's text; `COORDINATOR_BADGE` spells the icon, the name
+and the title once; `ROLE_CELL_CHARS` is sized for the badge: 3 characters and the separator, where the word took 11 and the separator), `pwa/src/fleet/SessionMeta.tsx`
+and `pwa/src/session/SessionDetails.tsx` (both spread `COORDINATOR_BADGE` into `RoleBadge`; the header's role detail has its own class,
+`chat-fact-role`), `pwa/src/session/chat.css` (that detail: the Goals glyph's size, 1em of `--fs-meta`, and the word's line,
+`min-height: 1lh`), `pwa/src/fleet/fleet.css` (`.sess-role`, the card's cell only, loses its font and `nowrap` and keeps `flex`,
+`align-self` and the quiet ink). `pwa/src/command/sessionEntries.ts` is untouched: the
+palette's entries are text the operator types to search, so they keep the word.
+
+**Why `RoleBadge` is in `@ccrc/ui`, with the word passed in.** A primitive that draws a picture with an accessible name is the
+design system's; it takes `icon`, `label` and `title`, so the package keeps no app vocabulary and the word is still spelt in one
+place (`sessionFacts.ts`). The badge strokes in `currentColor` and paints no colour of its own, so the contrast audit's pairs stay
+where the callers' rules name them.
+
+**Colour.** Inside a programme box the badge is the programme's hue (`--prog-*`, an alias of the lane hues), on the coordinator
+band's ground, the card's surface; on a card outside a box it is the quiet secondary ink (`.sess-role`). The hue pair is a gated
+one: each hue on the surface at 4.5 in every palette, and the lane hues on the selected row's tint. The badge pair itself is
+pinned by one row per hue in `contrast.test.ts`, beside the workers' slugs (a co-edit the file's other claimant consented to on
+2026-11-20), and the row-ink census of `fleet-css.test.ts` accepts `.sess-role`'s `var(--ink-secondary)`.
+
+**The session header's badge keeps the word's ink and the word's line.** In the details the word was drawn in the row's inherited
+ink (the primary), so the badge there carries no `.sess-role` class: it inherits that ink, and the card's `align-self: flex-start`
+does not reach it. Its glyph is the Goals door's size (1em of `--fs-meta`) on the line the word took (`min-height: 1lh`), so the
+header is the height it was with the word, in both skins (measured, `docs/superpowers/programs/desktop-polish/c50.md`). It has no
+hue, because no programme box surrounds the header; giving it one would mean reading the programme's hue from the run, a separate
+decision.
+
+**The programme page's kicker stays.** `ProgrammeScreen`'s `Programme` kicker sits in the page head beside a Back button, the
+title and the wave line, in the programme's hue but with no programme icon beside it, so the word is the one thing there that
+names what the page is; the operator's note is about the word beside the icon, so it stays. A sentence
+the server writes about a run ("not a work run of this programme") is not a label and stays.
+
+**Measured.** Which new cases were red at `main`, the files run and what was seen in a real Chrome (with screenshots, before and
+after, at 360 and 1280 px, in both skins, light and dark) are in `docs/superpowers/programs/desktop-polish/c50.md`.
+
+**Acceptance.** The programme box header draws no visible "Programme" text and its icon is an image named "Programme"; a
+coordinator's fleet row and its session header draw one badge, whose accessible name is "coordinator" and whose title is the role
+title, and no visible "coordinator" text; a worker draws no badge; the command palette still lists "coordinator".
+
+- **D-8817** — `coordinator-badge-and-no-programme-word`: Task C50, issued on 2026-11-19. A programme box's header does not
+  write the word "Programme" beside the programme icon, hue and waves bar, and a coordinator is marked by one `RoleBadge` (an icon
+  from the design system, the accessible name "coordinator" and the role title on hover), not by the word, in the fleet row and in
+  the session header; the palette keeps the word because it is search text. This changes D-8142's reading that the
+  card says the word; it adds one vendored icon and one design-system primitive, and nothing leaves the wire or the server.
+
+**Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
