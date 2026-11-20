@@ -25,13 +25,6 @@ import {
 /** The ops an Anthropic lane's own path admits. */
 export const ANTHROPIC_OPS = Object.freeze(['hold', 'release', 'revert', 'aliases-refresh']);
 
-/** THE GATE on holds (D-8820). Until ccd puts a held id on an Anthropic lane's launch (Task A3.4), a `hold` or `revert`
- *  there would answer ok while every new session still launched on the alias's current id. So both refuse at the op's
- *  door, `alias-hold-not-applied`, writing nothing; `release` stays open (it can clear a hand-made hold). The hold path
- *  below is kept whole and tested through a copy of this file with the gate set true. Task A3.4 sets it true, or
- *  removes it, in the release that makes ccd apply holds: ccd and this op always ship in one build. */
-export const ANTHROPIC_HOLDS_APPLIED = false;
-
 /** The largest cache file read: a catalogue cache is far smaller; a larger file is an `invalid` reading, never read whole. */
 const CACHE_FILE_MAX_BYTES = 1_048_576;
 /** At most this many cache files of one home are read (names sorted): a directory of thousands is not a cache. */
@@ -421,6 +414,10 @@ export function anthropicArm(io) {
       const after = next.classes[c];
       if (before === null || before.id === null || after.id === null || before.id === after.id) continue;
       if (before.unlaunchable !== null || !rowLaunchable(before.row, laneVersion)) continue;
+      // A HELD CLASS MOVES NOTHING (review 2886, F4), as the Codex arm's advance abandons a held class (`held`): no history
+      // entry, `previous` untouched and no push, so a second revert still holds at the model the first one named. The
+      // aliases file below still records where the alias went, which is how doctor names the class held behind.
+      if (cur.advance !== null && cur.advance.classes[c].hold !== null) continue;
       const history = cur.advance === null ? [] : cur.advance.classes[c].history;
       const newest = history[history.length - 1];
       const recorded = newest !== undefined && newest.ok === true && newest.from === before.id && newest.to === after.id
@@ -532,12 +529,9 @@ export function anthropicArm(io) {
 
   /** An Anthropic lane's own path, before the `anthropic-lane` and `no-registry` gates (`ANTHROPIC_OPS`). */
   function anthropicOp(opName, a, account, json) {
+    // A held id reaches every launch on the lane: ccd puts it in the launch environment (`_held_model_env_to`,
+    // ccd/lib/model-aliases.sh, Task A3.4), which lifted D-8820's gate in the same build.
     if (opName === 'aliases-refresh') return aliasesRefreshOp(a, account, json);
-    if (!ANTHROPIC_HOLDS_APPLIED && opName !== 'release') {
-      return refuse(1, 'alias-hold-not-applied', `account "${a.id}" is an Anthropic lane, and this fleet box's ccd does `
-        + `not yet put a held model on such a lane's launches, so a ${opName} would change nothing a session runs. `
-        + 'Nothing was written.');
-    }
     return anthropicHoldOp(opName, a, account);
   }
 

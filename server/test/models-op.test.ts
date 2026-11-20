@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
@@ -45,12 +45,17 @@ import type { FleetIO } from '../src/io.js';
 import {
   STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster, stepRow,
 } from './fixtures/advanceCases.js';
-import { HOLDS_GATE_LINE, holdsAppliedOp, pointImports } from './modelsOpCopy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const OP = path.join(REPO, 'deploy', 'models-op.mjs');
 const ARM = path.join(REPO, 'deploy', 'models-anthropic.mjs');
+
+/** A copy's source with its imports pointed at this checkout: `../shared/` (the shared rules) and
+ *  `./models-anthropic.mjs` (beside the op, so a copy elsewhere cannot find it) at `arm`. */
+const pointImports = (src: string, arm: string = ARM): string => src
+  .replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+  .replaceAll("from './models-anthropic.mjs'", `from '${pathToFileURL(arm).href}'`);
 
 let home: string;
 const rosterPath = (): string => path.join(home, '.ccrc', 'accounts.json');
@@ -85,12 +90,7 @@ function op(...args: string[]): Result {
 
 /** `op`, with `extra` laid over its environment (`CCRC_MODELS_NOW`, the advance file's clock). */
 function opEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Result {
-  return opThrough(OP, extra, ...args);
-}
-
-/** `opEnv`, through another copy of the op (`script`): the Anthropic hold path runs through `holdsAppliedOp`'s. */
-function opThrough(script: string, extra: NodeJS.ProcessEnv, ...args: string[]): Result {
-  const r = spawnSync(process.execPath, [script, ...args],
+  const r = spawnSync(process.execPath, [OP, ...args],
     { env: { ...process.env, HOME: home, ...extra }, encoding: 'utf8' });
   const stdout = r.stdout ?? '';
   // THE CONTRACT: exactly one JSON object on stdout, newline-terminated. A
@@ -4107,6 +4107,19 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(snapshot()).toEqual(before);
   });
 
+  // Review 2886's F4, measured on the Codex arm before the Anthropic arm was made to match it: while a class is held, a
+  // newer model moves nothing, so the class's `previous` and its history stay exactly as they were and nothing is pushed.
+  it('a held class keeps its previous and its history while a newer model waits (the Codex arm, F4)', () => {
+    const PREV = { model: 'model-5-gamma', effort: 'high' };
+    const ENTRY = { at: '2026-10-21T09:00:00Z', how: 'advance', from: 'model-5-gamma', to: 'model-5.6-gamma', ok: true,
+      canary: 'passed' };
+    plantStep({ advance: stepAdvance({ opus: { hold: HOLD, previous: PREV, history: [ENTRY] } }) });
+    const r = commit();
+    expect(r.body).toMatchObject({ ok: true, outcome: 'abandoned', why: 'held', push: false });
+    expect(laneAdvance().classes.opus.previous).toEqual(PREV);
+    expect(laneAdvance().classes.opus.history).toEqual([ENTRY]);
+  });
+
   it('a failed canary on a class held since the plan abandons too, and records no failure', () => {
     plantStep({ advance: stepAdvance({ opus: { hold: HOLD } }) });
     const before = snapshot();
@@ -5717,12 +5730,11 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     fs.writeFileSync(advFile(), bytes);
     return bytes;
   };
-  // The hold path runs through a copy with the hold gate open (D-8820: the shipped op refuses `hold` and `revert` on an
-  // Anthropic lane until Task A3.4); the gate's own cases below run the shipped op.
+  // The shipped op: D-8820's gate on `hold` and `revert` was lifted with Task A3.4, which puts a held id on every launch.
   const hold = (cls = 'opus', id: string = LANE, at: string = NOW): Result =>
-    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: at }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
+    opEnv({ CCRC_MODELS_NOW: at }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
   const verbOf = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
-    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
+    opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
   /** The op through a COPY with one line replaced: the one way to make one of its writes fail for real. A line of the
    *  Anthropic arm (`inArm`) is replaced in a copy of that module, which the op's copy imports in place of the shipped one. */
   const copyOf = (line: string, instead: string, inArm = false): string => {
@@ -6107,26 +6119,42 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     expect(fs.readFileSync(advFile(), 'utf8')).toBe(before);
   });
 
-  // THE GATE (D-8820): until ccd applies a held id at launch (Task A3.4), the shipped op refuses `hold` and `revert` on an
-  // Anthropic lane at its door, in a state where each would otherwise succeed, and writes nothing; `release` stays open.
-  it('the shipped op refuses hold and revert on an Anthropic lane, alias-hold-not-applied, writing nothing; release stays open', () => {
-    expect(fs.readFileSync(ARM, 'utf8').split(HOLDS_GATE_LINE), 'the arm carries the gate, closed').toHaveLength(2);
+  // Review 2886's F4: an alias move while the class is held is the Codex arm's held class (measured above, 'a held class
+  // keeps its previous and its history while a newer model waits'): no history entry, `previous` untouched, no push. The
+  // aliases file still records where the alias went, so doctor names the class held behind. Without it, a second revert
+  // held at the model the first revert had moved away from.
+  it('an alias move while the class is held records no move and keeps previous, so a second revert holds where the first did (F4)', () => {
+    baseline([{ id: X1 }, { id: X2 }, { id: X3 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }, { id: X3 }]));
+    expect(refresh(T1).body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(verbOf('revert').code).toBe(0);
+    const held = fs.readFileSync(advFile(), 'utf8');
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'revert', model: X1 });
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X3 }, [{ id: X1 }, { id: X2 }, { id: X3 }]));
+    const r = refresh(T2);
+    expect([r.code, r.body['moved']], r.stdout + r.stderr).toEqual([0, []]);
+    expect(fs.readFileSync(advFile(), 'utf8'), 'the advance file is untouched while held').toBe(held);
+    expect(readAliases().classes.opus.id, 'the aliases file still follows the alias').toBe(X3);
+    expect(verbOf('revert').code).toBe(0);
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'revert', model: X1 });
+    expect(adv().classes.opus.previous).toEqual({ model: X1, effort: null });
+  });
+
+  // D-8820's gate, lifted (Task A3.4): the shipped op holds and reverts on an Anthropic lane, and no code of the gate is
+  // left in the arm or on the Models sheet.
+  it('the shipped op holds and reverts on an Anthropic lane: the D-8820 gate is gone', () => {
+    expect(fs.readFileSync(ARM, 'utf8'), 'no gate constant and no gate code in the arm').not.toMatch(/HOLDS_APPLIED|alias-hold-not-applied/);
     baseline([{ id: X1 }, { id: X2 }]);
     plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
     expect(refresh(T1).code).toBe(0);
-    const before = fs.readFileSync(advFile(), 'utf8');
-    for (const v of ['hold', 'revert']) {
-      const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', LANE, '--class', 'opus');
-      expect([r.code, r.body['error']], `${v}: ${r.stdout}${r.stderr}`).toEqual([1, 'alias-hold-not-applied']);
-      expect(String(r.body['detail'])).toContain('Nothing was written.');
-      expect(fs.readFileSync(advFile(), 'utf8'), v).toBe(before);
-    }
-    // The same two, through the copy with the gate open, would have held: the refusal above is the gate's alone.
-    expect(verbOf('revert').code).toBe(0);
-    // A hold made before (by hand, or by A3.4's build before a rollback) is still released by the shipped op.
-    const r = opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
-    expect([r.code, r.body['changed']], r.stdout + r.stderr).toEqual([0, true]);
-    expect(adv().classes.opus.hold).toBeNull();
+    const r = opEnv({ CCRC_MODELS_NOW: T2 }, 'revert', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([r.code, r.body['ok']], r.stdout + r.stderr).toEqual([0, true]);
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'revert', model: X1 });
+    const rel = opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([rel.code, rel.body['changed']], rel.stdout + rel.stderr).toEqual([0, true]);
+    const h = opEnv({ CCRC_MODELS_NOW: T3 }, 'hold', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([h.code, h.body['changed']], h.stdout + h.stderr).toEqual([0, true]);
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'hand', model: X2 });
   });
 
   it('a settings.json that is not JSON refuses the hold without quoting any of its text', () => {

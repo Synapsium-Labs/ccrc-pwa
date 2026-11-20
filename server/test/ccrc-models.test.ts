@@ -1287,17 +1287,16 @@ describe('ccrc models <id> hold, release and revert (auto-advance spec §2.7, D1
     expect(oneObject(run(['models', ID, verb, 'opus', 'extra']))['error']).toBe('unknown-argument');
   });
 
-  // Model-class Anthropic arm A2.3: an Anthropic lane has its own path for the three (no `anthropic-lane` refusal). Until
-  // ccd applies a held id at launch (Task A3.4), hold and revert refuse at that path's door, writing nothing (D-8820);
-  // release stays open, and with nothing held it has nothing to do.
-  it('an Anthropic lane takes its own path: hold and revert refuse alias-hold-not-applied, release has nothing to do', () => {
+  // Model-class Anthropic arm A2.3: an Anthropic lane has its own path for the three (no `anthropic-lane` refusal). Since
+  // Task A3.4 puts a held id on every launch, D-8820's gate is gone: with no aliases file yet, a hold has no model to
+  // name and refuses alias-source-absent, a revert has nothing on record, and release has nothing to do.
+  it('an Anthropic lane takes its own path: hold and revert reach it, release has nothing to do', () => {
     const verb = (v: string): { code: number; body: Record<string, unknown> } => {
       const r = run(['models', ROSTER.accounts[1]!.id, v, 'opus']);
       return { code: r.code, body: oneObject(r) };
     };
-    expect(verb('hold')).toMatchObject({ code: 1, body: { error: 'alias-hold-not-applied' } });
-    expect(verb('revert')).toMatchObject({ code: 1, body: { error: 'alias-hold-not-applied' } });
-    expect(fs.existsSync(join(home, '.ccrc', 'models', `${ROSTER.accounts[1]!.id}.advance.json`))).toBe(false);
+    expect(verb('hold')).toMatchObject({ code: 1, body: { error: 'alias-source-absent' } });
+    expect(verb('revert')).toMatchObject({ code: 1, body: { error: 'no-previous' } });
     expect(verb('release')).toMatchObject({ code: 0, body: { ok: true, changed: false } });
   });
 

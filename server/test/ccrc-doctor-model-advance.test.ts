@@ -21,7 +21,6 @@ import { ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster } from './fixtures/advanceCases.js';
 import { seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
-import { holdsAppliedOp } from './modelsOpCopy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -579,11 +578,9 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
   const aliasesPath = (h: string): string => join(h, '.ccrc', 'models', `${AL}.aliases.json`);
   const advancePath = (h: string): string => join(h, '.ccrc', 'models', `${AL}.advance.json`);
 
-  /** The model op itself, with `now` as its clock; every call is asked to end 0. `hold` and `revert` run through a copy
-   *  with the hold gate open (D-8820: the shipped op refuses both on an Anthropic lane until Task A3.4). */
+  /** The model op itself, with `now` as its clock; every call is asked to end 0. */
   function aop(h: string, now: string, verb: string, cls = 'opus'): Json {
-    const script = verb === 'hold' || verb === 'revert' ? holdsAppliedOp(h) : OP;
-    const argv = [script, verb, '--file', join(h, '.ccrc', 'accounts.json'), '--id', AL,
+    const argv = [OP, verb, '--file', join(h, '.ccrc', 'accounts.json'), '--id', AL,
       ...(verb === 'aliases-refresh' ? ['--reg', reg(h)] : ['--class', cls])];
     const r = spawnSyncGroup(process.execPath, argv, { env: { ...process.env, HOME: h, CCRC_MODELS_NOW: now }, encoding: 'utf8', timeout: 20_000 });
     expect(r.status, `${verb}: ${r.stdout}${r.stderr}`).toBe(0);
