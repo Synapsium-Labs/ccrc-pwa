@@ -16,7 +16,7 @@
 
 This section says what reader mode builds on. Every claim about ccrc was read from `main` at `62276e71b`, and every claim about the library from the installed `@synapsium-labs/docserver` 1.1.0, on 2026-11-20.
 
-XR1 does not run on 1.1.0. It runs on the contract release, after X1's wave C re-pins ccrc to it and X2's P5 builds on it (§7.5). That release is 1.1.0 plus two designed landings: X1's contract (X1 spec §2, §6, §10) and X2's additions (X2 spec §4.7): the `place` op, `push` and `from` on the `hash` op, and the `close-overlay` and `goto` commands. Neither landing changes the chrome switches, the Aa menu's `settings` command, `progress` or `pos`, or, in the default layout, the keys the frame binds. So the 1.1.0 facts below are the contract release's default layout as designed, and XR1's first step re-reads each one on the installed release before any code (the plan's Task XR1.1 Step 0).
+XR1 does not run on 1.1.0. It runs on the contract release, after X1's wave C re-pins ccrc to it, X2's P6 lands, and X2's P5 adopts the release (§7.5). That release is 1.1.0 plus two designed landings: X1's contract (X1 spec §2, §6, §10) and X2's additions (X2 spec §4.7): the `place` op, `push` and `from` on the `hash` op, and the `close-overlay` and `goto` commands. Neither landing changes the chrome switches, the Aa menu's `settings` command, `progress` or `pos`, or, in the default layout, the keys the frame binds. So the 1.1.0 facts below are the contract release's default layout as designed, and XR1's first step re-reads each one on the installed release before any code (the plan's Task XR1.1 Step 0).
 
 The contract release also carries X2's five layouts (X2 spec §4.2): `default`, `classic`, `editorial`, `review` (with a rail and its own keys) and `guided` (folded sections, and tables as cards on a phone). The host picks one per device, and a change remounts the frame. Reader mode reads in the default layout only (§4.3, the coordinator's ruling on review 2947 F3), so every fact this design relies on is the default layout's.
 
@@ -63,7 +63,7 @@ The contract release also carries X2's five layouts (X2 spec §4.2): `default`, 
 | Full screen | Fill, plus the browser's element full screen on ccrc's reading container, where the engine grants it |
 | Screen page | One viewport of text. A turn moves to the next screen page and lands on a whole line |
 | Turn | Moving one screen page forward or back |
-| The overlay | ccrc's small reader-mode toolbar: progress and time left, Aa, the turn setting and Exit |
+| The overlay | ccrc's small reader-mode toolbar. XR1: Exit, the title and the percentage. From XR2 it adds the time left, Aa and the turn setting |
 | The top band | The strip at the top of the reading view whose tap shows the overlay; drawn and reported by the frame, from XR2 |
 | The menu control | XR1's small ccrc button in a top corner of the reading view, whose tap shows the overlay; gone from XR2 |
 | Reading container | The ccrc element that holds the reader frame and the overlay, and that goes full screen |
@@ -87,7 +87,7 @@ Normal view, 1280 x 800
 
 Reader mode, full screen
 +--------------------------------------------------------------------------------+
-|                       (top band: a tap or hover shows the overlay)             |
+|                       (top band: a tap shows the overlay)                      |
 |                 1. Context                                                     |
 |                 This section says what reader mode builds on. Every claim      |
 |                 about ccrc was read from main ... the text at its measure,     |
@@ -575,7 +575,9 @@ flowchart LR
   L1["Library L1: X1's landing"] --> RN["Library: the rename"] --> L2["Library L2: X2's landing"]
   L2 --> CR["The contract release"]
   CR --> WC["X1 wave C: ccrc re-pins<br/>to the contract release"]
-  WC --> P5["X2 P5 and P6 on it,<br/>P5.3's dispatcher and decider"]
+  WC --> P6["X2 P6, the page loader"]
+  P6 --> P5["X2 P5 adopts the release,<br/>P5.3's dispatcher and decider"]
+  CR --> P5
   P5 --> XR1["XR1 reader mode in scroll:<br/>button, fill, full screen,<br/>overlay, Back, place, wake lock"]
   L2 --> LX6["Library LX6: X6's shares,<br/>then X6's landing"]
   LX6 -.->|"if ready by the cut"| CR
@@ -584,7 +586,7 @@ flowchart LR
   NR --> XR2
   XR1 --> XR2
 ```
-*Figure 5. Wave order. Start at the library's L1. The library lands X1's contract, its rename and X2's additions, and cuts the contract release. X1's wave C re-pins ccrc to it and X2's P5 builds on it; XR1 follows, on that release, in continuous scroll. LX6 joins the contract release only if it is ready by the cut, and the cut never waits for it. XR2, the screen pages, follows on whichever release carries LX6.*
+*Figure 5. Wave order. Start at the library's L1. The library lands X1's contract, its rename and X2's additions, and cuts the contract release. X1's wave C re-pins ccrc to it; X2's P6 follows X1's host wave, and X2's P5 then adopts the release; XR1 follows, on that release, in continuous scroll. LX6 joins the contract release only if it is ready by the cut, and the cut never waits for it. XR2, the screen pages, follows on whichever release carries LX6.*
 
 ## 8. Boundaries, threat model and departures
 
@@ -596,7 +598,7 @@ This section checks reader mode against every wall and records what it departs f
 | Shell CSP `frame-src 'none'` | No new frame, no navigation, no source |
 | No parent-DOM access, no new channel | The `reading` and `reader` ops ride the existing port and parser |
 | No window `message` listener | None added; keys go through the command registry, history through X2's dispatcher |
-| Phishing inside the frame | Rich-docs §5.2's row rests on "ccrc's chrome stays outside the frame", and reader mode hides that chrome (D-8831). The frame fills the screen, so a document can draw a fake "Exit" or a fake sign-in box. The real Exit is the overlay's, and Back always works. A browser that grants element full screen may show its own notice naming the site, but the notice fades. On the fill path (the likely iPhone case, FS-1) and in the installed app (FS-2, which has no address bar) nothing names the site at all. In XR1, ccrc's menu control stays on screen; from XR2, nothing of ccrc's shows until the overlay does. The harm stays low, because the walls under the row still hold: raw HTML is off, so a document draws no input that takes text; the frame cannot send anything out (`form-action 'none'`, `default-src 'none'`); and every external link opens only from the external-link sheet, which names the host |
+| Phishing inside the frame | Rich-docs §5.2's row rests on "ccrc's chrome stays outside the frame", and reader mode hides that chrome (D-8831). The frame fills the screen, so a document can draw a fake "Exit" or a fake sign-in box. The real Exit is the overlay's, and Back always works. A browser that grants element full screen may show its own notice naming the site, but the notice fades. In the installed app (FS-2, which has no address bar), and on any fill path without the browser's bars, nothing names the site at all. In an iPhone's Safari tab (FS-1) the fill keeps Safari's bars, so the address bar still shows the site. In XR1, ccrc's menu control stays on screen; from XR2, nothing of ccrc's shows until the overlay does. The harm stays low, because the walls under the row still hold: raw HTML is off, so a document draws no input that takes text; the frame cannot send anything out (`form-action 'none'`, `default-src 'none'`); and every external link opens only from the external-link sheet, which names the host |
 | A frame spamming `reader` | A well-behaved frame paces it (`readerWindowMs`); a hostile one that does not is refused message by message like any other op and closes its own port at 16 refusals, which is the existing wall. `menu` toggles a toolbar; `exit` ends reader mode, which is what Esc does; `toggle` while off is refused by ccrc's decision unless the frame is ready and holds focus, so a frame cannot pull you into reader mode while you are elsewhere; and entering from a frame's `toggle` asks for full screen only when ccrc's own window holds transient activation as the op arrives (`navigator.userActivation.isActive`, which a key press in the frame may or may not give its parent: lab E16, per engine), otherwise the fill alone. A reader place pushed without activation may be skipped by Chromium's Back. The decider's rule, a pop that crosses an on reader place exits reader mode, covers that landing too, and routes when it lands past the doc (§3.3) |
 | A frame holding the screen on | Only as far as reading itself does: the wake lock is ccrc's, and only a `progress` message whose share changed counts as activity (§6.3). A frame that scrolls itself without end could hold the screen on while reader mode is open, as a reader scrolling would; it cannot reopen reader mode, and Exit and Back end it |
 | History | ccrc builds every entry; one reader place per entry, bounded by X2's 50 per visit |
@@ -646,7 +648,7 @@ Technical choices are the worker's, each argued above; the one product choice wa
 | R13 | Text size | A new reader-local pref, four steps | Proposed |
 | R14 | Wake lock | Taken, with a 5 minute idle release | Proposed |
 | R15 | Orientation | Never locked | Proposed |
-| R16 | Entry in XR1 | In place on a phone; on a desktop one remount with the chrome off, after scrolling settles and with no opening hash; in place everywhere from XR2 | Proposed |
+| R16 | Entry in XR1 | In place on a phone in the default layout; on a desktop one remount with the chrome off, after scrolling settles and with no opening hash; in place everywhere from XR2 | Proposed |
 | R17 | Op names | `reading` to the frame, `reader` from it, paced in the frame | Proposed |
 | R18 | The console behind reader mode | Inert and hidden from assistive technology, written as the page's own hiding through `modal-layers.ts`, which no closing sheet lifts; the palette does not offer reader mode | Proposed |
 | R19 | Blocks in full screen | End reader mode | Proposed |

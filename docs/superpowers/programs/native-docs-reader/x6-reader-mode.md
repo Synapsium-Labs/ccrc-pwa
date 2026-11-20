@@ -11,7 +11,7 @@ The task note for wave 31 of the native Docs reader programme, for the coordinat
 
 - **Waves row.** X6, reader mode: the operator's request of 2026-11-19. Design wave 31, run 2847. The order is the coordinator's ruling on review 2933 F7, option (a):
   - the library lands L1 (X1's landing), its rename and L2 (X2's landing), and cuts the contract release;
-  - X1's wave C re-pins ccrc to it, and X2's P5 and P6 build on it;
+  - X1's wave C re-pins ccrc to it; X2's P6 follows X1's host wave and P4, and X2's P5 then adopts the release;
   - XR1 follows on it, in continuous scroll;
   - LX6 joins the contract release if ready by the cut, otherwise the next release, and no cut waits for it;
   - XR2 follows on whichever release carries LX6.
@@ -35,4 +35,4 @@ The task note for wave 31 of the native Docs reader programme, for the coordinat
 - **Adversarial passes (Opus, high), 2026-11-20:**
   - before the first push: 14 important and 12 minor findings, all fixed;
   - after review 2933's fix round, on the changed sections: 4 important and 6 minor findings, all fixed.
-- **Review 2933 (round 1):** F1 to F8 and A1 to A6, each fixed in its own commit, and listed in the plan's Results. The judge's `pr1-files-invalid` for this note is accepted by the coordinator, as for X5.
+- **Review 2933 (round 1):** F1 to F8 and A1 to A6, each fixed in its own commit except A2 and A5, which share one, and listed in the plan's Results. The judge's `pr1-files-invalid` for this note is accepted by the coordinator, as for X5.
