@@ -506,8 +506,8 @@ describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
     const cases: [string, (f: Fake) => void][] = [
       ['mail', (f) => { f.mailTo.add(ID); }],
       ['claim', (f) => { (f.deps.coord as { activeClaims: unknown }).activeClaims = () => [{ heldBy: ID }]; }],
-      ['marker-background', (f) => { f.deps.mark = async () => ({ ...quiet, bg: 1 }) as never; }],
-      ['scheduled', (f) => { f.deps.mark = async () => ({ ...quiet, crons: 1 }) as never; }],
+      ['marker-background', (f) => { (f.deps as { mark: unknown }).mark = async () => ({ ...quiet, bg: 1 }) as never; }],
+      ['scheduled', (f) => { (f.deps as { mark: unknown }).mark = async () => ({ ...quiet, crons: 1 }) as never; }],
       ['run-worker', (f) => { f.openWorkers.add(ID); }],
     ];
     for (const [hold, arrange] of cases) {
