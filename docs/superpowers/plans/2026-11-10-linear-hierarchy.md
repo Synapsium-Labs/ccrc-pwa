@@ -344,6 +344,40 @@ number from `POST /api/ledger/deviations`.
   Upkeep binding, or for a programme with no coordinator, now mails the home project's Linear owner, with no programme, in
   the same transaction as the settle; with no usable owner (none named, or gone) it is refused `no-linear-owner`. Record: the
   wave 4 follow-ups note.
+- **D-8808 (2026-11-20)** — w8-team-and-workspace-mapping: wave 8 (spec §3.1, the operator's ruling of 2026-11-19, item
+  489). It departs from Tasks 8.1 to 8.6 in these places. The team-link vocabulary moved from `shared/api.ts` to
+  `shared/linking.ts` first, as a move commit with characterization pins; `shared/api.ts` gains one type-only import line
+  for `ProjectLinkingWire` (the L0 import pins move with it). The row's workspace is `project_linking.teamWorkspace`, in the
+  wave's one migration with `teamSuggestions` and `teamCallId`. The operator's write body's `workspace` is optional:
+  absent keeps the stored workspace (dropped when the new key is not in it), null clears it, a named one must hold the key
+  (`team-unknown`), and an unreadable Linear store is `unavailable`. One resolver, `routeProjectTeam`, serves the plan
+  sync, the plan routes and the linking routes; the Linear proxy is unchanged, because it does not know the caller's
+  project. The inbound owner rule takes the issue's workspace at all three of its lookups. Task 8.3's read
+  (`attachmentsForUrl`) has a constructed fixture (its schema is an assumption until the live capture), reads under its own
+  pass `team-link`, answers unmeasured unless every asked workspace answered, and is not wired into the lane: a guard test
+  goes red if it is, and wiring it is a follow-up after the operator's go. The suggestion's client row takes a JSON body
+  (`linking suggest --json -`, the identity spliced from the pane) rather than flags. The suggest door writes only an
+  existing row (`no-project` otherwise), refuses a reason naming a ticket id of any connected team or carrying line or
+  bidi control characters, refuses `team-ambiguous` for a key two connected workspaces hold when no workspace is named,
+  keeps the newest eight suggestions, answers only what the caller wrote, and checks no project ownership and no
+  coordinator role: any attributed session may suggest for any keyless project (a coordinator's programme files into
+  projects not its own), and the console shows who suggested. The README's
+  machine-lane count word moves to ninety-five under the packet terms of the run that holds README.md. The wave's one
+  migration took slot 112 at the absorb. One bend of the rings rule is stated
+  here, not hidden: the choice of which inbound row a `plan triage` acts on (searching every workspace that holds the key,
+  preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
+  another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
+  it into the policy. Record: the wave 8 note.
+- **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
+  act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
+  with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`
+  `auto` plus a nullable `teamCallId`, because migration 64's CHECK admits only `manual` and `auto` and cannot widen
+  without a table rebuild; exactly one function, `linkSourceOf`, derives the wire's `overlord` source from the pair, and a
+  single-definition test fails on any other read. The link and its big call are one transaction, under the automatic
+  link's own statement, after the chosen candidate's pair is re-checked against the live Linear store (`team-unknown`,
+  `team-ambiguous`, or `unavailable` when the store cannot be read). The call is filed under `linear-sync` (design call 19 as amended), names the project, the team and
+  the workspace by display name and the evidence, and shows in "calls made for you"; the operator overturns it by a key
+  write on the card, which makes the key `manual`. The door process gains a `link_team` tool row. Record: the wave 8 note.
 
 ## Global Constraints
 
@@ -2061,7 +2095,7 @@ Test `server/test/migration-putback.test.ts`.
 
 ---
 
-## Wave 8 — team and workspace mapping
+## Wave 8 — team and workspace mapping (D-8808)
 
 Spec §3.1, the operator's ruling of 2026-11-19 (item 489): coordinators suggest a team, and the Overlord may link one as
 a call made in the operator's name. It runs alongside wave 7's pilot and never blocks it. Its deviation numbers are
