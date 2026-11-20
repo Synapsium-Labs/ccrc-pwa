@@ -124,16 +124,16 @@ Normal view, 412 x 915, one bar            Reader mode                    Overla
 ```text
 XR1 on a phone, 412 x 915                 XR1, the menu control tapped
 +------------------------------+          +------------------------------+
-|[=]                       [Aa]|          |[x]  Title of the doc   41%   |
-| 1. Context                   |          | 1. Context                   |
-| This section says what       |          | This section says what       |
-| reader mode builds on.       |          | reader mode builds on.       |
-| Every claim about ccrc ...   |          | ...                          |
-|  (continuous scroll)         |          |                              |
+|[=]                       [Aa]|          |[=] Title of doc 41%[Exit][Aa]|
+| 1. Context                   |          |::::::::::::::::::::::::::::::|
+| This section says what       |          |: the reading area, under a  :|
+| reader mode builds on.       |          |: clear layer: a tap here    :|
+| Every claim about ccrc ...   |          |: hides the overlay          :|
+|  (continuous scroll)         |          |::::::::::::::::::::::::::::::|
 +------------------------------+          +------------------------------+
   [=] ccrc's menu control   [Aa] the reader's own Aa, drawn by the frame
 ```
-*Mockup 3. XR1 on a phone. The text scrolls as it does today. Two small controls stay over the page's top corners: ccrc's menu control, which shows the overlay with Exit and the percentage, and the reader's own Aa, which still opens width, font and folds. XR2 removes both.*
+*Mockup 3. XR1 on a phone. The text scrolls as it does today. Two small controls stay over the page's top corners: ccrc's menu control and the reader's own Aa, which still opens width, font and folds. The menu control shows the overlay strip between the two corners, with the title, the percentage and Exit. A second tap on the menu control, or a tap anywhere outside the strip, hides it. Exit never sits where the menu control was, and the Aa corner stays clear. XR2 removes both corner controls.*
 
 ### 2.3 The states
 
@@ -293,7 +293,16 @@ flowchart TB
 | The reader's own bar, running head, progress line | Hidden | XR1: the reader-mode remount passes `features.chrome {bar: false}`. XR2: the library hides it in place |
 | The contents rail | Hidden | XR1: `rail: false` at the remount. XR2: in place |
 | The frame's Aa button | XR1: stays, drawn by the frame at the top right, where the library puts it with the bar off (`.aa-wrap`, sticky, 8 px from the top). The contract release cannot hide it and keep its menu: there, as at 1.1.0, `settings: false` also unregisters the `settings` command (`enhance/settings.js`), and neither X1 nor X2 adds a host switch for it (X1 spec §6 keeps one Aa, in the frame). So in XR1 you reach width, font and folds through that Aa, in reader mode, with nothing of ccrc's over it. XR2: hidden in place, reachable from the overlay's Aa (`command settings`, D-8803) | XR1 keeps it; XR2 hides it |
-| ccrc's menu control | XR1 only: one 44 by 44 px button in the top corner the frame's Aa does not use (the top left), inside the safe areas, on the reader's ground at 85% opacity, labelled "Reader mode menu". A tap shows the overlay | Text scrolls beneath it, as it does beneath the frame's Aa; a drag anywhere else scrolls the frame. XR2 removes it |
+| ccrc's menu control | XR1 only: one 44 by 44 px button in the top corner the frame's Aa does not use (the top left), inside the safe areas, on the reader's ground at 85% opacity, labelled "Reader mode menu", with `aria-expanded`. A tap shows the overlay, and a second tap on it hides the overlay | Text scrolls beneath it, as it does beneath the frame's Aa; a drag anywhere else scrolls the frame. XR2 removes it |
+
+**The overlay, shown and hidden (the coordinator's ruling on review 2947 F2: Kindle-like, both ways).** It never hides by itself: a timeout would surprise a reader who is looking at the progress.
+- **Show.** XR1: a tap on the menu control. From XR2: a tap on the frame's top band (`reader {act: 'menu'}`).
+- **Hide:**
+  - the same control again: a second tap on the menu control (XR1), or on the top band (XR2), toggles it off;
+  - a tap anywhere outside the overlay. ccrc cannot see a tap inside the frame, so while the overlay shows, ccrc draws a clear layer over the reading area below the strip. A tap on that layer hides the overlay and does nothing else, as a Kindle's tap outside its menu does. The layer leaves the frame's Aa corner uncovered. A tap there opens the frame's settings and moves focus into the frame, which hides the overlay too, through the page clock's window-blur signal (`lib/pageClock.ts#onWindowBlur`);
+  - Esc on the overlay (§3.3).
+- **Where things sit.** The strip runs from the menu control's right edge to the Aa corner's left edge: the menu control stays where it was, as the toggle, and the strip holds the title, the percentage and Exit, with Exit at its right end. So Exit never sits where the menu control was, and a second tap there can never leave reader mode. While the overlay shows, the frame's Aa corner is never covered.
+- **From XR2, and in landscape.** XR2 has no corner controls. The strip runs the full width, with Exit at its right end, and a tap on the strip outside its controls hides it as well. The same clear layer below the strip hides it on a tap outside, in portrait and in landscape alike.
 | Figure tools, Render buttons of figures not drawn yet, code copy, table filter, cards | Kept | They are the document's own controls. Figures stay on request (E17, both phone blocks unchanged) |
 | The top space above the first heading | Trimmed | `topSpace: false` |
 
