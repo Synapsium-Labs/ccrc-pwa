@@ -74,8 +74,17 @@ Each through `ccrc test`, in `server/`, one at a time, `--maxWorkers=2`. Load is
 | `ccrc-api-closed` | 16 | red on the two new commands, then 52 passed after the list edit |
 | `single-definition` (all) | 13 | `advance-switches` and `docs-l0` red in the batch; each green alone on one rerun (53 and 155 passed): load flakes |
 | `dtbd` | 27 | 1 passed |
-| `topology-clean` | 12 to 18 | see §7 |
+| `deviation-refs` (after `git fetch origin main`) | 20 | 34 passed |
+| `topology-clean` | 12 to 20 | SIGKILLed five times, then 61 passed (§7) |
+| the ledger guard (`.github/ci/ledger-guard.mjs`, as a pull request from `ws/polish-wm5`) | n/a | passes by the head's `Ledger-Edit: D-8844` trailer; the first head had the trailer in its own paragraph, which git's trailer parser does not read, so the commit was amended before the push |
 
 ## 7. Not green, said plainly
 
-(filled at the end)
+- **`topology-clean` was killed, then passed.** Its worker was SIGKILLed ("Worker exited unexpectedly with signal SIGKILL") on five runs, alone, with
+  `--maxWorkers=2` and with one, while the test slice held 4.8 to 5.0 of its 6.0 GiB (other sessions' runs, measured: `ccrc test --status`). On the
+  sixth, with the slice at 4.8, it passed 61 of 61. This task adds no name to any list it scans, and the whole-tree scan with the operator's local list, run at the tip, printed nothing. Inferred: the kills were the slice's
+  memory cap, not a finding.
+- **`single-definition`: two files red in the batch.** `advance-switches` and `docs-l0` failed in the 43-file batch at load 13 and each passed alone on
+  the one rerun the brief allows (53 and 155 passed). Inferred: load flakes; neither reads a file this task changes.
+- **Not run:** the browser, pwa and agent suites (a docs and test-file change, so none reaches them), and no full run (the queue and the daily run are the arbiters).
+- **Not seen:** the new section was not read on the rendered Docs reader (it is a skill reference, not a doc page).
