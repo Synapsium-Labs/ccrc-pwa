@@ -168,12 +168,14 @@ When the operator starts a team's migration (its project row's "Reshape in Linea
 issue reads), then place every open issue once, with its Linear id and identifier and one class: `leaf` (a ticket in a
 programme's epic: `target` names `programme` and `epic`, and optionally `checkpoint`, `ticketKey` and `kind`), `upkeep`
 (a ticket in the project's Upkeep epic), `programme`, `epic` or `checkpoint` (an issue that stood for that level: it is
-closed, related to the first ticket placed under it), `finished`, `superseded` (`target.successor` names the issue that
-replaced it), `stale` (closed because the operator approves it on the map) or `unclear` (left where it is):
+closed, related to the first ticket placed under it), `finished` (closed as done with its evidence: `target.pr` names the
+merged pull request as `<owner>/<repo>#<number>`, or, when there is none, `target.reason` says why in one line),
+`superseded` (`target.successor` names the issue that replaced it: one on this map, or one ccrc's plan already holds),
+`stale` (closed because the operator approves it on the map) or `unclear` (left where it is):
 
 ```bash
 "$API" plan map-propose <TEAM> --json - <<JSON
-{"entries":[{"issue":"<issue id>","identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"}]}
+{"entries":[{"issue":"<issue id>","identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"},{"issue":"<issue id>","identifier":"AAA-14","class":"finished","target":{"pr":"<owner>/<repo>#<number>"}}]}
 JSON
 ```
 
@@ -185,8 +187,8 @@ or `"backlog":[{"slug":"<new slug>","title":"<title>","epics":[...]}]` for a new
 Linear before that. Issues the apply skipped because they changed reach you again as one follow-up map. Refusals:
 `not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing, listed twice, or not
 open), `map-rewrites-plan` (structure for a programme that has a plan or a live run), and `plan-bad-body` (a target
-that does not exist, a leaf whose epic is in another team, a ticket key already used, or no migration waiting for a
-map).
+that does not exist, a successor that does not exist, a finished issue with no evidence, a leaf whose epic is in another
+team, a ticket key already used, or no migration waiting for a map).
 
 ## plan take
 

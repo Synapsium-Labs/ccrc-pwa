@@ -1,7 +1,7 @@
 // D-8186: the migration map's deciders (`linear/migrationPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  applySteps, checkMap, putBackSteps, reconcileMove, replacementComment, ticketKeyOf, ticketKindOf, programmeOfEntry,
+  applySteps, checkMap, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, ticketKeyOf, ticketKindOf, programmeOfEntry,
   type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from '../src/linear/migrationPolicy.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
@@ -28,6 +28,8 @@ const ctx = (over: Partial<MapContext> = {}): MapContext => ({
   home: 'project-a', teamOf: (p) => (p.startsWith('project-') ? 'AAA' : null), upkeepKeys: new Set(), ...over,
 });
 const leaf = (n: number, over: MapEntry['target'] = {}) => entry(n, 'leaf', { programme: 'prog-a', epic: 'e-1', ...over });
+/** A finished entry with its evidence (review 2892 F7): a pull request, or a one-line reason when there is none. */
+const fin = (n: number, over: MapEntry['target'] = { pr: 'org-a/repo-a#12' }) => entry(n, 'finished', over);
 const withPlan = (p: StoredPlan | null, over: Partial<PlanFacts> = {}) => (prog: string): PlanFacts =>
   prog === 'prog-a' ? { declared: p !== null, live: false, plan: p, ...over } : none;
 const planA = plan(storedEpic('e-1'));
@@ -49,7 +51,7 @@ describe('checkMap coverage', () => {
 });
 
 describe('checkMap declared structure', () => {
-  const m = (): MapBody => mapOf([entry(1, 'finished')], { epics: [{ programme: 'prog-a', epics: [epic('e-1')] }] });
+  const m = (): MapBody => mapOf([fin(1)], { epics: [{ programme: 'prog-a', epics: [epic('e-1')] }] });
   it('epics for a declared programme with a run open is map-rewrites-plan', () => {
     expect(bad(checkMap(m(), [row(1)], withPlan(planA, { live: true }), ctx()))).toMatchObject({ word: 'map-rewrites-plan', detail: 'prog-a' });
   });
@@ -60,12 +62,12 @@ describe('checkMap declared structure', () => {
     expect(bad(checkMap(m(), [row(1)], withPlan(planA, { live: false }), ctx())).word).toBe('map-rewrites-plan');
   });
   it('epics for a done programme with no plan pass, even while its coordinator is alive', () => {
-    const map = mapOf([entry(1, 'finished'), leaf(2)], { epics: [{ programme: 'prog-a', epics: [epic('e-1', { checkpoints: [{ key: 'c-1', title: 'c', kind: 'acceptance' }] })] }] });
+    const map = mapOf([fin(1), leaf(2)], { epics: [{ programme: 'prog-a', epics: [epic('e-1', { checkpoints: [{ key: 'c-1', title: 'c', kind: 'acceptance' }] })] }] });
     const r = checkMap(map, [row(1), row(2)], () => ({ declared: false, live: false, plan: null }), ctx());
     expect(r).toEqual({ ok: true, counts: { created: 3, moved: 1, closed: 1, left: 0, skipped: 0 } });
   });
   it('a backlog slug with a stored plan with epics is map-rewrites-plan', () => {
-    const map = mapOf([entry(1, 'finished')], { backlog: [{ slug: 'prog-a', title: 'T', epics: [epic('e-1')] }] });
+    const map = mapOf([fin(1)], { backlog: [{ slug: 'prog-a', title: 'T', epics: [epic('e-1')] }] });
     expect(bad(checkMap(map, [row(1)], withPlan(planA, { declared: false }), ctx())).word).toBe('map-rewrites-plan');
   });
 });
@@ -119,14 +121,14 @@ describe('checkMap body and targets', () => {
     expect(bad(checkMap(up, [row(1)], () => none, ctx({ upkeepKeys: new Set(['aaa-1']) }))).detail).toBe('ticket-key-used:aaa-1');
   });
   it('a bad body is plan-bad-body', () => {
-    const map = mapOf([entry(1, 'finished')], { backlog: [{ slug: 'prog-b', title: '', epics: [] }] });
+    const map = mapOf([fin(1)], { backlog: [{ slug: 'prog-b', title: '', epics: [] }] });
     expect(bad(checkMap(map, [row(1)], () => none, ctx())).word).toBe('plan-bad-body');
-    const dup = mapOf([entry(1, 'finished')], { backlog: [{ slug: 'prog-b', title: 'T', epics: [] }], epics: [{ programme: 'prog-b', epics: [] }] });
+    const dup = mapOf([fin(1)], { backlog: [{ slug: 'prog-b', title: 'T', epics: [] }], epics: [{ programme: 'prog-b', epics: [] }] });
     expect(bad(checkMap(dup, [row(1)], () => none, ctx())).word).toBe('plan-bad-body');
   });
   it('counts add up across every class', () => {
     const map = mapOf([
-      leaf(1), entry(2, 'upkeep'), entry(3, 'finished'), entry(4, 'superseded', { successor: 'AAA-1' }), entry(5, 'stale'),
+      leaf(1), entry(2, 'upkeep'), fin(3), entry(4, 'superseded', { successor: 'AAA-1' }), entry(5, 'stale'),
       entry(6, 'unclear'), entry(7, 'programme', { programme: 'prog-a' }), entry(8, 'epic', { programme: 'prog-a', epic: 'e-1' }),
       entry(9, 'checkpoint', { programme: 'prog-a', epic: 'e-1', checkpoint: 'c-1' }),
     ], { backlog: [{ slug: 'prog-b', title: 'B', epics: [epic('e-2')] }] });
@@ -157,7 +159,7 @@ describe('applySteps', () => {
   });
   it('leaves come before the replaced levels, in map order', () => {
     const map = mapOf([entry(1, 'programme', { programme: 'prog-a' }), entry(2, 'stale'), entry(3, 'unclear'), leaf(4),
-      entry(5, 'upkeep'), entry(6, 'finished')]);
+      entry(5, 'upkeep'), fin(6)]);
     const reread = new Map<string, IssueSnapshot | 'closed'>(Object.entries(map.snapshot));
     expect(applySteps(map, new Set(), reread, after).now.map((s) => s.linearId)).toEqual([U(4), U(5), U(2), U(6), U(1)]);
   });
@@ -236,5 +238,53 @@ describe('replacementComment', () => {
     }
     expect(replacementComment('project-a', 'private', null)).toBe(replacementComment('project-a', 'public', null));
     expect(replacementComment('project-a', 'private', 'https://example.test/x')).toContain('(https://example.test/x)');
+  });
+});
+
+describe('review 2892 fix round 1 (D-8186)', () => {
+  it('F6: a superseded entry names a successor that exists in the map or the store, or the map is plan-bad-body unknown-successor', () => {
+    const open = [row(1), row(2)];
+    const facts = withPlan(planA);
+    expect(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: 'AAA-1' })]), open, facts, ctx()).ok).toBe(true);
+    expect(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: U(1) })]), open, facts, ctx()).ok).toBe(true);
+    expect(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: 'AAA-77' })]), open, facts, ctx({ heldIssues: new Set(['AAA-77']) })).ok).toBe(true);
+    expect(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: 'AAA-77' })]), open, facts, ctx()))
+      .toEqual({ ok: false, word: 'plan-bad-body', detail: 'unknown-successor:AAA-2' });
+    expect(bad(checkMap(mapOf([leaf(1), entry(2, 'superseded', { successor: 'AAA-2' })]), open, facts, ctx())).detail).toBe('unknown-successor:AAA-2');   // not itself
+  });
+
+  it('F7: a finished entry carries a pull request or a one-line reason, or the map is plan-bad-body finished-needs-evidence', () => {
+    const open = [row(1), row(2)];
+    const facts = withPlan(planA);
+    expect(checkMap(mapOf([leaf(1), fin(2)]), open, facts, ctx()).ok).toBe(true);
+    expect(checkMap(mapOf([leaf(1), fin(2, { reason: 'Shipped before ccrc tracked it' })]), open, facts, ctx()).ok).toBe(true);
+    for (const t of [undefined, {}, { pr: 'repo-a#12' }, { pr: 'org-a/repo-a#x' }, { pr: 'org-a/repo-a' }, { reason: '' }, { reason: 'two\nlines' }, { reason: 'r'.repeat(201) }]) {
+      expect(checkMap(mapOf([leaf(1), entry(2, 'finished', t)]), open, facts, ctx()), JSON.stringify(t))
+        .toEqual({ ok: false, word: 'plan-bad-body', detail: 'finished-needs-evidence:AAA-2' });
+    }
+  });
+
+  it('F7: the close names its evidence; a public team names a pull request outside its own repository by "a pull request" only', () => {
+    expect(finishedComment({ pr: 'org-a/repo-a#12' }, { teamKey: 'AAA', mode: 'private' }, 'org-a/repo-b', [])).toContain('org-a/repo-a#12');
+    expect(finishedComment({ pr: 'org-a/repo-a#12' }, { teamKey: 'AAA', mode: 'public' }, 'org-a/repo-a', [])).toContain('org-a/repo-a#12');
+    for (const mode of ['public', 'unknown'] as const) {
+      const c = finishedComment({ pr: 'org-a/repo-a#12' }, { teamKey: 'AAA', mode: mode }, 'org-a/repo-b', []);
+      expect(c).toContain('a pull request');
+      expect(c).not.toContain('repo-a');
+      expect(finishedComment({ pr: 'org-a/repo-a#12' }, { teamKey: 'AAA', mode: mode }, null, [])).not.toContain('repo-a');
+    }
+    expect(finishedComment({ reason: 'Shipped before ccrc tracked it' }, { teamKey: 'AAA', mode: 'public' }, null, [])).toContain('Shipped before ccrc tracked it');
+    // a reason the public-text check refuses is not written to a public team: the close says only that it is finished
+    const refused = finishedComment({ reason: 'see AAA-12 for it' }, { teamKey: 'AAA', mode: 'public' }, null, []);
+    expect(refused).not.toContain('AAA-12');
+    expect(refused).toContain('finished');
+  });
+
+  it('A6: the report says a done programme\'s initiative stays active while its placed tickets are open (D-8796)', () => {
+    const c = { created: 0, moved: 1, closed: 0, left: 0, skipped: 0 };
+    expect(reportItemInput(4, 'AAA', c).why).not.toContain('stays active');
+    const why = reportItemInput(4, 'AAA', c, ['prog-b']).why;
+    expect(why).toContain('prog-b');
+    expect(why).toContain('initiative stays active in Linear while its placed tickets are open');
   });
 });

@@ -4059,7 +4059,7 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
-  // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186), four nullable columns on
+  // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186, D-8800), four nullable columns on
   // `linear_migrations` (migration 95's table, which no build before this one writes): `project`, the ccrc project whose team
   // this migration reshapes (its Linear owner proposes the map, and the console's row reads its state); `report`, what the report
   // lists beyond the move rows, as JSON (issues skipped as changed, issues of a live programme still waiting, and after put back

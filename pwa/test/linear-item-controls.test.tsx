@@ -124,7 +124,7 @@ describe('the hierarchy items\' controls', () => {
     expect(call).not.toHaveBeenCalled();
     cleanup();
     const words: [string, number, string][] = [
-      ['migration-in-flight', 409, MIGRATE_REFUSAL_TEXT['migration-in-flight']],
+      ['migration-in-flight', 409, LINEAR_ITEM_REFUSAL_TEXT['migration-in-flight']],
       ['not-open', 409, LEDGER_REFUSAL_TEXT['not-open']],
       ['item-act-mismatch', 409, 'That item does not take this action, so nothing was changed. Reload the item and choose again.'],
       ['not-found', 404, LINEAR_ITEM_REFUSAL_TEXT['not-found']],
@@ -182,6 +182,17 @@ describe('the hierarchy items\' controls', () => {
       expect(group.getAttribute('aria-label')).not.toBe(verb);
       cleanup();
     }
+  });
+
+  it('migration-in-flight says what it means at each door (review 2892 A3)', () => {
+    // On an item act it is put back after the team's next migration started: refused for good, so no "try again".
+    const putBack = LINEAR_ITEM_REFUSAL_TEXT['migration-in-flight'];
+    expect(putBack).toContain('can no longer be put back');
+    expect(putBack).not.toMatch(/try again/iu);
+    // On Reshape in Linear it is another team's open migration (one team at a time) or this team migrated already.
+    const start = MIGRATE_REFUSAL_TEXT['migration-in-flight'];
+    expect(start).toContain('one team at a time');
+    expect(start).toContain('already migrated');
   });
 
   it.each([

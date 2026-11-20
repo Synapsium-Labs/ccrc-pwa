@@ -11,7 +11,7 @@ the operator's, in the console, after this lands.
 |---|---|
 | 7.1 | `server/src/linear/migrationPolicy.ts` (L1): `checkMap`, `applySteps`, `reconcileMove`, `putBackSteps`, `replacementComment`; `IssueSnapshot` and `MapBody` in `shared/plan.ts` beside D-8737's shapes; `isPlanKebab` admits the map classes |
 | 7.2 | `POST /api/projects/:project/hierarchy/migrate` (session-gated) and the map item's `approve` and `return` (`hierarchyRoutes.ts`); `plan map-propose`, `POST /api/teams/:team/plan/map` (box token, the team's Linear owner, `planRoutes.ts`), its client row and its section in `references/plan.md`; the console's "Reshape in Linear" |
-| 7.3 | `server/src/linear/migration.ts` (`LinearMigration`, L4): the owner and coordinator mails for a map, the apply at wave boundaries, the report; the plan store's migration functions; the `linearMigration` lane (30 s); migration 110 (four columns on `linear_migrations`) |
+| 7.3 | `server/src/linear/migration.ts` (`LinearMigration`, L4): the owner and coordinator mails for a map, the apply at wave boundaries, the report; the plan store's migration functions; the `linearMigration` lane (30 s); migration 111 (four columns on `linear_migrations`, D-8800) |
 | 7.4 | The report item's `put-back` and `done`; put back from the move record alone, run by the lane |
 
 ## Departures (defined in the plan's Deviations found)
@@ -33,6 +33,7 @@ the operator's, in the console, after this lands.
   | 4. `applied` means settled | `applied only when every move is applied or skipped` |
   | 5. put back and the sync | `a sync pass between two put-back writes writes nothing to a restored issue` |
   | 6. a done programme's initiative | D-8796's text and the report item's words; no forced state is written |
+- **D-8798, D-8799, D-8800** (fix round 1, the coordinator's rulings on review 2892): see the table below.
 - **D-8797, upkeep-link-with-key** (the coordinator's ruling): the Upkeep link shows with a team key; the inbound count only
   when issues wait; pinned both ways in `project-linking-card.test.tsx`.
 
@@ -46,15 +47,15 @@ the operator's, in the console, after this lands.
 | 7.3 `adoptIssueAsTicket` | its own transaction, after the write, with the after-state's fingerprint | `adoptIssueAsTicketInTx`, in the caller's transaction with the move row, the adopted fingerprint (D-8796) |
 | 7.3 the `applying` guard in `planSync.ts` | the sync emits no issue step for a listed issue with no applied move row | not needed: a listed issue has no binding until its move row exists (D-8796); the sync instead charges a migrating object's steps to lane `migration` |
 | 7.4 put back | run by the act | asked by the act (`putBackAskedAt`), run by the migration lane (D-8796) |
-| 7.2 approve | the map item settles on `applied` | it settles on Approve, with a note that the report follows; the report item is raised on `applied` |
-| — | no migration in wave 7 | migration 110: `linear_migrations.project`, `report`, `putBackAskedAt`, `reportDoneAt` |
+| 7.2 approve | the map item settles on `applied` | it settles on Approve, with a note that the report follows; the report item is raised on `applied` (D-8799) |
+| — | no migration in wave 7 | migration 111 (D-8800): `linear_migrations.project`, `report`, `putBackAskedAt`, `reportDoneAt` |
 | — | — | `GET /api/migrations/:id` (session-gated, masked), D-8737's read for the map and report bodies |
 | — | a server cap per new verb | none: `shared/api.ts` may only shrink (D-8635), so `plan map-propose` rides `plan-v1`; an older server answers 404 |
 
 ## Carries
 
-1. Wave 3 A5: `ticketOfRun` leaves out a ticket put back (`putBackAt`), as the sync's snapshot does. Built, in
-   `planSync.ts`. The F3/F5 interaction: see the end of this note.
+1. Wave 3 A5: `ticketOfRun` leaves out a ticket put back (`putBackAt`), as the sync's snapshot does. Built in the store's one
+   `ticketOfRun`, which the sync asks (fix round 1, F9). The F3/F5 interaction: built in fix round 1, see the end of this note.
 2. D-8737's handover: built (`GET /api/migrations/:id`; the map item's epics and checkpoints section; the report's lists).
 3. Wave 5 round 3 F1: built (`--safe-bottom`; the browser file emulates a home indicator).
 4. Wave 5 minors: A1, A2, A3/A8, A6 and A7 built with tests; A5 is D-8797.
@@ -77,25 +78,47 @@ the operator's, in the console, after this lands.
   home indicator) and green with `--safe-bottom`; both browser files pass in all views, the 1920 report case included,
   after the structure lists' CSS was measured (see `pwa/src/ledgers/migration.css`).
 
+## Fix round 1 (review 2892, the coordinator's mail of 2026-11-20)
+
+Every code fix has a test seen red before it (one run over the six server files, 24 red, and one over the two console files,
+2 red), and green after it.
+
+| Finding | Built | Test |
+|---|---|---|
+| F1 | a coordinator's first plan write after a map's makes `planBy` theirs (`planStore.ts#applyPlanChangesInTx`); put back reads it | `migration-putback.test.ts` drives the coordinator's write; `plan-store.test.ts` pins the writer |
+| F2 | put back saves the issues found moved since before its early return | `migration-putback.test.ts`, a refused second read |
+| F3 | a step that cannot be placed now is asked before any call, spends nothing, and is listed as waiting with its reason (`waitingWhy`) | `migration-apply.test.ts`: two unplaceable issues ahead, the closers run |
+| F4 | a retired move row is not a move: Return puts the follow-up's issues back on the skipped list | `migration-propose.test.ts` |
+| F5 (ruled) | the set-aside issue's binding is `retired` (a new binding state, the row kept), with its ticket put back and its row set aside, in one transaction (`setAsideAdopted`); every reader that takes a binding as holding its issue skips a retired one | `migration-apply.test.ts`: the owner is mailed once and the issue never written; `plan-store.test.ts` |
+| F6 | a successor exists on the map or in ccrc's plan, or `plan-bad-body` `unknown-successor` | `migration-policy.test.ts` |
+| F7 (ruled) | a finished entry carries `target.pr` (`<owner>/<repo>#<n>`) or a one-line `target.reason`, or `plan-bad-body` `finished-needs-evidence`; the close names it through the public-text check, and a public team names a pull request outside the project's own repository as "a pull request" (`finishedComment`); `references/plan.md` documents both fields | `migration-policy.test.ts` |
+| F8 (ruled) | D-8798: `planRequired` for the programmes the map names and the team's programmes with a declared plan | `migration-apply.test.ts` |
+| F9 | one `ticketOfRun` (the store's), which leaves out a ticket put back; the plan sync asks it | `plan-store.test.ts` |
+| A1 | the relation names an issue by its applied move row, and is sent once (marked on the row) | `migration-apply.test.ts` |
+| A2 | a follow-up map is stored on its own, the map it joins kept as `prior` until Approve merges them; its item counts its own entries | `migration-propose.test.ts` |
+| A3 | the console's `migration-in-flight` sentences: one for Reshape (one team at a time, or migrated already), one for Put back (refused for good) | `linear-item-controls.test.tsx` |
+| A4 | `stateOfTeam` reads the workspace the team's key routes to | `migration-propose.test.ts` |
+| A5 | D-8799 (the map item settles on Approve) and D-8800 (migration 111's four columns) in the plan | — |
+| A6 | the report names a done programme whose initiative stays active while its placed tickets are open | `migration-policy.test.ts` |
+| A7 | `MIGRATION_CALLS_PER_TICK` counts every Linear call of a tick; a rate refusal of any of them rests the lane | `migration-apply.test.ts` |
+
+Also in this round: `main` merged after #3088 (migration 110 is `main`'s, so this run's is 111; the gate's route counts and the
+census words recounted), and the wave 3 F3/F5 carry (below).
+
 ## Follow-ups and open points
 
-Three items are pending on this run, not carried to another: the coordinator's ruling (mail 27474) is that they are this
-PR's fix round 1, once #3088 lands, together with whatever the review finds.
-
-- **Pending: the F3/F5 interaction** (wave 3's carry: a bound ticket put back can take its held team off its project). It is
-  in `planSyncPolicy.ts`, which run 2810 (#3088) holds, and this run has not edited that file. The fix: the snapshot keeps
-  the epic ids of tickets put back, and F3's team list keeps the teams of bound tickets put back, with a test seen red first.
-- **Pending: the merge of `main` after #3088 lands.** Migration 110 is renumbered then if `main` has taken that slot.
-- **Pending: README's machine-lane count word** ("ninety-two" to "ninety-three", forced by `box-token-census.test.ts`). It
-  is held by run 1850's freeze; its coordinator asked the operator to extend the additive-packet consent to every programme
-  (item 496 on the landing-order programme). Until then README is untouched here, and one census case is red on this
-  branch: `box-token-census.test.ts`, "README states the DERIVED lane counts".
+- **The F3/F5 interaction, built in fix round 1** (wave 3's carry: a bound ticket put back could take its held team off its
+  project). The sync's snapshot keeps the epic ids of tickets put back (`putBackTicketsOf`), and F3's team list keeps the teams
+  of bound tickets put back; a retired binding holds none (`plan-sync-policy.test.ts`).
+- **Pending: README's machine-lane count word** ("ninety-three" to "ninety-four" since the merge of `main`, forced by
+  `box-token-census.test.ts`). It is held by run 1850's freeze until the operator answers item 496. README is untouched here,
+  and one census case is red on this branch: `box-token-census.test.ts`, "README states the DERIVED lane counts".
 - **Three minor points left**, each named by the review and judged not worth a change now: a worker's follow-up ticket and
   its mail are two transactions (a crash between them loses the mail, never the ticket); a follow-up's earlier report item
-  is settled in its own transaction after the new one is raised; `issueRelationCreate` takes no caller-chosen id, so a redo
-  after a crash can relate two issues twice (harmless in Linear).
-- **The suites under load.** `coord-db`, `plan-store`, `hierarchy-routes`, `secret-mask` and `mail-routes` failed only by
-  timeouts (20 s to 235 s per case) in a test slice at its memory cap, with OOM kills from other sessions' runs; the same
-  files' other cases pass, and CI on the quiet box is the arbiter.
+  is settled in its own transaction after the new one is raised; a replaced level's close does not wait for the issues placed
+  under it to settle, so with none applied yet it relates to none (the relation is evidence only).
+- **The suites under load.** `coord-db`, `secret-mask` and `mail-routes` failed only by timeouts (20 s to 235 s per case) in a
+  test slice at its memory cap, with OOM kills from other sessions' runs. `hierarchy-routes` and `plan-store` failed the same
+  way in one batch and pass alone (73 of 73). CI on the quiet box is the arbiter.
 - The pilot (ccrc's own team) is the operator's, in the console, after this lands: "Reshape in Linear", the owner's map,
   Approve, the report, before any other team.

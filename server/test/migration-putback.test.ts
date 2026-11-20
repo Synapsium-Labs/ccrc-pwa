@@ -134,17 +134,37 @@ describe('the migration report and put back (D-8186)', () => {
     expect(r.asks.filter((a) => a.op === 'initiativeUpdate')).toEqual([]);
   });
 
-  it('put back leaves a programme its coordinator has since declared: no plan end, no initiative write (security review)', async () => {
+  it('put back leaves a programme its coordinator has since taken over: its own plan put after the apply (review 2892 F1)', async () => {
     const r = await migRig();
     r.addProgramme('prog-b', 'done');
     r.addIssue(1);
     const id = await r.applied([B_LEAF(1, 'k1')], STRUCTURE);
-    r.db.prepare("UPDATE programs SET planBy = 'coord-b' WHERE slug = 'prog-b'").run();
+    expect(r.plan.planOf('prog-b').planBy).toBe('ccrc-migration');
+    // the programme's coordinator puts its plan (the write `plan put` makes), adding an epic of its own
+    applyPlanChanges(r.db, 'prog-b', changes({
+      epics: { insert: [{ key: 'ez', project: 'project-a', waves: [2], ordinal: 1, title: 'Their own epic', summary: 'S' }], update: [], drop: [] },
+    }), 'coord-b', r.t.now, null);
+    expect(r.plan.planOf('prog-b').planBy).toBe('coord-b');
     r.asks.length = 0;
     await putBack(r, id);
     expect(r.plan.migrationById(id)!.state).toBe('put-back');
     expect(r.plan.planEndOf('prog-b')).toBeNull();
     expect(r.asks.filter((a) => a.op === 'initiativeUpdate' && a.pass === 'put-back')).toEqual([]);
+    expect(r.plan.planOf('prog-b').epics.find((e) => e.key === 'ez')).toMatchObject({ putBackAt: null });
+  });
+
+  it('put back keeps an issue found moved since when a later read of the same tick is refused (review 2892 F2)', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([leaf(1, 'k1'), leaf(2, 'k2')]);
+    r.issues.get(U(102))!.title = 'Renamed by a person after the migration';   // the last move, handled first
+    r.override.current = (ask) => (ask.op === 'issueOwned' && ask.input['id'] === U(101) ? fail('unreachable') : undefined);
+    expect(r.mig.act(reportItem(r, id), id, 'put-back', null)).toEqual({ ok: true });
+    await r.tick();
+    r.override.current = null;
+    await r.until(() => r.stateOf(id) === 'put-back', 20);
+    expect(r.stateOf(id)).toBe('put-back');
+    expect(r.plan.migrationById(id)!.report!.movedSince).toEqual(['AAA-2']);
   });
 
   it('put back drops the ticket of a move row that never applied, as well as the applied ones (security review)', async () => {

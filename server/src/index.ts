@@ -452,7 +452,7 @@ deps.driftPass = driftPassFor({
 deps.linearMigration = linearMigrationFor({
   coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
   readLinearStore: () => readLinearStore(cfg.ccrcDir), directory: linearRefresher.directory,
-  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id),
+  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), privateTrackerKeys: cfg.privateTrackerKeys,
 });
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown

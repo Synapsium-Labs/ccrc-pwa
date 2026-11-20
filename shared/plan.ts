@@ -25,7 +25,9 @@ export type PlanEndOutcome = (typeof PLAN_END_OUTCOMES)[number];
 /** What a Linear binding binds a plan object to. */
 export const BINDING_KINDS = ['programme', 'epic', 'checkpoint', 'ticket'] as const;
 export type BindingKind = (typeof BINDING_KINDS)[number];
-export const BINDING_STATES = ['pending', 'bound', 'failed'] as const;
+/** `retired` (review 2892 F5, design §4.2, §10.3 step 5): a binding the migration set aside with its put-back ticket, kept as a
+ *  row (nothing is deleted) and holding its issue for no reader, so the issue reaches the team's Linear owner as inbound. */
+export const BINDING_STATES = ['pending', 'bound', 'failed', 'retired'] as const;
 export type BindingState = (typeof BINDING_STATES)[number];
 export const MIGRATION_STATES = ['proposing', 'proposed', 'approved', 'applying', 'applied', 'put-back', 'failed'] as const;
 export type MigrationState = (typeof MIGRATION_STATES)[number];
@@ -88,7 +90,7 @@ export type PlanRefusal = (typeof PLAN_REFUSALS)[number];
 let planKebab: ReadonlySet<string> | null = null;
 export const isPlanKebab = (tok: string): boolean => (planKebab ??= new Set<string>([
   LINEAR_SYNC_PROGRAMME, ...PLAN_REFUSALS, ...EPIC_STATES, ...CHECKPOINT_KINDS, ...CHECKPOINT_STATES, ...TICKET_KINDS,
-  ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES,
+  ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES, ...MIGRATION_WAITING_WHY, MIGRATION_PLAN_BY,
   ...HIERARCHY_STATES, ...INBOUND_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
   ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, WORK_READ_FAILED, ...MAP_CLASSES,
 ])).has(tok);
@@ -297,8 +299,17 @@ export interface MapEntry {
   issue: string;
   identifier: string;
   class: MapClass;
-  target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind };
+  /** `pr` and `reason` are a `finished` entry's evidence (review 2892 F7, design §10.3): the merged pull request as
+   *  `<owner>/<repo>#<number>`, or, when there is none, one line saying why. */
+  target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind; pr?: string; reason?: string };
 }
+/** The `planBy` of the plan rows a migration's map declares for a programme with no plan of its own (D-8186): told apart from a
+ *  coordinator's own declaration by the apply (the map's rule judged again) and by put back (review 2892 F1). */
+export const MIGRATION_PLAN_BY = 'ccrc-migration';
+/** Why a listed issue still waits in a migration's report (review 2892 F3): its live programme's wave boundary, or the Linear
+ *  object it is placed under (its epic's project, or the project's Upkeep epic) not created yet. */
+export const MIGRATION_WAITING_WHY = ['live-programme', 'epic-not-in-linear', 'upkeep-not-in-linear'] as const;
+export type MigrationWaitingWhy = (typeof MIGRATION_WAITING_WHY)[number];
 export interface MapCounts { created: number; moved: number; closed: number; left: number; skipped: number }
 /** An open issue as the map's draft read it (design §10.3): its state TYPE, its team KEY, the ids of its project, parent
  *  and milestone, and its title and description. Linear text: read only under `untrusted`. */
@@ -326,5 +337,5 @@ export interface MigrationStructure {
  *  moved since and the milestones left under their canceled project). Every title and identifier is Linear text or plan text. */
 export interface MigrationView {
   ok: true; id: number; team: string; state: MigrationState; counts: MapCounts; entries: MapEntry[]; structure: MigrationStructure[];
-  report: { skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[] } | null;
+  report: { skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[]; waitingWhy?: Record<string, MigrationWaitingWhy> } | null;
 }

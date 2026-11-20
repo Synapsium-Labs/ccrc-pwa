@@ -1,7 +1,7 @@
 // The words of the five hierarchy items' controls and of the map and report body (Linear hierarchy design §11.3 and §11.4,
 // D-8184, D-8737). L1: pure, no I/O. The sentences a refusal says are `refusalWords.ts`'s (`linearItemErrorText`).
 import type { LinearActionVerb } from '../../../shared/ledgers';
-import { MAP_CLASSES, type MapClass, type MapCounts, type MapEntry, type MigrationView } from '../../../shared/plan';
+import { MAP_CLASSES, type MapClass, type MapCounts, type MapEntry, type MigrationView, type MigrationWaitingWhy } from '../../../shared/plan';
 
 /** The controls' labels, once. `hand` is `ITEM_DOOR_WORDS['hand-to-coordinator']`, which `LinearItemControls` reads. */
 export const LINEAR_ITEM_TEXT = {
@@ -39,8 +39,17 @@ export const REPORT_LISTS = [
   { key: 'skipped', title: 'Skipped as changed' }, { key: 'waiting', title: 'Still waiting' },
   { key: 'movedSince', title: 'Moved since' }, { key: 'milestonesLeft', title: 'Milestones left' },
 ] as const;
+/** Why a waiting issue waits, as the report says it (review 2892 F3). */
+export const WAITING_WHY_WORDS: Readonly<Record<MigrationWaitingWhy, string>> = {
+  'live-programme': 'its programme is mid-wave; it moves at the wave boundary',
+  'epic-not-in-linear': 'its epic is not in Linear yet',
+  'upkeep-not-in-linear': 'the project\'s Upkeep epic is not in Linear yet',
+};
 export const reportLists = (r: NonNullable<MigrationView['report']> | null | undefined): { key: (typeof REPORT_LISTS)[number]['key']; title: string; items: string[] }[] =>
-  r === null || r === undefined ? [] : REPORT_LISTS.map((l) => ({ key: l.key, title: l.title, items: r[l.key] })).filter((l) => l.items.length > 0);
+  r === null || r === undefined ? [] : REPORT_LISTS.map((l) => ({
+    key: l.key, title: l.title,
+    items: l.key === 'waiting' ? r.waiting.map((id) => { const why = r.waitingWhy?.[id]; return why === undefined ? id : `${id}: ${WAITING_WHY_WORDS[why]}`; }) : r[l.key],
+  })).filter((l) => l.items.length > 0);
 
 export const nameConsequence = (project: string, id: string): string => `${id} becomes the Linear owner of ${project}.`;
 

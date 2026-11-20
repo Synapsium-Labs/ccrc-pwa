@@ -72,7 +72,7 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The ninety box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *  2. The ninety-one box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
  *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the hook's start report and its
  *     loads report, the door process's act-key claim, the hook's reports, the card door, the note door's lanes, the timer doors, the probe door's lanes and the replay quiz's record
  *     door) plus
@@ -81,7 +81,7 @@ import type { SessionStore } from './sessions.js';
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084), from update-management W4,
  *     `ccd-update-sync.timer`, and the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`);
- *     none of them has a cookie jar and never will. All ninety-three CHECK the box token (`checkMailToken`), and the mail pair
+ *     none of them has a cookie jar and never will. All ninety-four CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -1085,8 +1085,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the ninety box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — ninety-three in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the ninety-one box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — ninety-four in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

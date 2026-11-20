@@ -420,16 +420,17 @@ export const linkingErrorText = (err: unknown): string => refusalText(err, LINKI
  *  template sentence of `LINKING_REFUSAL_TEXT`, which names the template pull request. */
 export const MIGRATE_REFUSAL_TEXT: Readonly<Record<'no-team-key' | 'migration-in-flight' | 'unreachable', string>> = {
   'no-team-key': "Set this project's Linear team key first, then reshape the team in Linear. Nothing was changed.",
-  'migration-in-flight': 'A migration of this team is already running, so nothing was changed. Try again when it has finished.',
+  'migration-in-flight': 'Teams are reshaped one team at a time: another team\'s migration is still open, or this team is already migrated. Nothing was changed.',
   unreachable: 'No Linear key that ccrc holds serves this team, so nothing was asked of Linear. Check the workspace in Settings, then try again.',
 };
 /** The migration's refusal in its fixed sentence, or null for a word that is not one of its own. */
 export const migrateRefusalText = (err: unknown): string | null => refusalText(err, MIGRATE_REFUSAL_TEXT);
 
-/** `POST /api/items/:id/linear`'s words that have no sentence above (D-8184, D-8186); its other refusals read `linkingErrorText`. */
+/** `POST /api/items/:id/linear`'s words that have no sentence above (D-8184, D-8186); its other refusals read `linkingErrorText`. On an
+ *  item act `migration-in-flight` is Put back after the team's next migration started: refused for good (review 2892 A3). */
 export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found' | 'migration-in-flight', string>> = {
   'not-found': 'The server does not know that item. Reload the page.',
-  'migration-in-flight': MIGRATE_REFUSAL_TEXT['migration-in-flight'],
+  'migration-in-flight': 'The team\'s next migration has started, so this one can no longer be put back. Nothing was changed.',
 };
 /** `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
 export const linearItemErrorText = (err: unknown): string =>

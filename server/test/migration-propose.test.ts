@@ -1,7 +1,7 @@
 // D-8186 (Linear hierarchy plan, Task 7.2): the migration's start, the owner's proposal and the operator's Approve and Return.
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket } from '../src/coord/planStore.js';
-import { cleanMigRigs, entry, leaf, migRig, OWNER, SLUG, U } from './migrationRig.js';
+import { cleanMigRigs, entry, fail, leaf, migRig, OWNER, SLUG, U } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
 
 afterEach(cleanMigRigs);
@@ -118,11 +118,13 @@ describe('the migration proposal (D-8186)', () => {
     const ok = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open);
     expect(ok).toMatchObject({ ok: true, migrationId: id });
     expect(r.plan.migrationById(id)!.state).toBe('proposed');
-    // It joins the stored map (the same migration, the same Put back) and leaves the skipped list, so the apply writes it.
-    expect(r.plan.migrationById(id)!.map!.entries.map((e) => e.identifier)).toEqual(['AAA-1', 'AAA-2']);
+    // It leaves the skipped list, and joins the stored map on Approve (the same migration, the same Put back), so the apply
+    // writes it; until then the item shows the follow-up's own entries (review 2892 A2).
+    expect(r.plan.migrationById(id)!.map!.entries.map((e) => e.identifier)).toEqual(['AAA-2']);
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
     const m = r.plan.migrationById(id)!;
     expect(r.mig.act(m.itemId!, id, 'approve', null)).toEqual({ ok: true });
+    expect(r.plan.migrationById(id)!.map!.entries.map((e) => e.identifier)).toEqual(['AAA-1', 'AAA-2']);
     await r.until(() => r.stateOf(id) === 'applied' && r.plan.movesOf(id).some((x) => x.identifier === 'AAA-2' && x.appliedAt !== null));
     expect(r.plan.movesOf(id).filter((x) => x.kind === 'issue').map((x) => [x.identifier, x.appliedAt !== null])).toEqual([['AAA-1', true], ['AAA-2', true]]);
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
@@ -224,5 +226,54 @@ describe('the migration proposal (D-8186)', () => {
     await r.tick(); await r.tick();
     const subjects = mailsTo(r, OWNER).map((x) => x.subject);
     expect(subjects.filter((s) => s.includes('propose a follow-up map for team AAA (1 skipped)'))).toHaveLength(1);
+  });
+});
+
+describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)', () => {
+  it('F4: a returned follow-up keeps an issue adopted then set aside on the skipped list (a retired move row is not a move)', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => (ask.op === 'issueUpdate' ? fail('unreachable') : undefined);
+    const id = await r.approved([leaf(1, 'k1')]);
+    await r.tick();
+    r.override.current = null;
+    r.issues.get(U(101))!.title = 'A person renamed it between the adoption and the write';
+    await r.until(() => r.stateOf(id) === 'applied', 10);
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+    expect(r.plan.movesOf(id).map((x) => x.subject)).toEqual([expect.stringMatching(/:skipped:/u)]);
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: true });
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
+    const m = r.plan.migrationById(id)!;
+    expect(r.mig.act(m.itemId!, id, 'return', 'not yet')).toEqual({ ok: true });
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+  });
+
+  it("A2: a follow-up's map item counts and lists its own map only", async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2); r.addIssue(3);
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2'), entry(3, 'stale')]);
+    r.issues.get(U(102))!.title = 'Edited by a person after the map';
+    await r.until(() => r.stateOf(id) === 'applied');
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    const stored = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open);
+    expect(stored).toMatchObject({ ok: true, counts: { moved: 1, closed: 0 } });
+    const v = r.mig.view(id);
+    expect(v).toMatchObject({ state: 'proposed', counts: { moved: 1, closed: 0, created: 0, left: 0 } });
+    expect(v!.entries.map((e) => e.identifier)).toEqual(['AAA-2']);
+  });
+
+  it("A4: a project row's state is its team's newest migration in the workspace its key routes to", async () => {
+    const r = await migRig();
+    r.plan.insertMigration({ workspaceId: 'ws-elsewhere', teamKey: 'AAA', project: 'project-x', now: r.t.now });
+    expect(await r.mig.stateOfTeam('AAA')).toMatchObject({ state: 'not-migrated' });
+    r.addIssue(1);
+    expect(r.mig.start('project-a', WS.a.id)).toMatchObject({ ok: false, word: 'migration-in-flight' });   // one at a time, every workspace
+    r.db.prepare("UPDATE linear_migrations SET state = 'failed' WHERE workspaceId = 'ws-elsewhere'").run();
+    const { migrationId } = await r.propose([leaf(1, 'k1')]);
+    r.plan.insertMigration({ workspaceId: 'ws-elsewhere', teamKey: 'AAA', project: 'project-x', now: r.t.now + 1 });
+    expect(await r.mig.stateOfTeam('AAA')).toMatchObject({ state: 'map-waiting', itemId: r.plan.migrationById(migrationId)!.itemId });
   });
 });

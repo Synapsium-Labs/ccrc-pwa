@@ -14,7 +14,7 @@ import {
   LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE,
   type BindingKind, type BindingState, type InboundState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
   type PhaseRefKind, type PlanEndOutcome, type TicketDoneEvidence, type TicketKind, type TicketSource, type TicketState,
-  type IssueSnapshot, type MapBody, type MigrationState,
+  MIGRATION_PLAN_BY, type IssueSnapshot, type MapBody, type MigrationState, type MigrationWaitingWhy,
 } from '../../../shared/plan.js';
 import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { inboundRetirable, retireWhyOf, type RetireWhy } from '../linear/inboundRetire.js';
@@ -43,6 +43,8 @@ export interface BindingRow {
   state: BindingState; failedAt: number | null; failedWord: string | null; failedInputs: string | null;
   driftCount: number; driftSince: number | null; heldItemId: number | null;
 }
+/** The migration's `planBy` (`shared/plan.ts`), named here for the store's readers. */
+export { MIGRATION_PLAN_BY };
 export interface StoredPlan {
   program: string; planBy: string | null; required: boolean;
   epics: (EpicRow & { checkpoints: CheckpointRow[]; tickets: TicketRow[] })[];
@@ -235,8 +237,11 @@ export function doneFactsOf(db: DatabaseSync, program: string): TicketDoneRow[] 
   }));
 }
 /** A run's own ticket (`runs.ticketId` and that ticket's key): null for no such run; `ticketId` null for a run with none. */
+/** A run's ticket, the ONE reader of it (the routes, the run facts and the plan sync all ask here; review 2892 F9): a ticket put
+ *  back (`putBackAt`, Task 2.2, or the migration's put back) is no longer the run's, so it answers none, as the sync's snapshot
+ *  leaves it out (wave 3 A5, carried to wave 7, D-8186). Null: no such run. */
 export function ticketOfRun(db: DatabaseSync, runId: number): { ticketId: number | null; key: string | null } | null {
-  const r = db.prepare('SELECT r.ticketId AS ticketId, t.key AS key FROM runs r LEFT JOIN plan_tickets t ON t.id = r.ticketId WHERE r.id = ?')
+  const r = db.prepare('SELECT t.id AS ticketId, t.key AS key FROM runs r LEFT JOIN plan_tickets t ON t.id = r.ticketId AND t.putBackAt IS NULL WHERE r.id = ?')
     .get(runId) as Raw | undefined;
   if (r === undefined) return null;
   return { ticketId: (r.ticketId as number | null) ?? null, key: (r.key as string | null) ?? null };
@@ -406,7 +411,11 @@ function applyPlanChangesInTx(
 
     if (changes.phases !== undefined) applyPhaseChangesInTx(db, program, changes.phases);
 
-    db.prepare('UPDATE programs SET planBy = ?, planAt = ? WHERE slug = ? AND planBy IS NULL').run(by, now, program);
+    // `planBy` names who declared the plan. A plan a migration's map declared (`MIGRATION_PLAN_BY`) becomes its coordinator's at
+    // the coordinator's first plan write, so put back never ends a programme its coordinator has since taken over (review 2892
+    // F1); a coordinator's plan stays theirs.
+    db.prepare('UPDATE programs SET planBy = ?, planAt = ? WHERE slug = ? AND (planBy IS NULL OR (planBy = ? AND ? <> ?))')
+      .run(by, now, program, MIGRATION_PLAN_BY, by, MIGRATION_PLAN_BY);
     for (const epicId of touched) settleEpicInTx(db, epicId, now);
     markSyncDueInTx(db, program, now);
   }
@@ -650,15 +659,17 @@ export function bindingsOf(db: DatabaseSync, program: string): BindingRow[] {
 /** Every binding of a workspace, whatever its state, in id order (D-8183): the drift pass reads them BEFORE it reads Linear, so a
  *  sync write landing after its Linear read is seen as a moved fingerprint and never as drift; the inbound lane reads its
  *  `pending` ticket bindings, whose create may have been sent with its reply lost. */
+/** Every binding holding a Linear object in a workspace; a `retired` one holds none (review 2892 F5), here and in the three
+ *  readers below, so the issue it held is inbound again and no longer `plan-owned`. */
 export function bindingsInWorkspace(db: DatabaseSync, workspaceId: string): BindingRow[] {
-  return db.prepare('SELECT * FROM linear_bindings WHERE workspaceId = ? ORDER BY id').all(workspaceId) as unknown as BindingRow[];
+  return db.prepare("SELECT * FROM linear_bindings WHERE workspaceId = ? AND state <> 'retired' ORDER BY id").all(workspaceId) as unknown as BindingRow[];
 }
 /** The binding holding a Linear object in a workspace (the drift pass maps each node it reads to its binding, D-8183), or null.
  *  The lowest binding id wins when two hold one Linear id. Legitimately different from its twin `driftPolicy.ts#bindingByLinearIdOf`
  *  (the same rule): that is an L1 reader over rows the pass already holds, this is the store's SQL point read; the two are
  *  pinned to agree by drift-pass.test.ts ("the two twins agree on a duplicate"). */
 export function bindingByLinearId(db: DatabaseSync, workspaceId: string, linearId: string): BindingRow | null {
-  const r = db.prepare('SELECT * FROM linear_bindings WHERE workspaceId = ? AND linearId = ? ORDER BY id LIMIT 1').get(workspaceId, linearId);
+  const r = db.prepare("SELECT * FROM linear_bindings WHERE workspaceId = ? AND linearId = ? AND state <> 'retired' ORDER BY id LIMIT 1").get(workspaceId, linearId);
   return (r as BindingRow | undefined) ?? null;
 }
 /** The sync's due key of a binding's programme: its slug, or `upkeep:<project>` for an Upkeep epic's own objects; null for a
@@ -774,7 +785,7 @@ export function managedSince(db: DatabaseSync, workspaceId: string): number | nu
  *  proxy refuses a session's update of one in a managed team, `plan-owned`). A `failed` binding keeps its issue (D-8680) and is
  *  ccrc's as much as a `bound` one (review 2386 F4); a `pending` one holds no id yet. Absent ids never match. */
 export function issueBound(db: DatabaseSync, workspaceId: string, issue: { id: string | null; identifier: string | null }): boolean {
-  return db.prepare("SELECT 1 FROM linear_bindings WHERE localKind = 'ticket' AND workspaceId = ? AND (linearId = ? OR identifier = ?) LIMIT 1")
+  return db.prepare("SELECT 1 FROM linear_bindings WHERE localKind = 'ticket' AND workspaceId = ? AND state <> 'retired' AND (linearId = ? OR identifier = ?) LIMIT 1")
     .get(workspaceId, issue.id ?? '', issue.identifier ?? '') !== undefined;
 }
 
@@ -1089,7 +1100,7 @@ export function upkeepTicketByIdentifier(db: DatabaseSync, workspaceId: string |
 
 /** Every Linear id a binding holds in the workspace (the drift pass's one read of what is bound, D-8183). */
 export function boundLinearIdsOf(db: DatabaseSync, workspaceId: string): string[] {
-  return (db.prepare('SELECT DISTINCT linearId FROM linear_bindings WHERE workspaceId = ? AND linearId IS NOT NULL ORDER BY linearId').all(workspaceId) as Raw[])
+  return (db.prepare("SELECT DISTINCT linearId FROM linear_bindings WHERE workspaceId = ? AND linearId IS NOT NULL AND state <> 'retired' ORDER BY linearId").all(workspaceId) as Raw[])
     .map((r) => r.linearId as string);
 }
 /** The projects that have an Upkeep epic, in order: the sweeps that walk every programme walk these keys too. */
@@ -1157,7 +1168,11 @@ export function takeUpkeepTicket(
 /** What a migration's report lists beyond its move rows: issues skipped as changed since the map was stored, issues of a live
  *  programme still waiting for its wave boundary, and, after put back, the issues that moved since (left untouched) and the
  *  milestones the migration created (they stay in Linear under their canceled project, D-8795). Identifiers, never UUIDs alone. */
-export interface MigrationReport { skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[] }
+export interface MigrationReport {
+  skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[];
+  /** Why each waiting issue waits, by identifier (review 2892 F3). Absent in a report written before it. */
+  waitingWhy?: Record<string, MigrationWaitingWhy>;
+}
 export const EMPTY_MIGRATION_REPORT = (): MigrationReport => ({ skipped: [], waiting: [], movedSince: [], milestonesLeft: [] });
 export interface MigrationRow {
   id: number; workspaceId: string; teamKey: string; project: string | null; state: MigrationState; map: MapBody | null;
@@ -1305,16 +1320,30 @@ export function setPlanRequired(db: DatabaseSync, programs: readonly string[]): 
 /** Put back's ccrc half (D-8186, Task 7.4): the epics, checkpoints and tickets the migration made are dropped with the reason
  *  "put back" and `putBackAt` set, in ONE transaction; the sync's snapshot leaves out every record with `putBackAt` set
  *  (`withoutPutBack`), so it emits nothing for them. A record already put back is left. Each touched epic's key is marked due. */
-export function dropPutBack(db: DatabaseSync, ids: { epics: readonly number[]; checkpoints: readonly number[]; tickets: readonly number[] }, now: number): void {
+type PutBackIds = { epics: readonly number[]; checkpoints: readonly number[]; tickets: readonly number[] };
+export function dropPutBackInTx(db: DatabaseSync, ids: PutBackIds, now: number): void {
+  const why = 'put back';
+  for (const id of ids.tickets) db.prepare("UPDATE plan_tickets SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
+  for (const id of ids.checkpoints) db.prepare("UPDATE plan_checkpoints SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
+  for (const id of ids.epics) db.prepare("UPDATE plan_epics SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
+  const keys = new Set<string>();
+  for (const id of ids.epics) { const e = epicById(db, id); if (e !== null) keys.add(dueKeyOf(e)); }
+  for (const id of ids.tickets) { const t = ticketById(db, id); const e = t === null ? null : epicById(db, t.epicId); if (e !== null) keys.add(dueKeyOf(e)); }
+  for (const k of keys) markSyncDueInTx(db, k, now);
+}
+export function dropPutBack(db: DatabaseSync, ids: PutBackIds, now: number): void { tx(db, () => dropPutBackInTx(db, ids, now)); }
+/** A binding set aside (review 2892 F5): its state `retired`, its row and ids kept; it holds its issue for no reader. */
+export function retireBindingInTx(db: DatabaseSync, id: number): void {
+  db.prepare("UPDATE linear_bindings SET state = 'retired' WHERE id = ?").run(id);
+}
+/** An adopted issue that changed between its adoption and its write, set aside in ONE transaction (review 2892 F5, design §10.3
+ *  step 5): its ticket dropped "put back" (the sync never writes over the person's change), its binding retired (so the issue
+ *  reaches the team's Linear owner as inbound), and its move row set aside (so a follow-up map can move it). Nothing is deleted. */
+export function setAsideAdopted(db: DatabaseSync, a: { moveId: number; ticketId: number | null; bindingId: number | null }, now: number): void {
   tx(db, () => {
-    const why = 'put back';
-    for (const id of ids.tickets) db.prepare("UPDATE plan_tickets SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
-    for (const id of ids.checkpoints) db.prepare("UPDATE plan_checkpoints SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
-    for (const id of ids.epics) db.prepare("UPDATE plan_epics SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
-    const keys = new Set<string>();
-    for (const id of ids.epics) { const e = epicById(db, id); if (e !== null) keys.add(dueKeyOf(e)); }
-    for (const id of ids.tickets) { const t = ticketById(db, id); const e = t === null ? null : epicById(db, t.epicId); if (e !== null) keys.add(dueKeyOf(e)); }
-    for (const k of keys) markSyncDueInTx(db, k, now);
+    if (a.ticketId !== null) dropPutBackInTx(db, { epics: [], checkpoints: [], tickets: [a.ticketId] }, now);
+    if (a.bindingId !== null) retireBindingInTx(db, a.bindingId);
+    setMove(db, a.moveId, { retire: true });
   });
 }
 
@@ -1332,7 +1361,7 @@ const PORT_FUNCTIONS = {
   upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier, handedInboundByIdentifier,
   upkeepTicketByIdentifier, setInboundNote, inboundNoteOf, clearInboundNote, placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, boundLinearIdsOf, upkeepProjectsOf, inTransaction,
   migrationById, migrationsOf, insertMigration, setMigration, insertMove, movesOf, setMove, adoptIssueAsTicketInTx, declareMapStructure,
-  setPlanRequired, dropPutBack, migratingLocals,
+  setPlanRequired, dropPutBack, migratingLocals, setAsideAdopted,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

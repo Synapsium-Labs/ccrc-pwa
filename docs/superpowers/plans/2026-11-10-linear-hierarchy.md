@@ -372,7 +372,12 @@ number from `POST /api/ledger/deviations`.
   apply tick starts at most `MIGRATION_WRITES_PER_TICK` issue writes, so a large map never spends the sync's own share (§10.6). A
   live programme's part, its adoptions included, waits for no run in `ACTIVE_RUN_STATES`. A migration reads `applied` only
   when every move row is applied or its issue skipped and listed. An adopted issue a person changes before the sync's write is
-  put aside: its ticket dropped "put back", so the sync never writes over the change, and it is listed as skipped. The
+  put aside in one transaction: its ticket dropped "put back", so the sync never writes over the change; its binding `retired`
+  (a binding state, the row kept), so the issue reaches the team's Linear owner as inbound, as §10.3 step 5 says; and it is
+  listed as skipped (fix round 1, review 2892 F5). Every Linear call of an apply tick counts against
+  `MIGRATION_CALLS_PER_TICK` besides the write cap, and a rate refusal of any of them rests the lane; a step that cannot be
+  placed now (its epic's or the Upkeep epic's Linear project not created yet) spends nothing and is listed as waiting with its
+  reason (review 2892 F3, A7). The
   project's Upkeep epic, shared with the inbound path, is no object of the migration's: it has no move row and put back leaves
   it. Put back is asked by the report's act (`putBackAskedAt`) and run by the migration lane, a few issues a tick, its records
   dropped "put back" with `putBackAt` before its writes; a programme whose initiative it created has its plan end recorded
@@ -385,6 +390,22 @@ number from `POST /api/ledger/deviations`.
   Upkeep page is the only way into a project's Upkeep epic and its refused closes, which outlive the waiting count. Wave 5
   built it so (review run 2491 A5); `project-linking-card.test.tsx` pins both halves. Record: the wave 7 note (the
   coordinator's ruling, mail of 2026-11-20).
+- **D-8798 (2026-11-20)** — apply-plan-required-scope: when a team's migration is applied, `planRequired` is set for the
+  programmes its map names and for the team's programmes that have declared a plan, not for every programme homed in the team
+  (Task 7.3 said "the team's programmes"). A live programme the map does not name and whose coordinator has declared no plan is
+  left alone: forcing it would refuse that coordinator's next run open `plan-missing` in the middle of its work, with no word to
+  it. `migration-apply.test.ts` pins both halves. Record: the wave 7 note (the coordinator's ruling on review 2892 F8, mail of
+  2026-11-20).
+- **D-8799 (2026-11-20)** — map-item-settles-on-approve: the map's `decide` item settles when the operator approves it, with a
+  note that the report follows, not when the migration reaches `applied` (Task 7.4); the report item, raised on `applied`, carries
+  the result and its Put back. An item left open across a long apply would read as still waiting on the operator. Record: the
+  wave 7 note (the coordinator's ruling on review 2892 A5, mail of 2026-11-20).
+- **D-8800 (2026-11-20)** — migration-columns: a third schema migration for this programme (the Global Constraints name two),
+  four nullable columns on `linear_migrations`: `project` (the ccrc project whose team is reshaped), `report` (the report's
+  lists as JSON), `putBackAskedAt` (the operator's Put back, run by the lane) and `reportDoneAt` (the report closed; the next team
+  may start only then, §10.2). Its slot is 111 on this branch (`main` took 110 first) and is renumbered at landing if another
+  migration lands first. One writer, `planStore.ts#setMigration`. Record: the wave 7 note (the coordinator's ruling on review
+  2892 A5, mail of 2026-11-20).
 
 ## Global Constraints
 

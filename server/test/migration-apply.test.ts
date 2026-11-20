@@ -1,7 +1,9 @@
 // D-8186 and D-8796 (Linear hierarchy plan, Task 7.3): the apply. The migration writes each move row before its write, adopts a
 // leaf or upkeep issue only with that row in one transaction, and lets the plan sync send the update on lane `migration`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MIGRATION_WRITES_PER_TICK } from '../src/linear/migration.js';
+import { MIGRATION_CALLS_PER_TICK, MIGRATION_WRITES_PER_TICK } from '../src/linear/migration.js';
+import { InboundLane } from '../src/linear/inboundLane.js';
+import { readLinearStore } from '../src/linear/store.js';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket, type PlanChanges } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, leaf, migRig, ok, fail, SLUG, T, U, OWNER, type MigRig } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
@@ -292,7 +294,7 @@ describe('the migration apply (D-8186, D-8796)', () => {
     for (let n = 1; n <= 6; n += 1) r.addIssue(n);
     const id = await r.applied([
       leaf(1, 'k1', { programme: 'prog-b', epic: 'eb', checkpoint: 'cb' }), leaf(2, 'k2'),
-      entry(3, 'programme', { programme: 'prog-b' }), entry(4, 'finished'), entry(5, 'superseded', { successor: U(102) }), entry(6, 'stale'),
+      entry(3, 'programme', { programme: 'prog-b' }), entry(4, 'finished', { pr: 'org-a/repo-a#12' }), entry(5, 'superseded', { successor: U(102) }), entry(6, 'stale'),
     ], { epics: [{ programme: 'prog-b', epics: [{ key: 'eb', title: 'Epic B', summary: 'S', project: 'project-a', waves: [], checkpoints: [{ key: 'cb', title: 'CB', kind: 'acceptance' }] }] }] });
     const m = r.plan.migrationById(id)!;
     expect(r.mig.act(m.reportItemId!, id, 'put-back', null)).toEqual({ ok: true });
@@ -478,5 +480,129 @@ describe('the migration apply reads each issue by id (D-8796, review round)', ()
     expect(r.asks.length).toBeGreaterThan(n);
     await r.until(() => r.stateOf(id) === 'applied', 10);
     expect(r.stateOf(id)).toBe('applied');
+  });
+});
+
+describe('review 2892 fix round 1: the apply (D-8186)', () => {
+  it('F3: a step that cannot be placed now spends no budget, is listed as waiting with its reason, and the closers behind it run', async () => {
+    const r = await migRig();
+    for (let n = 1; n <= 4; n += 1) r.addIssue(n);
+    // The Upkeep epic's project cannot be created, so neither upkeep issue can be placed under it.
+    r.override.current = (ask) => (ask.op === 'projectCreate' ? fail('unreachable') : undefined);
+    const id = await r.approved([entry(1, 'upkeep'), entry(2, 'upkeep'), entry(3, 'stale'), entry(4, 'stale')]);
+    for (let i = 0; i < 6; i += 1) await r.tick();
+    expect(r.issues.get(U(103))!.stateType).toBe('canceled');
+    expect(r.issues.get(U(104))!.stateType).toBe('canceled');
+    expect(r.stateOf(id)).toBe('applying');
+    const report = r.plan.migrationById(id)!.report!;
+    expect([...report.waiting].sort()).toEqual(['AAA-1', 'AAA-2']);
+    expect(report.waitingWhy).toEqual({ 'AAA-1': 'upkeep-not-in-linear', 'AAA-2': 'upkeep-not-in-linear' });
+    expect(moveRows(r, id).filter((m) => m.identifier === 'AAA-1' || m.identifier === 'AAA-2')).toEqual([]);
+    // once the project can be created, the waiting issues are placed and the migration finishes
+    r.override.current = null;
+    await r.until(() => r.stateOf(id) === 'applied', 30);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.plan.migrationById(id)!.report!.waiting).toEqual([]);
+  });
+
+  it('F5: an issue changed after its adoption reaches the Linear owner once as inbound, and is never written', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => (ask.op === 'issueUpdate' ? fail('unreachable') : undefined);
+    const id = await r.approved([leaf(1, 'k1')]);
+    await r.tick();
+    const row = moveRows(r, id)[0]!;
+    const bindingId = row.after['bindingId'] as number;
+    r.override.current = null;
+    r.issues.get(U(101))!.title = 'A person renamed it between the adoption and the write';
+    const before = updates(r, U(101)).length;
+    await r.until(() => r.stateOf(id) === 'applied', 10);
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+    // the binding is retired, never deleted: the issue is no longer ccrc's
+    expect(r.db.prepare('SELECT state, linearId FROM linear_bindings WHERE id = ?').get(bindingId)).toEqual({ state: 'retired', linearId: U(101) });
+    expect(r.plan.issueBound(WS.a.id, { id: U(101), identifier: 'AAA-1' })).toBe(false);
+    expect(r.plan.boundLinearIdsOf(WS.a.id)).not.toContain(U(101));
+    expect(r.plan.bindingByLinearId(WS.a.id, U(101))).toBeNull();
+    // the inbound lane sees it as an issue ccrc holds no live binding for, and mails the owner once
+    const lane = new InboundLane({
+      coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir), call: async () => fail('not-found'),
+      now: () => r.t.now, presenceOf: () => 'alive', viaFleet: () => new Set(), directory: { get: () => null, filledAt: () => null, projectStatusesRead: () => 'none' },
+    } as unknown as ConstructorParameters<typeof InboundLane>[0]);
+    const node = { ...r.issues.get(U(101))! };
+    for (let i = 0; i < 2; i += 1) {
+      lane.detect(WS.a.id, [node], new Set(['AAA']), r.t.now);
+      await lane.tick(r.t.now);
+      r.t.now += 60_000;
+    }
+    expect(r.plan.inboundOf(U(101))).toMatchObject({ state: 'mailed', mailedTo: OWNER, identifier: 'AAA-1' });
+    expect((r.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE subject LIKE 'Linear inbound%' AND toId = ?").get(OWNER) as { n: number }).n).toBe(1);
+    // and nothing writes it: no later sync pass, no migration tick
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await r.sync.passFor(SLUG, r.t.now + 60_000);
+    await r.tick();
+    expect(updates(r, U(101))).toHaveLength(before);
+  });
+
+  it('F8 (D-8798): apply sets planRequired for the programmes the map names and those with a declared plan, never an unnamed one with no plan', async () => {
+    const r = await migRig();
+    r.addProgramme('prog-c', 'active');          // homed in the team, live, no plan, not named by the map
+    r.openRun('prog-c', 'working');
+    // both existed before this build (`planRequired` 0, as migration 59 left every older programme)
+    r.db.prepare("UPDATE programs SET planRequired = 0 WHERE slug IN (?, ?)").run(SLUG, 'prog-c');
+    r.addIssue(1);
+    const id = await r.applied([entry(1, 'stale')]);
+    expect(r.stateOf(id)).toBe('applied');
+    const req = (slug: string) => (r.db.prepare('SELECT planRequired FROM programs WHERE slug = ?').get(slug) as { planRequired: number }).planRequired;
+    expect(req(SLUG)).toBe(1);                   // declared (its coordinator's plan), not named
+    expect(req('prog-c')).toBe(0);               // left alone: its coordinator's next run open is not refused plan-missing
+  });
+
+  it('A1: a replaced level relates to an issue the migration placed, by its applied move row, and the relation is sent once', async () => {
+    const r = await migRig();
+    for (let n = 1; n <= 3; n += 1) r.addIssue(n);
+    let refusedState = 0;
+    r.override.current = (ask) => {
+      if (ask.op === 'issueUpdate' && ask.input['id'] === U(103) && 'stateId' in ask.input && refusedState === 0) { refusedState += 1; return fail('unreachable'); }
+      return undefined;
+    };
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2'), entry(3, 'epic', { programme: SLUG, epic: 'e1' })]);
+    r.issues.get(U(101))!.title = 'Changed before the apply';      // the first leaf under e1 is skipped, never placed
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    const rel = r.opsOf('issueRelationCreate');
+    expect(rel).toHaveLength(1);
+    expect(rel[0]!.input).toMatchObject({ issueId: U(103), relatedIssueId: U(102) });
+    expect(refusedState).toBe(1);
+  });
+
+  it('A7: every Linear call of a tick counts against its budget, and a refused close write rests the lane', async () => {
+    const r = await migRig();
+    for (let n = 1; n <= 4; n += 1) r.addIssue(n);
+    const id = await r.approved([1, 2, 3, 4].map((n) => entry(n, 'stale')));
+    const per: number[] = [];
+    for (let i = 0; i < 12 && r.stateOf(id) !== 'applied'; i += 1) {
+      const from = r.asks.length;
+      await r.tick();
+      per.push(r.asks.slice(from).filter((a) => a.lane === 'migration').length);
+    }
+    expect(r.stateOf(id)).toBe('applied');
+    expect(Math.max(...per)).toBeLessThanOrEqual(MIGRATION_CALLS_PER_TICK);
+
+    const q = await migRig();
+    q.addIssue(1); q.addIssue(2);
+    let refused = 0;
+    q.override.current = (ask) => {
+      if (ask.op === 'issueComment' && refused === 0) { refused += 1; return { ok: false, word: 'rate-limited', retryAfterS: 600 } as CcrcOpOutcome; }
+      return undefined;
+    };
+    const qid = await q.approved([entry(1, 'stale'), entry(2, 'stale')]);
+    await q.tick();
+    expect(refused).toBe(1);
+    const n = q.asks.length;
+    await q.tick();                                          // 31 s later: resting
+    expect(q.asks).toHaveLength(n);
+    await q.tick(600_000);
+    await q.until(() => q.stateOf(qid) === 'applied', 10);
+    expect(q.stateOf(qid)).toBe('applied');
   });
 });

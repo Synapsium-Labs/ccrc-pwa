@@ -251,13 +251,13 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
       const answer: HierarchyAnswer = {
         ok: true,
         // The team's newest migration names the state and its item (D-8186); the waiting count is the inbound path's (D-8183).
-        projects: rows.map((r) => {
-          const st = opts.migration?.stateOfTeam(r.teamKey) ?? { state: 'not-migrated' as const, at: null, itemId: null };
+        projects: await Promise.all(rows.map(async (r) => {
+          const st = (await opts.migration?.stateOfTeam(r.teamKey)) ?? { state: 'not-migrated' as const, at: null, itemId: null };
           return {
             project: r.project, teamKey: r.teamKey, initiatives: r.initiatives, linearOwner: r.linearOwner,
             ownerNow: ownerNow(plan, rows, r), ownsTeam: r.ownsTeam, state: st.state, stateAt: st.at, itemId: st.itemId, inboundWaiting: plan.inboundWaiting(r.project),
           };
-        }),
+        })),
         coordinators: plan.coordinatorIdsOf().map((id) => ({ id, live: opts.presenceOf(id) === 'alive' })),
       };
       return answer;

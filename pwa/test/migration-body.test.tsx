@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import type { MapCounts, MapEntry, MigrationStructure } from '../../shared/plan';
 import { MigrationBody } from '../src/ledgers/MigrationBody';
-import { MIGRATION_BODY_TEXT as W } from '../src/ledgers/migrationWords';
+import { MIGRATION_BODY_TEXT as W, WAITING_WHY_WORDS } from '../src/ledgers/migrationWords';
 
 afterEach(cleanup);
 
@@ -61,6 +61,13 @@ describe('the report body\'s lists', () => {
     expect(lists[1]!.textContent).toContain('AAA-7');
     expect(lists[2]!.textContent).toContain('Milestone one');
     expect(after(q(container, '[data-migration-counts]'), lists[0]!)).toBe(true);
+  });
+
+  it('a waiting issue says why it waits; one with no reason (an older report) is listed bare (review 2892 F3)', () => {
+    const report = { ...REPORT, waitingWhy: { 'AAA-6': 'upkeep-not-in-linear' as const } };
+    const { container } = render(<MigrationBody kind="report" counts={COUNTS} entries={ENTRIES} report={report} />);
+    const items = [...container.querySelectorAll('[data-report-list="waiting"] li')].map((l) => l.textContent);
+    expect(items).toEqual([`AAA-6: ${WAITING_WHY_WORDS['upkeep-not-in-linear']}`, 'AAA-7']);
   });
 
   it('after put back, the issues moved since are listed too', () => {

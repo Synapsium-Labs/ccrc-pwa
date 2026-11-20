@@ -51,7 +51,7 @@ import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from
 import { restoreCommentChoice, restoreHoldVerdict, restoreTargetVerdict, restoredDescription } from './driftPolicy.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
-  withoutPutBack, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  withoutPutBack, putBackTicketsOf, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -486,9 +486,10 @@ export class PlanSync {
   private ticketOfRun(runId: number): { run: NonNullable<Extract<ReturnType<CoordStore['run']>, { ok: true }>['run']>; ticket: TicketRow } | null {
     const read = this.deps.coord.run(runId);
     if (!read.ok || read.run === null) return null;
-    // Wave 3 A5, carried to wave 7 (D-8186): a ticket put back (`putBackAt`) is not the run's, as the sync's snapshot leaves it out.
-    const ticket = this.deps.plan.planOf(read.run.program).epics.flatMap((e) => e.tickets).find((t) => t.runId === runId && t.putBackAt === null);
-    return ticket === undefined ? null : { run: read.run, ticket };
+    // The store's one reader of a run's ticket (review 2892 F9): a ticket put back is not the run's (wave 3 A5, carried to wave 7).
+    const own = this.deps.plan.ticketOfRun(runId);
+    const ticket = own === null || own.ticketId === null ? null : this.deps.plan.ticketById(own.ticketId);
+    return ticket === null ? null : { run: read.run, ticket };
   }
 
   // ── One pass ──
@@ -577,7 +578,8 @@ export class PlanSync {
     const found = upkeep ? undefined : coord.programs().find((p) => p.slug === slug);
     const prog = rowid === null || found === undefined ? null : { rowid, row: found };
     if (!upkeep && prog === null) return null;
-    const stored = withoutPutBack(upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug));   // Task 3.1: a record Put back dropped is never in the snapshot
+    const raw = upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug);
+    const stored = withoutPutBack(raw);   // Task 3.1: a record Put back dropped is never in the snapshot
     if (upkeep && stored.epics.length === 0) return null;
     const bindings = plan.bindingsOf(slug);
     const planEnd = upkeep ? null : plan.planEndOf(slug);
@@ -630,7 +632,7 @@ export class PlanSync {
         end: outcome === null ? null : { outcome, why: planEnd?.why ?? null, at: planEnd?.at ?? this.deps.now() },
         doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.row.state === 'paused',
       },
-      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs,
+      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs, putBackTickets: putBackTicketsOf(raw),
     };
     return { snap, slots, waiting, unread };
   }

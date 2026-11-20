@@ -9,6 +9,7 @@ import { parsePlanPut } from '../coord/planPolicy.js';
 import type { StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
 import { normalText } from './driftPolicy.js';
+import { publicTextVerdict } from '../linking/policy.js';
 
 export type IssueSnapshotRow = IssueSnapshot & { linearId: string; identifier: string };
 export interface IssueAfter {
@@ -30,7 +31,18 @@ export interface MapContext {
   teamOf(project: string): string | null;
   /** Ticket keys already in the home project's Upkeep epic. */
   upkeepKeys: ReadonlySet<string>;
+  /** The Linear ids and identifiers of the issues ccrc's plan already holds in the workspace: a superseded entry's successor
+   *  exists in the map or here (review 2892 F6). Absent: none. */
+  heldIssues?: ReadonlySet<string>;
 }
+/** A finished entry's pull request: `<owner>/<repo>#<number>` (review 2892 F7). */
+const PR_REF = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,8})$/u;
+/** The longest one-line reason a finished entry may give for having no pull request. */
+export const FINISHED_REASON_MAX_CHARS = 200;
+/** Whether a finished entry carries its evidence (spec §10.3, review 2892 F7): a pull request, or a one-line reason. */
+const hasEvidence = (t: MapEntry['target']): boolean =>
+  (typeof t?.pr === 'string' && PR_REF.test(t.pr))
+  || (typeof t?.reason === 'string' && t.reason.trim() !== '' && !/[\r\n]/u.test(t.reason) && t.reason.length <= FINISHED_REASON_MAX_CHARS);
 export type PlanFacts = { declared: boolean; live: boolean; plan: StoredPlan | null };
 type MapWord = 'map-incomplete' | 'map-rewrites-plan' | 'plan-bad-body';
 type Checked = { ok: true; counts: MapCounts } | { ok: false; word: MapWord; detail: string };
@@ -118,6 +130,9 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
   const cache = new Map<string, Map<string, EpicFacts>>();
   const epicsFor = (p: string) => cache.get(p) ?? (cache.set(p, epicsOf(map, p, plans, ctx.home)), cache.get(p)!);
   const unknown = (e: MapEntry) => fail('plan-bad-body', `unknown-target:${e.identifier}`);
+  // A successor is an issue on this map, by id or identifier, other than the entry itself, or one ccrc's plan already holds
+  // (review 2892 F6): its value goes to Linear as the relation's other end, so a typo never reaches it.
+  const onMap = new Set(map.entries.flatMap((e) => [e.issue, e.identifier]));
   for (const e of map.entries) {
     const t = e.target ?? {};
     const ep = t.programme !== undefined && t.epic !== undefined ? epicsFor(t.programme).get(t.epic) : undefined;
@@ -127,7 +142,15 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
       case 'programme': good = progExists(t.programme); break;
       case 'epic': good = progExists(t.programme) && ep !== undefined; break;
       case 'checkpoint': good = progExists(t.programme) && ep !== undefined && t.checkpoint !== undefined && ep.checkpoints.has(t.checkpoint); break;
-      case 'superseded': good = typeof t.successor === 'string' && t.successor !== ''; break;
+      case 'superseded':
+        if (typeof t.successor !== 'string' || t.successor === '') { good = false; break; }
+        if (t.successor === e.issue || t.successor === e.identifier || !(onMap.has(t.successor) || (ctx.heldIssues?.has(t.successor) ?? false))) {
+          return fail('plan-bad-body', `unknown-successor:${e.identifier}`);
+        }
+        good = true; break;
+      case 'finished':
+        if (!hasEvidence(e.target)) return fail('plan-bad-body', `finished-needs-evidence:${e.identifier}`);
+        good = true; break;
       default: good = true;
     }
     if (!good) return unknown(e);
@@ -261,6 +284,21 @@ export function replacementComment(home: string, mode: LinkingMode, url: string 
   return `This issue now lives in “${home}”${link}. ccrc's migration closed it; nothing was deleted.`;
 }
 
+/** The comment on an issue closed as finished (spec §10.3, review 2892 F7): it names its evidence. A private team's names the
+ *  pull request; a public (or unmeasured) team's names it only when it is in the project's own repository (`repo`, measured),
+ *  and says "a pull request" for any other, which may be private. The text passes the public-text check for the team, or the
+ *  comment names no evidence. */
+export function finishedComment(t: Pick<NonNullable<MapEntry['target']>, 'pr' | 'reason'>, fact: { teamKey: string | null; mode: LinkingMode }, repo: string | null, privateKeys: readonly string[]): string {
+  const bare = 'ccrc\'s migration closed this issue as finished, as the approved map says; nothing was deleted.';
+  const pr = typeof t.pr === 'string' ? PR_REF.exec(t.pr) : null;
+  const evidence = pr !== null
+    ? (fact.mode === 'private' || (repo !== null && pr[1]!.toLowerCase() === repo.toLowerCase()) ? `pull request ${pr[1]}#${pr[2]}` : 'a pull request')
+    : typeof t.reason === 'string' ? `no pull request: ${t.reason.trim()}` : null;
+  if (evidence === null) return bare;
+  const text = `ccrc's migration closed this issue as finished, as the approved map says; its evidence: ${evidence}. Nothing was deleted.`;
+  return publicTextVerdict(text, fact.teamKey, fact.mode, privateKeys).ok ? text : bare;
+}
+
 // ── The migration's lifecycle words (Tasks 7.2 to 7.4; L1, pure) ──
 
 /** The facts of a migration row these deciders read (the store's `MigrationRow`, narrowed). */
@@ -347,7 +385,7 @@ export function parseMapProposal(body: unknown, team: string): { ok: true; map: 
     const t = e['target'];
     if (t !== undefined && !isObj(t)) return bad(`${e['identifier']}: target is not an object`);
     for (const [k, v] of Object.entries(t ?? {})) {
-      if (!['programme', 'epic', 'checkpoint', 'successor', 'ticketKey', 'kind'].includes(k) || typeof v !== 'string') return bad(`${e['identifier']}: target.${k}`);
+      if (!['programme', 'epic', 'checkpoint', 'successor', 'ticketKey', 'kind', 'pr', 'reason'].includes(k) || typeof v !== 'string') return bad(`${e['identifier']}: target.${k}`);
     }
     out.push({ issue: e['issue'], identifier: e['identifier'], class: e['class'] as MapEntry['class'], ...(t === undefined ? {} : { target: t as MapEntry['target'] }) });
   }
@@ -384,12 +422,15 @@ export function mapItemInput(migrationId: number, team: string, owner: string, c
     action: { verb: 'linear-map', migrationId },
   };
 }
-/** The report's `do` item: Put back (confirm) or Done. */
-export function reportItemInput(migrationId: number, team: string, c: MapCounts): RaiseItemInput {
+/** The report's `do` item: Put back (confirm) or Done. `done` names the finished programmes the map placed open tickets into:
+ *  their initiatives are not forced to Completed (D-8796, point 6), and the report says so (review 2892 A6). */
+export function reportItemInput(migrationId: number, team: string, c: MapCounts, done: readonly string[] = []): RaiseItemInput {
+  const doneLine = done.length === 0 ? ''
+    : ` ${done.length === 1 ? 'Programme' : 'Programmes'} ${done.join(', ')} ${done.length === 1 ? 'is' : 'are'} done: each one's initiative stays active in Linear while its placed tickets are open.`;
   return {
     program: LINEAR_SYNC_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', neededBy: 'later', soonLabel: null, secretSlot: null,
     title: `Linear migration report for team ${team}`,
-    why: `The map for team ${team} is applied: ${c.created} created, ${c.moved} moved, ${c.closed} closed, ${c.skipped} skipped as changed, ${c.left} left. Team ${team} is now managed: ccrc keeps its Linear hierarchy.`,
+    why: `The map for team ${team} is applied: ${c.created} created, ${c.moved} moved, ${c.closed} closed, ${c.skipped} skipped as changed, ${c.left} left. Team ${team} is now managed: ccrc keeps its Linear hierarchy.${doneLine}`,
     how: [
       'Read the counts and the full list below.',
       'Done: the report closes, and the next team may start.',
