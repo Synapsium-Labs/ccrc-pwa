@@ -639,16 +639,32 @@ describe('POST /api/linking/suggest', () => {
     expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
   });
 
-  it("a caller whose runs cannot be read is refused run-unreadable (503), never passed (review 2971 F7)", async () => {
+  it("a caller whose open claimants cannot be read is refused run-unreadable (503), never passed (review 2971 F7)", async () => {
     app = await boot();
-    const real = coord!.bindingsOf.bind(coord!);
-    coord!.bindingsOf = (id: string) => ({ ...real(id), claimant: () => ({ ok: false as const, kind: 'run-unreadable' as const, detail: 'unreadable row' }) });
+    const real = coord!.openCoordinatorIds.bind(coord!);
+    coord!.openCoordinatorIds = () => { throw new Error('db'); };
     const res = await suggest(app, ok());
     expect([res.statusCode, res.json().error]).toEqual([503, 'run-unreadable']);
-    coord!.bindingsOf = () => { throw new Error('db'); };
-    expect((await suggest(app, ok())).json().error).toBe('run-unreadable');
-    coord!.bindingsOf = real;
+    coord!.openCoordinatorIds = real;
     expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('the gate reads the role\'s own fact, the open claimants (`openCoordinatorIds`), and no rule of its own (review 2997 A4)', async () => {
+    app = await boot();
+    const realIds = coord!.openCoordinatorIds.bind(coord!);
+    const realBindings = coord!.bindingsOf.bind(coord!);
+    // The store's runs say ME claims an open run, but the role's fact says it does not: the gate follows the role's fact.
+    coord!.openCoordinatorIds = () => realIds().filter((id) => id !== ME.byId);
+    expect((await suggest(app, ok())).json().error).toBe('not-a-coordinator');
+    // A session that claims no run in the store, but that the role's fact names, passes; the binding series is not read.
+    const lone = { byId: 'project-a-lone-reed', byUuid: 'u-project-a-lone-reed' };
+    seedRow(home, lone.byId, { project: 'project-a' });
+    coord!.openCoordinatorIds = () => [...realIds(), lone.byId];
+    coord!.bindingsOf = () => { throw new Error('the gate must not read the binding series'); };
+    const res = await suggest(app, ok(lone));
+    expect(res.statusCode, res.body).toBe(200);
+    coord!.openCoordinatorIds = realIds;
+    coord!.bindingsOf = realBindings;
   });
 
   it('a server with no coordination store answers unavailable', async () => {

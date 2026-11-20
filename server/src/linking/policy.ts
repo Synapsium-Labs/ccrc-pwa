@@ -8,6 +8,7 @@ import type {
 import { TEAM_SUGGESTION_WHY_MAX, teamEvidenceClause } from '../../../shared/linking.js';
 import { CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_TEXT_MAX, CALL_WHY_MAX } from '../coord/coordCalls.js';
 import type { LinearRoute } from '../linear/route.js';
+import { claimsOpenRunOf } from '../roleOf.js';
 import { isWsProject } from '../../../shared/slug.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
 
@@ -224,11 +225,15 @@ export function confirmedWorkspaceName(
 }
 
 /** D-8808 (review 2971 F7, the coordinator's ruling): whether a session may suggest a team: one that claims an open run (a
- *  coordinator of some programme). `open` is how many open runs it claims, or `unmeasured` when its run series could not be read,
- *  which refuses (`run-unreadable`), never passes. */
-export function suggesterVerdict(open: number | 'unmeasured'): { ok: true } | { ok: false; error: 'not-a-coordinator' | 'run-unreadable' } {
-  if (open === 'unmeasured') return { ok: false, error: 'run-unreadable' };
-  return open > 0 ? { ok: true } : { ok: false, error: 'not-a-coordinator' };
+ *  coordinator of some programme). "Claims an open run" is the role's own decision (`claimsOpenRunOf`, roleOf.ts, review 2997
+ *  A4), over the same fact the card and the sleep lane read, the open claimants (`openCoordinatorIds`), so the gate has no rule
+ *  of its own. Claimants that could not be read (`unmeasured`) refuse (`run-unreadable`), never pass. */
+export function suggesterVerdict(
+  sessionId: string, openCoordinators: ReadonlySet<string> | 'unmeasured',
+): { ok: true } | { ok: false; error: 'not-a-coordinator' | 'run-unreadable' } {
+  const claims = claimsOpenRunOf(sessionId, openCoordinators);
+  if (claims === 'unmeasured') return { ok: false, error: 'run-unreadable' };
+  return claims === 'yes' ? { ok: true } : { ok: false, error: 'not-a-coordinator' };
 }
 
 /** A failed reading is taken again after this long, not after a day: a failure says nothing about the repository. */

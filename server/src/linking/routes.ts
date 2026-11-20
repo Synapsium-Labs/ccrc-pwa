@@ -154,8 +154,9 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
    * `POST /api/linking/suggest` (D-8808): a session suggests a Linear team (and optionally its workspace) for a project with no
    * key, with a reason. A candidate only: it never links, and the reason is shown in the console and never written to Linear.
    * A box-token machine lane (an `auth/gate.ts` EXEMPT entry): the token first (never the cookie), then the body's shape, then the
-   * registry's attribution, then the caller's standing (review 2971 F7: it claims an open run, so it coordinates a programme;
-   * `not-a-coordinator` otherwise, and a run series that cannot be read is `run-unreadable`, never a pass), then the store, then
+   * registry's attribution, then the caller's standing (review 2971 F7: it claims an open run, so it coordinates a programme,
+   * decided by the role's own `claimsOpenRunOf` over the open claimants, review 2997 A4; `not-a-coordinator` otherwise, and
+   * claimants that cannot be read are `run-unreadable`, never a pass), then the store, then
    * the row (`team-set` when it has a key), then the pair (a Linear store that
    * cannot be read is `unavailable`, never `team-unknown`; with no workspace named, the one workspace that holds the key is stored,
    * and a key two connected workspaces hold is `team-ambiguous`), then the reason as PUBLIC text (the console may be mirrored), then
@@ -177,12 +178,10 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     if (coord === undefined || opts.attribute === undefined) return refuseRoute(reply, 'unavailable');
     const attributed = await opts.attribute(s.byId, s.byUuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
-    let open: number | 'unmeasured';
-    try {
-      const claimed = coord.bindingsOf(s.byId).claimant();
-      open = claimed.ok ? claimed.siblings.length : 'unmeasured';
-    } catch { open = 'unmeasured'; }
-    const standing = suggesterVerdict(open);
+    // The open claimants, read as the card's role read and the sleep lane read them (`openCoordinatorIds`); a throw is unmeasured.
+    let openCoordinators: ReadonlySet<string> | 'unmeasured';
+    try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
+    const standing = suggesterVerdict(s.byId, openCoordinators);
     if (!standing.ok) return refuseRoute(reply, standing.error);
     if (coord.linkingOf(s.project).teamKey !== null) return refuseRoute(reply, 'team-set');
     let store: LinearStoreRead | null = null;

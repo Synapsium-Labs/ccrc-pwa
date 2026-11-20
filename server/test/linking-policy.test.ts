@@ -6,6 +6,7 @@ import {
   VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue, workspaceAfterWrite,
   parseTeamConfirm, confirmedCandidate, overlordLinkCallBody, writeReadsStore, confirmedWorkspaceName, suggesterVerdict,
 } from '../src/linking/policy.js';
+import { claimsOpenRunOf, roleFactsOf, roleOf } from '../src/roleOf.js';
 import { routeProjectTeam, type LinearRouteSlot } from '../src/linear/route.js';
 import { WS_SLUG_MAX } from '../../shared/slug.js';
 import type { ProjectLinkingWire, TeamCandidateWire } from '../../shared/linking.js';
@@ -261,13 +262,32 @@ describe('writeReadsStore and confirmedWorkspaceName (F5)', () => {
   });
 });
 
-// F7 (review 2971, the coordinator's ruling): only a session that claims an open run (a coordinator) suggests.
-describe('suggesterVerdict (F7)', () => {
-  it('a session claiming an open run passes; none is not-a-coordinator; an unreadable run series refuses, never passes', () => {
-    expect(suggesterVerdict(1)).toEqual({ ok: true });
-    expect(suggesterVerdict(3)).toEqual({ ok: true });
-    expect(suggesterVerdict(0)).toEqual({ ok: false, error: 'not-a-coordinator' });
-    expect(suggesterVerdict('unmeasured')).toEqual({ ok: false, error: 'run-unreadable' });
+// F7 (review 2971, the coordinator's ruling): only a session that claims an open run (a coordinator) suggests. Review 2997 A4:
+// the gate decides "claims an open run" through the role's own decider (`claimsOpenRunOf`, roleOf.ts), fed the open claimants.
+describe('suggesterVerdict (F7, review 2997 A4)', () => {
+  const ID = 'lane-a';
+  it('a session among the open claimants passes; one outside them is not-a-coordinator; unread claimants refuse, never pass', () => {
+    expect(suggesterVerdict(ID, new Set([ID]))).toEqual({ ok: true });
+    expect(suggesterVerdict(ID, new Set(['lane-b', ID]))).toEqual({ ok: true });
+    expect(suggesterVerdict(ID, new Set())).toEqual({ ok: false, error: 'not-a-coordinator' });
+    expect(suggesterVerdict(ID, new Set(['lane-b']))).toEqual({ ok: false, error: 'not-a-coordinator' });
+    expect(suggesterVerdict(ID, 'unmeasured')).toEqual({ ok: false, error: 'run-unreadable' });
+  });
+  it('the gate and the role decider agree on the same facts: it passes exactly when the role reads claimsOpenRun yes', () => {
+    const facts: ReadonlyArray<ReadonlySet<string> | 'unmeasured'> = [new Set(), new Set([ID]), new Set(['lane-b']), new Set([ID, 'lane-b']), 'unmeasured'];
+    for (const openCoordinators of facts) {
+      const claims = roleFactsOf(ID, {
+        child: { kind: 'none' }, childRunKind: 'unmeasured', openCoordinators, intentDeclared: false, designation: { kind: 'none' },
+      }).claimsOpenRun;
+      expect(claimsOpenRunOf(ID, openCoordinators)).toBe(claims);
+      const gate = suggesterVerdict(ID, openCoordinators);
+      expect(gate.ok, String(claims)).toBe(claims === 'yes');
+      if (!gate.ok) expect(gate.error).toBe(claims === 'unmeasured' ? 'run-unreadable' : 'not-a-coordinator');
+      // A session the gate passes is one the role reads as a coordinator, and one it refuses as not-a-coordinator reads plain.
+      const role = roleOf(roleFactsOf(ID, { child: { kind: 'none' }, childRunKind: 'unmeasured', openCoordinators, intentDeclared: false, designation: { kind: 'none' } }));
+      if (gate.ok) expect(role).toEqual({ kind: 'role', role: 'coordinator' });
+      else if (gate.error === 'not-a-coordinator') expect(role).toEqual({ kind: 'role', role: 'plain' });
+    }
   });
 });
 
