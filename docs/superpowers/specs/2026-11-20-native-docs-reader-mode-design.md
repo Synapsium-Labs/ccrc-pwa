@@ -140,7 +140,7 @@ XR1 on a phone, 412 x 915                 XR1, the menu control tapped
 ```mermaid
 stateDiagram-v2
   [*] --> Normal
-  Normal --> Entering: button, r, or the palette
+  Normal --> Entering: a button or r
   Entering --> FullScreen: element full screen granted
   Entering --> Fill: refused or unavailable
   FullScreen --> Normal: Esc, Back, Exit, browser exit
@@ -162,7 +162,7 @@ This section places the button and the key, and gives every exit one model throu
 | Phone, the one bar (a ready frame under 600 px) | The last control, icon only, `aria-label` "Reader mode", after Jump, Contents and a plan's Outline; at least 44 by 44 px. It is ccrc's own action drawn by `OneBarControls`, not a row of `oneBarTools`, which holds the library's command names only (`reader-commands.test-d.ts`) | (a) Inside Page details; (b) replace a tool; (c) a long press on the title | (a) Two taps, against "one button enters it". (b) Jump and Contents are in daily use. (c) Not discoverable. The title loses 44 px of width, which the one bar's ellipsis absorbs; the bar's height, the title's position and the tap floor do not change (§4.6). |
 | Phone, the compact row | None | Show it disabled | The compact row draws only while the frame is not ready, and reader mode needs the frame. |
 | The plain view | None in this design | A host-drawn reader mode of the plain tree | The plain view is a fallback. Reading it full screen is Later (Where things stand). |
-| The command palette | One command, "Reader mode", on a Docs page with a ready frame | None | The palette lists every command; one row in the existing registry, no new mechanism. |
+| The command palette | None. The `r` row's `when` is false while the palette is open, so the palette never lists it; the key does not read `when` (§3.2) | One row in the palette | Choosing it there would start reader mode while the palette's own modal layer is still leaving. That layer's hiding undo and its focus restore (`CommandLayer.tsx`, which puts focus back on what had it) would race reader mode's hiding and its focus on the frame (§4.1). The two buttons and `r` are the entries. |
 
 ### 3.2 The key
 
@@ -267,7 +267,11 @@ flowchart TB
 - **The fill comes first.** On entry ccrc sets `data-reader-mode` on the container. Its rule draws the container `position: fixed; inset: 0` over the console, on the reader's ground, inside the safe areas (`--safe-top`, `--safe-bottom`, and the side insets), at a new layer token `--z-reading` between `--z-toast` and `--z-block`. In the fill, a session-expired or update block (`BlockScreen`, `LoginScreen`, mounted beside the app shell) still draws over reader mode. In element full screen it would not, because only the full-screen subtree draws; so either of them appearing ends reader mode, through one decision event (`block`).
 - **Then full screen, where it exists.** If `document.fullscreenEnabled` is true, ccrc calls `container.requestFullscreen({navigationUI: 'hide'})` in the same task as your tap. A rejection, or an engine without the API, leaves the fill as reader mode. ccrc never retries without a new tap.
 - **Sheets go inside.** In element full screen only the full-screen element's subtree is drawn. The sheets the frame can raise (the external-link sheet, the copy sheet, a "not loaded" chip's sheet) are portalled to the document body today, so they would open unseen. On a Docs page, ccrc's `Sheet` primitive always takes its portal target from a context the reading container provides, in both views, so a sheet open as reader mode starts or ends is never moved and remounted. The container creates no stacking context and no clip in the normal view, so a sheet there draws as it does today.
-- **The rest of the console is suspended.** While reader mode is on, everything outside the container is inert and hidden from assistive technology, applied with the same `hideOthers` the modal layers use and recorded through `ui/src/lib/modal-layers.ts`, so Tab never leaves the overlay and the frame for an invisible head control, and a screen reader never reads it. The command layer's single keys are held, except `r`, and Cmd or Ctrl+K does not open the palette: its branch runs before the layer's key-holding check (`useShortcuts.ts`), so that branch gains the reader-mode test itself. Esc on ccrc's overlay is the overlay's own key handler, bound on its toolbar element, not the command layer's and not the container's (§3.3). Toasts draw behind the container and may expire unseen.
+- **The rest of the console is suspended, as the page's own hiding.** While reader mode is on, everything outside the container is inert and hidden from assistive technology: each sibling of the container and of each ancestor up to `body` gets `aria-hidden="true"` and `inert`, with no `data-aria-hidden` mark. An unmarked hidden node is the one kind the modal layers never lift. `ui/src/lib/modal-layers.ts#recordModalLayer` records it as the page's own, and a closing sheet's `useHidingFollowsOpen` (`ui/src/primitives/sheet.tsx`) lifts every mark but the page's own. So a sheet that opens and closes inside reader mode (the external-link or copy sheet) leaves the console hidden. A hiding of reader mode's own through Radix's `hideOthers` would not survive it: the closing sheet would lift those marks with its own. Two functions beside the record, in `modal-layers.ts`, keep one owner for the hiding:
+  - `hideAsPage(keep)` hides the nodes outside `keep`, skips any the page had already hidden, and returns the nodes it hid;
+  - `releaseAsPage(nodes)` takes them back. A node that a still-open modal also marks keeps its `aria-hidden` and leaves every layer's record, so that modal lifts it as its own when it closes. Every other node loses its `aria-hidden`, and all of them lose `inert`.
+
+  Reader mode never starts its hiding while a modal layer is in the document. No sheet can be open as it starts, because the head and the one bar sit behind any sheet and the command layer stands down under an open dialog, and the palette does not offer reader mode (§3.1). So Tab never reaches an invisible head control, and a screen reader never reads one. The command layer's single keys are held, except `r`, and Cmd or Ctrl+K does not open the palette: its branch runs before the layer's key-holding check (`useShortcuts.ts`), so that branch gains the reader-mode test itself. Esc on ccrc's overlay is the overlay's own key handler, bound on its toolbar element, not the command layer's and not the container's (§3.3). Toasts draw behind the container and may expire unseen.
 - **The mockup frame's own Full screen** (`.docs-mockup[data-frame='full']`) is a different view, for HTML leaves, and is unchanged.
 
 | Decision | Options | Chosen, and why |
@@ -481,10 +485,11 @@ This section names every new op, the paged reading, its size share under the lib
 | The `r` command | `pwa/src/command/commands.ts` | L1 table |
 | The `reader` place kind, `exit-reader` and the reader-place host slot | `pwa/src/lib/historyPlaces.ts` (X2 P5.3's decider), `pwa/src/lib/popstate.ts` (the slot) | L1, L4 |
 | The sheet portal target | `ui/src/primitives/sheet.tsx` and a context | L4 |
+| The console's hiding, as the page's own | `ui/src/lib/modal-layers.ts` (`hideAsPage`, `releaseAsPage`, beside `recordModalLayer`) | L4 |
 | `--z-reading` | `ui/src/styles/tokens.css` | L0 style |
 | The mount: `onProgress` for every production mount, `remount(chrome)` and `focus()` (XR1), the `reading` op and `onReader` (XR2) | `reader/bridge.ts`, `reader/policy.ts#readerMountPlan` | L3, L1 |
 
-Every decision is in L1 and every act in L4 (CLAUDE.md, decide in L1, act in L4). The fill, the full-screen request and the wake lock are one hook; no second listener is added for history (X2's dispatcher, with a second host slot for a second owner), keys (the command registry), visibility (the page clock) or the hiding of the console (the modal layers' `hideOthers`). The wake lock has one decider, `wakeLockWanted`, re-read on every state change.
+Every decision is in L1 and every act in L4 (CLAUDE.md, decide in L1, act in L4). The fill, the full-screen request and the wake lock are one hook; no second listener is added for history (X2's dispatcher, with a second host slot for a second owner), keys (the command registry), visibility (the page clock) or the hiding of the console (`modal-layers.ts`, the modal layers' own module, which gains `hideAsPage` and `releaseAsPage`; `sheet.tsx`'s lift rule is unchanged). The wake lock has one decider, `wakeLockWanted`, re-read on every state change.
 
 ### 7.2 The library: ops
 
@@ -609,7 +614,7 @@ Technical choices are the worker's, each argued above; the one product choice wa
 | R15 | Orientation | Never locked | Proposed |
 | R16 | Entry in XR1 | In place on a phone; on a desktop one remount with the chrome off, after scrolling settles and with no opening hash; in place everywhere from XR2 | Proposed |
 | R17 | Op names | `reading` to the frame, `reader` from it, paced in the frame | Proposed |
-| R18 | The console behind reader mode | Inert and hidden from assistive technology, through the modal layers' mechanism | Proposed |
+| R18 | The console behind reader mode | Inert and hidden from assistive technology, written as the page's own hiding through `modal-layers.ts`, which no closing sheet lifts; the palette does not offer reader mode | Proposed |
 | R19 | Blocks in full screen | End reader mode | Proposed |
 | R20 | XR1's library | The contract release, continuous scroll; LX6 in it if ready, else the next release, never held for | Agreed: the coordinator, review 2933 F7 (a), 2026-11-20 |
 
