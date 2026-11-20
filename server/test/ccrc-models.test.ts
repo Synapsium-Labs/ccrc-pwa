@@ -2349,6 +2349,18 @@ describe('ccrc models refresh: a stored effort level the new catalogue drops (pr
       effortFallback: [{ class: 'opus', from: 'max', to: 'xhigh' }], effortFallbackRecord: 'no-advance-file' });
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'codex-a.advance.json')), 'none is created for it').toBe(false);
   });
+
+  it('a LiteLLM render that fails after the fallback was written: the failed row still names the fallback (D-8865)', async () => {
+    await seatCodexA();
+    const stub = '_models_litellm() { printf \'%s\\n\' \'{"ok":false,"detail":"the proxy could not be stopped"}\'; return 1; }';
+    const r = sourced(`${stub}\ncmd_models refresh codex-a`, ['lock', 'ours', 'stop', 'start'],
+      { CCRC_MODELS_PROBE_FIXTURE: dropMax(false) });
+    expect(r.code, r.stderr).toBe(1);
+    expect((oneObject(r)['refreshed'] as Record<string, unknown>[])[0]).toEqual({ id: 'codex-a', ok: false,
+      reason: 'the proxy could not be stopped', effortFallback: [{ class: 'opus', model: 'gpt-5.6-sol', from: 'max', to: 'xhigh' }],
+      effortFallbackRecord: 'recorded' });
+    expect(models('codex-a.classes.json').effort.opus, 'the materialise that wrote it succeeded').toBe('xhigh');
+  });
 });
 
 describe('ccrc models refresh: the measured two-hour flap of a missing pin (programme wave 3, backward-move, D-8838)', () => {

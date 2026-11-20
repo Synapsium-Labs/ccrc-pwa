@@ -498,6 +498,33 @@ describe('the retired grace (programme wave 3, backward-move, D-8838)', () => {
     }
   });
 
+  // Review 2999 N3: one case per term of the run's identity, each red when that term alone is removed (measured).
+  const other = (since: number, seen: number) => ({ ...run(since, seen), model: 'model-7-sol' });
+
+  it('retireDue: a record of another model, six hours long and ending at this catalogue\'s sighting, never retires the pin', () => {
+    expect(chooseCandidate({ registry: r, catalogue: flap(6 * H), cls: 'opus', family: 'sol', missing: other(0, 6 * H),
+      nowMs: T0 + 6 * H })).toEqual(NONE);
+  });
+
+  it('pinMissing: a record of another model is no run of this pin, so no start and no earliest move are named', () => {
+    expect(pinMissing({ registry: r, catalogue: flap(2 * H), cls: 'opus', missing: other(0, 2 * H), nowMs: T0 + 2 * H }))
+      .toEqual({ model: PIN, since: null, until: null, older: 'model-6-sol' });
+  });
+
+  it('markMissing: a record of another model at this very sighting is no repeat of it; the pin\'s run starts there', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = other(0, 9 * H);
+    const back = markMissing(adv, r, flap(9 * H), T0 + 9 * H);
+    expect(back.changed).toBe(true);
+    expect(back.advance.classes.opus['missing']).toEqual(run(9 * H, 9 * H));
+  });
+
+  it('markMissing: a first-shape record half an hour before this sighting restarts the run, never continues it', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = { model: PIN, since: isoS(T0 + 8.5 * H) } as never;
+    expect(markMissing(adv, r, flap(9 * H), T0 + 9 * H).advance.classes.opus['missing']).toEqual(run(9 * H, 9 * H));
+  });
+
   it('a listed pin or an empty class loses its record, and the input is never edited', () => {
     const adv = fresh();
     adv.classes.opus['missing'] = run(0, 3 * H);

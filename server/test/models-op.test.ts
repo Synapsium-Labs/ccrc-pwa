@@ -6499,19 +6499,108 @@ describe('programme wave 3 through the ops', () => {
     expect(fs.statSync(advPath('lane-a')).isDirectory()).toBe(true);
   });
 
-  it('a materialise that fails writes the stored registry back and claims no fallback applied, recorded or not', () => {
+  // D-8865 (review 2999 N1, A-7): a preload makes the nth rename onto a named file fail, the way a full disk or a
+  // directory in its place would, so each arm of a failed materialise is reached through the op's own writes.
+  const EFFORT = (): string => path.join(home, '.ccrc', 'models', 'lane-a.effort.json');
+  const LANE = (): string => path.join(home, '.ccrc', 'codex', 'lane-a', 'lane.json');
+  const CLASSES_TSV = (): string => path.join(home, '.ccrc', 'models', 'lane-a.classes.tsv');
+  const failing = (fail: Record<string, number[]>, ...args: string[]): Result => {
+    const pre = path.join(home, 'fail-rename.mjs');
+    fs.writeFileSync(pre, [
+      "import fs from 'node:fs';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      'const fail = JSON.parse(process.env.FAIL_RENAMES); const seen = {}; const rename = fs.renameSync;',
+      'fs.renameSync = (from, to) => {',
+      '  seen[to] = (seen[to] ?? 0) + 1;',
+      "  if ((fail[to] ?? []).includes(seen[to])) throw Object.assign(new Error('injected rename failure'), { code: 'EIO' });",
+      '  return rename(from, to);',
+      '};',
+      'syncBuiltinESMExports();',
+    ].join('\n'));
+    return opEnv({ CCRC_MODELS_NOW: T0, NODE_OPTIONS: `--import=${pre}`, FAIL_RENAMES: JSON.stringify(fail) }, ...args,
+      '--file', rosterPath(), '--id', 'lane-a');
+  };
+  const effortOnDisk = (): string | undefined => JSON.parse(fs.readFileSync(EFFORT(), 'utf8'))['byModel']['model-5.6-gamma'];
+  const opusDropped = (): string => {
+    const h = opEnv({ CCRC_MODELS_NOW: T0 }, 'advance-health', '--file', rosterPath(), '--reg', path.join(home, '.cc-sessions'),
+      '--lock-template', path.join(home, 'lk', 'models-{id}.lock'));
+    const lane = (h.body['lanes'] as Record<string, unknown>[]).find((l) => l['id'] === 'lane-a')!;
+    const row = (lane['blocked'] as Record<string, unknown>[]).find((b) => b['class'] === 'opus')!;
+    expect(row['cause']).toBe('effort-dropped');
+    return String(row['detail']);
+  };
+
+  it('a materialise that fails puts the stored registry back and renders the lane\'s files from it: no fallback applied', () => {
     plantStep();
     writeCatalogue('lane-a', DROPPED_CAT);
     const reg0 = fs.readFileSync(regPath('lane-a'), 'utf8');
-    const eff = path.join(home, '.ccrc', 'models', 'lane-a.effort.json');
-    fs.rmSync(eff, { force: true });
-    fs.mkdirSync(eff);
-    const m = at(T0, 'materialise', '--refresh', 'true');
-    expect([m.code, m.body['error']]).toEqual([1, 'materialise-failed']);
-    expect(String(m.body['detail'])).toMatch(/The effort fallback was not applied: the stored registry was written back\.$/);
+    const m = failing({ [LANE()]: [1] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'materialise-failed']);
+    expect(String(m.body['detail'])).toMatch(/The effort fallback was not applied: the stored registry was written back, and the lane's files rendered from it\.$/);
     expect(m.body).not.toHaveProperty('effortFallback');
     expect(fs.readFileSync(regPath('lane-a'), 'utf8'), 'the stored level, so the lane still reads as refused').toBe(reg0);
+    expect(effortOnDisk(), 'the effort file rendered from the stored registry, which names no offered level').toBeUndefined();
+    expect(fs.existsSync(LANE()), 'the second render wrote lane.json').toBe(true);
     expect(laneAdvance().classes.opus['effortFallback']).toBeUndefined();
+    expect(opusDropped()).not.toMatch(/already carries/);
+  });
+
+  it('a failed third write whose second render fails too: its own word, and no applied level claimed', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const reg0 = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const m = failing({ [LANE()]: [1, 2] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'effort-fallback-unrestored']);
+    expect(String(m.body['detail'])).toMatch(/The stored registry was written back, but rendering the lane's files from it failed too \(materialise-failed: .*\), so they may carry the effort fallback\.$/);
+    expect(m.body).not.toHaveProperty('effortFallback');
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8')).toBe(reg0);
+    expect(effortOnDisk(), 'the second render reached the effort file before lane.json').toBeUndefined();
+    expect(opusDropped(), 'measured: the effort file does not carry the fallback').not.toMatch(/already carries/);
+  });
+
+  it('a second render that fails before the effort file leaves it at the fallback, and advance-health names that', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = failing({ [LANE()]: [1], [CLASSES_TSV()]: [2] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'effort-fallback-unrestored']);
+    expect(effortOnDisk()).toBe('xhigh');
+    expect(opusDropped()).toBe('model-5.6-gamma no longer offers effort max, so the lane\'s registry is refused until the '
+      + 'hourly refresh writes the fallback, xhigh, which the lane\'s effort file already carries: a refresh wrote it and '
+      + 'could not put that file back');
+  });
+
+  it('a write-back that fails leaves the fallback applied: answered, and recorded like any other', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = failing({ [EFFORT()]: [1], [regPath('lane-a')]: [2] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'materialise-failed']);
+    expect(String(m.body['detail'])).toMatch(/Writing the stored registry back failed too \(registry-unwritable\), so the registry keeps the effort fallback, applied\.$/);
+    expect(m.body).toMatchObject({ effortFallback: [FB], effortFallbackRecord: 'recorded' });
+    expect(opusEffort()).toBe('xhigh');
+    expect(laneAdvance().classes.opus['effortFallback']).toEqual({ at: T0, model: 'model-5.6-gamma', from: 'max', to: 'xhigh' });
+  });
+
+  it('a record write that fails is answered unwritten, and the fallback stands', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const adv0 = fs.readFileSync(advPath('lane-a'), 'utf8');
+    const m = failing({ [advPath('lane-a')]: [1] }, 'materialise', '--refresh', 'true');
+    expect(m.code, m.stderr).toBe(0);
+    expect(m.body).toMatchObject({ ok: true, effortFallback: [FB], effortFallbackRecord: 'unwritten' });
+    expect(m.stderr).toMatch(/the advance file was not updated/);
+    expect(fs.readFileSync(advPath('lane-a'), 'utf8')).toBe(adv0);
+    expect(opusEffort()).toBe('xhigh');
+  });
+
+  it('a --refresh value other than true is bad argv, exit 2, on a refused registry and beside --check (review 2999 A-2)', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const before = snapshot();
+    for (const extra of [[], ['--check', 'true']]) {
+      const m = at(T0, 'materialise', ...extra, '--refresh', 'yes');
+      expect([m.code, m.body['error']], extra.join(' ')).toEqual([2, 'bad-argv']);
+    }
+    expect(snapshot()).toEqual(before);
   });
 
   it('a set-effort that succeeds ends the record, at the level the class runs at too; a refused one does not', () => {

@@ -169,7 +169,11 @@ export declare function classWaits(
   a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; c: ClassAdvance | null; nowMs: number },
 ): { cause: 'pin-missing' | 'effort-fallback'; detail: string }[];
 /** `advance-health`'s detail for a registry still refused for a dropped level. */
-export declare const effortDroppedDetail: (f: EffortFallback) => string;
+export declare const effortDroppedDetail: (f: EffortFallback, onDisk?: boolean) => string;
+/** Why the automatic advance does not act on a lane with a class registry, or null when it does (D-5198; moved here from
+ *  deploy/models-op.mjs, D-8866). */
+export declare function advanceIneligible(account: { exec?: unknown }, registry: { probe: string }):
+  'lane-not-codex-kind' | 'probe-not-codex' | null;
 export declare function refreshRecord(
   adv: Advance,
   a: { registry: Registry; catalogue: Catalogue | null; fallbacks: readonly EffortFallback[]; nowMs: number },

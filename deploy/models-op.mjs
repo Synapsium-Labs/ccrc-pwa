@@ -81,9 +81,10 @@ import {
 } from '../shared/modelenv.mjs';
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
-  AdvanceInvalid, backfillAdvance, candidateFor, chooseCandidate, classWaits, clearEffortFallback, clientWindowNotice,
-  effortDroppedDetail, effortFallbacks, familyOf, heldBackOf, historyReason, parseAdvance, reconcilePending,
-  recordFailure, refreshRecord, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves, withEffort,
+  AdvanceInvalid, advanceIneligible, backfillAdvance, candidateFor, chooseCandidate, classWaits, clearEffortFallback,
+  clientWindowNotice, effortDroppedDetail, effortFallbacks, familyOf, heldBackOf, historyReason, parseAdvance,
+  reconcilePending, recordFailure, refreshRecord, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice,
+  unmeasuredMoves, withEffort,
 } from '../shared/model-advance.mjs';
 import { ANTHROPIC_OPS, anthropicArm } from './models-anthropic.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
@@ -333,6 +334,9 @@ function readRegistry(id, catalogue) {
   }
 }
 const fallbackOf = (fixed, stored) => (fixed === null ? {} : { dropped: { ...fixed, stored } });
+/** The registry as stored, in the parsed shape: the fallback's with each fallen class back at its stored level (D-8865). */
+const storedOf = (l) => ({ ...l.registry,
+  effort: { ...l.registry.effort, ...Object.fromEntries(l.fallbacks.map((f) => [f.class, f.from])) } });
 
 /** The lane's measured windows, as EXACTLY ONE of three states — never an
  *  overloaded null:
@@ -643,21 +647,6 @@ function settleHandMove(id, after) {
   const w = writeAdvance(id, loaded.advance);
   return w === null ? null : `${w[0]}: ${w[1]} The class registry was written; the advance file still holds this `
     + "change's intent, which the lane's next locked writer records.";
-}
-
-/** Why the automatic advance does not act on a lane that has a class registry, or null when it does (auto-advance
- *  spec §2.2; D-5198). The first that applies:
- *    - `lane-not-codex-kind`: only an `exec.kind: "codex"` row advances; an external row's tier, port and key are
- *      not ccrc's to know;
- *    - `probe-not-codex`: the family rule is the Codex lanes', so a registry whose probe is not `codex` never
- *      advances.
- *  A fact about the lane, never a refusal: each op of the advance step reports it as its `why`. ONE answer for all
- *  of them, so they can never disagree about which lanes advance: `advance-backfill` and `advance-plan` call it, and
- *  W2 Task 9's `advance-commit` calls it too. */
-function advanceIneligible(account, registry) {
-  if (!(isObj(account.exec) && account.exec.kind === 'codex')) return 'lane-not-codex-kind';
-  if (registry.probe !== 'codex') return 'probe-not-codex';
-  return null;
 }
 
 /** How old a catalogue staging file must be before the hourly writer may reap it (ruling 11, 2026-11-16). The
@@ -2195,7 +2184,9 @@ function laneHealth(acc, ctx) {
   if (rd.err !== undefined) block(null, rd.err[0], rd.err[1]);
   if (reg.err !== undefined || reg.invalid !== undefined) {
     const word = reg.err !== undefined ? reg.err[0] : reg.dropped !== undefined ? 'effort-dropped' : 'registry-invalid';
-    if (reg.dropped !== undefined) for (const f of reg.dropped.fallbacks) block(f.class, word, effortDroppedDetail(f));
+    const onDisk = reg.dropped !== undefined   // the lane's effort file already carries the fallback (D-8865)
+      && materialiseCheck(acc, reg.dropped.registry, cat.catalogue).changed?.effort === false;
+    if (reg.dropped !== undefined) for (const f of reg.dropped.fallbacks) block(f.class, word, effortDroppedDetail(f, onDisk));
     else block(null, word, reg.err !== undefined ? reg.err[1] : reg.invalid.message);
     // No session is judged here, so each is named unmeasured, by the registry's word (D-5220; review of R2).
     if (rd.err !== undefined || rd.advance !== null) {
@@ -2329,6 +2320,8 @@ function main(argv) {
   const pairs = readPairs(argv, spec);
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
+  // Review 2999 A-2: `materialise --refresh`'s value is argv, refused before any file is read, a refused registry's too.
+  if (a.refresh !== undefined && a.refresh !== 'true') return refuse(2, 'bad-argv', `--refresh takes only "true" (got ${a.refresh}).`);
 
   // C6: at op entry, before any of the seven per-account paths are built and
   // before the roster is even read — `rm`'s own unlink loop runs before the
@@ -2610,22 +2603,27 @@ function main(argv) {
       out({ ok: true, op: 'materialise', id: a.id, check: true, changed: chk.changed });
       return 0;
     }
-    if (a.refresh !== undefined && a.refresh !== 'true') {
-      return refuse(2, 'bad-argv', `--refresh takes only the value "true" (got ${JSON.stringify(a.refresh)}).`);
-    }
     const mat = materialise(account, registry, catalogue, windowsOf(win));
-    // D-8842: a fallback whose files could not be written is not applied: the stored registry goes back (advance-
-    // commit's restore, `writeRegistry`), so the lane reads as refused and the next hour tries again.
+    // D-8842, D-8865: a fallback whose files could not all be written is undone: the stored registry goes back
+    // (`writeRegistry`), then this same path renders the lane's files from it. A failed write-back leaves the registry
+    // at the fallback, which is then applied and recorded like any other.
     const back = mat.err === undefined || lowered === undefined ? null : writeRegistry(a.id, lowered.stored);
-    const fallbacks = mat.err === undefined ? lowered?.fallbacks ?? [] : [];
-    const rec = refresh && registry !== null ? editAdvance(a.id,
-      (adv) => refreshRecord(adv, { registry, catalogue, fallbacks, nowMs: Date.parse(now()) })) : null;
-    const undone = back === null ? 'the stored registry was written back' : `writing the stored registry back failed (${back[0]})`;
+    const redo = mat.err === undefined || lowered === undefined || back !== null ? {}
+      : materialise(account, storedOf(lowered), catalogue, windowsOf(win));
+    const kept = lowered !== undefined && (mat.err === undefined || back !== null);
+    const rec = refresh && registry !== null ? editAdvance(a.id, (adv) => refreshRecord(adv,
+      { registry, catalogue, fallbacks: kept ? lowered.fallbacks : [], nowMs: Date.parse(now()) })) : null;
+    const fb = kept ? { effortFallback: lowered.fallbacks, effortFallbackRecord: rec } : {};
     if (mat.err !== undefined) {
-      return refuse(1, mat.err[0], `${mat.err[1]}${lowered === undefined ? '' : ` The effort fallback was not applied: ${undone}.`}`);
+      const [word, undo] = lowered === undefined ? [mat.err[0], ''] : back !== null ? [mat.err[0], ` Writing the stored `
+        + `registry back failed too (${back[0]}), so the registry keeps the effort fallback, applied.`]
+        : redo.err !== undefined ? ['effort-fallback-unrestored', ` The stored registry was written back, but rendering `
+        + `the lane's files from it failed too (${redo.err[0]}: ${redo.err[1]}), so they may carry the effort fallback.`]
+        : [mat.err[0], ' The effort fallback was not applied: the stored registry was written back, and the lane\'s '
+        + 'files rendered from it.'];
+      return refuse(1, word, `${mat.err[1]}${undo}`, undefined, fb);
     }
-    out({ ok: true, op: 'materialise', id: a.id, wrote: mat.wrote,
-      ...(lowered === undefined ? {} : { effortFallback: lowered.fallbacks, effortFallbackRecord: rec }) });
+    out({ ok: true, op: 'materialise', id: a.id, wrote: mat.wrote, ...fb });
     return 0;
   }
 

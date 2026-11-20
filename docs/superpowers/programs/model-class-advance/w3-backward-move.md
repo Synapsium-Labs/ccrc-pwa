@@ -2,8 +2,8 @@
 
 Programme `model-class-advance`, epic `catalogue-current`, tickets `backward-move` and `effort-level-dropped`, with the
 follow-ups `revert-writes-before-refusing` and `release-lookup-warn` folded in. Run 2455. It is built on `main` after
-#3107 (wave 7). Fix round 1 answers review 2938 (findings F1 to F15). The departures are D-8838 to D-8843, defined in
-the Codex arm plan (`docs/superpowers/plans/2026-10-15-model-class-auto-advance-codex-arm.md`).
+#3107 (wave 7). Fix round 1 answers review 2938 (findings F1 to F15), and fix round 2 review 2999 (N1 to N4 and its
+advisories). The departures are D-8838 to D-8843, D-8865 and D-8866, defined in the Codex arm plan (`docs/superpowers/plans/2026-10-15-model-class-auto-advance-codex-arm.md`).
 
 ## The backward move: what the code establishes, and what it does not
 
@@ -42,7 +42,9 @@ canary, and neither recorded a cause. The other Codex lane (lane-a) did not move
   - `retireDue` moves a class `retired` only when its run spans at least `RETIRE_GRACE_MS` and the run's last sighting is
     the catalogue in hand, so a sighting whose record was never written proposes no older candidate.
   - The measured cadence: the refresh observes about once an hour (its timer, plus however long its first pass takes),
-    so the grace is six to seven hourly sightings, never a fixed number.
+    so the grace is six to seven hourly sightings, never a fixed number. Six hours is a floor, not a bound: any hour
+    without a recorded sighting restarts the run, so on a lane whose refresh misses about one hour in six the move may
+    never come, while the doctor keeps naming `pin-missing` (review 2999 A-5).
   - `pinMissing` names a waiting class: its pin, the run's start and the EARLIEST the move can come.
 - **A newer model never waits** (D-8839). On a fresh catalogue, a missing pin moves to a newer free model at once, as
   `newer`. On a stale catalogue, a pin it does not list gets no candidate, as before (review F7).
@@ -55,8 +57,15 @@ canary, and neither recorded a cause. The other Codex lane (lane-a) did not move
   - Only the refresh's own `materialise --refresh true` writes the fallback. The switch and ensure callers pass no flag,
     so they refuse the registry as before, and `--check` stays read-only.
   - The refresh row carries `effortFallback` and `effortFallbackRecord` (`recorded`, `no-advance-file`, the read's word,
-    or `unwritten`) on every lane. No advance file is created for it.
-  - A failed materialise writes the stored registry back and claims no applied level.
+    or `unwritten`) on every lane whenever the materialise kept the fallback, the row of a LiteLLM render that failed
+    afterwards included (review 2999 N2). No advance file is created for it.
+  - A failed materialise (D-8865, review 2999 N1) writes the stored registry back, then renders the lane's files from it
+    through the same materialise, under the same lock. It claims no applied level only when both succeed. When the
+    second render fails, its word is `effort-fallback-unrestored` (the files may carry the fallback), and
+    `advance-health` measures the lane's effort file: when it holds the fallback, `effort-dropped`'s detail says so.
+    When the write-back fails, the registry keeps the fallback, which is answered and recorded as applied, or answered
+    `unwritten` when the record write fails.
+  - `materialise --refresh` takes only `true`, refused as argv (exit 2) before any file is read (review 2999 A-2).
   - The record (`effortFallback` on the class) ends when the old level is offered again (the level the class runs at is
     kept), or after a hand `set-effort` on the class succeeds, at any level, the current one included. A refused one
     keeps it.
@@ -106,9 +115,16 @@ canary, and neither recorded a cause. The other Codex lane (lane-a) did not move
   - a missed hour restarts the run;
   - a direct lane's first hour after a drop names the refused lowering beside the fallback, and lowers the next hour.
 - **Mutation rows** (round 1). Each of 24 rows edited one guard in place, ran its named cases, and restored the file
-  from a saved copy. Every row was killed. Round 2's guards each have a case that pins them; the rows were not re-run
-  this round.
-- **Sizes.** `deploy/models-op.mjs` is 2,997 lines. The doctor file's growth is measured by the growth check's own
+  from a saved copy. Every row was killed.
+- **Round 2's guards were not all pinned** (review 2999 N3, A-4). The reviewer's runs killed most of them, but four
+  terms survived: `retireDue`'s and `pinMissing`'s check of the record's model against the pin, `markMissing`'s
+  same-sighting skip's, and the restart of a first-shape record within 90 minutes. Round 3 adds one case for each.
+- **Mutation rows** (round 3), the same way: each of the four terms above, and the re-render, the write-back's kept
+  fallback, the measured effort file, the early `--refresh` check and the row merge after a LiteLLM failure. Each of
+  the nine rows was killed by its own case. The failed renames are reached through the op's own writes, with a preload
+  that makes the nth rename onto a named file fail.
+- **Sizes.** `deploy/models-op.mjs` is 2,995 lines at round 3's tip, after `advanceIneligible` moved to the shared
+  module (D-8866). The doctor file's growth is measured by the growth check's own
   counter at the tip and reported in the wave-done.
 
 ## The live gate, read-only
@@ -127,9 +143,15 @@ files' times were unchanged afterwards.
   holds the README, so its doctor table does not yet name `pin-missing`, `effort-dropped`, `effort-fallback` or
   `model-release-lookup`. That is a follow-up for after the freeze.
 - **Claims.** Wave 8 (run 2910) holds four of this wave's shared files. It consented to round 1's hunks and, separately,
-  to this round's named hunks. In round 1, two of its test files were edited locally before the claim was asked for;
+  to each later round's named hunks (round 3: five hunks, then the move of `advanceIneligible`). In round 1, two of its test files were edited locally before the claim was asked for;
   nothing was pushed before its consent.
 - **Local reds on the fleet box** (round 1). `ccrc-install-codex` is red on two box-token cases, because `browser-mcp`
   reads this box's live processes, where other sessions run browser servers. They do not depend on this change.
+- **The spec lags until wave 10** (review 2999 N4): its §2.2 still retires a pin on the first fresh catalogue that
+  leaves it out, and its §2.8 names neither the three blocked causes nor `model-release-lookup`. No spec edit is in this
+  PR. D-8843's cost-if-wrong names it, and the coordinator carries it to the programme's spec-truth pass.
+- **A known residual, out of scope** (review 2999 A-1). When the advance file cannot be written, a successful
+  `set-effort` does not end the `effortFallback` record (its failure is named only on stderr), so the doctor keeps
+  giving the `effort-fallback` remedy the operator already took.
 - **A residual.** A run's record is written only by the refresh's materialise. An hour whose probe failed is no
   sighting, so it neither extends nor ends a run, and a gap past 90 minutes restarts it at the next sighting.

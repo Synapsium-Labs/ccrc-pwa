@@ -13423,16 +13423,17 @@ _models_box_sub() {   # <subcommand> [args…]
           else
             row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" --arg lit "$lit" \
               '{id:$id, probe:$p, ok:true, count:$c, litellm:$lit}')"
-            # D-8842: a dropped level's fallback is never silent: the row carries what materialise wrote, and whether
-            # the advance file recorded it (`effortFallbackRecord`), on every lane, with or without that file.
-            local fbrow
-            fbrow="$(printf '%s' "$mat_body" | tail -n1 | jq -c --argjson r "$row" \
-              '$r + (if (.effortFallback | type) == "array" then {effortFallback, effortFallbackRecord} else {} end)' \
-              2>/dev/null)" && [ -n "$fbrow" ] && row="$fbrow"
             # A codex lane whose probe, materialise and render all succeeded is advanced after the loop; the index its
             # row is about to take is kept, so the step's events land on it.
             if [ "$probe" = codex ]; then adv_ids+=("$id"); adv_at+=("${#rows[@]}"); fi
           fi
+          # D-8842, D-8865: a dropped level's fallback is never silent: every row whose materialise kept one, the
+          # LiteLLM-failure row and a refusal whose write-back failed included, carries what materialise wrote and
+          # whether the advance file recorded it (`effortFallbackRecord`), on every lane, with or without that file.
+          local fbrow
+          fbrow="$(printf '%s' "$mat_body" | tail -n1 | jq -c --argjson r "$row" \
+            '$r + (if (.effortFallback | type) == "array" then {effortFallback, effortFallbackRecord} else {} end)' \
+            2>/dev/null)" && [ -n "$fbrow" ] && row="$fbrow"
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
           # probe's own first stderr line, captured by `_models_refresh_one`.

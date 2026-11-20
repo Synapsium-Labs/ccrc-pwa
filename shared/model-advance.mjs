@@ -701,9 +701,26 @@ export function classWaits({ registry, catalogue, cls, c, nowMs }) {
 }
 
 /** `advance-health`'s detail for a registry still refused for a dropped level (`effort-dropped`, D-8842), one per
- *  `effortFallbacks` row. */
-export const effortDroppedDetail = (f) => `${f.model} no longer offers effort ${f.from}, so the lane's registry is `
-  + `refused until the hourly refresh writes the fallback, ${f.to}`;
+ *  `effortFallbacks` row. `onDisk` when the lane's effort file already carries the fallback: a refresh wrote it, then
+ *  could not render the files from the stored registry it put back (D-8865). */
+export const effortDroppedDetail = (f, onDisk = false) => `${f.model} no longer offers effort ${f.from}, so the lane's `
+  + `registry is refused until the hourly refresh writes the fallback, ${f.to}${onDisk ? `, which the lane's effort file `
+  + 'already carries: a refresh wrote it and could not put that file back' : ''}`;
+
+/** Why the automatic advance does not act on a lane that has a class registry, or null when it does (auto-advance
+ *  spec §2.2; D-5198). The first that applies:
+ *    - `lane-not-codex-kind`: only an `exec.kind: "codex"` row advances; an external row's tier, port and key are
+ *      not ccrc's to know;
+ *    - `probe-not-codex`: the family rule is the Codex lanes', so a registry whose probe is not `codex` never
+ *      advances.
+ *  A fact about the lane, never a refusal: each op of the advance step reports it as its `why`. ONE answer for all
+ *  of them, so they can never disagree about which lanes advance: `advance-backfill` and `advance-plan` call it, and
+ *  W2 Task 9's `advance-commit` calls it too. */
+export function advanceIneligible(account, registry) {
+  if (!(isObj(account.exec) && account.exec.kind === 'codex')) return 'lane-not-codex-kind';
+  if (registry.probe !== 'codex') return 'probe-not-codex';
+  return null;
+}
 
 /** `(adv, cls) => {advance, changed}`: the class's `effortFallback` deleted, after a hand `set-effort` on it succeeded
  *  (any level, the one it already runs at included): the operator has chosen the level (D-8842). */
