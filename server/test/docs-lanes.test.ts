@@ -13,7 +13,7 @@ import {
 } from '../src/docs/lane.js';
 import {
   DOCS_FETCH_GLOBAL, DOCS_FETCH_MAX_WAIT_MS, DOCS_FETCH_QUEUE, DOCS_LANE_BYTES, DOCS_LANE_EXECS, DOCS_LANE_LARGE_RAW,
-  DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, docsBusyBody, type DocsJob,
+  DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, LISTING_JOB, RANGE_PREPARE_JOB, docsBusyBody, laneStep, type DocsJob, type LaneLoad,
 } from '../src/docs/policy.js';
 import { blocker } from './docsRouteHelpers.js';
 
@@ -21,7 +21,7 @@ import { blocker } from './docsRouteHelpers.js';
 const SMALL: DocsJob = { raw: 1000, wire: 2000 };
 /** A large read job: one byte over the large threshold, its wire well inside the byte budget. */
 const LARGE: DocsJob = { raw: DOCS_LANE_LARGE_RAW + 1, wire: 1100000 };
-const IDLE = { execs: 0, bytes: 0, large: 0, queued: 0 };
+const IDLE = { execs: 0, bytes: 0, large: 0, prepares: 0, queued: 0 };
 
 /** A signal nobody aborts. */
 const live = (): AbortSignal => new AbortController().signal;
@@ -67,7 +67,7 @@ describe('W3 T4: the read lane admits by laneAdmit, applied to its head (section
     const b = blocker<string>();
     const runs = [0, 1, 2].map(() => lane.run(SMALL, live(), b.exec));
     expect(b.started()).toBe(2);
-    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 4000, large: 0, queued: 1 });
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 4000, large: 0, prepares: 0, queued: 1 });
     b.release(0, 'a');
     await flush();
     expect(b.started()).toBe(3);
@@ -85,7 +85,7 @@ describe('W3 T4: the read lane admits by laneAdmit, applied to its head (section
     expect(2 * job.wire).toBeGreaterThan(DOCS_LANE_BYTES);
     const runs = [lane.run(job, live(), b.exec), lane.run(job, live(), b.exec)];
     expect(b.started()).toBe(1);
-    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 2000000, large: 0, queued: 1 });
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 2000000, large: 0, prepares: 0, queued: 1 });
     b.release(0, 'a');
     await flush();
     expect(b.started()).toBe(2);
@@ -99,7 +99,7 @@ describe('W3 T4: the read lane admits by laneAdmit, applied to its head (section
     const b = blocker<string>();
     const runs = [lane.run(LARGE, live(), b.exec), lane.run(LARGE, live(), b.exec)];
     expect(b.started()).toBe(1);
-    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 1100000, large: 1, queued: 1 });
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 1100000, large: 1, prepares: 0, queued: 1 });
     b.release(0, 'a');
     await flush();
     expect(b.started()).toBe(2);
@@ -110,11 +110,68 @@ describe('W3 T4: the read lane admits by laneAdmit, applied to its head (section
     const c = blocker<string>();
     const more = [lane.run(edge, live(), c.exec), lane.run(edge, live(), c.exec)];
     expect(c.started()).toBe(2);
-    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 2200000, large: 0, queued: 0 });
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 2200000, large: 0, prepares: 0, queued: 0 });
     c.release(0, 'x');
     c.release(1, 'y');
     await Promise.all(more);
     expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('docs-lanes: a prepare takes at most one read exec, so a tree read is admitted while a prepare runs', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const first = lane.run(RANGE_PREPARE_JOB, live(), b.exec);
+    const second = lane.run(RANGE_PREPARE_JOB, live(), b.exec);
+    // A second prepare waits in the queue, though a second exec is free.
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: RANGE_PREPARE_JOB.wire, large: 0, prepares: 1, queued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(await first).toStrictEqual({ kind: 'ran', value: 'a' });
+    expect(b.started()).toBe(2);
+    b.release(1, 'b');
+    expect(await second).toStrictEqual({ kind: 'ran', value: 'b' });
+    expect(lane.load()).toStrictEqual(IDLE);
+
+    // With one prepare running, a tree read (the listing job) is admitted at once.
+    const c = blocker<string>();
+    const prepare = lane.run(RANGE_PREPARE_JOB, live(), c.exec);
+    const tree = lane.run(LISTING_JOB, live(), c.exec);
+    expect(c.started()).toBe(2);
+    expect(lane.load()).toMatchObject({ execs: 2, prepares: 1, queued: 0 });
+    c.release(0, 'p');
+    c.release(1, 't');
+    await Promise.all([prepare, tree]);
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('docs-lanes: a prepare held back by the one-prepare rule is passed by the reads behind it, and keeps its place among prepares', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const first = lane.run(RANGE_PREPARE_JOB, live(), b.exec);
+    const second = lane.run(RANGE_PREPARE_JOB, live(), b.exec);
+    // The second prepare is at the head of the queue; a tree read that arrives now is admitted at once, past it.
+    const tree = lane.run(LISTING_JOB, live(), b.exec);
+    expect(b.started(), 'the first prepare and the tree read run').toBe(2);
+    expect(lane.load()).toMatchObject({ execs: 2, prepares: 1, queued: 1 });
+    b.release(1, 't');
+    expect(await tree).toStrictEqual({ kind: 'ran', value: 't' });
+    b.release(0, 'a');
+    expect(await first).toStrictEqual({ kind: 'ran', value: 'a' });
+    await flush();
+    expect(b.started(), 'the second prepare starts once the first ends').toBe(3);
+    b.release(2, 'b');
+    expect(await second).toStrictEqual({ kind: 'ran', value: 'b' });
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('laneStep: a prepare refused only by the one-prepare rule is skipped; any other refusal stops the pump', () => {
+    const one: LaneLoad = { execs: 1, bytes: RANGE_PREPARE_JOB.wire, large: 0, prepares: 1 };
+    expect(laneStep(one, RANGE_PREPARE_JOB)).toBe('skip');
+    expect(laneStep(one, LISTING_JOB)).toBe('start');
+    const full: LaneLoad = { execs: 2, bytes: 2 * RANGE_PREPARE_JOB.wire, large: 0, prepares: 1 };
+    expect(laneStep(full, RANGE_PREPARE_JOB), 'no exec free: the pump stops, whatever the job').toBe('stop');
+    expect(laneStep(full, LISTING_JOB)).toBe('stop');
   });
 
   it('an idle lane admits one job over the whole byte budget, alone', async () => {
@@ -123,7 +180,7 @@ describe('W3 T4: the read lane admits by laneAdmit, applied to its head (section
     const huge: DocsJob = { raw: 1000, wire: DOCS_LANE_BYTES + 854272 };
     const runs = [lane.run(huge, live(), b.exec), lane.run(SMALL, live(), b.exec)];
     expect(b.started()).toBe(1);
-    expect(lane.load()).toStrictEqual({ execs: 1, bytes: huge.wire, large: 0, queued: 1 });
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: huge.wire, large: 0, prepares: 0, queued: 1 });
     b.release(0, 'a');
     await flush();
     expect(b.started()).toBe(2);
@@ -167,7 +224,7 @@ describe('W3 T4: the read lane is strict FIFO (section 6.3)', () => {
     b.release(1, 'p');
     await flush();
     expect(order).toStrictEqual(['a', 'p']);
-    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 1100000, large: 1, queued: 2 });
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 1100000, large: 1, prepares: 0, queued: 2 });
     b.release(0, 'a');
     await flush();
     expect(order).toStrictEqual(['a', 'p', 'b', 'c']);
@@ -201,7 +258,7 @@ describe('W3 T4: the read lane refuses past its queue and its wait (M6.2, sectio
     const lane = readLane();
     const b = blocker<string>();
     for (let i = 0; i < DOCS_LANE_EXECS + DOCS_LANE_QUEUE; i += 1) void lane.run(SMALL, live(), b.exec);
-    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 4000, large: 0, queued: DOCS_LANE_QUEUE });
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 4000, large: 0, prepares: 0, queued: DOCS_LANE_QUEUE });
     const next = await settledOrPending(lane.run(SMALL, live(), b.exec));
     expect(next).toStrictEqual({ kind: 'busy', body: docsBusyBody('read') });
     expect(b.started()).toBe(2);
@@ -296,7 +353,7 @@ describe('W3 T4: abandonment in the read lane (refinement (j), section 6.3)', ()
     gone.abort();
     expect(await head).toStrictEqual({ kind: 'abandoned' });
     expect(order).toStrictEqual(['a', 'c']);
-    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 1102000, large: 1, queued: 0 });
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 1102000, large: 1, prepares: 0, queued: 0 });
   });
 });
 
@@ -720,7 +777,7 @@ describe('W3 T7: the fetch lane and the read lane are separate (section 6.4: fet
     const br = blocker<string>();
     const bf = blocker<string>();
     for (let i = 0; i < DOCS_LANE_EXECS + DOCS_LANE_QUEUE; i += 1) void read.run(SMALL, live(), br.exec);
-    expect(read.load()).toStrictEqual({ execs: DOCS_LANE_EXECS, bytes: DOCS_LANE_EXECS * SMALL.wire, large: 0, queued: DOCS_LANE_QUEUE });
+    expect(read.load()).toStrictEqual({ execs: DOCS_LANE_EXECS, bytes: DOCS_LANE_EXECS * SMALL.wire, large: 0, prepares: 0, queued: DOCS_LANE_QUEUE });
     expect(await read.run(SMALL, live(), br.exec)).toStrictEqual({ kind: 'busy', body: docsBusyBody('read') });
     void fetch.run('k0', live(), bf.exec);
     expect(bf.started()).toBe(1);

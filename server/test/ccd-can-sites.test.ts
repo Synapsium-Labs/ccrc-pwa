@@ -24,7 +24,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import {
-  CCD_ARGV, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP,
+  CCD_ARGV, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP,
   ccdCan,
 } from '../src/ccdargv.js';
 import { expireArchived, learnExpiry } from '../src/coord/expireArchived.js';
@@ -326,6 +326,25 @@ describe('the docs verbs (D-5866, Step 1)', () => {
       const d = docs(v);
       await d.reader.log({ node: 'n', project: 'demo' }, LOG_ASK);
       expect(d.sent).toEqual(['docs-log']);
+    });
+  // docs-show-range (X2 P1.3): the adapter's range read, prepare and frame, gates on the `docsShowRange` row
+  // (`DOCS_RANGE_CAP`), which refuses on no evidence: a list without `docs-range-v1`, an empty one or none sends nothing.
+  const RANGE_TARGET = { where: { commit: 'a'.repeat(40) }, section: 'specs', path: 'a.md', pin: { kind: 'blob', sha: 'b'.repeat(40) } } as const;
+  const RANGE_FRAME = { snapshot: 'e'.repeat(32), offset: 0, length: 1 } as const;
+  it.each(FOUR(DOCS_RANGE_CAP).filter(([, v]) => !(v !== null && v.includes(DOCS_RANGE_CAP))))(
+    'docs-show-range over %s is unsupported, with zero execs', async (_what, v) => {
+      const d = docs(v);
+      const want = { ok: false, failure: v !== null && v.includes('caps') ? 'unsupported' : 'caps-unknown' };
+      expect(await d.reader.range.prepare({ node: 'n', project: 'demo' }, RANGE_TARGET)).toEqual(want);
+      expect(await d.reader.range.frame({ node: 'n', project: 'demo' }, RANGE_TARGET, RANGE_FRAME)).toEqual(want);
+      expect(d.sent).toEqual([]);
+    });
+  it.each(FOUR(DOCS_RANGE_CAP).filter(([, v]) => v !== null && v.includes(DOCS_RANGE_CAP)))(
+    'docs-show-range over %s execs once per call', async (_what, v) => {
+      const d = docs(v);
+      await d.reader.range.prepare({ node: 'n', project: 'demo' }, RANGE_TARGET);
+      await d.reader.range.frame({ node: 'n', project: 'demo' }, RANGE_TARGET, RANGE_FRAME);
+      expect(d.sent).toEqual(['docs-show-range', 'docs-show-range']);
     });
   it('the four docs verb names without docs-v1 are not the token', async () => {
     const d = docs(['caps', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch']);

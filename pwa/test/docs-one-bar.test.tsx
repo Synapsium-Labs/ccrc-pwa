@@ -21,7 +21,7 @@ import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
-import { COMMIT_A, COMMIT_B, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, treeResponse, type FakeLoaders } from './docsFixtures';
+import { COMMIT_A, COMMIT_B, NO_RANGE_VISIT, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, treeResponse, type FakeLoaders } from './docsFixtures';
 
 /** matchMedia at `width`: a min-width or max-width query answered as an engine at that width answers it. */
 function atWidth(width: number): void {
@@ -119,7 +119,7 @@ function loadingLeaf(): { page: ReturnType<typeof pageAt>; visit: DocsVisit; tre
   const visit: DocsVisit = {
     tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
     file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_B, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-    retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
   };
   return { page: pageAt('/docs/demo/specs/a.md'), visit, tree };
 }
@@ -319,7 +319,7 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
       file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_B, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } }, freshness: { s: 'idle' }, updatedTo: COMMIT_B, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     };
     const bar: ReaderBar = { title: 'Doc title', command: vi.fn(), progress: createReaderProgress() };
     render(<DocsHead page={pageAt('/docs/demo/specs/a.md')} visit={visit} tree={tree} readerBar={bar} />);
@@ -336,7 +336,7 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
       file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_B, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     };
     const bar: ReaderBar = { title: 'Doc title', command: vi.fn(), progress: createReaderProgress() };
     render(<DocsHead page={pageAt('/docs/demo/specs/a.md?ref=main')} visit={visit} tree={tree} readerBar={bar} />);
@@ -476,7 +476,7 @@ describe('the one bar (refinements (f), (j), (k), (l))', () => {
       const visit: DocsVisit = {
         tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
         file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_B, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-        retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+        ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
       };
       const bar: ReaderBar = { title: 'Doc title', command: vi.fn(), progress: createReaderProgress() };
       render(<DocsHead page={pageAt('/docs/demo/specs/a.md')} visit={visit} tree={null} readerBar={bar} />);

@@ -106,6 +106,11 @@ describe('the helper FAILURES equal shared/docs.ts, and its redaction is shared/
     expect(py.filter((w) => !ts.includes(w)), 'in the helper only').toEqual([]);
     expect(ts.filter((w) => !py.includes(w)), 'in shared/docs.ts only').toEqual([]);
     expect(py).toHaveLength(ts.length);
+    // The range words (X2 P1.2) are ccd's: each is in both sets, and none is hidden by the set comparison above.
+    for (const w of ['snapshot-gone', 'range-too-large', 'prepare-busy']) {
+      expect(py, `${w} in the helper`).toContain(w);
+      expect(ts, `${w} in DOCS_CCD_FAILURES`).toContain(w);
+    }
   });
 
   it('the helper has no python rule table (D-7077)', () => {
@@ -240,7 +245,7 @@ describe('the helper source: one write, python 3.8, ASCII, and its section marke
     '# ===== docs: refs =====', '# ===== docs: listing =====', '# ===== docs: stamps =====',
     '# ===== docs: index =====', '# ===== docs: holders =====', '# ===== docs: drafts =====',
     '# ===== docs: tree =====', '# ===== docs: show =====', '# ===== docs: log =====', '# ===== docs: fetch =====',
-    '# ===== docs: entry =====',
+    '# ===== docs: range =====', '# ===== docs: entry =====',
   ];
   const parse38 = (code: string) => spawnSyncT6(realPythonT6,
     ['-c', 'import ast, sys; ast.parse(sys.stdin.read(), feature_version=(3, 8))'], { input: code, encoding: 'utf8' });
@@ -287,9 +292,9 @@ describe('the helper source: one write, python 3.8, ASCII, and its section marke
     expect(() => helperSourceT6(['x', pyCloseT6, 'a', pyOpenT6].join('\n'))).toThrow(/no program/);
   });
 
-  it('importing the helper runs nothing, and VERBS names exactly the five verbs', () => {
+  it('importing the helper runs nothing, and VERBS names exactly the six verbs', () => {
     expect(unitJsonT6<string[]>(h.home, 'out(sorted(H.VERBS))'))
-      .toEqual(['docs-fetch', 'docs-index', 'docs-log', 'docs-show', 'docs-tree']);
+      .toEqual(['docs-fetch', 'docs-index', 'docs-log', 'docs-show', 'docs-show-range', 'docs-tree']);
   });
 });
 
@@ -333,6 +338,11 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
     ['DOCS_LOG_SUBJECT_MAX_CHARS', parityL0.DOCS_LOG_SUBJECT_MAX_CHARS],
     ['DOCS_LOG_AUTHOR_MAX_CHARS', parityL0.DOCS_LOG_AUTHOR_MAX_CHARS],
     ['DOCS_LOG_MAX_WIRE_BYTES', parityL0.DOCS_LOG_MAX_WIRE_BYTES],
+    // X2 P1.2: the range verb's frame, ceiling and prepare budget, and the stat pin's modified-time grammar.
+    ['DOCS_RANGE_FRAME_BYTES', parityL0.DOCS_RANGE_FRAME_BYTES],
+    ['DOCS_RANGE_MAX_BYTES', parityL0.DOCS_RANGE_MAX_BYTES],
+    ['DOCS_RANGE_PREPARE_BUDGET_MS', parityL0.DOCS_RANGE_PREPARE_BUDGET_MS],
+    ['MTIME_NS_RE', parityL0.DOCS_MTIME_NS_RE_BODY],
   ];
   /** The block's other names, each compared in its own shape: SECTIONS as ordered pairs (below), FAILURES as a set
    *  and REDACT_RULES rule by rule (Task 6's row-48 cases above). */
@@ -341,7 +351,8 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
   const CAPS = ['REF_MAX_CHARS', 'PATH_MAX_BYTES', 'PATH_MAX_COMPONENT_BYTES', 'PATH_MAX_DEPTH', 'DOCS_MAX_FILE_BYTES',
     'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',
     'DOCS_MAX_DRAFTS', 'DOCS_FETCH_MIN_INTERVAL_MS', 'DOCS_LOG_MAX_ENTRIES', 'DOCS_LOG_SUBJECT_MAX_CHARS',
-    'DOCS_LOG_AUTHOR_MAX_CHARS', 'DOCS_LOG_MAX_WIRE_BYTES'];
+    'DOCS_LOG_AUTHOR_MAX_CHARS', 'DOCS_LOG_MAX_WIRE_BYTES', 'DOCS_RANGE_FRAME_BYTES', 'DOCS_RANGE_MAX_BYTES',
+    'DOCS_RANGE_PREPARE_BUDGET_MS'];
   /** Read per case, never at collection: a missing marker reds these cases, not the whole file. */
   const src = (): string => helperSourceForParity();
   const home = harnessForParity('ccd-docs-parity-').home;
@@ -366,6 +377,22 @@ out({'values': {n: getattr(H, n) for n in NAMES}, 'sections': [list(p) for p in 
 
   it('SECTIONS equals DOC_SECTIONS as ORDERED pairs (the order is the listing order)', () => {
     expect(py().sections).toEqual(Object.entries(parityL0.DOC_SECTIONS));
+  });
+
+  it('docs-parity: ccd range literals equal shared', () => {
+    // The frame, the range ceiling and the mtime grammar, by value, each its own single-line literal in the block.
+    expect(py().values['DOCS_RANGE_FRAME_BYTES']).toBe(524288);
+    expect(py().values['DOCS_RANGE_MAX_BYTES']).toBe(67108864);
+    expect(py().values['DOCS_RANGE_FRAME_BYTES']).toBe(parityL0.DOCS_RANGE_FRAME_BYTES);
+    expect(py().values['DOCS_RANGE_MAX_BYTES']).toBe(parityL0.DOCS_RANGE_MAX_BYTES);
+    expect(py().values['MTIME_NS_RE']).toBe(parityL0.DOCS_MTIME_NS_RE_BODY);
+    const lines = src().split('\n');
+    const begin = lines.indexOf('# docs-parity: begin');
+    const end = lines.indexOf('# docs-parity: end');
+    for (const n of ['DOCS_RANGE_FRAME_BYTES', 'DOCS_RANGE_MAX_BYTES', 'MTIME_NS_RE']) {
+      const at = lines.findIndex((l) => l.startsWith(`${n}=`));
+      expect(at > begin && at < end, `${n} sits inside the block`).toBe(true);
+    }
   });
 
   it('QUALIFIED_RE and SECTION_RE are DERIVED in the helper, never pasted copies', () => {
