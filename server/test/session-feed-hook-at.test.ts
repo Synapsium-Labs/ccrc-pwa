@@ -122,3 +122,39 @@ describe('the feed hands readings on in nondecreasing roster read time (review 2
     expect(readings[1]!.hookAt!).toBeGreaterThanOrEqual(t);
   });
 });
+
+describe('the order and the stamp, pinned after the first mutation round', () => {
+  it('after the identity moves (a rotation), the new identity\'s read is handed on even when it is older than the last one of the old', async () => {
+    const bus = new Bus();
+    const t = Date.now() - 1_000;
+    const readings: FeedReading[] = [];
+    const feed = feedFor(deps, bus, ID);
+    const sub = { onReading: async (r: FeedReading) => { readings.push(r); } };
+    bus.emit(`hook:${ID}`, { at: t, uuid: UUID, raw: roster(['a1']) });
+    await feed.join(sub, { file: path.join(home, 'x.jsonl'), cfgDir: path.join(home, '.claude-a'), uuid: UUID });
+    const other = 'b'.repeat(36);
+    const rawB = roster(['b1']);
+    feed.setFacts(sub, { file: path.join(home, 'y.jsonl'), cfgDir: path.join(home, '.claude-a'), uuid: other });
+    bus.emit(`hook:${ID}`, { at: t - 2_000, uuid: other, raw: rawB });
+    await feed.poll();
+    expect(readings[1]!.hook).toBe(rawB);
+    expect(readings[1]!.hookAt).toBe(t - 2_000);
+  });
+
+  it('the feed\'s own read is stamped when it RETURNED, not when the reading began', async () => {
+    writeFileSync(path.join(home, '.cc-sessions', `${ID}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'working', event: null, sessionId: UUID, pid: 1, updatedAt: Date.now(), ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0,
+    }));
+    const slow = {
+      ...localIO,
+      readFileMeasured: async (p: string, ...rest: unknown[]) => {
+        if (p.endsWith('.hookstate.json')) await new Promise((r) => setTimeout(r, 60));
+        return (localIO.readFileMeasured as (p: string, ...r: unknown[]) => ReturnType<typeof localIO.readFileMeasured>)(p, ...rest);
+      },
+    };
+    deps = { ...deps, io: slow };
+    const { readings } = await subscribe(new Bus());
+    expect(readings[0]!.hook?.ok).toBe(true);
+    expect(readings[0]!.hookAt! - readings[0]!.startedAt).toBeGreaterThanOrEqual(50);
+  });
+});

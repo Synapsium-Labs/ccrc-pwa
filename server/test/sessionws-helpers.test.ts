@@ -11,6 +11,7 @@ import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Deps } from '../src/server.js';
 import { NO_TICK, SessionStream } from '../src/sessionws.js';
+import { feedFor } from '../src/sessionFeed.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -68,7 +69,8 @@ const noticeLine = (id: string, at: number): string => line({
   message: { role: 'user', content: `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>all done</summary>\n<result>the report</result>\n</task-notification>` },
 });
 
-const open = (): { stream: SessionStream; frames: SessionStreamMsg[] } => {
+let lastDeps: Deps;
+const open = (bus: Bus = new Bus()): { stream: SessionStream; frames: SessionStreamMsg[] } => {
   const cfg = loadConfig({ CCRC_HOME: home });
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
@@ -76,12 +78,14 @@ const open = (): { stream: SessionStream; frames: SessionStreamMsg[] } => {
     return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
+  lastDeps = deps;
   const frames: SessionStreamMsg[] = [];
-  return { stream: new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK), frames };
+  return { stream: new SessionStream(deps, bus, ID, (m) => frames.push(m), undefined, NO_TICK), frames };
 };
 type WfFrame = SessionStreamMsg & { type: 'workflows' };
 const wfFrames = (frames: SessionStreamMsg[]): WfFrame[] => frames.filter((f): f is WfFrame => f.type === 'workflows');
 type Priv = {
+  helperFacts: unknown[];
   resolve(): Promise<{ ok: true; data: unknown } | { ok: false }>;
   sendBacklogAndTail(r: unknown): Promise<void>;
   feed: { poll(): Promise<void> } | null;
@@ -178,5 +182,51 @@ describe('the helpers on the session frame (H1b)', () => {
     const { stream, frames } = open();
     try { await stream.start(); } finally { stream.stop(); }
     expect(wfFrames(frames).at(-1)!.agents).toEqual([expect.objectContaining({ id: 'a4', state: 'launched' })]);
+  });
+});
+
+describe('the wiring, pinned after the first mutation round', () => {
+  it('the roster\'s READ time, not the reading\'s, decides `launched`: a launch between the two is launched', async () => {
+    hook([]);
+    seedHelper(S, 'a5');
+    const launchAt = Date.now() - 2_000;
+    appendFileSync(tfile, line({
+      type: 'user', uuid: 'l-a5', timestamp: iso(launchAt),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_02', content: 'launched' }] },
+      toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'a5', description: 'd', resolvedModel: 'model-b', prompt: 'p' },
+    }));
+    const bus = new Bus();
+    const { stream, frames } = open(bus);
+    // the watcher's published copy, read 5 s ago: older than the launch, so the roster cannot list it yet
+    feedFor(lastDeps, bus, ID);
+    bus.emit(`hook:${ID}`, { at: launchAt - 3_000, uuid: UUID, raw: { ok: true, sessionId: UUID, identity: 'current', state: {
+      state: 'working', updatedAt: Date.now(), event: null, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false,
+    } } });
+    try { await stream.start(); } finally { stream.stop(); }
+    expect(wfFrames(frames).at(-1)!.agents).toEqual([expect.objectContaining({ id: 'a5', state: 'launched' })]);
+  });
+
+  it('a reading hands the pending facts to the reader and keeps none: the stream holds nothing between readings', async () => {
+    hook([{ id: 'a1', name: 'Explore', startedAt: now - 30_000 }]);
+    seedHelper(S, 'a1');
+    appendFileSync(tfile, noticeLine('a1', now - 5_000));
+    const { stream } = open();
+    const p = stream as unknown as Priv;
+    try {
+      await stream.start();
+      expect(p.helperFacts).toEqual([]);
+    } finally { stream.stop(); }
+  });
+
+  it('characterization (main\'s order): a frame not due still records its JSON, so the same JSON when due later sends nothing', async () => {
+    hook([]);
+    const { stream, frames } = open();
+    const p = stream as unknown as Priv;
+    try {
+      await stream.start();                                  // absent, never had: no frame, its JSON recorded
+      mkdirSync(path.join(S, 'subagents', 'workflows'), { recursive: true });
+      await p.feed?.poll();                                  // an empty directory: due, the same JSON
+    } finally { stream.stop(); }
+    expect(wfFrames(frames)).toEqual([]);
   });
 });
