@@ -225,7 +225,7 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order ("claim order"
 ### Task A3.3: the content door, bytes, the lane rules and budgets (D-8787)
 
 **Files:**
-- Modify: `server/src/artifacts/routes.ts` (`GET /c/:token/*`, `GET /clear`), `server/src/docs/ccdsource.ts` (`ArtifactBytes` over `docs-show` and X2 P1's range port), `server/src/docs/lane.ts` and `server/src/docs/policy.ts` (`laneAdmit` gains the job's source and the artifact rules of Global Constraints)
+- Modify: `server/src/artifacts/routes.ts` (`GET /c/:token/*`, `GET /clear`), `server/src/docs/ccdsource.ts` (`ArtifactBytes` over `docs-show` and X2 P1's range port), `server/src/docs/policy.ts` (`DocsJob` gains `source?: 'console' | 'artifact'`, absent meaning console; `laneAdmit` gains the artifact rules that judge one job against the load: at most one artifact job runs, and an artifact job's raw bytes are at most `DOCS_LANE_LARGE_RAW`; and a new L1 `laneNext(load: LaneLoad, consoleHead: DocsJob | null, artifactHead: DocsJob | null): 'console' | 'artifact' | null`, which considers the console head first and the artifact head only when no console job waits, then asks `laneAdmit`; and `laneOverflow` takes the artifact bound of 16) and `server/src/docs/lane.ts` (two FIFOs, console and artifact; `pump` asks `laneNext` and decides nothing itself; the 'Only the HEAD is ever considered' comment is restated per FIFO)
 - Test: `server/test/artifacts-content.test.ts`, `server/test/docs-lanes.test.ts` (the artifact cases)
 
 **Interfaces:**
@@ -378,7 +378,7 @@ Each row deletes or weakens one guard; the named test must go red. Run through t
 | MX5.31 | A3.3 | Write a frame before its digest check | content: a bad frame aborts the response (the marker bytes reach the client) |
 | MX5.32 | A3.3 | Serve a changed draft | content: a changed draft answers 409 |
 | MX5.33 | A3.3 | Per-capability in-flight limit 5 | content: a page with many parallel loads loads whole (at most 4 run) |
-| MX5.34 | A3.3 | Drop the console-first rule from `laneAdmit` | lane: console first behind artifact jobs |
+| MX5.34 | A3.3 | Make `laneNext` pick the artifact head while a console job waits | lane: console first behind artifact jobs |
 | MX5.35 | A3.3 | Serve an unknown extension inline | content: `.exe` is an attachment |
 | MX5.36 | A1.1 | Import a `MOCKUP_` constant into `server/src/artifacts` or `shared/artifacts.ts` | single-definition: no shared policy between tiers |
 | MX5.37 | A4.1 | Write the Caddyfile block on the ip arm | expose: the ip arm refuses |
