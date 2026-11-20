@@ -27,6 +27,7 @@ import {
 import type { SleepPolicy } from './sleep.js';
 import { designationFactFrom, designationFactOf, type DesignationFact } from './roleOf.js';
 import type { LaneName } from './laneSchedule.js';
+import { runNamesSession } from './coord/runBinding.js';
 
 /**
  * PUT A SESSION TO SLEEP, THE ONE EXECUTOR (D-7042; ARCH-43, consolidation spec K1): L4, it reads, logs and acts; it
@@ -626,10 +627,28 @@ export type StopDoneOutcome =
   | { readonly id: string; readonly kind: 'failed'; readonly detail: string }
   | { readonly id: string; readonly kind: 'switched-off'; readonly detail: string };
 
+/** The session asking `heldKindOf` (D-8789): its id, and its newest placed run's id from the store read the verdict
+ *  decides on, or `null` when no placed run names it (then no hold is its own). */
+export interface OwnRunAsker {
+  readonly sessionId: string;
+  readonly newestPlacedRunId: number | null;
+}
+
 /** The row's `.hold`, classified (D-6091): the grammar through `programmeHoldOf`, the one reader of
  *  `HOLD_REASON_PATTERN`, and a run suffix's state through the store's `run` read. Any read that cannot be made, or
- *  a run the store does not have, answers `unreadable`, which holds. */
-export function heldKindOf(held: string | null, coord: Pick<StopDoneSweepDeps['coord'], 'run'>): StopDoneHeldKind {
+ *  a run the store does not have, answers `unreadable`, which holds.
+ *
+ *  `run-own` (D-8789): D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run,
+ *  as F5 (b) requires. Every dispatch writes on its worker a hold naming that run, so reading it `run-live` held every
+ *  parked worker awake (D-6092 never acted on a dispatched child). The word answers only when the named run is open,
+ *  its `sessionId` is the asking session (`runNamesSession`, never the hold's text) AND its id is that session's newest
+ *  placed run (`OwnRunAsker.newestPlacedRunId`, from the same store read the verdict decides on, so the act-time re-ask
+ *  re-proves it). Any other open run, of another session or of this one (an older open run, a `planned` wave not yet
+ *  dispatched), stays `run-live` and holds. `asker` is required: `null` says no session is asking, and then `run-own`
+ *  is never answered (the deps-shed arm, `depsShedPass.ts`). */
+export function heldKindOf(
+  held: string | null, coord: Pick<StopDoneSweepDeps['coord'], 'run'>, asker: OwnRunAsker | null,
+): StopDoneHeldKind {
   if (held === null) return 'none';
   const hold = programmeHoldOf(held);
   if (hold === null) return 'operator';
@@ -637,7 +656,9 @@ export function heldKindOf(held: string | null, coord: Pick<StopDoneSweepDeps['c
   try {
     const r = coord.run(hold.runId);
     if (!r.ok || r.run === null) return 'unreadable';
-    return (TERMINAL_RUN_STATES as readonly string[]).includes(r.run.state) ? 'run-terminal' : 'run-live';
+    if ((TERMINAL_RUN_STATES as readonly string[]).includes(r.run.state)) return 'run-terminal';
+    const own = asker !== null && asker.newestPlacedRunId === hold.runId && runNamesSession(r.run, asker.sessionId);
+    return own ? 'run-own' : 'run-live';
   } catch {
     return 'unreadable';
   }
@@ -710,6 +731,11 @@ export function runDoneViewerFacts(
   return { viewer: deps.viewers?.isOpen(id) ?? true, sinceStartMs: at - deps.startedAt, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS };
 }
 
+/** The asker for `heldKindOf` from the store read this ask decides on (D-8789): an unreadable read, or no placed run,
+ *  leaves no newest placed run to own (the verdict then holds on the read itself). */
+const ownRunAskerOf = (id: string, store: StopDoneStoreRead): OwnRunAsker =>
+  ({ sessionId: id, newestPlacedRunId: store.ok && store.last !== null ? store.last.runId : null });
+
 /** run-done's verdict input: the row's `.hold` classified again at each ask (`heldKindOf`), presence read as it is
  *  built. */
 function runDoneInput(
@@ -717,7 +743,7 @@ function runDoneInput(
   live: StopDoneLive, at: number,
 ): StopDoneInput {
   return {
-    row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
+    row, heldKind: heldKindOf(row.held, deps.coord, ownRunAskerOf(row.id, store)), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
     verb: f.verb, overlord: overlordOf(f.designation, row.id), optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
     live, now: at, graceMs: f.quietMs,
   };

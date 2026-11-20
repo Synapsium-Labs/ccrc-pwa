@@ -237,7 +237,7 @@ JSON
    proves fingerprint and terminal state, not merge.
 
    A missing/non-`done` producer row, failed release, or required exact-SHA merge
-   proof that is absent means report and do not dispatch. The default `runs list`
+   proof that is absent does not dispatch, and is not a report either: re-read with backoff (class P3), and where the merge proof is absent, land the producer first (§5, "Landing on a native-queue project" and SKILL.md step 7). The default `runs list`
    excludes `done` and `failed` rows, so it cannot perform the state check.
 4. The close re-measures the SAME facts, against the SAME codes, as `/advance`
    does (skipped only on an explicit `"state":"failed"` abandon). Its response
@@ -248,7 +248,7 @@ JSON
    `prhistory-unreadable`; both ride `refused`. A hold write that would exceed
    the hook's display window answers `error:'hold-oversize'` (413), while an
    invalid stored programme or numeric domain answers `error:'hold-invalid'`
-   (400). Both leave the run open; report rather than retrying unchanged.
+   (400). Both leave the run open, and neither is retried unchanged: the row never passed the open door and you cannot correct it, so raise an end request for the run (`ccrc-api runs end-request <run id>`, a non-blocking ask), park the thread and work the rest, and open the wave again when the run reads abandoned.
 5. Dispatch wave N+1 (§2, step 2) only after the applicable close, closed-row
    proof, release proof, and exact-SHA merge proof above succeed.
 

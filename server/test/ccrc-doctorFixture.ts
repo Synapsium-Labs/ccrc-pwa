@@ -1604,8 +1604,10 @@ export function editRosterRow(home: string, id: string, edit: (row: Record<strin
  *  lane ccrc runs end to end: its launcher, a signed-in authDir, its model
  *  registry and a fresh catalogue, and the files rendered from them; the
  *  five GPT-lane executables placed from the shipped tree; a current
- *  runtime. Every check still PASSes — healthy()'s contract — so a Codex
- *  case breaks exactly one thing. The ports are FREE ones (`freeLanes`),
+ *  runtime. Every check but `model-advance-blocked` still PASSes — healthy()'s contract — so a Codex
+ *  case breaks exactly one thing; that one WARNs `pin-grammar`, because this box's two-part fixture pins
+ *  predate the id grammar (auto-advance D16), and `model-sessions-behind` SKIPs, as healthy()'s other
+ *  session checks do, for no `~/.cc-sessions` (measured, auto-advance W3). The ports are FREE ones (`freeLanes`),
  *  never the fixed pure-parse pair: from Task 5 on the check connects to
  *  them. No `accounts.sh` (`codexRoster`'s `accountsSh: false`), for
  *  healthy()'s own reason. */
@@ -1785,8 +1787,15 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  browser build, so there is nothing to launch. `ccrc-doctor-session-path.test.ts` plants the builds.
  *
  *  RAISED BY ONE AGAIN, on every platform (D-8121): `browser-mcp` SKIPs - `healthy()` creates no `~/.cc-sessions`, so no
- *  session runs a browser server. `ccrc-doctor-browser-mcp.test.ts` plants the registry and the process table. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 18;
+ *  session runs a browser server. `ccrc-doctor-browser-mcp.test.ts` plants the registry and the process table.
+ *
+ *  RAISED BY FOUR, on every platform (model-class auto-advance W3, D-8689): `model-advance-held-back`,
+ *  `model-held-behind`, `model-sessions-behind` and `model-advance-blocked` SKIP - `healthy()` places no
+ *  deploy/models-op.mjs, so advance-health prints no answer, and its roster names no lane with a model registry
+ *  either way. Measured the same way: with the four in the table and this `+ 4` absent, every `(N skipped)` pin
+ *  that reads this constant reds (`ccrc-doctor-codex-host.test.ts`: 22 skipped measured where 18 was pinned, and 21
+ *  where 17 was). `ccrc-doctor-model-advance.test.ts` plants the op and the lane files. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 22;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,
