@@ -163,7 +163,7 @@ _class_takes_no_effort() {   # wrapper class -> rc 0 the class's model says it t
   case "$__ne_e" in
     none) return 0 ;;
     -|unknown|'') return 2 ;;
-    *[!A-Za-z0-9._,-]*) return 2 ;;   # an `invalid ...` or `absent` answer carries a space: it is no list of levels
+    *[!A-Za-z0-9._,-]*) return 2 ;;   # any other answer (one with a space, as `invalid ...`) is no list of levels
     *) return 1 ;;
   esac
 }
