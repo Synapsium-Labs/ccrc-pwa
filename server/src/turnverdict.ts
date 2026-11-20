@@ -186,6 +186,16 @@ export async function conversationAfterClearFor(d: TurnReadDeps, rec: SessionRec
 }
 
 /**
+ * D-8792 (review 2875 F1): the bound on one worker's read for the dispatch cap, measured. One awake worker's read is about
+ * 25 agent and tmux operations in sequence (the registry record, the pane twice, the live file, two one-row frame
+ * assemblies, the turn marker). Twelve round trips from the fleet box to the server on 2026-11-20, at load 10 to 15, took
+ * 108 to 2690 ms with a median near 140 ms, so one read is about 3.5 s at the median. Past this bound the read answers
+ * `unmeasured`, which keeps its run counted: a slow fleet costs the armed rule its freed slots, never a wrong admit. The
+ * cap reads every worker in parallel (`coord/dispatch.ts#workerReadings`), so this bounds the whole reading.
+ */
+export const WORKER_READINGS_DEADLINE_MS = 5_000;
+
+/**
  * D-8792 (amending D-6094; waiting workers spec 2026-11-19 Part 3): the reads behind one run worker's reading for the
  * dispatch cap, measured, never decided: `workerReadingOf` and `resumeSkipsCap` (`coord/dispatchDecide.ts`, L1) hold the
  * rules. `gone`, with why: the registry lists no row for it, the row is archived, asleep or stopped (in that order, so a
@@ -194,9 +204,21 @@ export async function conversationAfterClearFor(d: TurnReadDeps, rec: SessionRec
  * a live pane is read like any awake worker, and a pane tmux could not answer for is `unmeasured`. `unmeasured`: the
  * row, its identity or a lifecycle field could not be read, or the pane could not be. Otherwise `awake`, with the fail-closed turn verdict,
  * whether the frame's row lists background work or subagents, and the turn marker. Every read is one this file already
- * makes for the stop-done lane and the archive door.
+ * makes for the stop-done lane and the archive door. The whole read is bounded by `WORKER_READINGS_DEADLINE_MS` (a timer
+ * local to this call): past it, `unmeasured`.
  */
-export async function workerFactsFor(d: TurnReadDeps, sessionId: string): Promise<WorkerFacts> {
+export async function workerFactsFor(
+  d: TurnReadDeps, sessionId: string, deadlineMs: number = WORKER_READINGS_DEADLINE_MS,
+): Promise<WorkerFacts> {
+  const unmeasured: WorkerFacts = { kind: 'unmeasured' };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<WorkerFacts>((resolve) => { timer = setTimeout(() => resolve(unmeasured), deadlineMs); });
+  try { return await Promise.race([readWorkerFacts(d, sessionId), late]); } finally { clearTimeout(timer); }
+}
+
+/** `workerFactsFor`'s reads, unbounded. A read cut at the deadline runs on to its end and its answer is dropped: every
+ *  read here only reads. */
+async function readWorkerFacts(d: TurnReadDeps, sessionId: string): Promise<WorkerFacts> {
   const read = await readSessionRecord(d.io, d.cfg, sessionId);
   if (read.kind === 'absent') return { kind: 'gone', why: 'absent' };
   if (read.kind !== 'found') return { kind: 'unmeasured' };

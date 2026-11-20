@@ -73,12 +73,15 @@ to run 2838 and defined in the plan's "Deviations found".
   it after the refusal). Armed, the readings decide, so they stay, bounded. Measured at the cap with 10 counted runs
   and a 300 ms worker port, 15 refusals each (median): main 0.6 ms; the reviewed tip `9c8abde7` 302 ms in shadow and
   304 ms armed; this tip 0.8 ms in shadow and 301 ms armed (one bounded read round).
-- **read-deadline.** `dispatch.ts#WORKER_READINGS_DEADLINE_MS`, 5 s, bounds every worker read the cap waits for:
-  `workerReadings` as a whole (one deadline for all workers, not one each) and each single read (`factsOf`). A read
-  past it is `unmeasured`, so its run counts: a slow fleet costs the armed rule its freed slots, never a wrong admit.
-  The bound comes from a measurement. One awake worker's read is about 25 agent and tmux operations in sequence, and
-  twelve round trips from the fleet box to the server at load 10 to 15 took a median of about 140 ms, so about 3.5 s
-  a read at the median. The tail is cut.
+- **read-deadline.** `turnverdict.ts#WORKER_READINGS_DEADLINE_MS`, 5 s, bounds each worker read the cap waits for, as
+  a timer local to `workerFactsFor` (the port, L3). A read past it is `unmeasured`, so its run counts: a slow fleet
+  costs the armed rule its freed slots, never a wrong admit. The coordinator asked for one overall deadline on
+  `workerReadings`. That function reads every worker in parallel, so the per-read bound is its overall bound. The timer
+  sits in the adapter because a deadline timer makes a file L3 (the rings rule), and `dispatch.ts` is imported by L1
+  files (`abandonDeadDispatch.ts`), so a timer there would point an edge outward. It needs no `routes.ts` change. The
+  bound comes from a measurement. One awake worker's read is about 25 agent and tmux operations in sequence, and twelve
+  round trips from the fleet box to the server at load 10 to 15 took a median of about 140 ms, so about 3.5 s a read
+  at the median. The tail is cut.
 - **send-back-plan.** Review 2875 F3: `dispatchDecide.ts#sendBackCapPlan` (L1) answers `today`, `free` or `recount` from
   measured facts (armed, port, cap full, the edge, the worker's facts or null), with the free-resume rule inside it.
   `sendBackCapCheck` (L4) reads, asks it, and acts. It reads the worker only when the plan without it is not `today`.

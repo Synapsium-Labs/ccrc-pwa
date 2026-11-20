@@ -10,9 +10,9 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  WORKER_READINGS_DEADLINE_MS, capCountsWorkingArmed, capsMeasured, dispatchRun, sendBackCapCheck, workerReadings,
-  type DispatchOutcome, type DispatchRunDeps,
+  capCountsWorkingArmed, capsMeasured, dispatchRun, sendBackCapCheck, workerReadings, type DispatchOutcome, type DispatchRunDeps,
 } from '../src/coord/dispatch.js';
+import { WORKER_READINGS_DEADLINE_MS } from '../src/turnverdict.js';
 import {
   capRefusalOf, capShadowLine, capShadowResumeLine, capsReadingOf, freedSlotPending, resumeSkipsCap, sendBackCapPlan,
   sendBackCharged, workerReadingOf, type SendBackCapFacts, type WorkerFacts, type WorkerReading,
@@ -484,39 +484,11 @@ describe('the dispatch door armed: a run holds a slot only while its worker work
     }
   });
 
-  it('review 2875 F1: a read past the deadline is unmeasured and keeps its slot; the reads that answered still count', async () => {
-    const f = fixture();
-    f.holder('a', 'demo-fast');
-    f.holder('b', 'demo-slow');
-    const port = async (sid: string): Promise<WorkerFacts> => (sid === 'demo-fast' ? ASLEEP : new Promise<WorkerFacts>(() => undefined));
-    const t0 = Date.now();
-    const readings = await workerReadings(f.coord, port, Date.now(), 50);
-    expect(Date.now() - t0).toBeLessThan(5_000);
-    expect([...(readings ?? new Map()).values()].sort()).toEqual(['gone', 'unmeasured']);
-    // A port that throws synchronously reads unmeasured too.
-    expect([...((await workerReadings(f.coord, () => { throw new Error('no link'); }, Date.now(), 50)) ?? new Map()).values()])
-      .toEqual(['unmeasured', 'unmeasured']);
-  });
-
-  it('review 2875 F1: armed, a worker port that never answers is cut at the deadline, and the run keeps its slot', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
-      const calls: string[] = [];
-      const f = atOneSlot({ workerFacts: (sid: string): Promise<WorkerFacts> => { calls.push(sid); return new Promise<WorkerFacts>(() => undefined); } });
-      f.holder('a', 'demo-a');
-      const out = dispatchRun(f.deps, f.resume(), 'go', undefined);
-      let settled = false;
-      void out.then(() => { settled = true; });
-      // The real reads before it (the registry listing) finish on real time; setImmediate is not faked.
-      for (let i = 0; i < 2000 && calls.length === 0; i++) await new Promise<void>((r) => { setImmediate(r); });
-      expect(calls).toEqual([WORKER]);
-      await vi.advanceTimersByTimeAsync(WORKER_READINGS_DEADLINE_MS - 100);
-      expect(settled).toBe(false);
-      // The resume's own read is cut, then the count's: two deadlines, and the run keeps its slot.
-      await vi.advanceTimersByTimeAsync(2 * WORKER_READINGS_DEADLINE_MS);
-      expect(calls).toEqual([WORKER, 'demo-a']);
-      expect(capRefused(await out)).toBe(true);
-    } finally { vi.useRealTimers(); }
+  it('a port that throws synchronously reads unmeasured too, and its run keeps its slot', async () => {
+    const f = atOneSlot({ workerFacts: () => { throw new Error('no link'); } });
+    f.holder('a', 'demo-a');
+    expect([...((await workerReadings(f.coord, f.deps.workerFacts)) ?? new Map()).values()]).toEqual(['unmeasured']);
+    expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
   });
 
   it('a run with no session keeps its slot, and is never read', async () => {

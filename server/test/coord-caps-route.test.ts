@@ -574,15 +574,20 @@ describe('the caps answer shape is defined ONCE, and both halves send it', () =>
   });
 
   it('review 2875 F1: the POST takes the worker readings after the coordination lock, never inside it', () => {
-    const r = raw();
-    const post = handlerBody(r, blankCommentsAndStrings(r), "app.post('/api/coord/caps'");
-    const lock = post.indexOf('coordMutex.run(');
-    expect(lock, 'the POST no longer takes the lock: this scan is over nothing').toBeGreaterThan(-1);
-    const close = post.indexOf('\n    });', lock);
+    // Keyed on scan/symbols.ts (sourceOfSymbol), never a literal read of routes.ts: ARCH-06's ratchet holds that file's
+    // literal pins at their ceiling.
+    const reg = sourceOfSymbol(path.join(srcRoot, 'coord', 'routes.ts'), 'registerCoordRoutes');
+    const post = reg.indexOf("app.post('/api/coord/caps'");
+    expect(post, 'the caps POST is gone under this registration').toBeGreaterThan(-1);
+    const lock = reg.indexOf('coordMutex.run(', post);
+    expect(lock, 'the POST no longer takes the lock: this scan is over nothing').toBeGreaterThan(post);
+    const close = reg.indexOf('\n    });', lock);
     expect(close, 'the lock body\'s end is not found').toBeGreaterThan(lock);
-    expect(post.slice(lock, close), 'the worker readings are taken inside the lock').not.toContain('capsViewMeasured(');
-    expect(post.slice(lock, close)).toContain('capsView(coord)');
-    expect(post.slice(close), 'the measured view is not built after the lock').toContain('capsViewMeasured(coord, view)');
+    const next = reg.indexOf('app.', close);
+    expect(next, 'the next registration is not found').toBeGreaterThan(close);
+    expect(reg.slice(lock, close), 'the worker readings are taken inside the lock').not.toContain('capsViewMeasured(');
+    expect(reg.slice(lock, close)).toContain('capsView(coord)');
+    expect(reg.slice(close, next), 'the measured view is not built after the lock').toContain('capsViewMeasured(coord, view)');
   });
 
   it('…and the usage half is read in exactly one place, so a rebuild cannot be faithful', () => {
