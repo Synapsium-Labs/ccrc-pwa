@@ -81,8 +81,18 @@ to run 2838 and defined in the plan's "Deviations found".
   files (`abandonDeadDispatch.ts`), so a timer there would point an edge outward. It needs no `routes.ts` change. The
   bound comes from a measurement. One awake worker's read is about 25 agent and tmux operations in sequence, and twelve
   round trips from the fleet box to the server at load 10 to 15 took a median of about 140 ms, so about 3.5 s a read
-  at the median. The tail is cut.
-- **send-back-plan.** Review 2875 F3: `dispatchDecide.ts#sendBackCapPlan` (L1) answers `today`, `free` or `recount` from
+  at the median. That per-read figure is derived (25 operations times the median), not a measured read. Under load many
+  reads will reach 5 s and read `unmeasured`, so the armed rule frees fewer slots, which fails safe. The tail is cut.
+  **Armed only, a stated departure (review 2898 F-A):** an at-cap dispatch or send-back whose run names a session waits
+  on two reads in series under the coordination lock. The first reads the dispatching worker (`resumeSkipsCap`), then
+  the counted workers in parallel (`workerReadings`), each up to 5 s, so up to about 10 s a refusal. The two cover
+  different workers (the dispatching run is not counted), so they cannot be one read. A fresh spawn pays one. Shadow
+  pays none: no worker is read on the refusal's path.
+- **shadow-one-in-flight.** Review 2898 F-B: at most one deferred shadow record per door (dispatch, send-back) is in
+  flight per store. A refusal that finds its door's record scheduled or running skips its own and writes nothing, so a
+  client that retries at a full cap cannot stack full reading passes. The flag clears when the record ends, however it
+  ends.
+- **send-back-plan.** (Its docstring says where each decision is made, review 2898 F-C.) Review 2875 F3: `dispatchDecide.ts#sendBackCapPlan` (L1) answers `today`, `free` or `recount` from
   measured facts (armed, port, cap full, the edge, the worker's facts or null), with the free-resume rule inside it.
   `sendBackCapCheck` (L4) reads, asks it, and acts. It reads the worker only when the plan without it is not `today`.
   A freed slot is pending as data (`freedSlotPending`), L4 asks the watcher's window, which records into it, and the
@@ -129,3 +139,7 @@ to run 2838 and defined in the plan's "Deviations found".
 Part 3 stays in shadow. The item asking the operator to arm it carries OA-F2 (from Part 2's shadow, after Part 2 is
 armed) and OA-F3: the caps view's `waiting` count and the `cap-counts-working shadow:` journal lines, with each run's
 reading.
+
+**A condition before the operator arms (review 2898 F-A, the coordinator's ruling).** Armed, an at-cap dispatch or
+send-back whose run names a session waits on two reads in series under the coordination lock, up to about 10 s (see
+**read-deadline**). Before arming, put one deadline over both reads. The arming item carries this.
