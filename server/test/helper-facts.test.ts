@@ -2,7 +2,7 @@
 // notification, one raw transcript line in, `HelperFact[]` out. Every fixture is built from the SHAPES measured on
 // 2.1.280 to 2.1.319 (key names, value types), with neutral names and values: no measured content.
 import { describe, expect, it } from 'vitest';
-import { helperFactsOf } from '../src/transcript/parse.js';
+import { helperFactsOf, type HelperFact } from '../src/transcript/parse.js';
 import { HELPER_REPORT_MAX_BYTES, HELPER_SUMMARY_MAX_BYTES } from '../../shared/workflows.js';
 
 const TS = '2026-11-20T09:32:17.244Z';
@@ -178,6 +178,23 @@ describe('helperFactsOf: a task notification', () => {
 describe('helperFactsOf: the bounds are the spec\'s numbers', () => {
   it('a report is at most 16 KiB and a summary at most 200 bytes', () => {
     expect([HELPER_REPORT_MAX_BYTES, HELPER_SUMMARY_MAX_BYTES]).toEqual([16_384, 200]);
+  });
+});
+
+describe('helperFactsOf: an agent id is the hook\'s own grammar (the one AGENT_ID_RE, review 2961 F6)', () => {
+  const launched = (agentId: string): HelperFact[] => helperFactsOf(toolResult({ ...ASYNC, agentId }));
+
+  it('letters, digits, underscore and hyphen, one to 64 characters, are an id', () => {
+    for (const id of ['a', 'a_1-B2', 'Z'.repeat(64), '0-_9']) expect(launched(id).map((f) => f.id)).toEqual([id]);
+  });
+
+  it('a dot, a space, a slash, an empty id and a 65th character are no id', () => {
+    for (const id of ['a.b', 'a b', 'a/b', '', 'a'.repeat(65), 'a\n']) expect(launched(id)).toEqual([]);
+  });
+
+  it('the same grammar reads a notification\'s task id', () => {
+    expect(helperFactsOf(notification({ id: 'a_1-B2' })).map((f) => f.id)).toEqual(['a_1-B2']);
+    expect(helperFactsOf(notification({ id: 'a.b' }))).toEqual([]);
   });
 });
 
