@@ -63,7 +63,8 @@ helpers S1)".
   arms. Net growth measured with `growthCheck.ts#codeLines`: +3 code lines.
 - [x] **The migration, slot 112** (the next free slot at `origin/main` d0b7467b9, which holds 111 entries). One
   `ALTER TABLE delegation_activities ADD COLUMN endBasis` whose CHECK holds the three words and Table 9's two rules.
-  Every test that pins the migration list or the schema is run.
+  Every test that pins the migration list or the schema, found by what it asserts, is run locally; the task note says
+  which files ran where (the coordinator's ruling of 2026-11-20 leaves the other schema importers to CI's selection).
 - [x] **Mutants**, each recorded in the task note `docs/superpowers/programs/desktop-polish/s1.md`.
 - [ ] **A week after S1 lands** (spec §14): count the open agent records of that week, and how many S1 ended.
 
@@ -81,10 +82,19 @@ Read only, on 2026-11-20 at 11:49 UTC, on the fleet box. Counts only.
 | Final notifications that name no agent started in the window | 655, and 118 more that are Workflow tasks | Measured. A notification also reports background shells and agents started before the window |
 | Open agent records the first boot after S1 would end | none expected from the spool's window | Inferred from the two rows above; the server's journal may retain older notifications |
 
-**So the spec's "adoption watches start sooner" holds only for those records:** an agent record whose task notification
-the journal holds while the record is still open, which in this window was none. Every agent that reported had already
-sent its SubagentStop, and that Stop had already ended its record. S1 is a second, independent end signal; this window
-shows no record that needed it. The week-after measurement (spec §14) is still owed.
+**What the count says (the coordinator's ruling on it, 2026-11-20).**
+
+- **Measured:** by this count the arm closed none of today's open records. Every one of the 788 agents that reported
+  had already sent its SubagentStop, and that Stop had already ended its record.
+- **Measured, so inferred for the adoption effect:** the arm gives no earlier adoption terminal time than the Stop
+  already gives, for any record in this window. The spec's "adoption watches start sooner" holds only for an agent
+  record whose task notification arrives while it is still open, and this window held none.
+- **Not found:** the cause of today's residue of open records (spec §2.2) is still unknown. The 7 open agents of the
+  window have no notification either, so the arm does not reach them.
+- **Not reached:** the server's journal and `coord.db`, so the count of open records the first boot will end is not
+  measured; it is inferred from the spool as few or none.
+- **Kept anyway (the coordinator's ruling):** the arm is built and tested, it costs no more than the `endBasis` S2 needs,
+  and it is a backstop if Stops go missing later. The week-after measurement (spec §14) is still owed.
 
 ### Rollback
 
