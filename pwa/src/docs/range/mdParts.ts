@@ -68,12 +68,21 @@ const RANK_LINE = 2;
 const RANK_FENCE = 1;
 
 /** A line's text as tested: without its `\n` and without one `\r` before it. */
-function lineAt(text: string, off: number): { end: number; line: string } {
-  const nl = text.indexOf('\n', off);
-  const stop = nl < 0 ? text.length : nl;
-  const line = text.slice(off, stop > off && text.charCodeAt(stop - 1) === 13 ? stop - 1 : stop);
-  return { end: nl < 0 ? text.length : nl + 1, line };
+function lineAt(text: string, off: number, limit: number, probe?: Probe): { end: number; line: string; bytes: number } {
+  // Only `[off, limit)` is looked at, never the rest of a long line. A line that does not end before `limit` ends at
+  // `limit` here: it is longer than the window, and its tail is never read.
+  const w = text.slice(off, limit);
+  const i = w.indexOf('\n');
+  const stop = i < 0 ? w.length : i;
+  const end = i < 0 ? w.length : i + 1;
+  const line = w.slice(0, stop > 0 && w.charCodeAt(stop - 1) === 13 ? stop - 1 : stop);
+  const bytes = utf8Bytes(i < 0 ? w : w.slice(0, end));
+  if (probe !== undefined) probe.chars += (i < 0 ? w.length : i + 1) + line.length + end;
+  return { end: off + end, line, bytes };
 }
+
+/** How far past a window's end a line is read: enough for a heading test, which needs six characters of a line. */
+const LINE_SLACK = 8;
 
 /** The fence state after `line`, given the state before it. */
 function fenceAfter(fence: Fence | null, line: string): Fence | null {
@@ -95,6 +104,10 @@ function fenceAfter(fence: Fence | null, line: string): Fence | null {
 /** The fence a part starting at a cut is inside, for reopening: only a reopenable one. */
 const reopenable = (f: Fence | null): Fence | null => (f !== null && f.reopen !== null ? f : null);
 
+/** A test-only counter: `chars` grows by every character the cutter examines (searched, sliced or measured). It changes
+ *  nothing the cutter answers; it lets a test bound the work by an operation count, never by wall time. */
+export interface Probe { chars: number }
+
 interface Cut { off: number; bytes: number; fence: Fence | null }
 
 /** The largest offset in `[from, to)` whose prefix `text.slice(from, off)` is at most `budget` UTF-8 bytes, at a code
@@ -113,7 +126,8 @@ function codePointCut(text: string, from: number, to: number, budget: number): {
 }
 
 /** Cuts `text` into parts of at most `maxBytes` UTF-8 bytes each (above). A text at or below `maxBytes` is one part. */
-export function splitMarkdownParts(text: string, maxBytes: number): { parts: MdPart[] } {
+export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe): { parts: MdPart[] } {
+  if (probe !== undefined) probe.chars += text.length;
   if (utf8Bytes(text) <= maxBytes) return { parts: [{ start: 0, end: text.length, continued: false, reopen: null, close: null }] };
   const parts: MdPart[] = [];
   let start = 0;
@@ -123,6 +137,8 @@ export function splitMarkdownParts(text: string, maxBytes: number): { parts: MdP
   while (start < text.length) {
     const reopen = inside === null ? null : inside.reopen;
     const head = reopen === null ? 0 : utf8Bytes(reopen);
+    // A part holds at most `maxBytes` bytes, so at most `maxBytes` characters: no line is read past this limit.
+    const limit = Math.min(text.length, start + maxBytes + LINE_SLACK);
     // One window: scan lines from `start` while the part still fits, keeping the latest cut of each rank.
     const best: (Cut | undefined)[] = [];
     let off = start;
@@ -132,7 +148,7 @@ export function splitMarkdownParts(text: string, maxBytes: number): { parts: MdP
     let firstLineEnd = -1;
     let atEnd = false;
     while (off < text.length) {
-      const { end, line } = lineAt(text, off);
+      const { end, line, bytes: lineBytes } = lineAt(text, off, limit, probe);
       if (firstLineEnd < 0) firstLineEnd = end;
       if (off > start) {
         const rank = fence === null && HEADING_RE.test(line) ? RANK_HEADING : prevRank;
@@ -141,7 +157,6 @@ export function splitMarkdownParts(text: string, maxBytes: number): { parts: MdP
           if (head + bytes + tail <= maxBytes) best[rank] = { off, bytes, fence };
         }
       }
-      const lineBytes = utf8Bytes(text.slice(off, end));
       const blank = fence === null && BLANK_RE.test(line);
       fence = fenceAfter(fence, line);
       if (head + bytes + lineBytes > maxBytes) break;
@@ -174,7 +189,7 @@ export function splitMarkdownParts(text: string, maxBytes: number): { parts: MdP
     parts.push({ start, end: cut.off, continued, reopen, close: closeText });
     if (cut.off >= firstLineEnd) {
       // The whole first line went: the fence state moves past it.
-      state = fenceAfter(state, lineAt(text, start).line);
+      state = fenceAfter(state, lineAt(text, start, limit, probe).line);
       inside = reopenable(state);
     } else if (closeText === null) {
       inside = null;

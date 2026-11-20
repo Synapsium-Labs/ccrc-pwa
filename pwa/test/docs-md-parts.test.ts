@@ -163,6 +163,21 @@ describe('splitMarkdownParts', () => {
     }
   });
 
+  it('md parts: one line thousands of windows long is cut in linear work: each part scans its own window only', () => {
+    // A scaled stand-in for one 64 MiB line (an inline base64 image): 300 windows of 1000 bytes on ONE line, with a
+    // short line before and after it. The probe counts every character the cutter searches, slices or measures.
+    const max = 1000;
+    const t = 'head\n' + 'q'.repeat(max * 300) + '\ntail\n';
+    const probe = { chars: 0 };
+    const { parts } = splitMarkdownParts(t, max, probe);
+    checkCover(t, parts, max);
+    expect(parts.length).toBeGreaterThanOrEqual(300);
+    expect(probe.chars, 'characters examined').toBeGreaterThan(t.length);
+    expect(probe.chars, 'characters examined stay a small multiple of the text').toBeLessThanOrEqual(6 * t.length);
+    // The probe changes nothing the cutter answers.
+    expect(splitMarkdownParts(t, max).parts).toEqual(parts);
+  });
+
   it('md parts: sizes are UTF-8 bytes, so a part of four-byte characters is cut at the gate\'s bytes', () => {
     const t = '\u{1F600}'.repeat(300000); // 1 200 000 bytes, 600 000 UTF-16 units
     const { parts } = splitMarkdownParts(t, GATE);
