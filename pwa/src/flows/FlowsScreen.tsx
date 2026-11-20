@@ -17,6 +17,7 @@ import './flows.css';
 import {
   EDITABLE_KINDS, KIND_WORD, addOutcome, addStepAfter, flowFileName, outlineOrder, protocolNote, removeOutcome, removeStep, setBlock,
   setTarget, targetOf,
+  moveBlock,
 } from './flowEdits';
 
 const flowPath = (id: number): string => `/flows/${id}`;
@@ -249,8 +250,8 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
           </Section>
           <div className="grid gap-4 @min-[900px]:grid-cols-[minmax(0,1fr)_360px] @min-[900px]:items-start">
             <div className="grid min-w-0 gap-4">
-              <Section title="Diagram" purpose="Dashed steps are ccrc's own and locked; an amber arrow is a fix round. Edit a step from the outline.">
-                <FlowDiagram doc={doc} selected={selected} />
+              <Section title="Diagram" purpose="Dashed steps are ccrc's own and locked; an amber arrow is a fix round. Drag a step, or focus it and use the arrow keys, to move it.">
+                <FlowDiagram doc={doc} selected={selected} onSelect={setSelected} onMove={(id, at) => edit(moveBlock(doc, id, at))} />
               </Section>
               <Section title="Steps" scope="outline">
                 <ol className="m-0 grid gap-0 p-0">

@@ -10,3 +10,7 @@
   background: var(--bg-raised); color: var(--ink-primary);
   font: var(--weight-regular) var(--fs-input) / var(--lh-mono) var(--family-mono); resize: vertical;
 }
+/* Wave 5a: a step on the canvas that can be moved. A visible focus ring for the arrow keys; touch drags the step, not the page. */
+.flow-movable { cursor: grab; touch-action: none; outline: none; }
+.flow-movable:active { cursor: grabbing; }
+.flow-movable:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
