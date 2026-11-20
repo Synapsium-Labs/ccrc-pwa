@@ -749,13 +749,13 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
 
   it('capacity follow-ups (T4 F3): a block whose run still has an eligible waiter is left to that waiter\'s wake', async () => {
     const l = await lane();
-    // One slot: the older refusal of prog-b is served first, and prog-a's waiter waits; its block waits with it.
-    l.coord.setCaps({ maxConcurrentWorkers: 1 });
-    l.refused('prog-b', 'coord-b', T0 - 3 * MIN);
-    const a = l.refused('prog-a', 'coord-a', T0 - MIN);
-    const parked = parkCapacity(l, a, T0 - MIN);
+    // Room for five, but one waiter a programme a pass: prog-a's older refusal is woken, its newer one waits, and the
+    // block naming the newer run waits with it, though the room has slots left.
+    const older = l.refused('prog-a', 'coord-a', T0 - 3 * MIN);
+    const newer = l.refused('prog-a', 'coord-a', T0 - MIN);
+    const parked = parkCapacity(l, newer, T0 - MIN);
     await l.sweep(T0);
-    expect(l.wakeMail()).toHaveLength(1);
+    expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${older}`]);
     expect(l.coord.callById(parked)!.wokenAt).toBeNull();
     expect(blockMail(l)).toEqual([]);
   });
