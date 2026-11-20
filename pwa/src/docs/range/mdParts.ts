@@ -26,12 +26,20 @@
 // most three columns past the zone's content column. It also ends when its container provably ends, and that is tried
 // first: a non-blank line with fewer `>` marks, or one indented less than the zone's content column. The content column
 // is 0 when only `>` marks come before the opener, the opener's own column when it carries a list marker, else the
-// larger of 2 and its column less 3. A line the detector cannot place stays in the zone: a mistake can only remove cut
-// choices, never move a cut into a fence.
-// THE ONE RESIDUAL: a zone longer than a whole window (a container fence, a fence with a marker over 64 characters, or
-// the rest of a fence that a list item ended) is cut inside it at a line end, with no reopen and no close, and the part
-// that then starts inside it ends right after its closer, so the part cut inside it holds code the reader shows as plain
-// text, and no text after the zone is shown as code.
+// larger of 2 and its column less 3. A line the detector cannot place stays in the zone.
+// THE FIVE RESIDUAL CLASSES: this cutter is a line heuristic, not a parser, and a cut can still fall inside a fence or leave
+// a part that starts oddly. Each class below is recorded with its input in the plan's Results. P6.1 Step 0b2's
+// parser-backed cutter replaces them all.
+//   1. A fence that its list item ended, followed by a later fence at column 0: the zone takes that opener for its closer,
+//      so a cut falls inside the real fence, with no close and no reopen.
+//   2. A zone longer than a whole part (a container fence, a fence with a marker over 64 characters): it is cut inside at
+//      a line end, with no reopen and no close, so the part cut inside it shows code as plain text.
+//   3. Windows under about 60 bytes: a window that small cannot hold a fence, its added lines and a cut choice, so a cut
+//      can fall inside a fence or a zone.
+//   4. A code-point tail that starts with a fence marker: a line longer than a part is cut mid-line, and the part that
+//      starts there reads the cut-off tail as a fence line.
+//   5. A cut inside a list item, outside any fence, that starts a part with indented text: the part reads it as indented
+//      code, not as the item's paragraph.
 // Sizes are UTF-8 bytes, counted by `shared/utf8.ts` as the gate counts them; `start` and `end` are string offsets.
 // Every part, its added fence lines counted, is at most `maxBytes`. A line ends at `\n`; a `\r` before it is not part
 // of what the line is tested as, so a CRLF file cuts as an LF one does. The scan holds O(1) state: one window of at most

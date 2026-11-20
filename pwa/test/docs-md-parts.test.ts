@@ -403,6 +403,21 @@ describe('splitMarkdownParts', () => {
     }
   });
 
+  it('md parts: residual 1 (a list-ended fence, then a later fence at column 0): pinned as today\'s behaviour, which P6.1 Step 0b2 flips', () => {
+    // CommonMark ends the fence at `b` (its list item is over), so the first column-0 ``` line OPENS a fence that holds
+    // `# H` and `more`. The cutter reads that line as the closer of the list-ended fence's zone, so it cuts before `# H` as at
+    // a top-level heading, inside the real fence. 22 is the smallest maxBytes at which the text splits in two at `# H`
+    // (below it the windows are under the size the header names, and the text splits in three or more).
+    const t = '- a\n  ```js\n  x\nb\n```\n# H\nmore\n```\n';
+    const { parts } = splitMarkdownParts(t, 22);
+    checkCover(t, parts, 22);
+    expect(parts, 'a cut before `# H`, no close and no reopen').toEqual([
+      { start: 0, end: 22, continued: false, reopen: null, close: null },
+      { start: 22, end: 35, continued: false, reopen: null, close: null },
+    ]);
+    expect(t.startsWith('# H', 22)).toBe(true);
+  });
+
   it('md parts: a fence with a marker over 64 characters is cut at line ends, never mid-line, and never reopened', () => {
     const mark = '`'.repeat(70);
     const t = mark + '\n' + 'code line number\n'.repeat(60) + mark + '\n';
