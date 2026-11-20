@@ -38,7 +38,7 @@ any running workflows and subagents, for the session i'm inside of, in a useful 
 list is the left panel and the open session is the right-hand one. On a phone, the session is the whole screen.
 
 This follows the operator's ruling of the same day that the fleet list draws none of it. C46 and C47 took the counts off.
-C48, running beside this task, removes every delegation row from the fleet list.
+C48, which ran beside this task and merged on 2026-11-20 (#3096), removes every delegation row from the fleet list.
 
 Every finding below is labelled **measured** (a command or a read-only query was run and its result seen), **sourced** (read
 from the code, cited by file and symbol) or **inferred** (deduced). The data was read read-only, and each table names when.
@@ -349,10 +349,11 @@ reading, never by a guess.
 
 ## 6. Work no session owns: its home
 
-C48 removes two things from the fleet list: the unowned rows, whose one door was `Not delegated`, and the offline-coordinator
-group's lease rows whose sessions are both unlisted. Neither row ever offered `Attach to…` or `Keep worktree` for unowned
-work: `unownedControls` (`pwa/src/fleet/delegationWords.ts`) returns `Not delegated` alone, and only where the projection
-hid a lease. The first revision said otherwise, and so did the brief and C48's scope mail; review 2861 found it (F3).
+C48 (#3096, merged 2026-11-20) removed two things from the fleet list: the unowned rows, whose one door was `Not
+delegated`, and the offline-coordinator group's lease rows whose sessions are both unlisted. Neither row ever offered
+`Attach to…` or `Keep worktree` for unowned work: before C48 (at 39af0ba5be), `unownedControls` in
+`pwa/src/fleet/delegationWords.ts` returned `Not delegated` alone, and only where the projection hid a lease. C48 deleted that
+function with the rows. The first revision said otherwise, and so did the brief and C48's scope mail; review 2861 found it (F3).
 
 They get a section of the Archive screen, **Work no session owns** (Figure 5). The Archive screen already answers "what is
 sitting around". The fleet foot's existing Archived row reaches it, so the fleet list gains nothing. This is the
@@ -361,9 +362,9 @@ coordinator's call (ask 649). The section holds two kinds of row:
 | Row kind | Read from | It shows | Its acts |
 |---|---|---|---|
 | An unowned tree | `DelegationProjectionWire.unowned` (`DelegationUnownedWire`) | the project; the path, or the admin record when no path is known; the verdict word (`no owner found` or `two owners claimed it`); the workspace qualifier where it says one (`unmeasured`); the attempt time as its age (`tried 3 days ago`) | `Not delegated` only where a lease is hidden (`leaseId`), through `POST /api/leases/:lease/resolve` |
-| A lease whose parent and worker are both unlisted (C48's review 2877, F1) | `DelegationProjectionWire.leases`, where neither session is a row of the fleet list | the line and the acts exactly as main's offline-coordinator group draws them: `from <parent> · via <worker>`, raw ids where unlisted | the lease controls main gives that group (`worktreeControls`): `Keep worktree` and `Not delegated` in the states that offer them, and `Attach to…` only where its rule allows, which needs a listed parent |
+| A lease whose parent and worker are both unlisted (C48's review 2877, F1) | `DelegationProjectionWire.leases`, where neither session is a row of the fleet list | the line and the acts exactly as the offline-coordinator group drew them before C48: `from <parent> · via <worker>`, raw ids where unlisted | the lease controls `worktreeControls` gives (`pwa/src/fleet/delegationWords.ts`, kept by C48 for the session's own worktrees): `Keep worktree` and `Not delegated` in the states that offer them, and `Attach to…` only where its rule allows, which needs a listed parent |
 
-*Table 8. The two rows of the Archive section. Every word and act exists on main today.*
+*Table 8. The two rows of the Archive section. Every word and act existed before C48; the words, the lease controls and both doors are still on main, and H4 restores the unowned row's one act (`Not delegated` on a hidden lease) on its new page.*
 
 Every other lease has a session panel after C48. An activity record whose session is not listed gets no home: helpers live
 only in their own session, and the stale records are S1's and S2's work. With nothing of either kind, the section draws
@@ -582,7 +583,7 @@ home for long. H3 lands only after H2 and C48, so nothing leaves the panel befor
 
 | Task | What | Red first | Depends on |
 |---|---|---|---|
-| **H4** | Archive's "Work no session owns": unowned trees and leases with both sessions unlisted (Table 8) | Render tests: an unowned tree draws its verdict and age and offers `Not delegated` only with a `leaseId`; a both-unlisted lease draws main's line and `worktreeControls`' acts; none of either draws nothing; each act calls its existing door | C48 merged |
+| **H4** | Archive's "Work no session owns": unowned trees and leases with both sessions unlisted (Table 8) | Render tests: an unowned tree draws its verdict and age and offers `Not delegated` only with a `leaseId`; a both-unlisted lease draws the pre-C48 line and `worktreeControls`' acts; none of either draws nothing; each act calls its existing door | C48 merged |
 | **H1a** | Pure pieces: the shared types and constants, the roster's `id` kept server-side, the transcript's launch and notification facts, and `model.ts`'s decision (Figure 2), the workflow-agent exclusion and the keep | A decision table over every branch of Figure 2, the exclusion by agent type and by meta path, the keep's window for each end source of Table 6, and `agentsUnmeasured` only with a non-final helper. A mutant per branch | — |
 | **H1b** | The reads by id with the helper tier and its rotation, `lastActivityAt` on workflows, the frame and its gate, and the reducer accepting the new members | A budget test: N growing helpers cost at most `HELPER_READS_PER_TICK` reads, and rotation reaches each within `ceil(N / 6)` readings. A frame test for a session with helpers and no workflow directory. A frame test for an older server's frame without `agents`. The reducer's three reset sites keep their behaviour: `applySessionMsg`'s backlog for another transcript, the store's initial state, and `disconnect()`; on the server, `sendBacklogAndTail`'s reset of the last frame | H1a |
 | **H2** | The Helpers section in the strip and in the rail, the finished fold, the report expand, the phone layout | Render tests for Tables 4 to 6 at 360 and 1280 px. A browser test that the section moves to the rail at 1600 px and falls back when the rail is hidden. A word census: no row says `not confirmed` or `unmeasured`, and no row says `ended` without a measured end | H1b |
@@ -656,7 +657,7 @@ These are the terms this spec uses in a narrow sense.
 
 - The operator, 2026-11-19: inside the session they are in, the right-hand panel shows actual, useful information about the
   session's running workflows and subagents.
-- The operator, 2026-11-19: the fleet list draws none of it (C46, C47, and C48 beside this task).
+- The operator, 2026-11-19: the fleet list draws none of it (C46, C47 and C48).
 
 ### Waiting on you
 
