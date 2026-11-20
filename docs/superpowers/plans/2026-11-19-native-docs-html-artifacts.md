@@ -273,7 +273,7 @@ and, on duckdns only, starting the platform's DDNS update once before printing, 
 			wrap json
 			fields {
 				request>uri delete
-				request>headers>Referer delete
+				request>headers delete
 			}
 		}
 		level INFO
@@ -396,7 +396,7 @@ Each row deletes or weakens one guard; the named test must go red. Run through t
 | MX5.49 | A5.1 | In `MockupView`, render the button only when the pre-scan refused (or only when it did not) | offer: beside the walls, refused or not (`artifact-offer-view.test.tsx`) |
 | MX5.50 | A2.2 | The liveness adapter compares against the generation the session was minted at, not the measured one | store: a passphrase change ends it |
 | MX5.51 | A2.2 | Treat an absent or unusable secret as live | store: a missing secret ends it; store: an unusable secret ends it |
-| MX5.52 | A4.1 | Drop the `request>headers>Referer delete` line, or the whole global block | expose: the log filter is written |
+| MX5.52 | A4.1 | Drop the `request>headers delete` line, narrow it to one header, or drop the whole global block | expose: the log filter is written |
 | MX5.53 | A2.3 | Skip `pinHolds` and mint from whatever the tree read answered | mint: a moved pin refuses |
 | MX5.54 | A3.3 | Answer 429 instead of waiting past the in-flight limit | content: a page with many parallel loads loads whole |
 | MX5.55 | A3.3 | Prepare on every request instead of reusing the entry's snapshot id | content: a page with many parallel loads loads whole (each large file prepared once) |
