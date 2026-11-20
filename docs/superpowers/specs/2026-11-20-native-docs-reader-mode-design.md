@@ -5,7 +5,7 @@
 ## In short
 
 - **What this is.** Your request of 2026-11-19: "when reading a document via docserver I need a button to enter "reader mode" where the document becomes full-screen (think Kindle-like experience when used)". It is designed for ccrc's native Docs reader, the reader you now read in. The standalone reader is being retired and gets nothing.
-- **What reader mode is.** One button, or the `r` key, takes the open document full screen. Everything but the text goes away: ccrc's head and banners, and the reader's own bar, contents rail and Aa button. You turn one screen at a time by tapping the side of the page, swiping, or pressing an arrow key, and each turn lands on a whole line. A tap at the top shows a small overlay with how far you are and the time left, Aa and Exit. Esc, Back, the overlay's Exit and the browser's own exit all leave it, and the place you were reading is kept. It works on a phone and on a desktop (§2).
+- **What reader mode is.** One button, or the `r` key, takes the open document full screen. Everything but the text goes away: ccrc's head and banners, and the reader's own bar, contents rail and Aa button. You turn one screen at a time by tapping the side of the page, swiping, or pressing an arrow key, and each turn lands on a whole line. A tap at the top shows a small overlay with how far you are and the time left, Aa and Exit. Esc, Back, the overlay's Exit and the browser's own exit all leave it, each once, and the place you were reading is kept. It works on a phone and on a desktop (§2).
 - **What is decided.** ccrc's window owns full screen; the sandboxed frame never asks for it, and its sandbox stays `allow-scripts` with no new attribute. Where an engine refuses element full screen (the iPhone is the likely case, still to be measured), the same view fills the viewport without the browser's request (§4). Screen pages, not true book pages, is your answer to ask 656 on 2026-11-20 (§5). Reading stays one scroll underneath, so place, progress, the quick jump and change marks keep working. A screen wake lock is taken while you read, with an idle release (§6).
 - **What changes.** Two ccrc waves and one library landing. XR1 is ccrc only, on library 1.1.0: the button, full screen, the overlay, Back and the wake lock. The library landing adds the turning, the in-place hiding of the reader's chrome, a text size and one small op each way on the existing port. XR2 takes that release up (§7). Nothing widens the sandbox, the shell CSP or the set of channels.
 - **What you must check.** The phone's entry button on the one bar (§3.1) and the wake lock (§6.3), both decided here with the alternatives priced. Three departures from the rich-docs spec's closed lists are recorded as D-8803 to D-8805 (§8). The phone engines' full-screen behaviour is one device item for the coordinator to raise (§4.4); desktop Chromium was measured in part (§4.5).
@@ -157,7 +157,7 @@ This section places the button and the key, and gives every exit one model throu
 | Esc to enter | Esc leaves things. |
 
 **Who sees the key.** The frame keeps focus while you read, and its keys never reach ccrc's window (the opaque origin). So:
-- In XR1, `r` is one row in the console's shortcut registry (`pwa/src/command/commands.ts`), active on a Docs page with a ready frame while focus is in the console, for example after a tap on the head.
+- In XR1, `r` is one row in the console's shortcut registry (`pwa/src/command/commands.ts`), acting while focus is in the console, for example after a tap on the head. The registry does not apply `when` to single keys, so the row's `run` calls a handle the Docs screen sets while it is mounted (`pwa/src/docs/readerModeHandle.ts`), and does nothing where the handle is empty or reader mode is not offered.
 - From the library landing, the frame forwards `r` as a `reader` op with `act: 'toggle'`, only when the host's seed says it accepts reader mode (§7.2). The library's keys sheet then lists `r`.
 
 ### 3.3 One place, one Back
@@ -189,15 +189,19 @@ sequenceDiagram
 *Figure 2. One Back model. Entering pushes one place, Back pops it, and an exit by any other path steps back over it. The router never runs for these pops, so the page does not reload or move.*
 
 - **The place.** `docsPlace: {visit, seq, kind: 'reader'}` on an entry carrying the doc's URL unchanged, beside X2's `overlay` and `jump` places. It counts toward X2's `PLACES_MAX` of 50 per visit.
-- **The decider.** `historyPlaces.ts#decidePop` gains one answer, `{kind: 'exit-reader'}`, for a popped entry below a current-visit `reader` place. A place of another visit is skipped as X2 decides, so a stale reader place never costs a Back.
-- **User activation.** The push follows a tap or a key on ccrc's own chrome, which gives the console activation directly. Unlike X2's frame-reported places, it does not wait on lab E16.
-- **Order of exit.** Esc in browser full screen is the browser's: it leaves full screen, and the `fullscreenchange` that follows is ccrc's signal. ccrc then leaves the fill and calls `history.back()` with the expected landing recorded, as X2 does when the frame closes its own overlay. A Back that pops the place first leaves full screen through `document.exitFullscreen()`; the `fullscreenchange` that follows finds reader mode already off and does nothing. So one Esc, or one Back, is one exit, whichever order an engine fires them in. Android Back while in full screen is a device row (§4.4).
+- **The decider.** `historyPlaces.ts#decidePop` gains one answer, `{kind: 'exit-reader'; closeOverlay: boolean}`, for a popped entry below a current-visit `reader` place, however many of the frame's own places (X2's overlay and jump places) sit above it; `closeOverlay` says the pop crossed an open figure overlay. A pop that lands on or above the reader place is X2's as before: Back first closes a figure overlay or returns from a jump, then leaves reader mode. A place of another visit is skipped as X2 decides, so a stale reader place never costs a Back.
+- **Its own host.** The reader place is answered by the Docs screen's reader-mode hook, through its own slot, `setReaderPlaceHost`, beside X2's `setPlaceHost`, which the frame's mount holds. The frame's slot is empty during a remount, and X2 treats a frame place popped then as stale; the reader place must not be, because reader mode outlives the frame's remount (§4.3). One dispatcher, one decider, two hosts for two owners.
+- **User activation.** The push follows a tap or a key on ccrc's own chrome, which gives the console activation directly, and it runs before the full-screen request, because the request consumes the tap's transient activation and a pushed entry is not. Unlike X2's frame-reported places, it does not wait on lab E16.
+- **Order of exit.** Esc in browser full screen is the browser's: it leaves full screen, and the `fullscreenchange` that follows is ccrc's signal. A Back that pops the place first leaves full screen through `document.exitFullscreen()`; the `fullscreenchange` that follows finds reader mode already off and does nothing.
+- **Stepping back over the place.** An exit that did not come from a pop (Esc, Exit, the browser's exit) steps back to the entry below the reader place: `history.go(-n)`, where `n` counts the reader place and every place of the frame's above it, from the tab record's last shown index, with the landing recorded so the decider consumes it. A frame overlay open at that moment is closed by the exit itself (XR1's remount resets it, XR2 sends `close-overlay`).
+- **When full screen is lost first.** An engine may leave full screen and also traverse history on one Back (FS-3). ccrc therefore waits `READER_EXIT_SETTLE_MS` (100 ms) after a lost full screen before stepping back, then reads the tab record again: if a pop has already landed below the reader place, it steps nothing. So one Esc, or one Back, is one exit, whichever order an engine fires them in. An engine that traverses later than that is a device row (FS-3), and its residue is one Back too many, never a lost document.
+- **No place, no step.** If the visit's place budget is spent (`PLACES_MAX`), reader mode still opens, with no place; its exits then step back nothing, and Back leaves the document as it does today.
 
 | Exit | XR1 | From XR2 |
 |---|---|---|
-| Esc, browser full screen | The browser leaves full screen, ccrc follows | Same |
-| Esc, fill only, focus in ccrc's overlay | ccrc's own key handler | Same |
-| Esc, fill only, focus in the frame | Not seen: the frame's keys stay in the frame. Exit and Back remain | The frame sends `reader {act: 'exit'}` when no overlay of its own is open |
+| Esc, browser full screen | The browser owns Esc: it leaves full screen, ccrc follows and leaves reader mode, closing any open frame overlay. Esc never reaches the page here | Same |
+| Esc, fill only, focus in ccrc's overlay | The container's own key handler: hides the overlay first, a second Esc leaves | Same |
+| Esc, fill only, focus in the frame | Not seen: the frame's keys stay in the frame. Exit and Back remain | The frame closes its own open overlay first; with none open it sends `reader {act: 'exit'}` |
 | Back (button, Alt+Left, Android Back, iOS swipe) | Pops the place | Same |
 | The overlay's Exit | ccrc | Same |
 | The browser's own exit (its banner or gesture) | `fullscreenchange`, ccrc follows | Same |
@@ -229,15 +233,15 @@ flowchart TB
   end
   RC -->|"requestFullscreen on the container"| FS["Element full screen<br/>where the engine grants it"]
   RC -->|"always"| FL["The fill<br/>fixed, inset 0, safe areas"]
-  IF -->|"existing port: progress, and from XR2 the reader op"| RC
+  IF -->|"existing port: progress, and from XR2 the reading and reader ops"| RC
 ```
 *Figure 3. The reading container. Start at your tap. ccrc's element, not the frame, goes full screen, and the fill is drawn first so a refusal changes nothing you can see beyond the browser's own bars. The frame keeps its sandbox and talks to ccrc only over the existing port.*
 
 - **The reading container is always there.** An iframe moved in the DOM reloads, so reader mode never re-parents the frame. A new element, the reading container, wraps the Docs screen's body (`DocsScreen.tsx`, around `{body}`) on every Docs page, in normal view too. It carries no React key, so adding it remounts nothing. Reader mode records the document it was entered for (project or folder, section, path): a same-document remount (a new commit, a same-page link spelled with its file name) happens inside the container and keeps reader mode, and a change of document ends it.
-- **The fill comes first.** On entry ccrc sets `data-reader-mode` on the container. Its rule draws the container `position: fixed; inset: 0` over the console, on the reader's ground, inside the safe areas (`--safe-top`, `--safe-bottom`, and the side insets), at a new layer token `--z-reading` between `--z-toast` and `--z-block`. So a session-expired or update block still shows over reader mode, and nothing else does.
+- **The fill comes first.** On entry ccrc sets `data-reader-mode` on the container. Its rule draws the container `position: fixed; inset: 0` over the console, on the reader's ground, inside the safe areas (`--safe-top`, `--safe-bottom`, and the side insets), at a new layer token `--z-reading` between `--z-toast` and `--z-block`. In the fill, a session-expired or update block (`BlockScreen`, `LoginScreen`, mounted beside the app shell) still draws over reader mode. In element full screen it would not, because only the full-screen subtree draws; so either of them appearing ends reader mode, through one decision event (`block`).
 - **Then full screen, where it exists.** If `document.fullscreenEnabled` is true, ccrc calls `container.requestFullscreen({navigationUI: 'hide'})` in the same task as your tap. A rejection, or an engine without the API, leaves the fill as reader mode. ccrc never retries without a new tap.
-- **Sheets go inside.** In element full screen only the full-screen element's subtree is drawn. The sheets the frame can raise (the external-link sheet, the copy sheet, a "not loaded" chip's sheet) are portalled to the document body today, so they would open unseen. While reader mode is on, ccrc's `Sheet` primitive takes its portal target from a context the reading container provides, so these sheets open inside it. The same context serves the fill.
-- **The rest of the console is suspended.** While reader mode is on, the command layer takes no key but Esc, and the palette does not open. Toasts wait behind the container and show on exit.
+- **Sheets go inside.** In element full screen only the full-screen element's subtree is drawn. The sheets the frame can raise (the external-link sheet, the copy sheet, a "not loaded" chip's sheet) are portalled to the document body today, so they would open unseen. On a Docs page, ccrc's `Sheet` primitive always takes its portal target from a context the reading container provides, in both views, so a sheet open as reader mode starts or ends is never moved and remounted. The container creates no stacking context and no clip in the normal view, so a sheet there draws as it does today.
+- **The rest of the console is suspended.** While reader mode is on, everything outside the container is inert and hidden from assistive technology, applied with the same `hideOthers` the modal layers use and recorded through `ui/src/lib/modal-layers.ts`, so Tab never leaves the overlay and the frame for an invisible head control, and a screen reader never reads it. The command layer's single keys are held, except `r`, and Cmd or Ctrl+K does not open the palette: its branch runs before the layer's key-holding check (`useShortcuts.ts`), so that branch gains the reader-mode test itself. Esc is the container's own key handler, not the command layer's. Toasts draw behind the container and may expire unseen.
 - **The mockup frame's own Full screen** (`.docs-mockup[data-frame='full']`) is a different view, for HTML leaves, and is unchanged.
 
 | Decision | Options | Chosen, and why |
@@ -254,13 +258,16 @@ flowchart TB
 | ccrc's head, truth line, banners, the one bar, the shell's navigation | Hidden | Outside the container, covered by the fill or outside the full-screen subtree |
 | The reader's own bar, running head, progress line | Hidden | XR1: the reader-mode remount passes `features.chrome {bar: false}`. XR2: the library hides it in place |
 | The contents rail | Hidden | XR1: `rail: false` at the remount. XR2: in place |
-| The frame's Aa button | Hidden, reachable from the overlay's Aa (`command settings`) | XR1: `settings: false` only if the command still opens the menu at 1.1.0, measured in XR1 Step 0; otherwise it stays. XR2: in place |
+| The frame's Aa button | XR1: stays, because at 1.1.0 `settings: false` also unregisters the `settings` command (`enhance/settings.js`), so the overlay's Aa could not open it. XR2: hidden in place, reachable from the overlay's Aa (`command settings`) | XR1 keeps it; XR2 hides it |
 | Figure tools, Render buttons of figures not drawn yet, code copy, table filter, cards | Kept | They are the document's own controls. Figures stay on request (E17, both phone blocks unchanged) |
 | The top space above the first heading | Trimmed | `topSpace: false` |
 
 ### 4.3 XR1 enters by a remount; XR2 does not
 
-Library 1.1.0 reads its chrome switches once, at mount. So XR1 enters and leaves reader mode by remounting the same document in the same container: the same rendered document, a new `MessageChannel` and nonce, as the same-page link already does (rich-docs §4.1, D2). The place comes back from the library's own `pos` field, which the remount reads from the store snapshot. The visible cost is one frame swap, about 0.2 to 1.4 s (lab E4's srcdoc timings), and what a remount already resets: the "Changed since your last visit" notice, open folds and drawn figures. XR2 replaces the remount with the in-place `reader` op (§7.2), so entering and leaving keep the very scroll position, the drawn figures and the folds.
+Library 1.1.0 reads its chrome switches once, at mount.
+- **On a phone, no remount.** A phone's mount is already `host-bar`: the frame's bar is off and its top space trimmed, and the contents rail is a drawer. XR1 enters in place there, with nothing reloaded.
+- **On a desktop, one remount.** XR1 remounts the same document in the same container with the chrome off, through a new bridge method, `ReaderMount.remount(chrome)`: the same rendered document, a new `MessageChannel` and nonce, as the same-page link's `openAt` already does (rich-docs §4.1, D2), but with no `initialHash`, because the library lets a hash win over the stored place and the page's opening fragment must not pull you back to it. The place comes back from the library's own `pos` field. That field is written 250 ms after scrolling stops, and the host drops the old frame's messages once it is destroyed, so the remount waits until `READER_REMOUNT_QUIET_MS` (400 ms) have passed since the last `progress` message, which XR1 asks for from every production mount (D-8805). The fill is drawn at once; only the swap waits.
+- **The cost** is one frame swap, about 0.2 to 1.4 s (lab E4's srcdoc timings), and what a remount already resets: the "Changed since your last visit" notice, open folds and drawn figures. XR2 replaces the remount with the in-place `reading` op (§7.2), so entering and leaving keep the very scroll position, the drawn figures and the folds on every device.
 
 ### 4.4 Engines
 
@@ -277,6 +284,7 @@ Library 1.1.0 reads its chrome switches once, at mount. So XR1 enters and leaves
 | FS-5 | Desktop Chrome, Firefox and Safari | Granted; Esc leaves full screen and fires `fullscreenchange` (M-5) | Granted |
 | FS-6 | Every engine above | A tap in the frame after entry: keys and turns reach the frame; the external-link sheet shows inside reader mode | Holds |
 | FS-7 | iOS and Android | Wake lock granted in the tab and in the installed app; released when hidden | Granted where the engine has the API |
+| FS-8 | Desktop Chrome and one phone engine | `requestFullscreen` without a tap's activation rejects; with it, it resolves (M-1) | Holds |
 
 ### 4.5 The desktop Chromium measurement
 
@@ -293,12 +301,12 @@ Measured on 2026-11-20 on the box's own headless Chromium 156 (the browser leg's
 | M-7 | Wake lock in the console's window | Measured: `granted: screen`. Inside the frame: UNMEASURED, as M-3 |
 | M-8 | Orientation lock on a desktop | Measured: `NotSupportedError`, so §6.4's choice costs nothing there |
 
-XR1 Step 0 measures M-1 (a real click against an evaluation with no activation), M-3, M-4 and M-7's frame half in the browser leg's Playwright-driven Chrome, before any code, and records them in the plan's Results. M-5 needs a browser with its interface, so it joins the device item as FS-5.
+XR1 Step 0 measures M-3, M-4 and M-7's frame half in the browser leg's Playwright-driven, headless Chrome, before any code, and records them in the plan's Results. The leg cannot measure the rest: Playwright evaluates with a user gesture, so M-1's refusal without activation joins the device item as FS-8, and Esc needs a browser with its interface, so M-5 joins it as FS-5. The leg's "refused full screen" rows stub `requestFullscreen` to reject.
 
 ### 4.6 Phone blocks, budgets and safe areas
 
 - **Both 2026-11-06 phone blocks stay byte for byte.** Reader mode changes no Mermaid draw and no lab reading; no phone block is reused as evidence for it.
-- **The one bar.** One more tool of 44 by 44 px. The bar stays 44 px tall, the title stays at most 61 px down with at most 48 px of that the console's, and every tool keeps the 44 px floor, at 412 by 915 and at 915 by 412 (`pwa/browser/docs-compact-head.browser.test.ts`). The title's width falls by 44 px; at 360 px wide a plan's bar holds back, four tools and a title of about 140 px.
+- **The one bar.** One more tool of 44 by 44 px. The bar stays 44 px tall, the title stays at most 61 px down with at most 48 px of that the console's, and every tool keeps the 44 px floor, at 412 by 915 and at 915 by 412 (`pwa/browser/docs-compact-head.browser.test.ts`). The title's width falls by 44 px; at 360 px wide a plan's bar holds back, four tools and a title of about 116 px, after the screen's and the title's padding.
 - **The desktop head.** The row stays one line and the head at most 80 px at 1280 by 800, with a new 1920 by 1080 row.
 - **In reader mode.** Every overlay control is at least `--tap-min` (44 px). The overlay's top strip sits below `--safe-top`, its bottom strip above `--safe-bottom`, and the text inside the side insets. The fill's ground is the reader's ground, X1's `bg` slot while hosted, so the insets do not show as bands.
 
@@ -310,7 +318,7 @@ This section designs the reading model you chose in ask 656 on 2026-11-20, scree
 
 | Model | What you see | Library change | ccrc change | Risk |
 |---|---|---|---|---|
-| Calm scroll | Continuous scroll, nothing turns | None for XR1; the `reader` op for in-place chrome | XR1 alone | Least; also least like a Kindle |
+| Calm scroll | Continuous scroll, nothing turns | None for XR1; the `reading` op for in-place chrome | XR1 alone | Least; also least like a Kindle |
 | **Screen pages (chosen)** | A turn moves one screen and lands on a whole line; one scroll underneath | A turn engine of about 6 to 10 thousand characters, inside the frame (§7.3) | XR2 adds the setting | Low: position, progress, jumps and change marks are unchanged, because the frame still scrolls |
 | True book pages | Fixed pages with a count, laid out in columns | A paged layout of about 25 to 45 thousand characters, re-plumbing position, progress, the quick jump, `hash` jumps, scroll-spy and change marks | XR2 and a new progress model | Highest: WebKit multicolumn fragmentation, wide tables and long code against a horizontal swipe, figures taller than a page, re-pagination when a figure draws on tap |
 
@@ -361,12 +369,12 @@ flowchart TB
 | ArrowLeft, PageUp, Shift+Space | Back | Native |
 | ArrowUp, ArrowDown, Home, End | Native scroll | Native |
 | `r` | Leave reader mode | Leave |
-| Esc | Closes the frame's own open overlay first; with none open, leaves reader mode | Same |
+| Esc | In browser full screen, the browser's: it leaves reader mode (§3.3). In the fill, the frame's own open overlay closes first; with none open, reader mode ends | Same |
 
 - **A tap** is a primary pointer up within 10 px and 500 ms of its down. A long press is not a tap.
 - **Interactive targets** are named by one selector list in the library: `a[href]`, `button`, `summary`, `input`, `select`, `textarea`, `label`, `[role="button"]`, `[tabindex]`, the figure tools, the table filter, cards and menus. Mermaid's Render button is a button, so a tap on it draws the figure and never turns.
 - **The top band** is the same in both settings, so you always know where the overlay is. It sits inside the frame, so it is the library's to draw nothing on and to report; ccrc draws the overlay.
-- **XR1, before the library landing,** has no turns and no frame-side band. ccrc draws its own top band as a transparent strip, 44 px tall, over the top of the frame; a tap or a hover on it shows the overlay. The text under it scrolls into reach. XR2 removes the strip when the frame accepts the `reader` op, so one mechanism reports the band at a time.
+- **XR1, before the library landing,** has no turns and no frame-side band. ccrc draws its own top band as a transparent strip, 44 px tall, over the top of the frame; a tap or a hover on it shows the overlay. The text under it scrolls into reach. XR2 removes the strip when the frame's seed accepts reader mode, so one mechanism reports the band at a time.
 
 ### 5.5 Figures, tables, code and Mermaid
 
@@ -382,8 +390,8 @@ flowchart TB
 
 ### 5.6 Progress, time left and the place
 
-- **Progress** is the library's existing `progress` op, unchanged (§1.1). XR1's reader-mode remount passes `onProgress`, so it arrives on a desktop too. From XR2 every production mount passes it (D-8805).
-- **Time left** needs the document's reading time, which today lives only in the frame's DOM. The library landing adds it to `render()`'s `meta`, computed by the library's own rule (230, 520, half a minute a figure), so the byline and the overlay always agree and ccrc never copies the rule. ccrc's parse worker already runs `render()`, so the value arrives with the document. The overlay shows `minutes × (1 − share)`, rounded to whole minutes, "about 12 min left", and "less than a minute left" below one. XR1 shows the percentage alone.
+- **Progress** is the library's existing `progress` op, unchanged (§1.1). From XR1 every production mount passes `onProgress`, so it arrives on a desktop too, and its arrival times the desktop remount (§4.3, D-8805).
+- **Time left** needs the document's reading time, which today lives only in the frame's DOM. The library landing adds it to `render()`'s `meta`, computed by the library's own rule (230, 520, half a minute a figure), so the byline and the overlay always agree and ccrc never copies the rule. ccrc's parse worker already runs `render()`, so the value arrives with the document. The overlay computes `minutes × (1 − share)`; below one minute it says "less than a minute left", otherwise it rounds to whole minutes, "about 12 min left". XR1 shows the percentage alone.
 - **The place** is the library's `pos` field, already per document and per device (§1.1). Reader mode adds nothing: leaving keeps the place, and reopening the document later, in either view, returns to it. Reader mode itself is not remembered: a document always opens in the normal view, because full screen needs a tap (Later).
 
 ## 6. Comfort
@@ -394,7 +402,7 @@ This section covers typography, motion, the wake lock, orientation and focus.
 
 - **Appearance is ccrc's,** through X1's contract: the frame's colours, faces, focus ring and code wells follow ccrc's skin and palette while hosted. Reader mode adds no palette, catalogue or token list.
 - **Width and font stay reader-local,** as X1 keeps them: Aa's `width` (`standard` or `wide`) and `font` (`serif` or `sans`).
-- **Text size is new and reader-local.** The library landing adds `size: s | m | l | xl` to the frame's prefs, default `m`, today's 18 px, with `s` 16 px, `l` 20 px and `xl` 22 px, scaling `--rem` with it so headings and the measure follow. It is a row in Aa and is stored under `ccrc:reader:v1:` like width and font. It applies in both views: one setting, one writer.
+- **Text size is new and reader-local.** The library landing adds `size: s | m | l | xl` to the layout's own stored prefs (enhance's `PREF_VALUES`, as the lens is), not to the host's `FRAME_PREF_VALUES`, so the parent-to-frame `prefs` op does not widen: ccrc never sends a size. Default `m`, today's 18 px, with `s` 16 px, `l` 20 px and `xl` 22 px, scaling `--rem` so headings and the measure follow. It is a row in Aa, stored under `ccrc:reader:v1:` with width and font. It applies in both views: one setting, one writer, the frame.
 - **The measure** is the library's `--measure`, 52 rem for serif and 42 rem for sans, centred. Reader mode does not widen it on a large screen; "wide" in Aa does.
 
 ### 6.2 Motion
@@ -420,9 +428,10 @@ Reader mode never locks orientation (`screen.orientation.lock` stays unused): yo
 
 ### 6.5 Focus order and screen readers
 
-- **On entering,** focus moves into the frame, so its keys work at once, and a polite live region in ccrc says "Reader mode. Esc or Back leaves it."
+- **On entering,** focus moves into the frame, so its keys work at once: at once where nothing remounts (a phone in XR1, every device in XR2), and on the new mount's `ready` after XR1's desktop remount, through a new `ReaderMount.focus()`. A polite live region in ccrc says "Reader mode. Esc or Back leaves it."
 - **The overlay** is a `role="toolbar"` region named "Reader mode", not a modal: Exit, the turn setting, Aa, then the progress text, which is not focusable. Showing it moves focus to Exit. Tab past Aa returns to the frame. Esc on the overlay hides it and returns focus to the frame, without leaving reader mode.
-- **On leaving,** focus returns to the control that entered, or to the frame when it was the key.
+- **On leaving,** focus returns to the frame (after XR1's desktop remount, on its `ready`): the control that entered may not exist yet, because the head draws its reader controls only once the frame is ready again.
+- **Behind it,** the console is inert and hidden from assistive technology while reader mode is on (§4.1).
 - **Screen pages and screen readers.** A turn only scrolls, so a screen reader's own reading order and navigation are untouched. A turn announces nothing, because the text is what the reader reads next.
 - **The progress text** is a `role="status"` region updated at most once a second.
 
@@ -436,40 +445,43 @@ This section names every new op, the paged reading, its size share under the lib
 |---|---|---|
 | The reader-mode decisions: may it enter, which exit cause does what, attempt full screen or not, the idle rule, time left | `pwa/src/docs/reader/readerMode.ts` (new) | L1 |
 | Its words: the labels, the live sentence, the time-left phrases | `pwa/src/docs/reader/readerModeWords.ts` (new) | L1 |
-| The hook: the fill, full screen, `fullscreenchange`, the wake lock, the place push, focus | `pwa/src/docs/useReaderMode.ts` (new) | L4 |
+| The hook: the fill, full screen, `fullscreenchange`, the wake lock, the place push, focus, inert; visibility through the page clock (`lib/pageClock.ts`, the one `visibilitychange` owner) | `pwa/src/docs/useReaderMode.ts` (new), called by `DocsScreen.tsx` above the head, so the head and the body share it | L4 |
+| The reading container element | `pwa/src/docs/DocsReading.tsx` (new) | L4 |
+| The handle the `r` command calls | `pwa/src/docs/readerModeHandle.ts` (new) | L4 |
 | The overlay | `pwa/src/docs/ReaderModeOverlay.tsx` (new) | L4 |
 | The reading container | `pwa/src/screens/DocsScreen.tsx`, around the body | L4 |
 | The entry action and the one-bar control | `DocsHead.tsx` (`ActionsRow`, `OneBarControls`); whether to offer it is `readerMode.ts`'s | L4 |
 | The `r` command | `pwa/src/command/commands.ts` | L1 table |
-| The `reader` place kind and `exit-reader` | `pwa/src/lib/historyPlaces.ts` (X2 P5.3's decider) | L1 |
+| The `reader` place kind, `exit-reader` and the reader-place host slot | `pwa/src/lib/historyPlaces.ts` (X2 P5.3's decider), `pwa/src/lib/popstate.ts` (the slot) | L1, L4 |
 | The sheet portal target | `ui/src/primitives/sheet.tsx` and a context | L4 |
 | `--z-reading` | `ui/src/styles/tokens.css` | L0 style |
-| The mount: chrome off and `onProgress` for a reader-mode mount (XR1), the `reader` op and `onReader` (XR2) | `reader/bridge.ts`, `reader/policy.ts#readerMountPlan` | L3, L1 |
+| The mount: `onProgress` for every production mount, `remount(chrome)` and `focus()` (XR1), the `reading` op and `onReader` (XR2) | `reader/bridge.ts`, `reader/policy.ts#readerMountPlan` | L3, L1 |
 
-Every decision is in L1 and every act in L4 (CLAUDE.md, decide in L1, act in L4). The fill, the full-screen request and the wake lock are one hook; no second listener of any kind is added for history (X2's dispatcher) or keys (the command registry).
+Every decision is in L1 and every act in L4 (CLAUDE.md, decide in L1, act in L4). The fill, the full-screen request and the wake lock are one hook; no second listener is added for history (X2's dispatcher, with a second host slot for a second owner), keys (the command registry), visibility (the page clock) or the hiding of the console (the modal layers' `hideOthers`). The wake lock has one decider, `wakeLockWanted`, re-read on every state change.
 
 ### 7.2 The library: ops
 
-Both ops ride the existing port, the existing host parser and `BRIDGE_LIMITS`; the bridge's version stays 1, as when `mermaid`, `command` and `progress` were added. Neither adds a channel, a window listener, parent-DOM access or a CSP source.
+Two ops ride the existing port, the existing host parser and `BRIDGE_LIMITS`; the bridge's version stays 1, as when `mermaid`, `command` and `progress` were added. They carry two names, one per direction, as `changes` and `changes.result` do, because `OP_KEYS` is the one table both parsers read, keyed by `t`: one name for both directions would let each parser accept the other direction's key. Neither adds a channel, a window listener, parent-DOM access or a CSP source.
 
-| Op | Direction | Payload | Check | Effect |
+| Op | Direction | Payload, and its `OP_KEYS` row | Check | Effect |
 |---|---|---|---|---|
-| `reader` | parent to frame | `{mode}`, one of `screens`, `scroll`, `off` | The frame's port parser, through `FRAME_ACCEPTS`; an unknown mode is ignored | The frame hides or restores its bar, rail, settings button and top space in place, and turns screen pages on or off. `DocFrame.setReader(mode)` queues it before `ready`, latest wins, and seeds a later remount |
-| `reader` | frame to parent | `{act}`, one of `menu`, `exit`, `toggle` | The host parser: a closed set, no other key; at most 4 a second, coalesced | ccrc's `onReader(act)` callback. Sent only when the seed's `bridge.reader` is true, which the library sets when the host passes `onReader`; so a 1.1 host never counts it as refused |
+| `reading` | parent to frame | `{mode}`, one of `screens`, `scroll`, `off`; `reading: ['t', 'mode']` | The frame's port parser, through `FRAME_ACCEPTS`; an unknown mode is ignored | The frame hides or restores its bar, rail, settings button and top space in place, and turns screen pages on or off. `DocFrame.setReading(mode)` queues it before `ready`, latest wins, and seeds a later remount |
+| `reader` | frame to parent | `{act}`, one of `menu`, `exit`, `toggle`; `reader: ['t', 'act']` | The host parser: a closed set, no other key | ccrc's `onReader(act)` callback. Sent only when the seed's `bridge.reader` is true, which the library sets when the host passes `onReader`; so a 1.1 host never counts it as refused |
 
+- **Pacing in the frame, not refusal in the host.** `BRIDGE_LIMITS` has no per-op rate for this, and it closes the port after 16 refused messages (`refusalsToClose`), so a host that refused fast taps would bring the frame down to the plain view. The frame paces `reader` itself, as it paces `progress`: a new protocol constant, `readerWindowMs: 250`, leading edge, the latest act of a window at its end. A well-paced frame is therefore never refused, and taps at ten a second never close the bridge (a library case).
 - `menu` is a tap on the top band. `exit` is Esc with no overlay of the frame's own open, or `r`, while reader mode is on. `toggle` is `r` while it is off. The frame never sends a URL or a position; ccrc decides what each act does.
-- The library's `features.chrome` stays as it is for a mount; the `reader` op is the in-place switch for an open frame.
+- The library's `features.chrome` stays as it is for a mount; the `reading` op is the in-place switch for an open frame.
 
 ### 7.3 The library: the rest
 
 | Change | Where in the library | Compatibility |
 |---|---|---|
-| The turn engine (§5.3), tap zones and the top band (§5.4), the swipe and the keys, active only in `screens` mode | enhance, a new module beside `nav` and `position` | Inert unless the host sends `reader {mode: 'screens'}` |
-| In-place reading chrome | enhance and the stylesheet, a `data-reading` root attribute | Inert unless the host sends the op |
+| The turn engine (§5.3), tap zones and the top band (§5.4), the swipe and the keys, active only in `screens` mode | enhance, a new module beside `nav` and `position` | Inert unless the host sends `reading {mode: 'screens'}` |
+| In-place reading chrome | enhance and the stylesheet, a `data-reading` root attribute | Inert unless the host sends `reading` |
 | `r` and Esc forwarded; `r` in the keys sheet | `keys.js`, `keysheet.js` | Only when the seed accepts reader |
-| Text size, `size: s \| m \| l \| xl`, an Aa row | `FRAME_PREF_VALUES`, the stylesheet's `--rem` | Additive pref; an absent size reads as `m` |
+| Text size, `size: s \| m \| l \| xl`, an Aa row | enhance's own stored prefs (`PREF_VALUES`, beside the lens), the stylesheet's `--rem` | Additive stored pref; the `prefs` op is unchanged; an absent size reads as `m` |
 | Reading time in `render()`'s `meta` | render | Additive field; not a frame asset |
-| Conformance and browser cases: a turn lands on a whole line in a fixture of known line boxes; a tap on a link, a selection, a Render button and a swipe in a wide table never turn; reduced motion; the op's parser rows | the library's suites | New cases |
+| Conformance and browser cases: a turn lands on a whole line in a fixture of known line boxes; a tap on a link, a selection, a Render button and a swipe in a wide table never turn; reduced motion; both ops' parser rows; taps at ten a second never close the bridge | the library's suites | New cases |
 
 ### 7.4 Size: this design's share under test 8
 
@@ -478,7 +490,7 @@ Test 8 (X1 spec §10, as X4 amended it) keeps one growth row per landing that ch
 | Part | Comparator, measured in 1.1.0 | Estimate, characters |
 |---|---|---|
 | The turn engine, tap zones, swipe and keys | `nav` 5 997 (jumps, anchors, the token) | 8 192 |
-| The `reader` op both ways, in-place chrome, `r` and Esc forwarding | `commands` 594 and `overlays` 855 | 2 048 |
+| The `reading` and `reader` ops, in-place chrome, `r` and Esc forwarding | `commands` 594 and `overlays` 855 | 2 048 |
 | Text size and its Aa row | a settings-menu row; no module measured alone | 1 536 |
 | Bundle growth | 11 776 times the bundling factor 0.952 | 11 211 |
 | The bootstrap's parser rows for two op directions | X2's proxy for its rows, 2 329 for more ops | 1 280 |
@@ -489,7 +501,7 @@ Test 8 (X1 spec §10, as X4 amended it) keeps one growth row per landing that ch
 - **Total share: 59 392 characters.** The enhance modules are shared by every layout, and X2's landing brings five (default and four), so X6's bundle growth lands in each: 11 211 times 5, plus the bootstrap and stylesheet once, 59 383, rounded up.
 - The render's reading time is not a frame asset, so test 8 does not count it; it is reported beside the row.
 - **The shares are a ceiling.** If the landing measures above either, the library wave stops and asks the coordinator with its rows. It never raises its own share.
-- **Test 9.** `FRAME_ACCEPTS` gains `reader`, and `FRAME_OPS` gains `reader`: one entry appended to test 9's record in this landing.
+- **Test 9.** `FRAME_ACCEPTS` gains `reading`, and `FRAME_OPS` gains `reader`, two disjoint names: one entry appended to test 9's record in this landing.
 
 ### 7.5 Waves
 
@@ -513,33 +525,35 @@ This section checks reader mode against every wall and records what it departs f
 |---|---|
 | Sandbox exactly `allow-scripts` | No attribute is added to the frame; the frame never requests full screen or a wake lock |
 | Shell CSP `frame-src 'none'` | No new frame, no navigation, no source |
-| No parent-DOM access, no new channel | The two `reader` ops ride the existing port and parser |
+| No parent-DOM access, no new channel | The `reading` and `reader` ops ride the existing port and parser |
 | No window `message` listener | None added; keys go through the command registry, history through X2's dispatcher |
 | Phishing inside the frame | ccrc's overlay and sheets stay ccrc's chrome. In reader mode the frame fills the screen, so a document can draw a fake "Exit" or a fake sign-in box; the real Exit is the overlay's, Esc and Back always work, the browser's own full-screen banner names the site, and the frame still cannot send anything out (`form-action 'none'`, `default-src 'none'`) |
-| A frame spamming `reader` | Coalesced, at most 4 a second, inside `BRIDGE_LIMITS`. `menu` toggles a toolbar; `exit` ends reader mode, which is what Esc does; `toggle` while off is refused by ccrc's decision unless the frame is ready and holds focus, so a frame cannot pull you into reader mode while you are elsewhere; and entering from a frame's `toggle` asks for full screen only when ccrc's own window holds transient activation as the op arrives (`navigator.userActivation.isActive`, which a key press in the frame may or may not give its parent: lab E16, per engine), otherwise the fill alone. A reader place pushed without activation may be skipped by Chromium's Back; the decider's rule, a pop below a current reader place exits reader mode, covers that landing too |
+| A frame spamming `reader` | A well-behaved frame paces it (`readerWindowMs`); a hostile one that does not is refused message by message like any other op and closes its own port at 16 refusals, which is the existing wall. `menu` toggles a toolbar; `exit` ends reader mode, which is what Esc does; `toggle` while off is refused by ccrc's decision unless the frame is ready and holds focus, so a frame cannot pull you into reader mode while you are elsewhere; and entering from a frame's `toggle` asks for full screen only when ccrc's own window holds transient activation as the op arrives (`navigator.userActivation.isActive`, which a key press in the frame may or may not give its parent: lab E16, per engine), otherwise the fill alone. A reader place pushed without activation may be skipped by Chromium's Back; the decider's rule, a pop below a current reader place exits reader mode, covers that landing too |
 | A frame holding the screen on | It cannot: the wake lock is ccrc's, with the idle release |
 | History | ccrc builds every entry; one reader place per entry, bounded by X2's 50 per visit |
+| Blocks in full screen | The block and sign-in screens draw outside the full-screen subtree, so either appearing ends reader mode (§4.1) |
+| The hidden console | Inert and hidden from assistive technology while reader mode is on, so nothing behind the fill takes focus or speaks (§4.1) |
 
 **Departures, defined in the leaf plan** (issued block 8803 to 8805):
 - **D-8803:** the overlay's Aa sends `command settings` from ccrc's reader-mode overlay, not only "from a tap on ccrc's own bar" (rich-docs §4.4's `command` row).
-- **D-8804:** the new `reader` op in each direction, against rich-docs §4.4's closed lists of parent messages ("`prefs`, `changes.result`, `mermaid` or `command`") and of frame ops.
-- **D-8805:** ccrc asks for `progress` from a reader-mode mount in XR1, and from every production mount in XR2, against the `progress` row's "ccrc asks only for a frame mounted on its own bar".
+- **D-8804:** the new `reading` op (to the frame) and `reader` op (from it), against rich-docs §4.4's closed lists of parent messages ("`prefs`, `changes.result`, `mermaid` or `command`") and of frame ops.
+- **D-8805:** ccrc asks for `progress` from every production mount, from XR1, against the `progress` row's "ccrc asks only for a frame mounted on its own bar".
 
 ## 9. Testing and proof
 
 This section says how each part is proved; the plan carries the rows.
 
 - **Unit (jsdom):** the decisions table of `readerMode.ts` (every exit cause by state); the decider's `exit-reader` answers and stale reader places; the wake lock's request, release and idle release under a fake clock; time left at 0, 0.5 and 1 and below a minute; the one-bar tool table; the command row; the sheet's portal target in and out of reader mode.
-- **Browser (the `browser (pwa)` leg, desktop Chromium):** the button and `r` enter; the container goes full screen and the frame does not reload (one `load`); refused full screen leaves the fill covering the console; Esc, Back and Exit each leave with exactly one history entry consumed; the external-link sheet shows inside reader mode; the head and one-bar budgets at 412 by 915, 915 by 412, 1280 by 800 and 1920 by 1080; no `allowfullscreen` or `allow` on the reader frame (beside the mockup frame's existing row).
+- **Browser (the `browser (pwa)` leg, headless desktop Chrome):** the button and `r` enter; the container goes full screen and the frame does not reload (one `load`); refused full screen (`requestFullscreen` stubbed to reject) leaves the fill covering the console; Back and Exit each leave with exactly one history entry consumed, a jump inside reader mode included; the external-link sheet shows inside reader mode; Tab never reaches the head while reader mode is on; the head and one-bar budgets at 412 by 915, 915 by 412, 1280 by 800 and 1920 by 1080; no `allowfullscreen` or `allow` on the reader frame (beside the mockup frame's existing row).
 - **Library (its own suites, the landing):** the cases of §7.3, test 8's row and test 9's entry.
-- **Device item (F):** FS-1 to FS-7 (§4.4) and the acceptance row below.
+- **Device item (F):** FS-1 to FS-8 (§4.4), Esc and activation among them, which the headless leg cannot prove, and the acceptance row below.
 - **Mutation rows:** each guard ships with a row that a deletion reds (the plan's Mutation rows).
 
 **Acceptance: a proposed row for completion Task 17.**
 
 | Row | Installed action and observation |
 |---|---|
-| Reader mode | On the installed release: open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. FS-1 to FS-7 recorded per engine |
+| Reader mode | On the installed release: open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. FS-1 to FS-8 recorded per engine |
 
 ## 10. Decisions
 
@@ -562,7 +576,10 @@ Technical choices are the worker's, each argued above; the one product choice wa
 | R13 | Text size | A new reader-local pref, four steps | Proposed |
 | R14 | Wake lock | Taken, with a 5 minute idle release | Proposed |
 | R15 | Orientation | Never locked | Proposed |
-| R16 | Entry in XR1 | A remount with the chrome off; in place from XR2 | Proposed |
+| R16 | Entry in XR1 | In place on a phone; on a desktop one remount with the chrome off, after scrolling settles and with no opening hash; in place everywhere from XR2 | Proposed |
+| R17 | Op names | `reading` to the frame, `reader` from it, paced in the frame | Proposed |
+| R18 | The console behind reader mode | Inert and hidden from assistive technology, through the modal layers' mechanism | Proposed |
+| R19 | Blocks in full screen | End reader mode | Proposed |
 
 ## 11. Promise delta
 
@@ -582,7 +599,7 @@ none - design of a reading view of the native Docs reader programme; acceptance 
 
 ### Waiting on you
 
-- **The device item** (§4.4, FS-1 to FS-7): the phone engines' full-screen behaviour, raised by the coordinator. Nothing in XR1's code waits on it: the fill is the path wherever full screen is refused.
+- **The device item** (§4.4, FS-1 to FS-8): the phone engines' full-screen behaviour, raised by the coordinator. Nothing in XR1's code waits on it: the fill is the path wherever full screen is refused.
 - Two choices made here are worth your glance, though neither waits on you: the phone's button as the last tool of the one bar (§3.1), and the wake lock with its 5 minute idle release (§6.3).
 
 ### Later
