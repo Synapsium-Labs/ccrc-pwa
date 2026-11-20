@@ -90,7 +90,8 @@ to run 2838 and defined in the plan's "Deviations found".
   from L1. `advance.ts` is untouched.
 - **stamp-checks-the-pane.** Review 2875 F5: an asleep or stopped stamp is checked against `sessionVerdict` once. A
   failed kill can leave a live pane under the stamp. `gone` needs the pane proved gone. A live pane is read like any
-  awake worker. A pane tmux could not answer for is `unmeasured`.
+  awake worker. A pane tmux could not answer for is `unmeasured`. The hibernation census (`hibernate-census.test.ts`)
+  records the second tmux-verdict read in `turnverdict.ts` with its reason.
 - **same-reading-as-decideSleep.** Review 2875 F4, a stated departure from "every reading that cannot be made keeps the
   run counted". Two readings are the sleep lane's own (`sleep.ts`), not fail-closed. A frame row whose `subagents` is
   null ("no fresh hook data") reads as no subagents. `workerReadingOf` does not require the marker's `state === 'done'`.
