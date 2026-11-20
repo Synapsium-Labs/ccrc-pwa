@@ -153,7 +153,7 @@ request-local buffer sent as the op's stdin only, zeroed after, never in argv, a
 The verb reuses the root installer unchanged in what it checks. It adds the steps a coordinator does by hand today.
 
 1. **Preflight, read-only.** Over ssh: root or working sudo (C2); `/etc/os-release` equal to the fleet host's
-   distribution release; systemd new enough for `NFTSet=`; nftables present; `CCRC_TESTBOX_ROOT`'s parent on XFS with
+   distribution release; systemd new enough for `NFTSet=`; nftables present; `CCRC_TESTBOX_ROOT` (or, while it does not exist, its nearest existing ancestor) on XFS with
    `reflink=1`; the private-network address the fleet reached (from the box's own `SSH_CONNECTION`) is an IP literal;
    open egress to the release host and the npm upstream; no installed release with another tag. Each failed check is
    a code with a sentence. ccrc never formats a disk and never joins the box to a private network (C10, C11).

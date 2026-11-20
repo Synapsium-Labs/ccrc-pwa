@@ -2319,12 +2319,14 @@ describe('the programme box\'s hues (Task G2)', () => {
     }
   });
 
-  it('measures the kicker on the tint and the workers\' slugs on the surface, through the stylesheet, in every palette', () => {
+  it('measures the kicker on the tint, the workers\' slugs and the coordinator\'s badge on the surface, through the stylesheet, in every palette', () => {
     for (const h of PROG_HUES) {
       for (const [key, pair] of [
         [`.pg-kicker [as .pg-kicker[data-hue='${h}']]`, 'var(--pg) on var(--pg-tint)'],
         [`.pg-tray [data-hue='${h}'] .sess-pw-prog [in .pg-tray]`, `var(--prog-${h}) on var(--bg-surface)`],
         [`.pg-elsewhere [data-hue='${h}'] .sess-pw-prog [in .pg-elsewhere]`, `var(--prog-${h}) on var(--bg-surface)`],
+        // D-8817: the coordinator's badge in its programme's hue, on the coordinator band's ground, the card's surface.
+        [`.pg-box[data-hue='${h}'] .pg-coord .sess-role [in .pg-coord]`, `var(--prog-${h}) on var(--bg-surface)`],
       ] as const) {
         const rows = rowsFor(key);
         expect(rows, key).toHaveLength(THEME_COUNT);

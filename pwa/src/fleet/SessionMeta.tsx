@@ -27,11 +27,11 @@
 // *:not(:first-child)::before` punctuates this row's cells from the parent
 // rule — the shape moves, the ground stays.
 import type { CSSProperties, ReactNode } from 'react';
-import { WARN_GLYPH } from '@ccrc/ui';
+import { RoleBadge, WARN_GLYPH } from '@ccrc/ui';
 import { programmeWaveTail, type ChildRunContext } from './runWords';
 import { GraphChip, LastSpawnChip } from './chips';
 import {
-  PROGRAMME_BUDGET, cardFacts, heldWords, markers, shortenByToken, type Fact, type MarkerKey, type SessionFactSet,
+  COORDINATOR_BADGE, PROGRAMME_BUDGET, cardFacts, heldWords, markers, shortenByToken, type Fact, type MarkerKey, type SessionFactSet,
 } from './sessionFacts';
 import { buildText } from './buildWords';
 import './fleet.css';
@@ -173,8 +173,9 @@ export function SessionMeta({
         </span>
         {(glance.role !== null || context !== null) && (
           <span className="sess-meta sess-meta--context" style={metaStyle}>
-            {/* D-8142: a coordinator's role, first on the context line; the middot rule separates it from the context. */}
-            {glance.role !== null && <span className="sess-role" title={glance.role.title}>{glance.role.text}</span>}
+            {/* D-8142: a coordinator's role, first on the context line; the middot rule separates it from the context.
+                D-8817: drawn as the badge, never the word. */}
+            {glance.role !== null && <RoleBadge {...COORDINATOR_BADGE} className="sess-role" />}
             {context}
           </span>
         )}

@@ -4059,6 +4059,25 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
+  // The waiting workers' sleep (waiting workers spec 2026-11-19, Part 2; D-8790): the seed row `working-idle-sleep` =
+  // `shadow` adds the case's switch to the Shadow lanes card. Shadow, the run-done sleep lane logs a dispatched worker on a
+  // `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else, and `OR IGNORE`: a file that already carries the row (a database rolled back below this
+  // entry with its rows kept, as a test rebuilds one) keeps the stored choice and migrates, where a plain INSERT would
+  // refuse to start on the lane's primary key. An older build opening a file at this entry's version takes rule 3 (it
+  // warns, reads as-is and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`; door B1 took 110 first, so this entry moved up to
+  // 111; approvals PR 3 builds on the slots after 110 too, so whoever lands second moves up. RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  `,
+
+  // ── 112: user_version 111 -> 112 ──────────────────────────────────────────
   // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186, D-8800), four nullable columns on
   // `linear_migrations` (migration 95's table, which no build before this one writes): `project`, the ccrc project whose team
   // this migration reshapes (its Linear owner proposes the map, and the console's row reads its state); `report`, what the report
@@ -4067,8 +4086,8 @@ export const MIGRATIONS: readonly string[] = [
   // for put back (the migration lane runs it, never the act); `reportDoneAt`, when the operator closed the report (the next team
   // may start only then, §10.2). One writer, `planStore.ts#setMigration`. FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build
   // opening a file at this `user_version` takes rule 3 and never names them. The slot is the next free one by position: the
-  // session hook's reports (110) are the last on main, so this is 111, renumbered at landing if another lands first (D-8673).
-  // RE-MEASURE the slot before the PR and before merge (it must print 110 before this entry is counted):
+  // lane-arm row of waiting workers (111) is the last on main, so this is 112, renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 111 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

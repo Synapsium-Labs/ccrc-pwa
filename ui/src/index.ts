@@ -54,6 +54,8 @@ export { ListRow, LIST_ROW, type ListRowProps } from './primitives/list-row';
 export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/cover-screen';
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
+// A session's role as a picture with its accessible name, where the word stood (desktop polish C50, D-8817).
+export { RoleBadge, ROLE_BADGE, type RoleBadgeProps } from './primitives/role-badge';
 export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
 // A link inside a line of text, opening another site (D-5550).
 export { TextLink, TEXT_LINK, type TextLinkProps } from './primitives/text-link';

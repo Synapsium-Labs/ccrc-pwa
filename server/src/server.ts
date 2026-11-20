@@ -1994,7 +1994,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       if (decision.verdict === 'refused') {
         // Per reason, what to do or what to expect; never the message.
         const detail = 'lane' in decision
-          ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" `
+          ? `: the server box's roster row for lane ${decision.lane} must exist and carry exec.kind "codex" or telemetry "anthropic" `
             + '(the server decides from the roster it holds)'
             + (deps.cfg.fleetMode === 'remote'
               ? '; copy the fleet box\'s whole accounts.json over this server box\'s accounts.json, '

@@ -403,8 +403,8 @@ number from `POST /api/ledger/deviations`.
 - **D-8800 (2026-11-20)** — migration-columns: a third schema migration for this programme (the Global Constraints name two),
   four nullable columns on `linear_migrations`: `project` (the ccrc project whose team is reshaped), `report` (the report's
   lists as JSON), `putBackAskedAt` (the operator's Put back, run by the lane) and `reportDoneAt` (the report closed; the next team
-  may start only then, §10.2). Its slot is 111 on this branch (`main` took 110 first) and is renumbered at landing if another
-  migration lands first. One writer, `planStore.ts#setMigration`. Record: the wave 7 note (the coordinator's ruling on review
+  may start only then, §10.2). Its slot is 112 on this branch (`main` took 110 and 111 first) and is renumbered at landing if
+  another migration lands first. One writer, `planStore.ts#setMigration`. Record: the wave 7 note (the coordinator's ruling on review
   2892 A5, mail of 2026-11-20).
 
 ## Global Constraints

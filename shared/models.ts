@@ -297,6 +297,7 @@ export {
   MODELS_DIR_NAME,
   registryFileName,
   catalogueFileName,
+  aliasesFileName,
   laneClassModels,
   MODELS_PUSH_MAX,
   modelsPushOf,
