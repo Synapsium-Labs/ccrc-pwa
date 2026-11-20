@@ -113,6 +113,16 @@
    row would push the header past the screen's edge; with it, the row keeps the list's width, its free-text part ends in
    an ellipsis and its other words wrap whole (`.proj-work-part`, fleet.css; D-7783). */
 .chat-facts .sess-entries { flex-basis: 100%; min-width: 0; }
+/* D-8782 (review 2864 F6): the session's worktrees, the entries list's twin in the same row: a full-width flex item with a
+   minimum of 0, for the same reason. Its rows carry chips, controls and an alert sentence, and without these one long path
+   or word would push the header past the screen's edge, or the section would shrink to nothing in a nowrap rail. */
+.chat-facts .sess-worktrees { flex-basis: 100%; min-width: 0; padding: var(--sp-1); }
+/* The padding is the focus ring's room: the controls' box draws a ring 4px outside itself (2px outline, 2px offset), and
+   Refined's phone rail scrolls sideways, so it clips whatever it holds at its own edge: a ring on a box flush with that edge
+   was cut (measured in a real Chrome at 360 and 390, review 2864 F4). */
+/* A worktree row WRAPS, as a card's row does (`.proj-nest > .proj-work`, fleet.css): its chips and controls drop under its words
+   rather than squeezing the words to nothing or pushing the row past the screen's edge (measured in a real Chrome). */
+.chat-facts .sess-worktrees > .proj-work { flex-wrap: wrap; }
 /* D-5546, phone: the keycaps took ~170 of 360px beside the title, leaving the
    name, the coordination row and the meta row a 140px column that ellipsised
    the name and broke every clause. Below 900 the back button and the keycaps

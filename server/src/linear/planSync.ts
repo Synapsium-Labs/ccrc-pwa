@@ -901,6 +901,8 @@ export class PlanSync {
   keyReadAnswered(workspaceId: string): void { this.attempts.delete(`read|${workspaceId}`); }
   /** Until when a workspace's refused key holds every write lane there (0: not held). */
   keyBlockedUntil(workspaceId: string): number { return this.blockedUntil.get(workspaceId) ?? 0; }
+  /** The installer's private tracker keys: the one list every write's public-text check reads (the inbound close's re-check asks here). */
+  privateKeys(): readonly string[] { return this.deps.privateTrackerKeys; }
 
   /** When a workspace is free for this programme again: the later of its key's refusal and its step failure's hold (0: free). */
   private releaseOf(slug: string, ws: string): number {

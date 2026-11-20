@@ -18,7 +18,6 @@ import { substrateFault, type FleetSession } from '../../../shared/api';
 import type { FleetRow } from './nestFleet';
 import type { FleetTreeGroup } from './fleetTree';
 import { rowStateWord } from './sessionFacts';
-import { delegationParts } from './delegationWords';
 
 /** A project whose last change is younger than this is active (rule 2). */
 export const ROLLUP_RECENT_MS = 30 * 60_000;
@@ -47,12 +46,12 @@ export type RolledRow =
 
 /** One count of a coordinator's worker line: `5 workers`, `1 needs you`. */
 export interface CountedPart { readonly n: number; readonly word: string }
-/** One part of a fold line: a count of workers, or, with no `n`, a bare word for rows the line does not count
- *  (`delegated`, `worktrees`, D-8771). */
-export type SummaryPart = CountedPart | { readonly n?: undefined; readonly word: string };
+/** One part of a fold line: a count of workers. (A bare word for rows the line does not count, `delegated` or `worktrees`,
+ *  went with those rows: the fleet list draws no delegation row, D-8782.) */
+export type SummaryPart = CountedPart;
 
 /** A part as the line draws it: the one spelling, shared by the fold line, the programme box's footer and the row's text. */
-export const partWords = (p: SummaryPart): string => (p.n === undefined ? p.word : `${p.n} ${p.word}`);
+export const partWords = (p: SummaryPart): string => `${p.n} ${p.word}`;
 
 export interface CardRollup {
   readonly cls: ActivityClass;
@@ -92,16 +91,8 @@ export function nextRollupBoundary(sessions: readonly FleetSession[], now: numbe
   return next;
 }
 
-/** A coordinator's worker children (W) and its delegation children (D: delegated work and worktrees,
- *  delegation broker wave 4). */
+/** A coordinator's children are its workers: a session or a spawn. No delegation row is one (D-8782). */
 export type WorkerRow = Extract<FleetRow, { kind: 'session' | 'pending' }>;
-type DelegatedRow = Extract<FleetRow, { kind: 'activity' | 'lease' }>;
-export const isWorker = (r: FleetRow): r is WorkerRow => r.kind === 'session' || r.kind === 'pending';
-const isDelegated = (r: FleetRow): r is DelegatedRow => r.kind === 'activity' || r.kind === 'lease';
-
-/** A head's delegated work and worktrees as words (`delegated`, `worktrees`, uncounted: D-8771), its other children left
- *  out: the summary line's tail, and a programme box's footer's (`footerWords`), so the two never word them differently. */
-export const delegatedWords = (rows: readonly FleetRow[]): string[] => delegationParts(rows.filter(isDelegated)).map(partWords);
 
 /** A child's word in the summary line: the row's own state word (`rowStateWord`), `needs you` for an
  *  operator-facing ask. Asked of W only. */
@@ -116,8 +107,7 @@ const childWord = (row: WorkerRow): string => {
 const WORD_ORDER = ['needs you', 'working', 'waiting', 'done', 'idle', 'merged', 'asleep', 'exited', 'archived', 'spawning'];
 
 /** A coordinator's worker line, as counts in drawing order: the total, then each state word. A programme box's
- *  footer counts its hidden workers with it (Task G2), so the two never word a worker differently. Asked of W only
- *  (delegation broker wave 4): delegation rows are named, not counted, by `delegationParts` (D-8771). */
+ *  footer counts its hidden workers with it (Task G2), so the two never word a worker differently. */
 export function summaryParts(children: readonly WorkerRow[]): CountedPart[] {
   const counts = new Map<string, number>();
   for (const c of children) counts.set(childWord(c), (counts.get(childWord(c)) ?? 0) + 1);
@@ -128,11 +118,7 @@ export function summaryParts(children: readonly WorkerRow[]): CountedPart[] {
 /** Rules 6 and 7 over one card's rows: each coordinator with `CHILD_FOLD_MIN` children or more gets one summary line;
  *  folded, only its operator-facing children and the open session stay under it.
  *
- *  Delegation broker wave 4: W is a head's worker children and D its delegation children. It folds when EITHER
- *  reaches `CHILD_FOLD_MIN`, so worktrees appearing beside a lone worker never hide that worker: folded, W keeps
- *  today's filter only when W itself would have folded, else all of W stays, and D hides. The line is today's worker
- *  counts (only when W is non-empty), then the words `delegated` and `worktrees` with no number (D-8771), never sorted into `WORD_ORDER`. A
- *  delegation group header is not a session head, so its members pass through unfolded. */
+ *  The line is the worker counts (`summaryParts`). A delegation row is no child of a head (D-8782), so none folds. */
 function foldChildren(rows: readonly FleetRow[], open: ReadonlySet<string>, selectedId: string | null): RolledRow[] {
   const out: RolledRow[] = [];
   let i = 0;
@@ -142,18 +128,16 @@ function foldChildren(rows: readonly FleetRow[], open: ReadonlySet<string>, sele
     i += 1;
     const kids: FleetRow[] = [];
     while (i < rows.length && rows[i]!.depth === 1) kids.push(rows[i++]!);
-    const w = kids.filter(isWorker);
-    const d = kids.filter(isDelegated);
-    if (head.kind !== 'session' || (w.length < CHILD_FOLD_MIN && d.length < CHILD_FOLD_MIN)) {
+    const w = kids;
+    if (head.kind !== 'session' || w.length < CHILD_FOLD_MIN) {
       out.push(...kids);
       continue;
     }
     const expanded = open.has(head.session.id);
-    const parts = [...(w.length > 0 ? summaryParts(w) : []), ...delegationParts(d)];
+    const parts = summaryParts(w);
     const text = parts.map(partWords).join(' · ');
     out.push({ kind: 'summary', depth: 1, parentId: head.session.id, expanded, total: kids.length, parts, text });
-    const kept = w.length < CHILD_FOLD_MIN ? w
-      : w.filter((k) => k.kind === 'session' && (operatorAsk(k.session) || k.session.id === selectedId));
+    const kept = w.filter((k) => k.kind === 'session' && (operatorAsk(k.session) || k.session.id === selectedId));
     out.push(...(expanded ? kids : kept));
   }
   return out;
