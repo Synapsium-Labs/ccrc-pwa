@@ -565,12 +565,13 @@ runs list. **Rollback.** A plain revert; the server field stays and is unread.
 **R132:** each live programme's coordinator declares its plan at its next wave boundary, which is the first one after
 WM0, WM1, WM3 and WM4 have landed. So this task merges after WM4, and its Step 2 is the act.
 
-**Files:** Modify `ccd/coordinator-skill/references/plan.md` and `ccd/coordinator-skill/references/api.md`. The skill's
+**Files:** Modify `ccd/coordinator-skill/references/plan.md` and `ccd/coordinator-skill/references/api.md`, and
+`server/test/coordinator-plan-reference.test.ts`, which Step 1b edits (review 2740 F6). The skill's
 `SKILL.md` clauses are pinned verbatim by
 `server/test/coordinator-skill.test.ts`, so this task changes the reference file only, and names only verbs whose
 client row and route exist when it merges (the rule the hierarchy's Task 6.1 pins).
 
-- [ ] **Step 1:** Add a section to `references/plan.md`: the programme page's Work card is drawn from this plan. A
+- [x] **Step 1:** Add a section to `references/plan.md`: the programme page's Work card is drawn from this plan. A
   coordinator declares its epics and tickets (the work) and its phases (the sequence), each phase referencing the epics
   and tickets it takes on; records a slip with `plan phase-ref` and `op: 'carry'`; adds a ticket (`plan ticket-add`) in
   the same act that adds the task to its plan file; names the ticket at `runs open` (`ticket-required` in a phased plan,
@@ -579,7 +580,7 @@ client row and route exist when it merges (the rule the hierarchy's Task 6.1 pin
   `evidence-unverified`, each with its recovery, and adds `ticket-required` with its recovery to `references/api.md`, so
   `coordinator-skill.test.ts`'s pin of the plan-added run refusals in both files goes from five to six (F8 of review
   2268); Files gains `ccd/coordinator-skill/references/api.md`.
-- [ ] **Step 1b:** In the same act that names `evidence-unverified` in `references/plan.md`, delete WM1's `NOT_MET` row
+- [x] **Step 1b:** In the same act that names `evidence-unverified` in `references/plan.md`, delete WM1's `NOT_MET` row
   for `evidence-unverified` in `server/test/coordinator-plan-reference.test.ts` (and `ticket-done` from its
   `WORK_MAP_VERBS` once the verb is documented), so the test checks the word and the verb from then on; the row does not
   go red by itself when the word is named (D-8727, `evidence-unverified-not-met-until-wm5`).
@@ -590,7 +591,7 @@ client row and route exist when it merges (the rule the hierarchy's Task 6.1 pin
   that did it, as `references/plan.md` now says. The run that did it verifies when its own ticket is that ticket, an
   auto ticket or none (spec §4.1, review 2375 F2). Each coordinator's declaration and back-fill is its own act, not a
   PR, recorded in its own ledger note; a ticket whose evidence does not verify stays open (spec §4.1).
-- [ ] **Step 3:** Run
+- [x] **Step 3:** Run
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
 - [ ] **Step 4: Commit** — `docs(coordinator): declare and keep the plan, so the programme page shows what remains`.
 
@@ -887,6 +888,24 @@ Task WM4 departs under its own number:
   list before this task edited it, then this task's own claim 5899.
   The task note (`docs/superpowers/programs/desktop-polish/wm4.md`) gives each case, the mutants, the test runs, what was seen in Chrome and the
   carries from review 2891.
+
+- **D-8844** — `work-map-wm5-build`: Task WM5 (desktop polish run 2969), issued on 2026-11-20. The coordinator reference declares and keeps the
+  plan, so the programme page shows what remains. A rules-and-docs task: the new last section of `references/plan.md` ("Keep the plan: the
+  programme page shows what remains"), WM1's `evidence-unverified` row and the work-map verbs out of the reference test's skip lists, and no product
+  code. The build departs from the plan's text in these ways, each named by slug: `api-md-already-six`, Step 1 asks for `ticket-required` in
+  `references/api.md` and the pin of the plan-added run refusals to go from five to six, and both were already true on `main` (`ticket-required`
+  came with WM6's follow-ups, #3088, and the pin reads six), so `api.md` is not edited and the carried wording of its lines 20 to 41 and of
+  `plan.md`'s lines 4 and 14 to 34 was read against `planGate` and `epicForOpen` and found true, but for one clause in `plan.md`'s ticket sentence ("unless
+  `ticket-required` refuses it"), the only text change to that part; `work-map-verbs-empty`, the brief removes `ticket-done` from `WORK_MAP_VERBS`,
+  and `phase-ref`, whose row is on `main` and which the same section documents, leaves it too, so the set is empty and the verb check covers both;
+  `closed-table-pin`, `server/test/ccrc-api-closed.test.ts` is in no task's Files, and its sorted list of the corpus's client commands gains
+  `plan.phase-ref` and `plan.ticket-done`, which the new section is the first to run; `section-examples-parse`, one new case in
+  `coordinator-plan-reference.test.ts` parses the new section's `plan put`, `phase-ref` and `ticket-done` examples as the routes parse them, as the `plan take`
+  examples already are; and `step-2-left-open`, Step 2 (the notice to every live coordinator) is the desktop-polish coordinator's after this merges, and
+  stays unticked. Held by another's claim, each with that worker's consent by mail on 2026-11-20 for exactly this task's lines: `plan.md`,
+  `coordinator-plan-reference.test.ts` and `ccrc-api-closed.test.ts`, claims 5967 and 5954 (Linear hierarchy wave 7, run 2846). The plan was held by the
+  ended WM4 session's claim 5899, which lapsed at 15:40Z, then this task's claim 6032. The task note
+  (`docs/superpowers/programs/desktop-polish/wm5.md`) gives each carried line read against the code, the mutant and the test runs.
 
 ## Where things stand
 
