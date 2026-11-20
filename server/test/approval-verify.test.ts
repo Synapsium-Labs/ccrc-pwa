@@ -159,6 +159,14 @@ describe('approval-verify: record v2 (approvals PR 3v)', () => {
     expect(verdictFor({ record: twelve, sig: sign(null, Buffer.from(canonical(twelve) as string, 'utf8'), ours.priv).toString('base64') },
       expected, ours.pub)).toBeNull();
   });
+  it('case 9b: a record that says v: 2 with only v1\'s ten fields (the server\'s older-or-forged shape) prints nothing', () => {
+    const ten = { ...record(), v: 2 } as unknown as Record<string, unknown>;
+    expect(recordBytes(ten)).toBeNull();
+    for (const bytes of [canonical(ten), approvalRulingBytes(ten as unknown as ApprovalRulingRecord)]) {
+      expect(verdictFor({ record: ten, sig: sign(null, Buffer.from(bytes as string, 'utf8'), ours.priv).toString('base64') },
+        expected, ours.pub)).toBeNull();
+    }
+  });
   it('case 10: a v2 record signed by another key prints nothing', () => {
     expect(verdictFor(sv2(v2(), theirs.priv), expected, ours.pub)).toBeNull();
   });
