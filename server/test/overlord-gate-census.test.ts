@@ -9,7 +9,7 @@
 // its `insertCardRead` calls), and stops on `refused` the same way (review 2803 F3, N7). A new Overlord door that forgets the
 // call, names another row, goes on after a refusal or reads the store first turns this red.
 //
-// The scan reads every file an `overlord` row may name (the four files `overlord-doors-census.test.ts` lists) and refuses a row
+// The scan reads every file an `overlord` row may name (the five files `overlord-doors-census.test.ts` lists) and refuses a row
 // naming any other (review 2803 F5). The runner call is told from the account gate's `deps.gate(req, reply, { … })` by its
 // third argument: a string literal is the runner's row key, an object literal is the account gate's, which is not scanned.
 //
@@ -18,7 +18,7 @@
 // (an identifier is refused, not followed), a gate call reached through a helper inside the handler (the call must be a
 // top-level `const g = await gate(…)` statement of the handler), and a store reached through a name other than `coord`
 // (every door reads the store through the `coord` local or `deps.coord`; a differently named alias would pass the
-// "before the store" arm), and a row naming a file outside the four (refused by the subset test, not followed). It reads literal `app.get|post|put|delete('<path>', …)` calls with the repo's one parser wrapper
+// "before the store" arm), and a row naming a file outside the five (refused by the subset test, not followed). It reads literal `app.get|post|put|delete('<path>', …)` calls with the repo's one parser wrapper
 // (`scan/parse.ts`), as the other censuses do.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -32,8 +32,9 @@ const CONTINUITY = 'server/src/continuity/routes.ts';
 const OVERLORD_ROUTES = 'server/src/coord/overlordRoutes.ts';
 const LEDGERS_ROUTES = 'server/src/coord/ledgersRoutes.ts';
 const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
-/** The files an `overlord` row may name: the same four `overlord-doors-census.test.ts` reads. */
-const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES] as const;
+const LINKING_ROUTES = 'server/src/linking/routes.ts';
+/** The files an `overlord` row may name: the same five `overlord-doors-census.test.ts` reads (D-8809 added the linking file). */
+const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES] as const;
 const sourceOf = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
 
@@ -222,14 +223,14 @@ describe('every overlord door asks the one gate, with its own row, before the st
     expect(record[0]!.getStart()).toBeLessThan(calls[0]!.getStart());
   });
 
-  it('every overlord row names a scanned file, and the scan covers the four files a row may name (F5)', () => {
+  it('every overlord row names a scanned file, and the scan covers the five files a row may name (F5)', () => {
     const files = new Set(Object.values(OVERLORD_DOORS).filter((r) => r.group === 'overlord').map((r) => r.file));
     expect(files.size).toBeGreaterThan(0);
     for (const f of files) expect(SCANNED as readonly string[], f).toContain(f);
   });
 
   for (const file of SCANNED.filter((f) => f !== CONTINUITY)) {
-    it(`${file}: any overlord-group row it holds is checked as the continuity file's are (none today)`, () => {
+    it(`${file}: any overlord-group row it holds is checked as the continuity file's are (the linking file's link-team today)`, () => {
       const text = sourceOf(file);
       // Non-vacuity: the file is scanned and registers doors.
       expect(registrationsIn(text, file).length).toBeGreaterThan(0);
@@ -248,6 +249,12 @@ describe('every overlord door asks the one gate, with its own row, before the st
       for (const c of calls) expect(record[0]!.getStart(), write).toBeLessThan(c.getStart());
     }
     expect(stopViolations(record[0]!, 'card/card-record', null)).toEqual([]);
+  });
+
+  it('D-8809: the linking file registers the link-team door, which holds the form (a zero would make its loop case vacuous)', () => {
+    const rows = overlordRowsOf(LINKING_ROUTES);
+    expect([...rows.entries()]).toEqual([['POST /api/linking/confirm', ['link-team']]]);
+    expect(violationsOf(sourceOf(LINKING_ROUTES), LINKING_ROUTES)).toEqual([]);
   });
 
   it('the whole continuity file is clean, over every overlord row', () => {

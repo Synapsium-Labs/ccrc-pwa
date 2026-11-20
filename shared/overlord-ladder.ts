@@ -83,6 +83,8 @@ const RUNG_CELL_MAP = {
   read: { chat: 'allow', advise: 'allow', full: 'allow' },
   'write-note': { chat: 'allow', advise: 'allow', full: 'allow' },
   acknowledge: { chat: 'allow', advise: 'allow', full: 'allow' },
+  // D-8809: the Overlord confirms one team candidate for a project, a call made in the operator's name: at `full` only.
+  'link-team': { chat: 'refuse', advise: 'refuse', full: 'allow' },
 } as const satisfies Readonly<Record<string, Readonly<Record<Exclude<Rung, 'off'>, 'allow' | 'refuse'>>>>;
 export type LadderActKind = keyof typeof RUNG_CELL_MAP;
 export const LADDER_ACT_KINDS = Object.keys(RUNG_CELL_MAP) as LadderActKind[];

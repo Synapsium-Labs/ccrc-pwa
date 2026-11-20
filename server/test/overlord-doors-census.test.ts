@@ -20,7 +20,9 @@ const OVERLORD_ROUTES = 'server/src/coord/overlordRoutes.ts';
 const CONTINUITY_ROUTES = 'server/src/continuity/routes.ts';
 const LEDGERS_ROUTES = 'server/src/coord/ledgersRoutes.ts';
 const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
-const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES] as const;
+// D-8809: the Overlord's team link door (`link-team`) is registered in the linking file.
+const LINKING_ROUTES = 'server/src/linking/routes.ts';
+const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES] as const;
 /** Table 11.1d's server words (the later waves' words join here when their pieces land). */
 const SERVER_WORDS = ['continuity-v1', 'timers-v1', 'overlord-v1'];
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
@@ -114,6 +116,8 @@ describe('the table itself', () => {
     expect(rows.map(([k]) => k)).toEqual([
       'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear', 'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
       'card', 'card-record', 'notes-write', 'notes-read', 'handover', 'probe-read', 'probe-answer',
+      // D-8809: the Overlord's team link, the first Overlord door of class `other`.
+      'link-team',
     ]);
   });
 });

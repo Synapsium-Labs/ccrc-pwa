@@ -2,7 +2,16 @@
 // `coord/linkingStore.ts` is the table. Task 2 registers the operator's write; the session's read and the template
 // pull request join it in this file. Task 3 adds the session's read, `GET /api/linking`; Task 5 the template pull request.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { LinkingShowAnswer, TeamSuggestionAnswer } from '../../../shared/linking.js';
+import type { LinkingShowAnswer, TeamCandidateWire, TeamConfirmAnswer, TeamConfirmBody, TeamSuggestionAnswer } from '../../../shared/linking.js';
+import { teamEvidenceClause } from '../../../shared/linking.js';
+import { LINEAR_TEAM_KEY_SHAPE, isLinearUuid } from '../../../shared/linear.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
+import { isWsProject } from '../../../shared/slug.js';
+import type { Bus } from '../bus.js';
+import type { NoticeSink } from '../notice.js';
+import { CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_TEXT_MAX, CALL_WHY_MAX, callBodyOf } from '../coord/coordCalls.js';
+import { announceBigCall } from '../coord/coordCallsRoute.js';
+import type { overlordGateRun } from '../coord/overlordGateRun.js';
 import type { AttributionRead } from '../coord/openRun.js';
 import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
@@ -13,6 +22,7 @@ import type { CcdArgv } from '../ccdargv.js';
 import type { CcdResult } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import { withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
+import { autoLinkAllowed } from './teamLink.js';
 import { parseLinkingWrite, parseTeamSuggestion, suggestionReasonVerdict, workspaceAfterWrite } from './policy.js';
 import { routableSlots, routableTeams, routeProjectTeam } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
@@ -37,6 +47,13 @@ export interface LinkingRouteOpts {
   readLinearStore?: () => Promise<LinearStoreRead>;
   /** The installer's private tracker keys (`CCRC_PRIVATE_TRACKER_KEYS`), which a suggestion's reason may not name. */
   privateTrackerKeys?: readonly string[];
+  /** D-8809: the Overlord gate's runner (`overlordGateRun`, built once in `server.ts`). Absent: the confirm refuses `unavailable`. */
+  gate?: ReturnType<typeof overlordGateRun>;
+  /** D-8809: the big call's feed notice and the Waiting-on-you rebuild (`announceBigCall`). Absent: neither is raised. */
+  notice?: NoticeSink;
+  bus?: Bus;
+  /** The server's build stamp the call records, as the call record's route records it; null where the build carries none. */
+  build?: string | null;
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -48,8 +65,54 @@ const TOKEN_DETAIL = {
   unconfigured: 'no box token is configured on this server: this lane fails shut, it does not fail open',
 } as const;
 
+const CONFIRM_KEYS = ['byId', 'byUuid', 'project', 'team', 'workspace'];
+
+/** D-8809: the confirm's body, closed: `byId`, `byUuid`, `project` (`isWsProject`), `team` (the Linear key shape, uppercased)
+ *  and `workspace` (a slot id, `isLinearUuid`, or null for a candidate stored without one; required). A refusal names the field
+ *  (`body` for the shape as a whole). Beside `parseTeamSuggestion`'s rules; it moves into `policy.ts` when that file is claimed. */
+function confirmBodyOf(body: unknown): { ok: true; value: TeamConfirmBody } | { ok: false; field: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return { ok: false, field: 'body' };
+  const o = body as Record<string, unknown>;
+  if (Object.keys(o).some((k) => !CONFIRM_KEYS.includes(k))) return { ok: false, field: 'body' };
+  const { byId, byUuid, project, team, workspace } = o;
+  if (typeof byId !== 'string' || !IDENTITY_RE.test(byId)) return { ok: false, field: 'byId' };
+  if (typeof byUuid !== 'string' || !IDENTITY_RE.test(byUuid)) return { ok: false, field: 'byUuid' };
+  if (typeof project !== 'string' || !isWsProject(project)) return { ok: false, field: 'project' };
+  if (typeof team !== 'string' || !LINEAR_TEAM_KEY_SHAPE.test(team.toUpperCase())) return { ok: false, field: 'team' };
+  if (workspace !== null && !isLinearUuid(workspace)) return { ok: false, field: 'workspace' };
+  return { ok: true, value: { byId, byUuid, project, team: team.toUpperCase(), workspace: workspace as string | null } };
+}
+
+/** One line of at most `max` characters: whitespace runs folded, a longer text cut with an ellipsis. */
+const line = (text: string, max: number): string => {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+};
+/** A candidate as the call names it: the team's NAME and its workspace's display NAME, never a key. */
+const teamPhrase = (c: TeamCandidateWire): string => line(c.workspaceId === undefined ? c.name
+  : `${c.name} in ${c.workspaceName ?? 'a workspace whose name is unknown'}`, CALL_OPTION_MAX);
+
+/** D-8809: the call body of the Overlord's link, in the call record's own shape (`callBodyOf` reads it as the call route reads a
+ *  coordinator's): a big, reversible call naming the project, the team and workspace by name, and the candidate's evidence. The
+ *  options are the project's current candidates (each once, the chosen one kept) and leaving it unlinked. */
+function linkCallBody(project: string, chosen: TeamCandidateWire, candidates: readonly TeamCandidateWire[]): Record<string, unknown> {
+  const pick = teamPhrase(chosen);
+  const others = [...new Set(candidates.map(teamPhrase))].filter((p) => p !== pick).slice(0, CALL_OPTIONS_MAX - 2);
+  return {
+    class: 'big', reversible: true,
+    question: line(`Which Linear team does ${project} link to?`, CALL_TEXT_MAX),
+    options: [pick, ...others, line(`Leave ${project} unlinked`, CALL_OPTION_MAX)], chosen: pick,
+    why: line(`The Overlord linked it on its evidence: ${teamEvidenceClause(chosen.evidence)}.`, CALL_WHY_MAX),
+  };
+}
+
 export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOpts): void {
   const now = opts.now ?? Date.now;
+  // A server built without the Overlord gate (a test, a script) refuses the confirm: it never links ungated.
+  const gate: ReturnType<typeof overlordGateRun> = opts.gate ?? (async (_req, reply) => {
+    void refuseRoute(reply, 'unavailable', { detail: 'this server has no Overlord gate' });
+    return { kind: 'refused' };
+  });
 
   /**
    * `POST /api/projects/:project/linking`: the operator sets a project's Linear team key and visibility override. NOT in
@@ -174,6 +237,59 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
       if (wrote === 'no-project') return refuseRoute(reply, 'no-project');
       if (wrote === 'team-set') return refuseRoute(reply, 'team-set');
       const answer: TeamSuggestionAnswer = { ok: true, project: s.project, suggestion: stored };
+      return answer;
+    } catch (err) {
+      return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /**
+   * `POST /api/linking/confirm` (D-8809): the Overlord confirms one of a project's CURRENT team candidates (the pass's or a
+   * coordinator's suggestion, matched by key and workspace), which links that team as a call made in the operator's name. A
+   * box-token machine lane (an `auth/gate.ts` EXEMPT entry) and an Overlord door (`overlordDoors.ts`'s `link-team` row): the
+   * token first (never the cookie), then the body's shape, then THE GATE (every step of the order: the Overlord alone, at the
+   * `full` rung; below it `rung-below`, any other session `not-the-overlord`), then the store, the row (`no-project`, 404), the
+   * pass's own rule (`autoLinkAllowed`: a key stored or the operator's decision is `team-set`), the pair (`team-unknown`), then
+   * the call and the link in ONE transaction (`linkTeamOverlord`), whose rule refuses a row that changed meanwhile (`team-set`).
+   * The big call is announced as the call record's route announces one (`announceBigCall`). The operator overturns it with their
+   * own write, which makes the key `manual`. The 200 is the link and the call's id only, never the project's row.
+   */
+  app.post('/api/linking/confirm', {
+    config: { rateLimit: { max: 1200, timeWindow: '1 minute' } },
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(opts.mailToken?.() ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/linking/confirm');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const parsed = confirmBodyOf(req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: parsed.field });
+    const c = parsed.value;
+    const g = await gate(req, reply, 'link-team', { sessionId: c.byId, uuid: c.byUuid, uuidField: 'byUuid' });
+    if (g.kind === 'refused') return reply;
+    // `others: 'refuse'` on the row: the gate never serves this door in the hook's group.
+    if (g.kind !== 'pass') return refuseRoute(reply, 'unavailable', { detail: 'the gate did not pass the call' });
+    const store = opts.coord;
+    if (store === undefined) return refuseRoute(reply, 'unavailable');
+    try {
+      if (!store.linkingAll().has(c.project)) return refuseRoute(reply, 'no-project');
+      const row = store.linkingOf(c.project);
+      if (!autoLinkAllowed(row.teamKey, row.teamLink?.source ?? null)) return refuseRoute(reply, 'team-set', { detail: 'the project has a key, or the operator decided it' });
+      const candidates = row.teamCandidates ?? [];
+      const chosen = candidates.find((x) => x.key === c.team && (x.workspaceId ?? null) === c.workspace);
+      if (chosen === undefined) return refuseRoute(reply, 'team-unknown', { detail: 'the pair is not one of the project\'s current candidates' });
+      const at = now();
+      const call = callBodyOf(linkCallBody(c.project, chosen, candidates), at);
+      if (!call.ok) return refuseRoute(reply, 'write-failed', { detail: call.detail });
+      const workspaceId = chosen.workspaceId ?? null;
+      const callId = store.linkTeamOverlord(c.project, { key: chosen.key, name: chosen.name, evidence: chosen.evidence, workspace: workspaceId },
+        { program: LINEAR_SYNC_PROGRAMME, madeBy: c.byId, call: call.call, build: opts.build ?? null }, at);
+      if (callId === null) return refuseRoute(reply, 'team-set', { detail: 'the project got a key, or the operator decided it, meanwhile' });
+      if (opts.notice !== undefined && opts.bus !== undefined) announceBigCall({ notice: opts.notice, bus: opts.bus }, LINEAR_SYNC_PROGRAMME, callId, call.call);
+      const answer: TeamConfirmAnswer = {
+        ok: true, project: c.project, callId,
+        link: { key: chosen.key, teamName: chosen.name, workspaceId, workspaceName: workspaceId === null ? null : (chosen.workspaceName ?? null), evidence: chosen.evidence },
+      };
       return answer;
     } catch (err) {
       return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });

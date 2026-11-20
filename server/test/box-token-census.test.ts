@@ -285,7 +285,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Programme work map WM1: POST /api/programmes/:slug/plan/tickets/done (`plan ticket-done`), a box-token lane in the plan file: ninety-two machine lanes in all.
   'ninety-two',
   // D-8808: POST /api/linking/suggest, a coordinator's suggestion of a team, a box-token lane in the linking file: ninety-three machine lanes in all.
-  'ninety-three'];
+  'ninety-three',
+  // D-8809: POST /api/linking/confirm, the Overlord's confirm of a team candidate, a box-token lane in the linking file: ninety-four machine lanes in all.
+  'ninety-four'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -433,8 +435,9 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
       'POST /api/programmes/:slug/spec',
     ]);
-    // …and the linking standard's two (D-8147 the session's read, D-8808 the coordinator's suggestion), by name; the operator's write beside it is no lane.
-    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking', 'POST /api/linking/suggest']);
+    // …and the linking standard's three (D-8147 the session's read, D-8808 the coordinator's suggestion, D-8809 the Overlord's
+    // confirm), by name; the operator's write beside it is no lane.
+    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking', 'POST /api/linking/suggest', 'POST /api/linking/confirm']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
     expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'POST /api/sessions/:id/act-key', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',

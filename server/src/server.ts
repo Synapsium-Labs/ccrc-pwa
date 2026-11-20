@@ -2207,15 +2207,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     managed: (w, t) => deps.plan?.managedTeams().some((m) => m.workspaceId === w && m.teamKey.toUpperCase() === t.toUpperCase()) ?? false,
     boundIssue: (w, i) => deps.plan?.issueBound(w, i) ?? false,
   });
-  // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
-  registerLinkingRoutes(app, {
-    coord: deps.coord, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
-    mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
-    readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
-    runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
-    privateTrackerKeys: deps.cfg.privateTrackerKeys,
-  });
   // The caller identity port (Overlord W1 gates A, §3.6 H2): its one adapter, over the readers the continuity routes take.
   const identity = attributionIdentity({
     attribute: (id, uuid, field) => attributionVerdict(deps.io, deps.cfg, id, uuid, field),
@@ -2242,6 +2233,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     witness: () => ({ kind: 'unmeasured', why: 'the witness report is not built' }), recordWitness: () => {},
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
+  });
+  // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project, and (D-8809)
+  // the Overlord's confirm of a team candidate behind the gate above.
+  registerLinkingRoutes(app, {
+    coord: deps.coord, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
+    mailToken: () => deps.mailToken ?? null,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
+    privateTrackerKeys: deps.cfg.privateTrackerKeys, gate, notice, bus, build: deps.build?.version ?? null,
   });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
