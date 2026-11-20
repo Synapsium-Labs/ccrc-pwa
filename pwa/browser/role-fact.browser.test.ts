@@ -402,8 +402,10 @@ describe('D-8834: the header\'s role badge sits on the title line, after the nam
 // difference on the title line, and a worker draws none) WHERE THE BADGE HAS ROOM: when the name's last line leaves less than the
 // glyph's width and gap before the column's edge, the glyph needs a line the worker's name did not, and the header is taller by
 // that one line; nothing can change that short of drawing the glyph over the doors. The text is replaced in the page (the
-// head text node and the glue's own character), so the markup around it is the app's own.
-describe('D-8834: the badge never sits alone on a line (a name-length sweep)', () => {
+// head text node and the glue's own character), so the markup around it is the app's own. THE RULE, as the coordinator ruled it
+// (2026-11-20, fix round 1): the badge never sits alone on a line, and a coordinator's header is taller than a worker's only where
+// the name's last line has no room for the glyph. The sweep asserts both halves.
+describe("D-8834: the badge never sits alone on a line, and a coordinator's header is taller than a worker's only where the name's last line has no room for the glyph (a name-length sweep)", () => {
   for (const { skin, theme, width } of [INSTRUMENT, REFINED].flatMap((skin) =>
     THEMES.flatMap((theme) => [360, 390, 1280].map((width) => ({ skin, theme, width }))))) {
     it(`${skin}, ${theme}, ${width}px: names of 1 to 130 characters, words and one token`, async () => {

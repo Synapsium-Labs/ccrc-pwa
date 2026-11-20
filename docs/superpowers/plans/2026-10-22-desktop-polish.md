@@ -4470,15 +4470,7 @@ break-word`'s emergency break inside it, as the ruling asks, and the badge follo
 
 **The cost, and what the sweep can and cannot say.** A coordinator's title is plain text, never a `TypedLabel`: the label's one text
 node and its `role="img"` root cannot hold a box that spans its last character and a sibling, so a rename of a coordinator's name no
-longer types in; it changes at once, as a main checkout's title does. The ruling also asked that the coordinator's header is never
-taller than a worker's with the same name at the same width. **That cannot hold at every length, and the rule and the task conflict
-there:** when the name's last line leaves less than the glyph's width and its 4 px gap before the column's edge, the glyph needs a
-line the worker's name did not, and no layout short of drawing it over the doors avoids that. **Measured** (real Chrome, both skins,
-both themes, 360, 390 and 1280 px, names of 1 to 130 characters in words and as one token, 260 names a view): at every length the
-badge's centre is inside the name's last line box; the header is taller than the same header with the badge hidden (a worker's header of
-that name, the badge being the only difference on the title line) at 4 to 36 of the 260 names a view, and at each of those the last line
-left no room for the glyph to within a pixel; with room, never. Follow-up for the coordinator: if "never taller" is wanted, it needs a
-design the ruling did not make (the glyph drawn in the gutter, or off the title).
+longer types in; it changes at once, as a main checkout's title does. **The rule, as the coordinator ruled it (2026-11-20, fix round 1): the badge never sits alone on a line, and a coordinator's header is taller than a worker's only where the name's last line has no room for the glyph.** When the name's last line leaves less than the glyph's width and its 4 px gap before the column's edge, the glyph needs a line the worker's name did not, and the badge wraps with the name's last character. **Measured** (real Chrome, both skins, both themes, 360, 390 and 1280 px, names of 1 to 130 characters in words and as one token, 260 names a view): at every length the badge's centre is inside the name's last line box; the header is taller than the same header with the badge hidden (a worker's header of that name, the badge being the only difference on the title line) at 4 to 36 of the 260 names a view, and at each of those the last line left no room for the glyph to within a pixel; with room, never. The sweep asserts both halves.
 
 **The details row is decided in code (F3 to F6).** `detailsHaveFacts` says whether the row has anything to show: one of its own facts
 (`detailRows`: a main checkout's name, the run, a programme hold, the PR, an away lane, the question), a cell of its meta row
@@ -4496,15 +4488,32 @@ real Chrome, a session with nothing to show, `main` against the tip; the picture
 | Refined, coordinator | 109 to 87.5 | 109 to 87.5 | 85 to 85 |
 | Refined, worker | 109 to 87.5 | not measured | 85 to 85 |
 
-**One earlier pin is re-pointed, and two rulings meet there.** `goals-door-height.browser.test.ts` pins that the Goals door costs a phone
-header no height (PL11: "on a phone nothing"). In Refined that held for a coordinator with no other fact only because the Details
-door's own 44 px line (the tap floor) was the rail's tallest item and the Goals door, also 44 px, hid beside it. With no Details door the
-rail out of a programme is as tall as its chips (**measured**: 20 px) and the Goals door makes it 44, so the header is 24 px taller in
-a programme than out of one (**measured**: 85 to 109, a main-checkout coordinator, Refined, 390 px, names of 8, 13, 26 and 31
-characters). The pin now expects exactly that growth (the door's height less the rail's own) where the rail has no other 44 px item,
-and equal heights everywhere else; a door that took more would still red (**inferred**: not run under a mutant). The header "in" is not
-taller than it was before this task (109 px); the one "out" is 24 px shorter. The coordinator may want one or the other kept: for the
-coordinator to rule.
+**One earlier pin is restated as main's own claim (fix round 1, the coordinator's ruling of 2026-11-20).** `goals-door-height.browser.test.ts`
+pins that the Goals door costs a phone header no height (PL11: "on a phone nothing"). The first version of this round re-pointed its
+expectation, because in Refined an out-of-programme coordinator with no other fact is 24 px shorter than the same session in one
+(**measured**: 85 against 109, Refined, 390 px). **That was the same session out of a programme against in it, not main against this
+branch**, and the round's wave-done wording "85 to 109" read as the latter; it is corrected here. **Measured against main** (a `main` copy
+at `f95ac048a4` and this branch, real Chrome, coarse pointer, light theme, a main-checkout coordinator with no other fact, header height in
+px, closed / details open):
+
+| Header | Main, in a programme | This branch, in a programme | Main, out of a programme | This branch, out of a programme |
+|---|---|---|---|---|
+| Refined, 360 and 390 px | 109 / 109 | 109 (no door, nothing to open) | 109 / 109 | 85 |
+| Instrument, 360 and 390 px | 159.75 / 181.25 | 134.75 (no door, nothing to open) | 159.75 / 181.25 | 134.75 |
+
+A workspace coordinator with a PR cap keeps its door and is equal to main at 390 px in both skins (Refined 109 against 109; Instrument
+159.75 / 181.25 against 159.75 / 181.25); at 360 px Refined is 116.8 against 109, which is the first rule's accepted case (the name's last
+line has no room for the glyph, so the title takes a second line), not the Goals door. So a coordinator in a programme with no facts is
+**no taller than at main in every layout measured**: equal in Refined, 25 px shorter in Instrument. The Goals door keeps its 44 px floor, and
+it adds no row: in Refined the rail row it stands in is 44 px in main (the Details door's) and here (its own). What cannot be asked of
+the pin is that "in" equals "out" for such a session, because its out header lost the Details door that opened nothing (F3 to F6's gain).
+The pin now says main's own claim: where the out header still has its Details door, "in" and "out" are equal; where it has none, "in" is no
+taller than the out header with main's Details door, rebuilt in the page as a frozen copy (a `Door` of the shared primitive at the end of
+the status row; calibrated: 109 in Refined and 159.75 in Instrument, the heights main measured), and on a phone the Goals door is at least
+the 44 px tap floor. It runs at 360, 390, 1200, 1279 and 1280 px in both skins. **Measured under three mutants** (CSS appended, restored
+from a saved copy): the Goals door's floor dropped reds 10 cases; a Refined rail that gives the Goals door a row of its own reds the
+main-checkout cases ("in a programme the header is 150, taller than at main"); an Instrument Back row made taller reds them likewise
+("194.75, taller than at main (159.75 with main's Details door)"). The coordinator ruled not to move the Goals door into the title row.
 
 A phone header with nothing to show loses the Details door's line (21.5 px); at 1280 px Instrument's loses 2.75 px for a worker and
 19.25 px for the coordinator (its badge's old line), and Refined's is unchanged. The measured heights are for these fixtures
