@@ -342,9 +342,11 @@
 .pv-head .pv-sub { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .pv-two { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }
 @media (max-width: 900px) { .pv-two { grid-template-columns: minmax(0, 1fr); } }
-/* The Goals page's columns (the runs rebuild, Task 19, o8): Goals, Waiting on you and Stored secrets stack in the first, and the
-   Runs section is the other. Under 900 everything stacks in that order. */
-.pv-main { display: grid; gap: var(--sp-3); min-width: 0; align-content: start; }
+/* The Goals page's columns (the runs rebuild, Task 19, o8; the Work card, WM4): Goals and the Work card stack in the first, and
+   Waiting on you (with Stored secrets) and Runs in the other, so a long list never pushes Waiting on you out of view. Under 900
+   everything stacks in that order: Goals, Work, Waiting on you, Runs. */
+.pv-main,
+.pv-side { display: grid; gap: var(--sp-3); min-width: 0; align-content: start; }
 /* The head's run facts (spec §8.5): the card's elements, the coordinator, the wave counts, a pending-close line per reason and
    Resume. A full-width row of the head, wrapping; the controls keep the tap floor. */
 .pv-head .pv-facts { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-3); min-width: 0; }
@@ -513,7 +515,7 @@
    cell, and the stripe on the row's left edge and the bar's segments are non-text marks that repeat it, so no status is read
    out of colour alone. Layout follows the plan's table, by the CARD's own width (a container query, so the page may put it in
    either column): one column up to a phone, where a row stacks status, title with its tag, then facts and the strip wraps; one
-   row from the card's wide layout, where the tag wraps under the title before the facts do. Every width holds with no
+   row from the card's 26rem, where the tag wraps under the title before the facts do. Every width holds with no
    horizontal scroll: the tracks are `minmax(0, 1fr)` and the words wrap anywhere. */
 .wk-card { container: work / inline-size; display: grid; gap: var(--sp-2); min-width: 0; overflow-wrap: anywhere; background: var(--bg-surface); color: var(--ink-primary); }
 .wk-card .wk-heading { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
@@ -580,9 +582,14 @@
 .wk-card .wk-epic { font: var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm); background: var(--bg-surface); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wk-card .wk-facts { display: flex; flex-wrap: wrap; gap: 2px var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wk-card .wk-fact { min-width: 0; overflow-wrap: anywhere; }
-@container work (min-width: 34rem) {
-  .wk-card .wk-row { grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 14rem); align-items: start; }
+/* Two steps, measured on the programme page (WM4, D-8823 `card-width-steps`): the left column is a 451px card at a 1280 window and
+   532px at 1470, so the one-row layout starts at 26rem with narrow status and facts tracks, and the roomy tracks wait for 40rem. */
+@container work (min-width: 26rem) {
+  .wk-card .wk-row { grid-template-columns: 6.75rem minmax(0, 1fr) minmax(0, 10rem); align-items: start; }
   .wk-card .wk-facts { justify-content: flex-end; text-align: right; }
+}
+@container work (min-width: 40rem) {
+  .wk-card .wk-row { grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 14rem); }
 }
 
 /* A folded group: done tickets under a phase, the Done when line. The summary is a tap target at the floor. */

@@ -1,11 +1,17 @@
 // The programme's Goals page (desktop-polish PL5b, D-7713; spec section 3; the prototype's view 2), at `/programmes/<slug>`:
-// Goals on one side; on the other, how many things wait on the operator as a link to the one Waiting on you list filtered to
-// this programme, or what the programme waits on when nothing does, and its Stored secrets. The title of the programme's box
-// opens it, and so does the Goals icon in the chrome of a session in the programme.
+// Goals and, below them, the Work card (programme work map WM4, D-8823) on one side; on the other, how many things wait on the
+// operator as a link to the one Waiting on you list filtered to this programme, or what the programme waits on when nothing does,
+// and its Stored secrets, then Runs. One column on a phone, in that order: Goals, Work, Waiting on you, Runs. The title of the
+// programme's box opens it, and so does the Goals icon in the chrome of a session in the programme.
 //
 // IT DRAWS NO LIST OF ITS OWN (PL11, D-7986; spec §2, D29). Until PL11 this card drew the programme's share of the list, a second
 // Waiting on you page with its own way into each item; there is one page now, and this one links it (`waitingPath`, the one
 // builder), so the navigation, the box's chip and this link all land on it.
+//
+// THE WORK CARD (WM4). The page reads the plan on arrival and again when its key moves (`planKey`: this programme's runs and items
+// as the frames hold them), keeps the last view the card drew and the time of the last good read, and hands the card its links
+// (`useWorkRead`, decided in `workRead.ts`). A failed read, or an unreadable `work`, keeps the last view and says so; a failed first
+// read says "The work could not be read" with the refusal's word; an absent `work` (an older server) draws no card.
 //
 // A screen of the ladder, ring L4: it reads the fleet store (the list, the fleet's sessions and runs, each only once its frame
 // has landed, `useHeard`), asks the server for the programme's Goals, and navigates. It decides nothing: the count is
@@ -43,7 +49,7 @@ import { LEDGER_REFUSAL_TEXT, apiErrorText, refusalText } from '../lib/refusalWo
 import { WAITING_BADGE_UNIT } from '../fleet/navBadges';
 import { inAppClick } from '../fleet/settingsText';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
-import { ROUTES, waitingPath } from '../lib/routes';
+import { ROUTES, epicPath, runPath, waitingPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel, SpecLink } from './GoalsPanel';
 import { homeProjectOf, specHref } from './ledgerLinks';
@@ -53,6 +59,9 @@ import { needsYou, needsYouCount } from './needsYou';
 import { HeadResumeSheet, ProgrammeHeadFacts, ProgrammeRunsSection, useProgrammeRuns, type ProgrammeRunsReaders } from './ProgrammeRuns';
 import { useHeard } from '../fleet/useHeard';
 import { Back, useUnavailable } from './WaitingRoutes';
+import { WorkCard } from './WorkCard';
+import { planKey } from './workRead';
+import { useWorkRead } from './useWorkRead';
 import { isGoalsFor } from './waitingView';
 import './ledgers.css';
 
@@ -276,6 +285,8 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers 
   const coordPaused = store((s) => markerState(s.coord?.pause) === 'set');
   const [resumeOpen, setResumeOpen] = useState(false);
   const runsNow = useNow(30_000);
+  // The plan is read again when one of this programme's runs or items moves: the frames' own rows, never a second poll.
+  const work = useWorkRead(slug, planKey(slug, heard, [...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)]));
   const fleetSessions = sessions ?? NO_SESSIONS;
   const entries = view === null || sessions === null || runs === null ? [] : needsYou(view.items, sessions, runs);
   const row = runsView.row;
@@ -295,16 +306,24 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers 
         fleetFrameSeen={fleetFrameSeen} title={title} project={home} />
       <div className="pv-two">
         <div className="pv-main">
-        <div className="pv-card">
-          <GoalsCard slug={slug} reread={reread} read={read} held={held} homeProject={home} heldItems={heldItems} list={list} />
+          <div className="pv-card">
+            <GoalsCard slug={slug} reread={reread} read={read} held={held} homeProject={home} heldItems={heldItems} list={list} />
+          </div>
+          {work !== null && (
+            <div className="pv-card">
+              <WorkCard work={work.answer} readAt={work.readAt} runHref={(id) => runPath(id)}
+                itemHref={(id) => (heldItems.has(id) ? itemPath(id, list) : null)} epicHref={(key) => epicPath(slug, key)} />
+            </div>
+          )}
         </div>
-        <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable}
-                     stored={<StoredSecretsSection slug={slug} secrets={stored.secrets} now={now} onRemoved={stored.reread}
-                                                   removeSecret={secrets?.remove ?? removeStoredSecret}
-                                                   {...(secrets?.stepUpDeps === undefined ? {} : { stepUpDeps: secrets.stepUpDeps })} />} />
+        <div className="pv-side">
+          <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable}
+                       stored={<StoredSecretsSection slug={slug} secrets={stored.secrets} now={now} onRemoved={stored.reread}
+                                                     removeSecret={secrets?.remove ?? removeStoredSecret}
+                                                     {...(secrets?.stepUpDeps === undefined ? {} : { stepUpDeps: secrets.stepUpDeps })} />} />
+          <ProgrammeRunsSection view={runsView} sessions={fleetSessions} fleetFrameSeen={fleetFrameSeen} runsHeard={runs !== null}
+            quietMs={stallQuietMs} />
         </div>
-        <ProgrammeRunsSection view={runsView} sessions={fleetSessions} fleetFrameSeen={fleetFrameSeen} runsHeard={runs !== null}
-          quietMs={stallQuietMs} />
       </div>
     </div>
   );
