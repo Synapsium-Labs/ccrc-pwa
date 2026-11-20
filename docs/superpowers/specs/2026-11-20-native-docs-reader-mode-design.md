@@ -7,12 +7,14 @@
 - **What this is.** Your request of 2026-11-19: "when reading a document via docserver I need a button to enter "reader mode" where the document becomes full-screen (think Kindle-like experience when used)". It is designed for ccrc's native Docs reader, the reader you now read in. The standalone reader is being retired and gets nothing.
 - **What reader mode is.** One button, or the `r` key, takes the open document full screen. Everything but the text goes away: ccrc's head and banners, and the reader's own bar, contents rail and Aa button. You turn one screen at a time by tapping the side of the page, swiping, or pressing an arrow key, and each turn lands on a whole line. A tap at the top shows a small overlay with how far you are and the time left, Aa and Exit. Esc, Back, the overlay's Exit and the browser's own exit all leave it, each once, and the place you were reading is kept. It works on a phone and on a desktop (§2).
 - **What is decided.** ccrc's window owns full screen; the sandboxed frame never asks for it, and its sandbox stays `allow-scripts` with no new attribute. Where an engine refuses element full screen (the iPhone is the likely case, still to be measured), the same view fills the viewport without the browser's request (§4). Screen pages, not true book pages, is your answer to ask 656 on 2026-11-20 (§5). Reading stays one scroll underneath, so place, progress, the quick jump and change marks keep working. A screen wake lock is taken while you read, with an idle release (§6).
-- **What changes.** Two ccrc waves and one library landing. XR1 is ccrc only, on library 1.1.0: the button, full screen, the overlay, Back and the wake lock. The library landing adds the turning, the in-place hiding of the reader's chrome, a text size and one small op each way on the existing port. XR2 takes that release up (§7). Nothing widens the sandbox, the shell CSP or the set of channels.
+- **What changes.** Two ccrc waves and one library landing. XR1 is ccrc only, on the library's contract release: the one that carries X1's appearance contract and X2's history places, which ccrc re-pins to in X1's wave C. It delivers reader mode in continuous scroll: the button, full screen, the overlay, Back and the place, and the wake lock. The library landing LX6 adds the turning, the in-place hiding of the reader's chrome, a text size and one small op each way on the existing port. It joins the contract release if it is ready by then, otherwise the next one, and no release waits for it. XR2 takes up the release that carries it and brings the screen pages (§7). Nothing widens the sandbox, the shell CSP or the set of channels.
 - **What you must check.** The phone's entry button on the one bar (§3.1) and the wake lock (§6.3), both decided here with the alternatives priced. Three departures from the rich-docs spec's closed lists are recorded as D-8803 to D-8805 (§8). The phone engines' full-screen behaviour is one device item for the coordinator to raise (§4.4); desktop Chromium was measured in part (§4.5).
 
 ## 1. Context
 
 This section says what reader mode builds on. Every claim about ccrc was read from `main` at `62276e71b`, and every claim about the library from the installed `@synapsium-labs/docserver` 1.1.0, on 2026-11-20.
+
+XR1 does not run on 1.1.0. It runs on the contract release, after X1's wave C re-pins ccrc to it and X2's P5 builds on it (§7.5). That release is 1.1.0 plus two designed landings: X1's contract (X1 spec §2, §6, §10) and X2's additions (X2 spec §4.7): the `place` op, `push` and `from` on the `hash` op, and the `close-overlay` and `goto` commands. Neither landing changes the chrome switches, the Aa menu's `settings` command, the keys the frame binds, `progress` or `pos`. So the 1.1.0 facts below are the contract release's as designed, and XR1's first step re-reads each one on the installed release before any code (the plan's Task XR1.1 Step 0).
 
 ### 1.1 What exists
 
@@ -34,6 +36,7 @@ This section says what reader mode builds on. Every claim about ccrc was read fr
 | Full screen, wake lock | `pwa/src`, `ui/src` | No use of the Fullscreen API, the Wake Lock API or `screen.orientation`. The viewport meta carries `viewport-fit=cover`, and the tokens define `--safe-top` and `--safe-bottom`. Sourced |
 | The installed app | `pwa/vite.config.ts` manifest | `display: 'standalone'`, no `display_override`, no `orientation`. Sourced |
 | History | `lib/router.ts`, `lib/swupdate.ts`, `docs/readerHistory.ts` | Three `popstate` listeners today. X2's wave P5.3 replaces them with one dispatcher, `lib/popstate.ts`, and a pure decider, `lib/historyPlaces.ts` (X2 spec §4.7). Sourced |
+| The contract release's history ops | X2 spec §4.7, §6 | The frame reports a figure overlay as `place {kind}` and a jump to return to as `hash {id, push, from}`; ccrc sends `close-overlay` and `goto {id, from}` on a Back that pops a place. Designed, landed by the library before XR1 |
 
 ### 1.2 Boundaries that do not move
 
@@ -42,7 +45,7 @@ This section says what reader mode builds on. Every claim about ccrc was read fr
 | Reader frame sandbox | Exactly `allow-scripts`; no `allow`, no `allowfullscreen` | rich-docs §4.1 |
 | Shell CSP | `frame-src 'none'` | completion plan, Global Constraints |
 | Frame and console | No parent-DOM access, no new channel, no window `message` listener in `pwa/src`; frame ops additive on the existing port | rich-docs §4.4, §5.1 |
-| Library | Exactly 1.1.0 in this wave. A library change is designed here, not made | brief |
+| Library | Exactly 1.1.0 in this design wave; XR1 on the contract release as X1's wave C pins it, XR2 on the release carrying LX6. A library change is designed here, not made | brief; the coordinator's ruling on review 2933 F7 |
 | Phone | Both 2026-11-06 phone blocks byte for byte; the tap, one-bar and desktop-fit budgets stand | completion plan, Global Constraints |
 | Appearance | Reader mode uses ccrc's appearance through X1's contract. No new palette, catalogue or token list | X1 spec §2, §10 |
 | The standalone reader | Gets nothing | brief |
@@ -193,7 +196,7 @@ sequenceDiagram
 - **Its own host.** The reader place is answered by the Docs screen's reader-mode hook, through its own slot, `setReaderPlaceHost`, beside X2's `setPlaceHost`, which the frame's mount holds. The frame's slot is empty during a remount, and X2 treats a frame place popped then as stale; the reader place must not be, because reader mode outlives the frame's remount (§4.3). One dispatcher, one decider, two hosts for two owners.
 - **User activation.** The push follows a tap or a key on ccrc's own chrome, which gives the console activation directly, and it runs before the full-screen request, because the request consumes the tap's transient activation and a pushed entry is not. Unlike X2's frame-reported places, it does not wait on lab E16.
 - **Order of exit.** Esc in browser full screen is the browser's: it leaves full screen, and the `fullscreenchange` that follows is ccrc's signal. A Back that pops the place first leaves full screen through `document.exitFullscreen()`; the `fullscreenchange` that follows finds reader mode already off and does nothing.
-- **Stepping back over the place.** An exit that did not come from a pop (Esc, Exit, the browser's exit) steps back to the entry below the reader place: `history.go(-n)`, where `n` counts the reader place and every place of the frame's above it, from the tab record's last shown index, with the landing recorded so the decider consumes it. A frame overlay open at that moment is closed by the exit itself (XR1's remount resets it, XR2 sends `close-overlay`).
+- **Stepping back over the place.** An exit that did not come from a pop (Esc, Exit, the browser's exit) steps back to the entry below the reader place: `history.go(-n)`, where `n` counts the reader place and every place of the frame's above it, from the tab record's last shown index, with the landing recorded so the decider consumes it. A frame overlay open at that moment is closed by X2's `close-overlay`, sent as the step-back's pop crosses its place, which is the Back that X2's departure D-8763 already allows it on. This holds in both waves, because the contract release carries the command.
 - **When full screen is lost first.** An engine may leave full screen and also traverse history on one Back (FS-3). ccrc therefore waits `READER_EXIT_SETTLE_MS` (100 ms) after a lost full screen before stepping back, then reads the tab record again: if a pop has already landed below the reader place, it steps nothing. So one Esc, or one Back, is one exit, whichever order an engine fires them in. An engine that traverses later than that is a device row (FS-3), and its residue is one Back too many, never a lost document.
 - **No place, no step.** If the visit's place budget is spent (`PLACES_MAX`), reader mode still opens, with no place; its exits then step back nothing, and Back leaves the document as it does today.
 
@@ -264,7 +267,7 @@ flowchart TB
 
 ### 4.3 XR1 enters by a remount; XR2 does not
 
-Library 1.1.0 reads its chrome switches once, at mount.
+The library reads its chrome switches once, at mount, in 1.1.0 and in the contract release alike: neither X1's landing nor X2's changes them.
 - **On a phone, no remount.** A phone's mount is already `host-bar`: the frame's bar is off and its top space trimmed, and the contents rail is a drawer. XR1 enters in place there, with nothing reloaded.
 - **On a desktop, one remount.** XR1 remounts the same document in the same container with the chrome off, through a new bridge method, `ReaderMount.remount(chrome)`: the same rendered document, a new `MessageChannel` and nonce, as the same-page link's `openAt` already does (rich-docs §4.1, D2), but with no `initialHash`, because the library lets a hash win over the stored place and the page's opening fragment must not pull you back to it. The place comes back from the library's own `pos` field. That field is written 250 ms after scrolling stops, and the host drops the old frame's messages once it is destroyed, so the remount waits until `READER_REMOUNT_QUIET_MS` (400 ms) have passed since the last `progress` message, which XR1 asks for from every production mount (D-8805). The fill is drawn at once; only the swap waits.
 - **The cost** is one frame swap, about 0.2 to 1.4 s (lab E4's srcdoc timings), and what a remount already resets: the "Changed since your last visit" notice, open folds and drawn figures. XR2 replaces the remount with the in-place `reading` op (§7.2), so entering and leaving keep the very scroll position, the drawn figures and the folds on every device.
@@ -507,15 +510,19 @@ Test 8 (X1 spec §10, as X4 amended it) keeps one growth row per landing that ch
 
 ```mermaid
 flowchart LR
-  X1C["X1's ccrc host wave"] --> XR1
-  P53["X2 P5.3: the popstate dispatcher<br/>and the places decider"] --> XR1["XR1 reader mode on 1.1.0:<br/>button, fill, full screen,<br/>overlay, Back, wake lock"]
-  LX1["Library: X1's landing"] --> LX2["Library: X2's landing"] --> LX6["Library: X6's shares,<br/>then X6's landing"]
-  LX6 --> REL["The release, the operator's"]
-  REL --> P5["X2 P5 adopts it"]
-  P5 --> XR2["XR2 adopts reader ops:<br/>screen pages, in place,<br/>time left, text size"]
+  L1["Library L1: X1's landing"] --> RN["Library: the rename"] --> L2["Library L2: X2's landing"]
+  L2 --> CR["The contract release"]
+  CR --> WC["X1 wave C: ccrc re-pins<br/>to the contract release"]
+  WC --> P5["X2 P5 and P6 on it,<br/>P5.3's dispatcher and decider"]
+  P5 --> XR1["XR1 reader mode in scroll:<br/>button, fill, full screen,<br/>overlay, Back, place, wake lock"]
+  L2 --> LX6["Library LX6: X6's shares,<br/>then X6's landing"]
+  LX6 -.->|"if ready by the cut"| CR
+  LX6 --> NR["The next release,<br/>otherwise"]
+  CR --> XR2["XR2 on the release with LX6:<br/>screen pages, in place,<br/>time left, text size"]
+  NR --> XR2
   XR1 --> XR2
 ```
-*Figure 5. Wave order. XR1 needs X2's dispatcher and X1's host wave, because all three edit the reader host files. XR2 needs the release that carries X6's landing, taken up first by X2's P5. If the coordinator lands P5.3's host half (the dispatcher and the decider) before the library release, XR1 can ship ahead of it; otherwise XR1 follows P5.*
+*Figure 5. Wave order. Start at the library's L1. The library lands X1's contract, its rename and X2's additions, and cuts the contract release. X1's wave C re-pins ccrc to it and X2's P5 builds on it; XR1 follows, on that release, in continuous scroll. LX6 joins the contract release only if it is ready by the cut, and the cut never waits for it. XR2, the screen pages, follows on whichever release carries LX6.*
 
 ## 8. Boundaries, threat model and departures
 
@@ -580,6 +587,7 @@ Technical choices are the worker's, each argued above; the one product choice wa
 | R17 | Op names | `reading` to the frame, `reader` from it, paced in the frame | Proposed |
 | R18 | The console behind reader mode | Inert and hidden from assistive technology, through the modal layers' mechanism | Proposed |
 | R19 | Blocks in full screen | End reader mode | Proposed |
+| R20 | XR1's library | The contract release, continuous scroll; LX6 in it if ready, else the next release, never held for | Agreed: the coordinator, review 2933 F7 (a), 2026-11-20 |
 
 ## 11. Promise delta
 
@@ -596,6 +604,7 @@ none - design of a reading view of the native Docs reader programme; acceptance 
 - Screen pages, with scroll as a reader setting: your answer to ask 656, 2026-11-20, relayed by the coordinator (§5). Calm scroll and true book pages stay priced in §5.1.
 - The walls stay: the frame keeps exactly `allow-scripts` with no new attribute, the shell keeps `frame-src 'none'`, and both new ops ride the existing port (§4.1, §7.2, §8).
 - The library stays at 1.1.0 in this wave; its change is designed in §7 and built by the library programme.
+- XR1 runs on the contract release, in continuous scroll. LX6 joins that release if it is ready by the cut, otherwise the next one, and no release is held for it. XR2, the screen pages, follows on the release that carries LX6. This is the coordinator's ruling on review 2933 F7, option (a), 2026-11-20 (§7.5).
 
 ### Waiting on you
 
