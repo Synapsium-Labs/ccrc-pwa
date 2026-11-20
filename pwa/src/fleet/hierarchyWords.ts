@@ -3,7 +3,7 @@
 // refusal says are `refusalWords.ts`'s (`linkingErrorText`); the box's own text never reaches the screen.
 import type { HierarchyProjectRow } from '../../../shared/plan';
 import { ApiError, writeOutcomeUnknown } from '../lib/apiError';
-import { linkingErrorText, migrateRefusalText } from '../lib/refusalWords';
+import { linkingErrorText, migrateRefusalText, refusalText } from '../lib/refusalWords';
 import { isPlaceableInstant, releaseDate } from '../lib/format';
 
 /** The labels. Short words only. */
@@ -34,7 +34,11 @@ export const HIERARCHY_TEXT = {
  *  no coordination store), so that pair is a refusal, never unknown (D-8186, review run 2491 A7); every other 5xx and a missing
  *  answer may follow a commit. */
 export const hierarchyOutcomeUnknown = (err: unknown): boolean =>
-  writeOutcomeUnknown(err) && !(err instanceof ApiError && err.status === 503 && (err.body as { error?: unknown } | null)?.error === 'unavailable');
+  writeOutcomeUnknown(err) && !(err instanceof ApiError && err.status === 503 && refusalText(err, REFUSED_BEFORE_WRITE) !== null);
+/** The 503 word those routes answer before any write, read through `refusalText` (ARCH-13b), never compared as a literal. */
+const REFUSED_BEFORE_WRITE: Readonly<Record<'unavailable', string>> = {
+  unavailable: 'The box could not reach its stores, so nothing was changed.',
+};
 /** The sentence for a failed hierarchy or linking write: the unconfirmed line when its outcome is unknown, else the word's sentence. */
 export const hierarchyWriteText = (err: unknown): string => (hierarchyOutcomeUnknown(err) ? HIERARCHY_TEXT.unconfirmed : linkingErrorText(err));
 
