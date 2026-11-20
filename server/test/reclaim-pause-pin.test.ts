@@ -593,7 +593,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
         runsNamingSession: () => ({ ok: true as const, runs: [] }) as never,
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
         laneArmSetting: () => ({ kind: 'absent' as const }),
-        hasMailWithSubject: () => false,
+        runEvents: () => [],
       } as unknown as StopDoneSweepDeps['coord'],
       runCcd: async (a) => { argv.push([...a]); return { ran: true as const, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
@@ -606,7 +606,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
       listing: async () => [],
-      systemMail: () => ({ queued: false }),
+      stallNotice: () => ({ queued: false, why: 'duplicate' as const }),
       startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };

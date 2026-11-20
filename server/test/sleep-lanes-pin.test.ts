@@ -440,7 +440,7 @@ function sdDeps(w: World): StopDoneSweepDeps {
       recordFeedEvent: () => undefined,
       run: (runId: number) => ({ ok: true, run: { id: runId, state: 'working', reviews: null } }) as never,
       laneArmSetting: () => ({ kind: 'absent' as const }),
-      hasMailWithSubject: () => false,
+      runEvents: () => [],
     },
     runCcd: runCcdOf(w),
     fleetState: { ccdVerbs: w.verbs } as unknown as FleetState,
@@ -457,7 +457,7 @@ function sdDeps(w: World): StopDoneSweepDeps {
     serial: serialOf(w),
     queueRun: queueOf(w),
     listing: listingOf(w, []),
-    systemMail: () => ({ queued: false }),
+    stallNotice: () => ({ queued: false, why: 'duplicate' as const }),
     startedAt: STARTED,
     now: () => w.now,
   };

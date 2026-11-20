@@ -4,7 +4,7 @@ import type { Viewers } from './viewer.js';
 import type { NotifyLog } from './notifylog.js';
 import type { SessionRecord } from './registry.js';
 import type { CoordStore, RunRow } from './coord/store.js';
-import type { SystemMailQueued, queueSystemMail } from './coord/rundefsTx.js';
+import type { StallNoticeQueued, queueStallNotice } from './coord/rundefsTx.js';
 import { laneArmRowViewOf } from './coord/laneArm.js';
 import { WORKING_IDLE_SLEEP_LANE } from '../../shared/lane-arm.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
@@ -24,7 +24,7 @@ import { readSwitches, type MarkerSwitchName, type SwitchReading } from '../../s
 import {
   RUN_DONE_POLICY, STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS,
   STOP_DONE_PARKED_STATES, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_STATES,
-  mailOnly, stopDoneVerdict, workerAsleepMail, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
+  mailOnly, stopDoneVerdict, workerAsleepNotice, workerAsleepNoticeDue, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
   type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
 import type { SleepPolicy } from './sleep.js';
@@ -595,7 +595,7 @@ function wokeNothing<V, St>(r: SleepActResult<V, St>): boolean {
  *  read `heldKindOf` classifies a run suffix by (and the waiting case's coordinator is read from). D-8790:
  *  the waiting case's Shadow lanes row, and whether its sleep's mail was ever sent (every delivery state). */
 export type RunDoneCoordPort = Pick<CoordStore, 'lastRunBySession' | 'activeClaims' | 'outstandingMailFor' | 'recordFeedEvent' | 'run' | 'designationRead'
-  | 'laneArmSetting' | 'hasMailWithSubject'>;
+  | 'laneArmSetting' | 'runEvents'>;
 
 export interface StopDoneSweepDeps {
   readonly coord: RunDoneCoordPort;
@@ -621,9 +621,9 @@ export interface StopDoneSweepDeps {
   readonly queueRun: <T>(id: string, fn: () => Promise<T>) => Promise<T>;
   /** At the act (D-7047): the registry listed again, for the kill switches; null when it cannot be listed. */
   readonly listing: () => Promise<readonly string[] | null>;
-  /** D-8791: the server's own mail (`queueSystemMail` over the watcher's store), which a live
-   *  sleep of a waiting worker sends its run's coordinator. */
-  readonly systemMail: (run: Pick<RunRow, 'program' | 'wave' | 'waveOf'>, m: Parameters<typeof queueSystemMail>[2]) => SystemMailQueued;
+  /** D-8791: the server's own notice (`queueStallNotice` over the watcher's store): the sleep's observation row and its
+   *  mail to the run's coordinator, in one transaction. */
+  readonly stallNotice: (run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'>, n: Parameters<typeof queueStallNotice>[2]) => StallNoticeQueued;
   readonly startedAt: number;
   readonly now: () => number;
 }
@@ -822,10 +822,11 @@ function workingIdleSleepLive(coord: Pick<RunDoneCoordPort, 'laneArmSetting'>): 
 
 const utcOf = (ms: number): string => (Number.isFinite(ms) ? new Date(ms).toISOString() : 'an unrecorded time');
 
-/** D-8791: a live sleep of a waiting worker mails its run's coordinator ONCE: the run, when the
- *  worker's last turn ended, and that mail or a send-back wakes it. On the coordination serialiser (the act's), the
- *  subject, which names the sleep, is read back over every delivery state first, so a restart or a later pass never
- *  sends one sleep twice. A run it cannot read, or one nobody claims, mails nobody and says so; it never throws. */
+/** D-8791: a live sleep of a waiting worker tells its run's coordinator, once per sleep and at most
+ *  `WORKER_ASLEEP_MAILS_PER_RUN` times a run: the run, when the worker's last turn ended, and that mail or a send-back
+ *  wakes it. The notice is the stall watch's (`queueStallNotice`): the sleep's observation row and the mail in one
+ *  transaction, deduped on the row, so a restart or a later pass never sends one sleep twice, acked or not. A run it
+ *  cannot read, one nobody claims, or one past the bound mails nobody and says so; it never throws. */
 function tellCoordinator(deps: StopDoneSweepDeps, id: string, runId: number, since: number): void {
   try {
     const r = deps.coord.run(runId);
@@ -838,9 +839,12 @@ function tellCoordinator(deps: StopDoneSweepDeps, id: string, runId: number, sin
       console.warn(`ccrc-server: stop-done: ${id} sleeps on run ${runId}, which no coordinator claims — nobody was told`);
       return;
     }
-    const m = workerAsleepMail(id, runId, since);
-    if (deps.coord.hasMailWithSubject('operator', runId, to, m.subject)) return;
-    deps.systemMail(r.run, { fromId: 'operator', toId: to, runId, kind: 'status', subject: m.subject, body: m.body });
+    if (!workerAsleepNoticeDue(deps.coord.runEvents(runId).map((e) => e.detail))) {
+      console.warn(`ccrc-server: stop-done: ${id} sleeps on run ${runId}, whose coordinator has had its bound of sleep notices — not told again (D-8791)`);
+      return;
+    }
+    const n = workerAsleepNotice(id, runId, since);
+    deps.stallNotice(r.run, { detail: n.detail, at: deps.now(), toId: to, kind: 'status', subject: n.subject, body: n.body });
   } catch (err) {
     console.warn(`ccrc-server: stop-done: telling run ${runId}'s coordinator that ${id} sleeps failed (${errText(err)})`);
   }

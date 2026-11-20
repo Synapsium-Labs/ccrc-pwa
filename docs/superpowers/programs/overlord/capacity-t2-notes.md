@@ -19,9 +19,11 @@ programme ledger. It defines no D-number: D-8790 (slug `working-idle-sleeps`) an
   again for an hour. Read again at the act beside the kill switches, a row set back to shadow holds the act
   (`switched-off`). Nothing in the tree arms it: only the operator's `POST /api/coord/lane-arm` does.
 - **Live:** the act is `ccd hibernate` as today, the worker's own-run hold passing with `--hold-ok` (Task 1, D-8789).
-  The asleep row and the journal line say "waiting on a working run". The run's coordinator gets one system mail
-  (`worker-asleep: run <id>, last turn ended <UTC minute>`). It is read back over every delivery state first, so a
-  restart or a later pass never mails the same sleep twice. A worker parked at review, merge or close sends no mail.
+  The asleep row and the journal line say "waiting on a working run". The run's coordinator gets one notice per sleep
+  (`worker-asleep: run <id>, last turn ended <UTC minute>`), at most `WORKER_ASLEEP_MAILS_PER_RUN` (3) a run. It goes
+  through the stall watch's `queueStallNotice`: a `run_events` observation row naming the worker and the instant its
+  quiet began, written in one transaction with the mail, so a restart or a later pass never mails the same sleep
+  twice, acked or not. A worker parked at review, merge or close sends no mail.
 - **Unchanged:** the mail-only count stays a count of finished workers. The stall watch is untouched. No new run
   state, no new `ccd` verb, `FLEET_PROTO` unchanged, and the lane's kill switches (`stop-done-disabled`,
   `hibernate-disabled`, `reclaim-paused`) stop the case as they stop the rest of the lane.
@@ -37,7 +39,16 @@ programme ledger. It defines no D-number: D-8790 (slug `working-idle-sleeps`) an
 | `lane-words-file` | The plan lists `pwa/src/fleet/laneArmWords.ts` among the files. | The row's words live in `shared/lane-arm.ts` (`LANE_ARM_TEXT`) as every row's do, and the console's one lane-keyed table that needs the row is `SHADOW_LOG` in `ShadowLanesSection.tsx`, so `laneArmWords.ts` is not changed. |
 | `suite-copies-one-store` | The draft's new suite opened a fresh coordination store per use. | Every open replays every migration. Under a loaded box, three live cases that open two or three stores passed the 20 s case bound. The suite now builds one migrated database in `beforeAll` and copies it per store (the pattern of `designation-actor.test.ts`), and closes each copy after its case. |
 
-## 2. Red-first evidence
+## 2. The design review's rulings (review 2848, relayed by the coordinator)
+
+| Finding | Ruling | What this PR does |
+|---|---|---|
+| F5, the coordinator's mail | Key each sleep durably, never re-send after an ack, bound the mails per run; red cases for the restart and the bound. | The draft read the subject back over every delivery state. The notice now rides `queueStallNotice` (an existing owner, not a second dedupe): the observation row `worker-asleep:<worker>:<since>` and the mail in one transaction. `workerAsleepNoticeDue` (L1, `stopDone.ts`) decides the bound from the run's `run_events` (`runEvents`, an existing read), so no store change. The row is `causedBy 'operator'` with `fromState = toState`, so drift's act clock, the notify lane and the stall ladder (which parses only its own details) all skip it. New cases: the row alone stops a second mail after the mail rows are deleted, and the fourth and fifth sleeps of a run are acted on and unmailed. |
+| F9, where the arming gate sits | Only the new case waits on the row; every other run-done sleep is unchanged; read the row through `laneArmRowViewOf`. | Already so in the draft: `answerLive` reads `v.waiting`, which the verdict sets exactly when the run it read is in `STOP_DONE_WAITING_STATES` (`working`), from the same store read, and an answer without it is live as before. The row is read through `laneArmRowViewOf(WORKING_IDLE_SLEEP_LANE, …).live`, as `rollLane.ts` reads its own; a read that throws is shadow. Unchanged. |
+| F13, holds pinned | One case each for `menu`, `roster` (subagents), `bucket`, `turn`, the row's `background`, unread mail, background work, a session cron and a claim. | The draft's one looping case is now one case per hold (`it.each`), plus `viewer`, `run-claimant`, `marker` and the unmeasurable `bg -1` and absent `crons`. The pass-level cases for unread mail, background work and a session cron stay. |
+| F2, arming order | Part 2 is armed before Part 3, whose cap reading now ships in shadow too. | Recorded here. This PR arms nothing: the `working-idle-sleep` row is seeded `shadow`. The operator arms it first; Task 3's row comes after. |
+
+## 3. Red-first evidence
 
 Each guard was mutated, `stop-done-working-idle.test.ts` was run through `ccrc test`, and the file was restored from
 a saved copy:
@@ -56,7 +67,7 @@ a saved copy:
 The characterization commit (`test(sleep): pin today's run-done answer …`) is green on its base, Task 1's tip; the
 rows marked `today:` are the ones the behaviour commit flips to `now: … (was: …)`.
 
-## 3. Residuals
+## 4. Residuals
 
 - **The shadow hold-off covers the worker, not the case.** A waiting worker logged in shadow is not asked again for
   an hour (the lane's one hold-off map). If its run moves to `awaiting-review` inside that hour, the parked sleep

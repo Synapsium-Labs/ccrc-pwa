@@ -7,11 +7,11 @@ import { describe, expect, it, vi, afterEach, beforeAll } from 'vitest';
 import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import {
-  STOP_DONE_GRACE_MS, STOP_DONE_PARKED_IDLE_MS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_STATES, mailOnly, stopDoneVerdict,
-  type StopDoneInput, type StopDoneRow,
+  STOP_DONE_GRACE_MS, STOP_DONE_PARKED_IDLE_MS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_STATES, WORKER_ASLEEP_DETAIL_PREFIX,
+  WORKER_ASLEEP_MAILS_PER_RUN, mailOnly, stopDoneVerdict, workerAsleepNoticeDue, type StopDoneInput, type StopDoneRow,
 } from '../src/stopDone.js';
 import { stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/sleepLane.js';
-import { queueSystemMail } from '../src/coord/rundefsTx.js';
+import { queueStallNotice, queueSystemMail } from '../src/coord/rundefsTx.js';
 import { WORKING_IDLE_SLEEP_LANE } from '../../shared/lane-arm.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -80,25 +80,26 @@ describe('the run-done verdict on a worker whose newest placed run is active', (
     expect(word(input('working', { store: { openWorker: true, otherOpenWorker: true } }))).toBe('run-worker');
   });
 
-  it('every use hold stands: mail, claim, viewer, menu, bucket, roster, turn, marker-background, scheduled', () => {
-    const base = input('working');
-    const held: [string, StopDoneInput][] = [
-      ['mail', input('working', { store: { mail: true } })],
-      ['claim', input('working', { store: { claim: true } })],
-      ['run-claimant', input('working', { store: { openClaimant: true } })],
-      ['viewer', { ...base, viewer: true }],
-      ['menu', withRow(base, { dialogPending: true })],
-      ['bucket', withRow(base, { bucket: 'done' })],
-      ['background', withRow(base, { background: { count: 1, kinds: ['shell'] } } as Partial<StopDoneRow>)],
-      ['roster', withRow(base, { subagents: [{ name: 'a0000000000000001', startedAt: NOW }] } as Partial<StopDoneRow>)],
-      ['turn', withLive(base, { turn: 'busy' })],
-      ['marker', withMark(base, { state: 'running' })],
-      ['marker-background', withMark(base, { bg: 1 })],
-      ['marker-background', withMark(base, { bg: -1 })],
-      ['scheduled', withMark(base, { crons: 1 })],
-      ['scheduled', withMark(base, { crons: null })],
-    ];
-    for (const [w, i] of held) expect(word(i), w).toBe(w);
+  // F13 (design review 2848): one case per use hold, so each reds on its own.
+  const useBase = input('working');
+  const useHolds: [string, string, StopDoneInput][] = [
+    ['mail', 'mail', input('working', { store: { mail: true } })],
+    ['claim', 'claim', input('working', { store: { claim: true } })],
+    ['run-claimant', 'run-claimant', input('working', { store: { openClaimant: true } })],
+    ['viewer', 'viewer', { ...useBase, viewer: true }],
+    ['menu', 'menu', withRow(useBase, { dialogPending: true })],
+    ['bucket', 'bucket', withRow(useBase, { bucket: 'done' })],
+    ['background', 'background', withRow(useBase, { background: { count: 1, kinds: ['shell'] } } as Partial<StopDoneRow>)],
+    ['roster', 'roster', withRow(useBase, { subagents: [{ name: 'a0000000000000001', startedAt: NOW }] } as Partial<StopDoneRow>)],
+    ['turn', 'turn', withLive(useBase, { turn: 'busy' })],
+    ['marker', 'marker', withMark(useBase, { state: 'running' })],
+    ['marker-background', 'marker-background', withMark(useBase, { bg: 1 })],
+    ['marker-background (2)', 'marker-background', withMark(useBase, { bg: -1 })],
+    ['scheduled', 'scheduled', withMark(useBase, { crons: 1 })],
+    ['scheduled (2)', 'scheduled', withMark(useBase, { crons: null })],
+  ];
+  it.each(useHolds)('a use hold stands for the waiting case: %s', (_label, w, i) => {
+    expect(word(i)).toBe(w);
   });
 
   it('a hold naming its own run passes with hibernate-hold-ok, and the answer carries its exact text and the waiting case', () => {
@@ -207,10 +208,10 @@ function world(s: CoordStore, o: { quietMs?: number } = {}): World {
     serial: async (fn) => fn(),
     queueRun: async (_id, fn) => fn(),
     listing: async () => [],
-    // The real mail path over the real store, so the dedupe is the store's own.
-    systemMail: (run, m) => {
-      const q = queueSystemMail(s, run, m);
-      if (q.queued) w.mails.push({ toId: m.toId, runId: m.runId, subject: m.subject, body: m.body });
+    // The real notice path over the real store, so the dedupe is the store's own observation row.
+    stallNotice: (run, n) => {
+      const q = queueStallNotice(s, run, n);
+      if (q.queued) w.mails.push({ toId: n.toId, runId: run.id, subject: n.subject, body: n.body });
       return q;
     },
     startedAt: NOW - VIEWER_OPEN_TTL_MS - MIN,
@@ -294,6 +295,43 @@ describe('the run-done pass on a worker whose newest placed run is `working`', (
       `worker-asleep: run ${id}, last turn ended ${new Date(NOW - 7 * HOUR).toISOString().slice(0, 16)}Z`,
       `worker-asleep: run ${id}, last turn ended ${new Date(NOW - 2 * HOUR).toISOString().slice(0, 16)}Z`,
     ]);
+  });
+
+  it('live: the sleep is keyed by an observation row on the run, written with its mail, and a restart reads it back (F5)', async () => {
+    const s = store();
+    const id = runAt(s, 'working');
+    live(s);
+    const w = world(s);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await stopDonePass(w.deps, mem(), [fleetRow(id)], [rec(WORKER)], []);
+    const rows = s.runEvents(id).filter((e) => e.detail !== null && e.detail.startsWith(WORKER_ASLEEP_DETAIL_PREFIX));
+    expect(rows.map((e) => [e.detail, e.causedBy, e.fromState, e.toState])).toEqual([
+      [`${WORKER_ASLEEP_DETAIL_PREFIX}${WORKER}:${NOW - 7 * HOUR}`, 'operator', 'working', 'working'],
+    ]);
+    // The restart, with the mail row itself deleted: the observation row alone stops a second mail.
+    s.db.prepare('DELETE FROM mail_deliveries').run();
+    s.db.prepare('DELETE FROM mail').run();
+    await stopDonePass(w.deps, mem(), [fleetRow(id)], [rec(WORKER)], []);
+    expect(mailed(s)).toEqual([]);
+  });
+
+  it(`live: at most WORKER_ASLEEP_MAILS_PER_RUN (${WORKER_ASLEEP_MAILS_PER_RUN}) sleep notices a run; later sleeps still happen, unmailed (F5)`, async () => {
+    const s = store();
+    const id = runAt(s, 'working');
+    live(s);
+    const w = world(s);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sleeps = WORKER_ASLEEP_MAILS_PER_RUN + 2;
+    for (let k = 0; k < sleeps; k++) {
+      w.quietMs = 7 * HOUR - k * MIN;   // each pass a new sleep: a later last turn
+      await stopDonePass(w.deps, mem(), [fleetRow(id)], [rec(WORKER)], []);
+    }
+    expect(w.argv).toHaveLength(sleeps);
+    expect(mailed(s)).toHaveLength(WORKER_ASLEEP_MAILS_PER_RUN);
+    // CONTROL: another run of the same coordinator has its own bound.
+    const other = runAt(s, 'working', 2, 'project-a-other-worker');
+    expect(workerAsleepNoticeDue(s.runEvents(other).map((e) => e.detail))).toBe(true);
+    expect(workerAsleepNoticeDue(s.runEvents(id).map((e) => e.detail))).toBe(false);
   });
 
   it('live: a worker parked at review is put to sleep with no mail (the wait there is the coordinator\'s own)', async () => {

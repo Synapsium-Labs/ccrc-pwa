@@ -99,7 +99,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
         return { ok: true as const, run: (runId === 900 ? { reviews: 901 } : { id: runId, state: st ?? 'working', reviews: null }) as never };
       },
       laneArmSetting: () => ({ kind: 'absent' as const }),
-      hasMailWithSubject: () => false,
+      runEvents: () => [],
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ran: true, ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
     fleetState: {
@@ -125,7 +125,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
     serial: o.serial === false ? null : async (fn) => { f.serialCalls++; return fn(); },
     queueRun: async (_id, fn) => fn(),
     listing: async () => [],
-    systemMail: () => ({ queued: false }),
+    stallNotice: () => ({ queued: false, why: 'duplicate' as const }),
     startedAt: STARTED,
     now: () => NOW,
   };

@@ -52,7 +52,7 @@ import {
  * it neither as `not-done` nor as `run-worker`; a SECOND active run naming it still holds `run-worker`, and a
  * `dispatched` run (its brief unread) still holds `not-done`. Every use hold stands. The answer says it is this case
  * (`waiting`), and the lane keeps it in shadow until the operator sets the `working-idle-sleep` row Live; a live act tells
- * the run's coordinator once (`workerAsleepMail`, D-8791).
+ * the run's coordinator once per sleep, at most `WORKER_ASLEEP_MAILS_PER_RUN` times a run (`workerAsleepNotice`, D-8791).
  */
 
 /** Every reason the lane leaves a session running this pass — a `Record`, so the list below is derived and a word
@@ -289,17 +289,31 @@ export function mailOnly(i: StopDoneInput): boolean {
 }
 
 
-/** D-8791: the one mail a live sleep of a waiting worker sends its run's coordinator. The subject
- *  names the run and, to the minute in UTC, when the worker's last turn ended, so it names the sleep: the lane reads it
- *  back over every delivery state (`hasMailWithSubject`), and a restart or a later pass never sends one sleep twice
- *  (the stall watch's rule, `self-mail-subjects-carry-the-date`). */
+/** D-8791: the notice a live sleep of a waiting worker sends its run's coordinator, keyed the stall watch's way
+ *  (`queueStallNotice`): a `run_events` observation row whose `detail` names the worker and the instant its quiet began
+ *  (`since`, the marker's newest stamp), written in ONE transaction with the mail. The row is durable and deduped on
+ *  `(runId, detail)`, so a restart or a later pass never mails the same sleep twice, acked or not. */
+export const WORKER_ASLEEP_DETAIL_PREFIX = 'worker-asleep:';
 export const WORKER_ASLEEP_SUBJECT_PREFIX = 'worker-asleep:';
+
+/** D-8791: at most this many sleep notices a run, over its whole life. A worker that wakes on mail and goes quiet again
+ *  is a new sleep; past the bound its coordinator has been told enough times that the run waits, and the sleep still
+ *  happens, unmailed. */
+export const WORKER_ASLEEP_MAILS_PER_RUN = 3;
+
+/** The bound, decided: is another sleep notice due, given the run's `run_events` details? Pure; the lane reads the rows. */
+export function workerAsleepNoticeDue(details: readonly (string | null)[]): boolean {
+  return details.filter((d) => d !== null && d.startsWith(WORKER_ASLEEP_DETAIL_PREFIX)).length < WORKER_ASLEEP_MAILS_PER_RUN;
+}
 
 const utcMinute = (ms: number): string => (Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(0, 16)}Z` : 'an unrecorded time');
 
-export function workerAsleepMail(workerId: string, runId: number, since: number): { readonly subject: string; readonly body: string } {
+export function workerAsleepNotice(workerId: string, runId: number, since: number): {
+  readonly detail: string; readonly subject: string; readonly body: string;
+} {
   const at = utcMinute(since);
   return {
+    detail: `${WORKER_ASLEEP_DETAIL_PREFIX}${workerId}:${Number.isFinite(since) ? Math.trunc(since) : 'unrecorded'}`,
     subject: `${WORKER_ASLEEP_SUBJECT_PREFIX} run ${runId}, last turn ended ${at}`,
     body: `Your worker ${workerId} on run ${runId} was put to sleep: the run is working, and the worker's last turn ended at `
       + `${at} with nothing running or scheduled since. Its workspace, branch and transcript are kept. Mail to it, or a `
