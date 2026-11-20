@@ -1161,10 +1161,10 @@ every file found. The fix:
   `OpenRunTicket = { kind: 'existing'; id: number; epicId: number; reproject: string | null } | { kind: 'new'; epicId: number; project: string; title: string }`.
   Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-closed` (the plan reads `ended`: `runs open`
   after `plan close`, which the sync would otherwise answer by closing the initiative under a live run);
-  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (no live epic lists the wave, and the run names a
-  ticket that is not of a live epic that lists no waves, or names none in a plan where every live epic lists waves; or the
-  named ticket's epic lists waves and is not the wave's; or the named ticket is an open ticket of a dropped epic that lists no
-  waves, which only live epics take); `ticket-required`
+  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (a live epic exists, and: no live epic lists the
+  wave, and the run names a ticket that is not of a live epic that lists no waves, or names none in a plan where every live
+  epic lists waves; or the named ticket is available and its epic lists waves and is not the wave's, since at a wave a live
+  epic lists an unavailable ticket answers `ticket-unavailable` first); `ticket-required`
   (programme work map WM6, D-8780, with WM1's word: a run that names no ticket, at a wave no live epic lists, in a plan where
   a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
   or an Upkeep ticket). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
