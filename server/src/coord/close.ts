@@ -409,10 +409,11 @@ async function abandonRun(
     : await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
   if (!fleet.ok) return fleet;
   if (sweep !== undefined) {
-    const after = decideClose({ step: 'recheck', stop: await sweep.stillStuck(), release: act.plan.released });
+    const after = decideClose({ step: 'recheck', stop: await sweep.stillStuck(), release: act.plan.released,
+      acted: act.plan.fleet !== null });
     if (after.kind !== 'go') return stopped(deps, after);
   }
-  const late = commitAbandon(deps, id, plan, causedBy, sweep, true, detail);
+  const late = commitAbandon(deps, id, plan, causedBy, sweep, act.plan.fleet !== null, detail);
   if (late !== null) return late;
   noteGone(deps, id, causedBy, fleet);
   return { ok: true, id, state: 'failed', released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };

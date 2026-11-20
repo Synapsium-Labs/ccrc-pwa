@@ -159,7 +159,7 @@ export async function resolveDoneBranch(
       return { ok: false, code: 'branch-unmeasurable',
         detail: 'this in-place run records no branch, so there is nothing to re-measure' };
     }
-    return { ok: true, branch: run.branch, provenance: IN_PLACE_PROVENANCE, project: run.project };
+    return { ok: true, branch: run.branch, provenance: IN_PLACE_PROVENANCE, project: null };
   }
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
   // why the DB column cannot be trusted here. `record` is undefined on ONE
@@ -299,21 +299,35 @@ const withLineageDetail = (today: string, s: Extract<StaleSettled, { kind: 'toda
 
 type PrLineRead = { ok: true; line: CcdPrLine } | { ok: false; code: DoneRejectCode; detail: string };
 
-/** The PR read of an in-place run (D-6096): `pr-state --project` carries the repo's PR rows on every line, and the line is
- *  rebound to the run's recorded sibling branch (`ahead` unmeasured, since no registry row counts that branch), so
- *  `phaseFor` reads the PR whose head is that branch. The line taken is the first whose own base binds a row to the branch,
+/**
+ * D-6096 (review 2993 F1): a `pr-state --project` line rebound to an in-place run's sibling branch, on the sibling TIP
+ * just read, never on ccd's `ours`. ccd sets `ours` per line by reachability from THAT line's registered session tip, and
+ * the sibling branch is no session's workspace, so on real output every line reads it false. Here a row is bound when it
+ * is the repo's own (not cross-repository), on the line's base, its head the recorded branch and its head commit the tip
+ * that was measured; every other row is unbound. `phaseFor`, `closePrFactsOf` and `mergedFactsOf` then read the line as
+ * they read any other, so an open, draft or merged sibling PR binds, a closed one regresses an open claim, and the close
+ * records the PR for `landOnClose`. `ahead` is unmeasured: no registry row counts that branch. Pure.
+ */
+export function siblingPrLine(line: CcdPrLine, branch: string, tip: string): CcdPrLine {
+  const rows = line.rows.map((r) => ({ ...r, ours: r.isCrossRepository === false && r.baseRefName === line.baseShort
+    && r.headRefName === branch && r.headRefOid === tip }));
+  return { ...line, rows, branch, tip, ahead: null };
+}
+
+/** The PR read of an in-place run (D-6096): the project form carries the repo's PR rows on every line, and each line is
+ *  rebound to the sibling branch on its measured tip (`siblingPrLine`). The line taken is the first that binds a row,
  *  else the first full line, which then reads `none`. */
-async function inPlacePrLine(deps: VerifyDoneDeps, project: string, branch: string): Promise<PrLineRead> {
+async function inPlacePrLine(deps: VerifyDoneDeps, project: string, branch: string, tip: string): Promise<PrLineRead> {
   const argv = CCD_ARGV.prStateProject(project);
   if (!ccdCan(deps.fleetState, 'prStateProject')) {
     return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
   }
   const res = await deps.runCcd(argv);
   if (!res.ok) return { ok: false, code: 'pr-unmeasurable', detail: res.stderr.trim() };
-  const lines = parsePrLines(res.stdout).filter(isFullLine);
+  const lines = parsePrLines(res.stdout).filter(isFullLine).map((l) => siblingPrLine(l, branch, tip));
   const bound = lines.find((l) => boundRow(l.rows, l.baseShort, branch) !== null) ?? lines[0];
   if (!bound) return { ok: false, code: 'pr-unmeasurable', detail: 'pr-state answered no full line for the project' };
-  return { ok: true, line: { ...bound, branch, ahead: null } };
+  return { ok: true, line: bound };
 }
 
 /**
@@ -417,7 +431,7 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   // `pr-state --session` would read. The project form answers the repo's PR rows, and the recorded branch is bound to one.
   let line: CcdPrLine;
   if (run.inPlace === true) {
-    const read = await inPlacePrLine(deps, run.project, branch);
+    const read = await inPlacePrLine(deps, run.project, branch, tip);
     if (!read.ok) return read;
     line = read.line;
   } else {

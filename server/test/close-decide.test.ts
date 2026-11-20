@@ -257,11 +257,14 @@ describe('decideClose, the sweep, ledger, verb, fleet and re-measure steps', () 
     expect(decideClose({ step: 'sweep', stop: null, fresh: () => ({ ok: true, run: { claimedBy: 'x' } }) as never, claimedBy: 'x' }).kind).toBe('go');
   });
   it('recheck: a stop after the act is STALE and names which fleet act ran', () => {
-    expect(decideClose({ step: 'recheck', stop, release: true }))
+    expect(decideClose({ step: 'recheck', stop, release: true, acted: true }))
       .toEqual({ kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop, fleetAct: 'released' } });
-    expect(decideClose({ step: 'recheck', stop, release: false }))
+    expect(decideClose({ step: 'recheck', stop, release: false, acted: true }))
       .toEqual({ kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop, fleetAct: 're-held' } });
-    expect(decideClose({ step: 'recheck', stop: null, release: true }).kind).toBe('go');
+    expect(decideClose({ step: 'recheck', stop: null, release: true, acted: true }).kind).toBe('go');
+    // D-6096 (review 2993 F6): no fleet act ran (an in-place run's abandon), so the stop names none, never re-held
+    expect(decideClose({ step: 'recheck', stop, release: false, acted: false }))
+      .toEqual({ kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop, fleetAct: 'none' } });
   });
   it('ledger: an unreadable ledger refuses, a read one goes with its entries', () => {
     expect(outcomeOf(decideClose({ step: 'ledger', history: { ok: false, error: 'unreadable' }, branch: 'ws/a' })))

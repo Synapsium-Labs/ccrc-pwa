@@ -210,7 +210,7 @@ describe('the column and the store call (D-6096)', () => {
     expect(run).toMatchObject({ state: 'working', sessionId: BOSS, branch: 'feat/sibling', resumed: false, inPlace: true,
       dispatchedAt: null, workspace: null });
     expect(b.coord.runEvents(id).map((e) => [e.fromState, e.toState, e.detail])).toEqual([
-      ['planned', 'dispatched', 'inPlace'], ['dispatched', 'working', 'inPlace'],
+      ['planned', 'dispatched', 'in-place'], ['dispatched', 'working', 'in-place'],
     ]);
     // an in-place run takes no concurrency slot: neither the count nor the rows it counts (D-8792) see it
     expect(b.coord.capsUsage().running).toBe(0);
@@ -512,13 +512,15 @@ describe('an in-place run\'s close, abandon and done-claim never touch its coord
     mkdirSync(gitHeads, { recursive: true });
     writeFileSync(path.join(gitHeads, 'sibling'), `${TIP}\n`);
     const run = okRun(b.coord.run(id))!;
-    // the coordinator's own workspace has a PR (#7) and the sibling branch has another (#42): the claim is about #42
+    // the coordinator's own workspace has a PR (#7) and the sibling branch has another (#42): the claim is about #42. As
+    // real ccd output gives it (review 2993 F1): the line is the coordinator's, and ccd's `ours` is reachability from ITS
+    // tip, so the sibling's row reads `ours: false`; only the coordinator's own row is ours.
     const row = (number: number, head: string, over: Record<string, unknown> = {}) =>
-      ({ number, state: 'OPEN', headRefName: head, baseRefName: 'main', isCrossRepository: false, ours: true, isDraft: false, ...over });
+      ({ number, state: 'OPEN', headRefName: head, baseRefName: 'main', isCrossRepository: false, ours: false, isDraft: false, ...over });
     const seen: string[][] = [];
     const prRun: Runner = async (_cmd, args) => {
       seen.push(args);
-      const rows = [row(7, `ws/${BOSS}`), row(42, 'feat/sibling')];
+      const rows = [row(7, `ws/${BOSS}`, { ours: true, headRefOid: 'b'.repeat(40) }), row(42, 'feat/sibling', { headRefOid: TIP })];
       return { ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows, baseShort: 'main', branch: `ws/${BOSS}`, ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' };
     };
     const deps = testDeps(b.home, prRun);
@@ -532,7 +534,7 @@ describe('an in-place run\'s close, abandon and done-claim never touch its coord
     // a claim naming the coordinator's own PR is refused
     expect(await verifyDone(deps, inPlace, { ...claim, prNumber: 7 })).toMatchObject({ ok: false, code: 'pr-regressed' });
     // the sibling has no PR of its own: an open claim is refused although the coordinator's workspace has one
-    const noPr: Runner = async () => ({ ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows: [row(7, `ws/${BOSS}`)], baseShort: 'main', branch: `ws/${BOSS}`, ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' });
+    const noPr: Runner = async () => ({ ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows: [row(7, `ws/${BOSS}`, { ours: true, headRefOid: 'b'.repeat(40) })], baseShort: 'main', branch: `ws/${BOSS}`, ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' });
     expect(await verifyDone(testDeps(b.home, noPr), inPlace, claim)).toMatchObject({ ok: false, code: 'pr-regressed' });
     // the same claim for a run NOT taken in place reads the registry's `ws/<id>` branch, where there is no ref
     expect(await verifyDone(deps, { sessionId: BOSS, project: PROJECT, branch: 'feat/sibling' }, claim))
@@ -542,7 +544,7 @@ describe('an in-place run\'s close, abandon and done-claim never touch its coord
   it('resolveDoneBranch answers the recorded branch with its own provenance for an in-place run, and still refuses a bad session id', async () => {
     const b = build();
     expect(await resolveDoneBranch(b.base, { sessionId: BOSS, project: PROJECT, branch: 'feat/sibling', inPlace: true }))
-      .toEqual({ ok: true, branch: 'feat/sibling', provenance: expect.stringContaining('in-place'), project: PROJECT });
+      .toEqual({ ok: true, branch: 'feat/sibling', provenance: expect.stringContaining('in-place'), project: null });
     expect(await resolveDoneBranch(b.base, { sessionId: BOSS, project: PROJECT, branch: '', inPlace: true }))
       .toMatchObject({ ok: false, code: 'branch-unmeasurable' });
     expect(await resolveDoneBranch(b.base, { sessionId: '../x', project: PROJECT, branch: 'feat/sibling', inPlace: true }))
@@ -610,3 +612,162 @@ describe('the operator\'s pause does not refuse non-dispatch acts (D-8126 answer
   });
 });
 const TIP_FOR_ADVANCE = 'a'.repeat(40);
+
+describe('fix round 1 (review 2993): what an in-place run is for (D-6096)', () => {
+  const TIP = 'a'.repeat(40);
+  const TOKEN = 'f'.repeat(64);
+  const H = { 'x-ccrc-mail-token': TOKEN };
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+  const inPlaceRun = (b: ReturnType<typeof build>, wave = 1, branch = 'feat/sibling'): number => {
+    const id = b.open({ wave });
+    if (!b.coord.bindInPlace(id, BOSS, branch).ok) throw new Error('fixture: bind refused');
+    return id;
+  };
+  const siblingRef = (b: ReturnType<typeof build>, tip = TIP): void => {
+    const heads = path.join(b.base.cfg.projectsRoot, PROJECT, '.git', 'refs', 'heads', 'feat');
+    mkdirSync(heads, { recursive: true });
+    writeFileSync(path.join(heads, 'sibling'), `${tip}\n`);
+  };
+  /** A `pr-state --project` answer as real ccd gives it: the coordinator's own line, `ours` by reachability from ITS tip,
+   *  so only its own PR #7 reads ours; the sibling's PR #42 reads `ours: false` whatever its state. */
+  const prState = (sibling: Record<string, unknown>): Runner => async (_cmd, args) => {
+    if (args[0] !== 'pr-state') return { ran: true, code: 0, stdout: '', stderr: '' };
+    const base = { baseRefName: 'main', isCrossRepository: false, isDraft: false };
+    const rows = [{ ...base, number: 7, state: 'OPEN', headRefName: `ws/${BOSS}`, headRefOid: 'b'.repeat(40), ours: true },
+      { ...base, number: 42, state: 'OPEN', headRefName: 'feat/sibling', headRefOid: TIP, ours: false, ...sibling }];
+    return { ran: true, code: 0, stdout: `${JSON.stringify({ id: BOSS, rows, baseShort: 'main', branch: `ws/${BOSS}`, tip: 'b'.repeat(40), ahead: 1, checkedAt: Date.now() })}\n`, stderr: '' };
+  };
+  const claim = (prPhase: 'open' | 'draft' | 'merged' | 'closed' | 'none', prNumber: number | null = 42) =>
+    ({ branchTip: TIP, prNumber, prPhase, handoffCommit: TIP });
+  const MERGED = { state: 'MERGED', mergedAt: '2026-11-20T00:00:00Z', mergeCommit: { oid: 'c'.repeat(40) } };
+
+  it('F1: the sibling PR binds on the measured sibling tip, never on ccd\'s ours: an open, draft or merged claim passes', async () => {
+    const b = build();
+    siblingRef(b);
+    const run = doneRunOf({ ...okRun(b.coord.run(inPlaceRun(b)))!, sessionId: BOSS });
+    expect(await verifyDone(testDeps(b.home, prState({})), run, claim('open')))
+      .toMatchObject({ ok: true, measured: { branchTip: TIP, prNumber: 42, prPhase: 'open' } });
+    expect(await verifyDone(testDeps(b.home, prState({ isDraft: true })), run, claim('draft')))
+      .toMatchObject({ ok: true, measured: { prNumber: 42, prPhase: 'draft' } });
+    expect(await verifyDone(testDeps(b.home, prState(MERGED)), run, claim('merged')))
+      .toMatchObject({ ok: true, measured: { prNumber: 42, prPhase: 'merged' } });
+  });
+
+  it('F1: a closed sibling PR regresses an open claim, and a PR whose head is not the sibling tip binds nothing', async () => {
+    const b = build();
+    siblingRef(b);
+    const run = doneRunOf({ ...okRun(b.coord.run(inPlaceRun(b)))!, sessionId: BOSS });
+    expect(await verifyDone(testDeps(b.home, prState({ state: 'CLOSED' })), run, claim('open')))
+      .toMatchObject({ ok: false, code: 'pr-regressed' });
+    // the PR's head is an older commit of the branch: it says nothing about this tip, so the open claim regresses
+    expect(await verifyDone(testDeps(b.home, prState({ headRefOid: 'd'.repeat(40) })), run, claim('open')))
+      .toMatchObject({ ok: false, code: 'pr-regressed' });
+    // a fork PR with the same head name is never the sibling's
+    expect(await verifyDone(testDeps(b.home, prState({ isCrossRepository: true })), run, claim('open')))
+      .toMatchObject({ ok: false, code: 'pr-regressed' });
+  });
+
+  it('F1: a done close of an in-place run records the sibling PR as closePr, and landOnClose reads it merged', async () => {
+    const b = build();
+    siblingRef(b);
+    const id = inPlaceRun(b);
+    const t = testDeps(b.home, prState(MERGED));
+    const landed: unknown[] = [];
+    const advanceLanding = b.coord.advanceLanding.bind(b.coord);
+    b.coord.advanceLanding = ((x: Parameters<typeof advanceLanding>[0]) => { landed.push(x); return advanceLanding(x); }) as typeof b.coord.advanceLanding;
+    const deps = { ...b.deps, runCcd: t.runCcd, fleetState: { ...b.fleetState, ccdVerbs: [...VERBS, 'pr-state'] } };
+    const out = await closeRun(deps, id, { fingerprint: claim('merged'), final: true, state: 'done' }, 'coordinator');
+    expect(out).toMatchObject({ ok: true, state: 'done', released: false });
+    expect(b.acts(), 'still no ws-* verb on the claimant').toEqual([]);
+    expect(JSON.parse(okRun(b.coord.run(id))!.closePr ?? 'null')).toEqual({ pr: 42, merged: true, head: TIP });
+    expect(landed, 'landOnClose marks the sibling PR').toEqual([expect.objectContaining({ project: PROJECT, pr: 42 })]);
+  });
+
+  it('F2: an in-place send-back at a full cap is neither refused nor stamped as an admission waiter', async () => {
+    const b = build();
+    app = await buildServer({ ...b.base, mailToken: TOKEN, coord: b.coord, fleetState: b.fleetState });
+    b.coord.setCaps({ maxConcurrentWorkers: 1 });
+    b.open({ session: 'demo-worker', state: 'dispatched' });
+    const id = inPlaceRun(b, 2);
+    expect(b.coord.advance(id, 'awaiting-review', 'coordinator')).toMatchObject({ ok: true });
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/advance`, headers: H,
+      payload: { to: 'working', fingerprint: claim('open') } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(okRun(b.coord.run(id))!.state).toBe('working');
+    expect(b.coord.admissionWaiters()).toEqual([]);
+  });
+
+  it('F2 control: an ordinary send-back at a full cap is still refused, and waits, as on main', async () => {
+    const b = build();
+    app = await buildServer({ ...b.base, mailToken: TOKEN, coord: b.coord, fleetState: b.fleetState });
+    b.coord.setCaps({ maxConcurrentWorkers: 1 });
+    seedRow(b.home, 'demo-worker');
+    const id = b.open({ session: 'demo-worker', state: 'dispatched' });
+    expect(b.coord.advance(id, 'working', 'coordinator')).toMatchObject({ ok: true });
+    expect(b.coord.advance(id, 'awaiting-review', 'coordinator')).toMatchObject({ ok: true });
+    b.open({ wave: 2, session: 'demo-other', state: 'dispatched' });
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/advance`, headers: H,
+      payload: { to: 'working', fingerprint: claim('open') } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency' } });
+    expect(b.coord.admissionWaiters().map((w) => w.runId)).toEqual([id]);
+  });
+
+  describe('F3: the bind refuses a branch that is not the sibling\'s', () => {
+    const inPlaceDeps = (b: ReturnType<typeof build>): InPlaceDeps => ({
+      coord: b.coord, io: b.base.io, cfg: b.base.cfg,
+      attribute: (who, uuid) => attributionVerdict(b.base.io, b.base.cfg, who, uuid, 'claimedByUuid'),
+    });
+    const bind = (b: ReturnType<typeof build>, id: number, branch: string) =>
+      bindRunInPlace(inPlaceDeps(b), id, BOSS, `u-${BOSS}`, branch);
+
+    it('the project\'s base branch is refused', async () => {
+      const b = build();
+      const id = b.open();
+      expect(await bind(b, id, 'main')).toEqual({ ok: false, kind: 'bad-request', detail: expect.stringContaining('base branch') });
+      expect(okRun(b.coord.run(id))!.state).toBe('planned');
+    });
+
+    it('the claimant\'s own registry branch is refused', async () => {
+      const b = build();
+      const id = b.open();
+      expect(await bind(b, id, `ws/${BOSS}`))
+        .toEqual({ ok: false, kind: 'bad-request', detail: expect.stringContaining('claimant\'s own workspace branch') });
+      expect(okRun(b.coord.run(id))!.state).toBe('planned');
+    });
+
+    it('another registry row\'s branch in the project is refused, and one in another project is not', async () => {
+      const b = build();
+      seedRow(b.home, 'demo-other');
+      seedRow(b.home, 'else-row', { project: 'else', branch: 'feat/elsewhere', base: 'origin/trunk' });
+      const id = b.open();
+      expect(await bind(b, id, 'ws/demo-other'))
+        .toEqual({ ok: false, kind: 'bad-request', detail: expect.stringContaining('workspace branch of demo-other') });
+      expect(okRun(b.coord.run(id))!.state).toBe('planned');
+      expect(await bind(b, id, 'feat/elsewhere')).toMatchObject({ ok: true, branch: 'feat/elsewhere' });
+    });
+
+    it('a row of the project whose branch cannot be read refuses: an unreadable registry never frees', async () => {
+      const b = build();
+      seedRow(b.home, 'demo-other');
+      const field = path.join(b.home, '.cc-sessions', 'demo-other.branch');
+      rmSync(field);
+      mkdirSync(field);
+      const id = b.open();
+      expect(await bind(b, id, 'feat/sibling')).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+      expect(okRun(b.coord.run(id))!.state).toBe('planned');
+    });
+  });
+
+  it('F4: an in-place run is never its coordinator\'s run as worker, so a finished one does not read released', async () => {
+    const b = build();
+    const id = inPlaceRun(b);
+    expect(await closeRun(b.deps, id, { ...FAILED_CLOSE, final: true }, 'coordinator')).toMatchObject({ ok: true, state: 'failed' });
+    const read = b.coord.lastRunBySession([BOSS]);
+    if (!read.ok) throw new Error('fixture: lastRunBySession unreadable');
+    expect(read.last, 'no newest run as worker').toEqual([]);
+    expect(read.lastPlaced).toEqual([]);
+    expect(read.openClaimants).not.toContain(BOSS);
+  });
+});

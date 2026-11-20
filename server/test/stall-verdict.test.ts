@@ -522,12 +522,19 @@ describe('golden fixtures (spec §1 measured times)', () => {
     expect(v({ mail: [own29, wait29] }, lastOn29 + 3 * H)).toEqual(NONE);
   });
 
-  it('an in-place run is no worker subject: its session is its claimant and stays a coordinator subject (D-8126)', () => {
+  it('an in-place run is no worker subject: its session is its claimant and stays a coordinator subject (D-6096)', () => {
     const inPlace = runRow({ id: 41, sessionId: COORD, claimedBy: COORD, dispatchedAt: null, inPlace: true });
     const other = runRow({ id: 42, sessionId: 'demo-other-worker', claimedBy: COORD });
     expect(stallSubjects([inPlace, other]).map((x) => x.primary.id)).toEqual([42]);
     expect(stallSubjects([inPlace])).toEqual([]);
     expect(stallCoordinatorSubjects([inPlace, other]).map((c) => [c.sessionId, c.runs.map((r) => r.id)])).toEqual([[COORD, [41, 42]]]);
+  });
+
+  it('a run bound to its own claimant with inPlace unset, as after a rebuild, is no worker subject either (actsOnClaimant, review 2993 F8)', () => {
+    const rebuilt = runRow({ id: 43, sessionId: COORD, claimedBy: COORD, dispatchedAt: null });
+    const other = runRow({ id: 44, sessionId: 'demo-other-worker', claimedBy: COORD });
+    expect(stallSubjects([rebuilt, other]).map((x) => x.primary.id)).toEqual([44]);
+    expect(stallSubjects([rebuilt])).toEqual([]);
   });
 
   it('a declared-idle legit wait: a question holds the watch through the 28.7 h legit maximum, and coord-ball fires once at 30 h', () => {

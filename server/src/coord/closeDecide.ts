@@ -5,7 +5,7 @@ import type { CloseCause, CloseOutcome, CloseRunBody, ChildGate } from './close.
 import type { DoneClaim, DoneVerdict } from './fingerprint.js';
 import type { PrHistoryRead } from './prhistory.js';
 import type { SingleRead } from '../registry.js';
-import { HANDOFF_SHA, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
+import { HANDOFF_SHA, actsOnClaimant, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
 import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from './store.js';
 
 /**
@@ -249,14 +249,6 @@ export interface CloseActFacts {
   gate: () => Promise<ChildGate>;
 }
 
-/** D-6096: the session a close or an abandon would act on is the run's own CLAIMANT, so its workspace is the coordinator's.
- *  True for an in-place run, and for any run bound to its own claimant with `inPlace` unset: after a coord.db rebuild
- *  (`inPlace` is not recoverable, the reconstruction drill's UNRECOVERABLE list) an in-place run reads as such a run, and a
- *  plain dispatch can no longer make one (`self-dispatch`). Either way no `ws-*` verb and no child gate names the claimant. */
-export function actsOnClaimant(run: Pick<RunRow, 'inPlace' | 'sessionId' | 'claimedBy'>): boolean {
-  return run.inPlace === true || (run.sessionId !== null && run.sessionId === run.claimedBy);
-}
-
 async function decideCloseAct(f: CloseActFacts): Promise<CloseDecision<ActPlan>> {
   // D-6096: an in-place run's workspace is its coordinator's. No release, no hold for wave N+1 (the next wave's run names no
   // session, never the claimant), no archive and no child gate: the sibling list and the gate are not even read.
@@ -360,12 +352,14 @@ export interface RecheckFacts {
   stop: DeadCoordinatorStop | null;
   /** Which act ran: a release (nothing else claimed the workspace) or a re-hold under the surviving run. */
   release: boolean;
+  /** D-6096 (review 2993 F6): whether a fleet act ran at all (`ActPlan.fleet !== null`); none for an in-place run. */
+  acted: boolean;
 }
 
 function decideRecheck(f: RecheckFacts): CloseDecision<null> {
   // A revive that landed during the release keeps its run open: the stale arm names which act already ran.
-  return f.stop === null ? go(null)
-    : { kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop: f.stop, fleetAct: f.release ? 'released' : 're-held' } };
+  const fleetAct = !f.acted ? 'none' : f.release ? 'released' : 're-held';
+  return f.stop === null ? go(null) : { kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop: f.stop, fleetAct } };
 }
 
 export interface CommitFacts {

@@ -2000,6 +2000,9 @@ type AskMint = {
   releaseReason?: AskMintReleaseReason;
 };
 
+/** D-6096: the `run_events.detail` of both hops of an in-place bind (`CoordStore.bindInPlace`), the plan's word. */
+export const IN_PLACE_EVENT = 'in-place';
+
 /**
  * Every read and every write of the coordination database, in one class, and
  * SYNCHRONOUS throughout — `DatabaseSync` has no async surface, so a whole
@@ -3289,7 +3292,7 @@ export class CoordStore {
     });
   }
 
-  /** The ONE writer of `landing_intents` (D-7614 wave 5g; D-8126 gave it a second caller, `bindInPlace`): a hold on `key`
+  /** The ONE writer of `landing_intents` (D-7614 wave 5g; D-6096 gave it a second caller, `bindInPlace`): a hold on `key`
    *  for the run's project, set by the run's claimant at `at`, or at the run's own `dispatchedAt` when `at` is null. A
    *  repeated key throws on the primary key, so the caller's transaction rolls back. */
   private holdLandingIntent(runId: number, key: string, at: number | null): void {
@@ -4178,25 +4181,24 @@ export class CoordStore {
    * machine has no `planned` -> `working` edge and is not widened), the run's session the claimant (through `bindSession`,
    * the one writer of that column), `branch` the sibling worktree's, `resumed` 0 and `inPlace` 1.
    *
-   * `dispatchedAt` IS LEFT NULL, and that is the point: an in-place run starts no process, so `capsUsage().running` and the
-   * stale-run predicate's `activeRunWorkers` (both read `dispatchedAt IS NOT NULL`) charge it to neither cap. `workspace` is
+   * `dispatchedAt` IS LEFT NULL, and that is the point: an in-place run starts no process, so `capsUsage().running` and
+   * `capsCountedRuns` (both read `dispatchedAt IS NOT NULL`) charge it to neither cap. `workspace` is
    * left null too: the sibling worktree is not a registry workspace. Two `run_events` rows, one per hop, both detail
-   * `inPlace`; the admission stamp is cleared by the hops (`advanceInner`).
+   * `in-place` (the plan's word); the admission stamp is cleared by the hops (`advanceInner`). `at` stamps the landing
+   * intents it holds, since `dispatchedAt` is null here.
    *
    * The first hop is taken BEFORE any column is written, so a run not `planned` (or not a work run) refuses
    * `bad-transition` with nothing changed. The caller (`bindRunInPlace`, `dispatch.ts`) has already decided WHO may bind.
    */
-  bindInPlace(runId: number, sessionId: string, branch: string, intents: readonly string[] = []): AdvanceResult {
+  bindInPlace(runId: number, sessionId: string, branch: string, intents: readonly string[] = [], at: number = Date.now()): AdvanceResult {
     return tx(this.db, () => {
-      const first = this.advanceInner(runId, 'dispatched', 'coordinator', 'inPlace');
+      const first = this.advanceInner(runId, 'dispatched', 'coordinator', IN_PLACE_EVENT);
       if (!first.ok) return first;
       this.bindSession(runId, sessionId);
       this.db.prepare('UPDATE runs SET branch = ?, resumed = 0, inPlace = 1 WHERE id = ?').run(branch, runId);
-      // Landing intents (D-8086), as `dispatchRun` writes them; `dispatchedAt` is null for an in-place run, so the hold is
-      // stamped with the bind's own time.
-      const at = Date.now();
+      // Landing intents (D-8086), as `dispatchRun` writes them, stamped `at`: `dispatchedAt` is null for an in-place run.
       for (const key of intents) this.holdLandingIntent(runId, key, at);
-      return this.advanceInner(runId, 'working', 'coordinator', 'inPlace');
+      return this.advanceInner(runId, 'working', 'coordinator', IN_PLACE_EVENT);
     });
   }
 
@@ -5196,12 +5198,14 @@ export class CoordStore {
     const ph = placeholders(sessionIds.length);
     const planned: RunState = 'planned';
     // `placedOnly` adds ONE clause to the newest-run subquery; the statement is otherwise the one `last` has always read.
+    // D-6096 (review 2993 F4): an in-place run is never its coordinator's run "as worker", so neither newest read counts
+    // one, and a coordinator whose last in-place run closed does not read released.
     const newest = (placedOnly: boolean): LastRun[] | { detail: string } => {
       const rows = this.db.prepare(
         'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
         'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
         'LEFT JOIN programs p ON p.slug = r.program ' +
-        `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph})${placedOnly ? ' AND state <> ?' : ''} ` +
+        `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) AND inPlace IS NOT 1${placedOnly ? ' AND state <> ?' : ''} ` +
         'GROUP BY sessionId) ORDER BY r.id',
       ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as unknown as {
         idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
@@ -5914,7 +5918,7 @@ export class CoordStore {
       // stored word outside the three is no `closedBy`; the detail is the redacted form.
       closedBy: isRunClosedBy(row.closedBy) ? row.closedBy : null,
       closeDetail: row.closeDetail === null ? null : redactCommand(row.closeDetail),
-      // Migration 52 (D-6096): present exactly for a run its coordinator took in place, absent for every other.
+      // Migration 115 (D-6096): present exactly for a run its coordinator took in place, absent for every other.
       ...(row.inPlace === 1 ? { inPlace: true } : {}),
     };
   }

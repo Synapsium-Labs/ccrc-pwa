@@ -7332,7 +7332,7 @@ export interface RunSummary {
    *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
    *  `FLEET_PROTO` is not bumped. */
   runTitle?: string | null;
-  /** D-6096 (migration 113): `true` for a run its coordinator took IN PLACE, as the run's own worker, in a sibling worktree
+  /** D-6096 (migration 115): `true` for a run its coordinator took IN PLACE, as the run's own worker, in a sibling worktree
    *  (`POST /api/runs/:id/dispatch` with `inPlace: true`). Such a run starts no process, takes no concurrency slot and is
    *  never closed through its coordinator's workspace. ABSENT for every other run, and on an older server. ADDITIVE;
    *  `FLEET_PROTO` is not bumped. */

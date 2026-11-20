@@ -61,6 +61,7 @@ import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } f
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { bindRunInPlace, type InPlaceOutcome } from './dispatch.js';   // D-6096: the in-place bind
+import { inPlaceRequest } from './dispatchDecide.js';   // D-6096: the in-place body, shaped in L1 (review 2993 F8)
 import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
@@ -1774,20 +1775,16 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown };
-    const inPlaceBody = (req.body ?? {}) as { inPlace?: unknown; by?: unknown; byUuid?: unknown; branch?: unknown };
     // D-6096: the IN-PLACE bind. A coordinator takes its own refused wave as the run's worker; no process starts and no
     // fleet act is composed, so none of the dispatch's deps below are built for it, and the skill self-install (which
-    // belongs to a bound WORKER) never runs for it. Any `inPlace` value but `true` is malformed.
-    if (inPlaceBody.inPlace !== undefined) {
-      if (inPlaceBody.inPlace !== true) return refuseRoute(reply, 'bad-request', { detail: 'inPlace: must be true when given' });
-      if (typeof inPlaceBody.by !== 'string' || inPlaceBody.by === '' || typeof inPlaceBody.byUuid !== 'string' || inPlaceBody.byUuid === '') {
-        return refuseRoute(reply, 'bad-request', { detail: 'inPlace: by and byUuid (the claimant) are required' });
-      }
-      const by = inPlaceBody.by;
-      const byUuid = inPlaceBody.byUuid;
+    // belongs to a bound WORKER) never runs for it. The body is shaped in L1 (`inPlaceRequest`, review 2993 F8).
+    const inPlace = inPlaceRequest(req.body ?? {});
+    if (inPlace !== null) {
+      if (!inPlace.ok) return refuseRoute(reply, 'bad-request', { detail: inPlace.detail });
+      const { by, byUuid, branch } = inPlace;
       const inPlaceDeps = { coord, io: deps.io, cfg: deps.cfg,
         attribute: (who: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, who, uuid, 'claimedByUuid') };
-      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, inPlaceBody.branch, body.intents)));
+      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, branch, body.intents)));
     }
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),

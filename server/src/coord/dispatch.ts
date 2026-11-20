@@ -26,13 +26,12 @@ import {
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
 import { SKILL_PREFLIGHT_EVENT } from './skillInstall.js';
-import { isDocsBareRef } from '../../../shared/docs.js';
-import { parseLandingIntents } from '../../../shared/landingIntents.js';
-import type { AttributionRead, AttributionRefusal } from './openRun.js';
+import type { AttributionRead } from './openRun.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
   admitMarkerRefusal, capRefusalOf, capShadowLine, capShadowResumeLine, capsReadingOf, decideDispatch, freedSlotPending,
-  resumeSkipsCap, sendBackCapPlan, workerReadingOf, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop, type WorkerFacts, type WorkerReading,
+  resumeSkipsCap, sendBackCapPlan, sendBackCharged, workerReadingOf, decideInPlaceCaller, decideInPlaceRequest, decideInPlaceTarget,
+  type InPlaceHalt, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop, type WorkerFacts, type WorkerReading,
 } from './dispatchDecide.js';
 import { laneArmRowViewOf } from './laneArm.js';
 import { capWaitOf } from './admissionWake.js';
@@ -395,9 +394,12 @@ export async function sendBackCapCheck(
   coord: CoordStore, ports: CapPorts, id: number, to: RunState,
 ): Promise<() => { limit: number; running: number } | null> {
   const today = (): { limit: number; running: number } | null => capsMeasured(coord).overConcurrency;
+  const read = coord.run(id);
+  // D-6096 (review 2993 F2): an in-place run's send-back, which `sendBackCharged` answers not charged on every edge, is no
+  // refusal here, so the gate admits it and `waitOnSendBackRefusal` stamps nothing. Every other run's check is as before.
+  if (read.ok && read.run !== null && read.run.inPlace === true && !sendBackCharged(to, read.run.state, true)) return () => null;
   const workerFacts = ports.workerFacts;
   if (workerFacts === undefined || today() === null) return today;
-  const read = coord.run(id);
   const from = read.ok && read.run !== null ? read.run.state : null;
   const sessionId = read.ok && read.run !== null ? read.run.sessionId : null;
   const armed = capCountsWorkingArmed(coord);
@@ -1017,10 +1019,7 @@ export interface InPlaceDeps {
 }
 
 /** `bindRunInPlace`'s answer: the bind, a refusal of the dispatch union, or the attribution gate's own refusal. */
-export type InPlaceOutcome =
-  | { ok: true; id: number; sessionId: string; branch: string }
-  | Extract<DispatchOutcome, { ok: false }>
-  | { ok: false; kind: 'attribution'; error: AttributionRefusal; detail: string };
+export type InPlaceOutcome = { ok: true; id: number; sessionId: string; branch: string } | InPlaceHalt;
 
 /**
  * D-6096 (fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave as the run's own
@@ -1032,59 +1031,31 @@ export type InPlaceOutcome =
  * stop binds every path, DISPATCH, THE IN-PLACE BIND AND SELF-WORK ON NEW WAVES, and nothing else: the close, the abandon
  * and the advance do not read the marker; the listing fails shut, as the dispatch's admit step does), then the run (it
  * exists, is a `planned` work run, is not already bound to another session), the caller (it is the claimant, and its uuid
- * is the registry's), the claimant's measured project (equal to the run's; unreadable or unrecorded refuses), and the
- * branch (a bare git ref name, `isDocsBareRef`, the one shared reader). The concurrency cap is not asked: an in-place run
+ * is the registry's), the claimant's measured project (equal to the run's; unreadable or unrecorded refuses), the branch
+ * (a bare git ref that is the sibling's: no registered workspace's and not the project's base, review 2993 F3), and
+ * another programme's held landing intent. Each is decided in `dispatchDecide.ts`. The concurrency cap is not asked: an in-place run
  * starts nothing and is charged to neither cap (`CoordStore.bindInPlace` leaves `dispatchedAt` null).
  */
 export async function bindRunInPlace(
   deps: InPlaceDeps, id: number, by: string, byUuid: string, branch: unknown, intents: unknown = undefined,
 ): Promise<InPlaceOutcome> {
   const { coord } = deps;
-  // The measured listing (the plain `readdir` ratchet, D-5969): an absent or unreadable registry is no answer, so it
-  // folds to `null` and refuses `paused`, failing shut as the admit step does.
+  // The executor only reads and writes: every refusal is `dispatchDecide.ts`'s (review 2993 F8), asked in the order the
+  // reads come. The measured listing (the plain `readdir` ratchet, D-5969) folds an absent or unreadable registry to
+  // `null`, which refuses `paused`, failing shut as the admit step does.
   const listing = await deps.io.readdirMeasured(deps.cfg.registryDir);
-  const markers = admitMarkerRefusal(listing.ok ? listing.entries : null);
-  if (markers !== null) return markers;
-  const read = coord.run(id);
-  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
-  const run = read.run;
-  if (run === null) return { ok: false, kind: 'unknown-run' };
-  if (run.kind !== 'work') {
-    return { ok: false, kind: 'bad-request', detail: 'inPlace: only a work run is bound in place' };
-  }
-  if (run.state !== 'planned') return { ok: false, kind: 'bad-transition', from: run.state, to: 'working' };
-  if (run.claimedBy !== by) return { ok: false, kind: 'refused', code: 'claimed-by-another' };
-  // A planned run already bound to another session (a wave N>=2 reclaim) would be silently re-bound, and its worker's
-  // mail re-issued to the coordinator: refused instead.
-  if (run.sessionId !== null && run.sessionId !== by) {
-    return { ok: false, kind: 'bad-request', detail: 'inPlace: this run is already bound to another session' };
-  }
-  const who = await deps.attribute(by, byUuid);
-  if (!who.ok) return { ok: false, kind: 'attribution', error: who.error, detail: who.detail };
-  // The claimant's project, MEASURED through `fieldMeasured` (never `SessionRecord.project`, whose `project ?? id` default
-  // answers as if it were a measurement). Unreadable is transient; an unrecorded project proves nothing and fails shut.
-  const project = await fieldMeasured(deps.io, deps.cfg.registryDir, by, 'project');
-  if (!project.ok && project.reason === 'unreadable') return { ok: false, kind: 'registry-unmeasurable' };
-  if (!project.ok || project.content === '') {
-    return { ok: false, kind: 'refused', code: 'project-mismatch' };
-  }
-  if (project.content !== run.project) return { ok: false, kind: 'refused', code: 'project-mismatch', by: project.content };
-  if (typeof branch !== 'string' || !isDocsBareRef(branch)) {
-    return { ok: false, kind: 'bad-request', detail: 'branch: must be the sibling worktree\'s bare git branch name' };
-  }
+  const request = decideInPlaceRequest(listing.ok ? listing.entries : null, coord.run(id), by);
+  if (!request.ok) return request;
+  const run = request.plan;
+  const caller = decideInPlaceCaller(run, await deps.attribute(by, byUuid),
+    await fieldMeasured(deps.io, deps.cfg.registryDir, by, 'project'));
+  if (caller !== null) return caller;
   // D-8085, D-8086: the landing intents a plain dispatch holds are held by the in-place bind too, under the same holder
   // check (the caller runs inside `coordMutex`, which serialises this check and the write in `bindInPlace`).
-  const parsedIntents = parseLandingIntents(intents);
-  if (!parsedIntents.ok) return { ok: false, kind: 'bad-request', detail: parsedIntents.detail };
-  const intentKeys = parsedIntents.keys;
-  if (intentKeys.length > 0) {
-    const other = coord.heldLandingIntents(run.project, intentKeys).find((h) => h.program !== run.program);
-    if (other !== undefined) {
-      return { ok: false, kind: 'refused', code: 'intent-held', key: other.key,
-        holder: { runId: other.runId, program: other.program } };
-    }
-  }
-  const adv = coord.bindInPlace(id, by, branch, intentKeys);
+  const target = decideInPlaceTarget(run, by, branch, await readRegistryMeasured(deps.io, deps.cfg), intents,
+    (project, keys) => coord.heldLandingIntents(project, keys));
+  if (!target.ok) return target;
+  const adv = coord.bindInPlace(id, by, target.plan.branch, target.plan.intentKeys, Date.now());
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
-  return { ok: true, id, sessionId: by, branch };
+  return { ok: true, id, sessionId: by, branch: target.plan.branch };
 }
