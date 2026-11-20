@@ -45,7 +45,7 @@ const ROLE_ONLY_LINE = new RegExp(`<span class="sess-meta sess-meta--context">${
 /** The programme box's kicker (D-8817): the base drew the icon bare with the class `pg-ico`, then the word "Programme" and a
  *  middot; the head draws the icon inside an image named "Programme" and neither the word nor the middot. Both sides are
  *  brought to one shape: the head's wrapper is unwrapped, the base's word, middot and icon class are removed. */
-const PROGRAMME_ICON = /<span class="pg-ico" role="img" aria-label="Programme">(<svg[\s\S]*?<\/svg>)<\/span>/g;
+const PROGRAMME_ICON = /<span role="img" aria-label="Programme" title="Programme" class="[^"]*\bpg-ico\b[^"]*">(<svg[\s\S]*?<\/svg>)<\/span>/g;
 const BASE_PROGRAMME_WORD = '<span class="pg-word">Programme</span><span class="pg-sep" aria-hidden="true">·</span>';
 const BASE_KICKER_ICON = 'class="block flex-none pg-ico"';
 /** The programme box's title door (PL10, D26 amended), round the title span the base drew. */
@@ -97,6 +97,13 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '')
         .replace(FACE_MARK, '').replace(FACE_GROUP, '$1');
       expect(baseline.views[view].match(ROLE_CELL), `${view}: the base drew no role cell`).toBeNull();
+      // The badge is stripped below as a declared head-only addition, so it is counted FIRST: the world has two coordinators
+      // (`coord`, `coord-e`) and each view draws exactly two badges, each on one of their rows, so a badge drawn on a worker's
+      // row, or on a row with no `role`, turns this red instead of being stripped with the rest.
+      expect((html.match(ROLE_CELL) ?? []).length, `${view}: one role badge per coordinator row, none elsewhere`).toBe(2);
+      const badged = html.split('<div class="sess-line"').filter((row) => new RegExp(ROLE_CELL.source).test(row))
+        .map((row) => /aria-label="([^"]*)"><span aria-hidden="true">/.exec(row.slice(row.indexOf('sess-label')))?.[1]);
+      expect(badged.sort(), `${view}: the badged rows are the coordinators`).toEqual(['coord', 'coord-e']);
       expect(old, `${view}: no other delegation attribute`).not.toContain('data-delegation');
       for (const word of ['inferred', 'Unowned work', 'Offline coordinator', 'delegated']) {
         expect(html, `${view}: no "${word}"`).not.toContain(word);

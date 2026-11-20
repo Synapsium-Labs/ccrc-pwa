@@ -21,7 +21,7 @@
 // memo (C9, D-6441) holds: the card never re-renders for the time.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Door, Icon, TextLink, useNow } from '@ccrc/ui';
+import { BareRow, Door, RoleBadge, TextLink, useNow } from '@ccrc/ui';
 import type { RunSummary } from '../../../shared/api';
 import { SpecLink } from '../ledgers/GoalsPanel';
 import { programmeSpecHref } from '../ledgers/ledgerLinks';
@@ -125,8 +125,9 @@ export function ProgrammeBox({ view, state, tray, drawRow, drawAbroad, hueOf, on
   return (
     <section className="pg-box" data-hue={view.lead.hue} data-state={state}>
       <div className="pg-kicker" data-hue={view.lead.hue}>
-        {/* D-8817: the icon, the hue and the waves bar say programme, so the word is not drawn; the icon keeps its name. */}
-        <span className="pg-ico" role="img" aria-label="Programme"><Icon name="workflow" /></span>
+        {/* D-8817: the icon, the hue and the waves bar say programme, so the word is not drawn; the icon keeps its name and a
+            hover title (the badge primitive the coordinator's mark uses, so a mouse user still gets the word on hover). */}
+        <RoleBadge icon="workflow" label="Programme" title="Programme" className="pg-ico" />
         <Title slug={view.lead.slug} title={view.lead.title} />
         <WaitingChip slug={view.lead.slug} title={view.lead.title} />
         <BoxSpec slug={view.lead.slug} title={view.lead.title} />

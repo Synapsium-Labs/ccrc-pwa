@@ -107,6 +107,14 @@
   .chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
 }
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
+/* D-8817: the role badge in the details, where the word was drawn in this row's inherited ink. The glyph is the Goals door's size:
+   `1em` of `--fs-meta`, as that door's glyph is (`.chat-coord-goals svg`, below; its `Door` glyph span is `text-meta`). The role
+   detail keeps the line the word took (`min-height: 1lh` of its own inherited line), so the header is the height it was with the
+   word, in both skins, and the glyph is centred on that line. The card's `.sess-role` rule (`align-self: flex-start`, the quiet
+   ink) is not on it. */
+.chat-fact-role { display: flex; align-items: center; min-height: 1lh; }
+.chat-fact-role [role="img"] { font-size: var(--fs-meta); }
+.chat-fact-role svg { width: 1em; height: 1em; }
 .chat-facts .sess-subagent-list { flex-basis: 100%; }
 /* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its
    min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long

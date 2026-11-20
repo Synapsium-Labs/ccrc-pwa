@@ -29,8 +29,8 @@ import { coordinationLine, type Coordination } from '../fleet/fleetTree';
 import { coordinationClauses } from './sessionHeaderView';
 
 /** A plain detail — one fact in words, its tooltip when it has one. */
-function Detail({ children, title }: { children: ReactNode; title?: string }): ReactNode {
-  return <span className="chat-fact" title={title}>{children}</span>;
+function Detail({ children, title, className }: { children: ReactNode; title?: string; className?: string }): ReactNode {
+  return <span className={className === undefined ? 'chat-fact' : `chat-fact ${className}`} title={title}>{children}</span>;
 }
 
 /** One clause of the coordination row that opens somewhere — the run board, or the coordinator's session. */
@@ -144,7 +144,7 @@ export function SessionDetails({ facts, coordination }: {
       {/* A main checkout's heading is its project; the name the card leads with is here. */}
       {s.workspace === null && s.name !== null && <Detail title="this session's name">{s.name}</Detail>}
       {runId !== null && <Detail title="the run this wave belongs to — the run board names it">{`run #${runId}`}</Detail>}
-      {facts.coordinatorRole && <Detail><RoleBadge {...COORDINATOR_BADGE} className="sess-role" /></Detail>}
+      {facts.coordinatorRole && <Detail className="chat-fact-role"><RoleBadge {...COORDINATOR_BADGE} /></Detail>}
       {s.held !== null && ctx?.key === 'programme' && <Detail title="the hold, verbatim">{heldWords(s.held)}</Detail>}
       {s.pr?.number != null && <Detail>{`PR #${s.pr.number}`}</Detail>}
       {facts.lane.away && facts.offPool === null && facts.lane.label !== undefined && <Detail>{facts.lane.label}</Detail>}

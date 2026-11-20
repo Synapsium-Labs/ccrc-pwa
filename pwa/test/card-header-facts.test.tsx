@@ -154,18 +154,29 @@ describe('the model (D-5545)', () => {
     expect(cardFacts(sessionFacts({ session: s({ role: null as never }), now: NOW })).role).toBeNull();
   });
 
-  it('a coordinator with a long branch keeps both whole on the card (D-8142)', () => {
+  it('a coordinator with a long branch keeps both whole on the card (D-8142, D-8817)', () => {
     const branch = 'feat/a-long-descriptive-branch-name-for-the-sidebar';
     const f = sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'coordinator', branch }), now: NOW });
     const c = cardFacts(f);
     expect(c.role?.text).toBe('coordinator');
-    // D-8817: the role cell is the badge's width (`ROLE_CELL_CHARS`), no longer the word's, so the branch keeps more.
-    expect(c.context).toMatchObject({ key: 'branch', text: branch, short: shortenByToken(branch, NAME_BUDGET - ROLE_CELL_CHARS) });
+    // As at main, the shortened branch spelt out; the budget is the badge's cell (`ROLE_CELL_CHARS`), no longer the word's.
+    expect(c.context).toMatchObject({ key: 'branch', text: branch, short: 'feat/a-long…' });
     expect(c.context!.short!.length + ROLE_CELL_CHARS).toBeLessThanOrEqual(NAME_BUDGET);
-    expect(ROLE_CELL_CHARS, 'a smaller cell than the word and its separator took').toBeLessThan(COORDINATOR_WORD.length + ' · '.length);
     // A child, and a coordinator with no role cell to make room for, keep the full budget.
     const kid = cardFacts(sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'child', branch }), now: NOW }));
     expect(kid.context?.short).toBe(shortenByToken(branch, NAME_BUDGET));
+  });
+
+  it('the role cell is the badge\'s width: a branch the word\'s 14 characters cut shorter is kept longer beside the badge (D-8817)', () => {
+    // At main (budget 28 - 14 = 14) this branch shortened to `feat/garden…`; at the badge's cell (28 - 6 = 22) it keeps
+    // another token, and the child's full budget (28) keeps one more still. Each is spelt out, so a wrong cell width reds here.
+    const branch = 'feat/garden-stone-silver-harbor-morning-cedars-quiet-river-run';
+    const lead = cardFacts(sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'coordinator', branch }), now: NOW }));
+    expect(lead.context).toMatchObject({ key: 'branch', short: 'feat/garden-stone…' });
+    expect(lead.context!.short!.length + ROLE_CELL_CHARS).toBeLessThanOrEqual(NAME_BUDGET);
+    const kid = cardFacts(sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'child', branch }), now: NOW }));
+    expect(kid.context?.short).toBe('feat/garden-stone-silver…');
+    expect(lead.context!.short).not.toBe(kid.context!.short);
   });
 
   it('a child names its programme and wave on the card; the header keeps the verbatim hold and the coordinator', () => {

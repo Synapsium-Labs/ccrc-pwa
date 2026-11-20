@@ -72,6 +72,7 @@ describe('the programme box header (note 1)', () => {
     const kicker = drawBox().querySelector('.pg-kicker')!;
     const img = kicker.querySelector('.pg-ico[role="img"]');
     expect(img?.getAttribute('aria-label')).toBe('Programme');
+    expect(img?.getAttribute('title'), 'a mouse user still gets the word on hover').toBe('Programme');
     // The programme page's kicker has no icon beside it, so it stays the page's one cue.
     expect(readFileSync(path.join(__dirname, '../src/ledgers/ProgrammeScreen.tsx'), 'utf8')).toContain('<span className="pv-kicker">Programme</span>');
   });
@@ -123,24 +124,55 @@ describe('the coordinator badge (note 2)', () => {
   });
 });
 
-describe('the badge colour (note 2, the contrast gates)', () => {
-  const read = (f: string): string => readFileSync(path.join(__dirname, '../src/fleet', f), 'utf8');
-  /** The `color` a rule of exactly this selector declares, read by its text, so no selector is turned into a pattern. */
-  const decl = (css: string, selector: string): string | null => {
-    const at = css.indexOf(`${selector} {`);
-    if (at < 0) return null;
-    const body = css.slice(at + selector.length + 2, css.indexOf('}', at));
-    return /color:\s*([^;]+);/.exec(body)?.[1] ?? null;
+describe('the badge stylesheet rules (note 2; the contrast gates measure the pair in contrast.test.ts)', () => {
+  const read = (...f: string[]): string => readFileSync(path.join(__dirname, '../src', ...f), 'utf8');
+  /** Every value the stylesheet gives `prop` for a rule whose selector list holds exactly `selector`: comments are cut first,
+   *  a rule is read whole, a selector is compared whole (never as a substring of a longer one) and a property by its own name
+   *  (never `background-color` for `color`), so no selector becomes a pattern. */
+  const values = (css: string, selector: string, prop: string): string[] => {
+    const out: string[] = [];
+    for (const m of css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!m[1]!.split(',').some((sel) => sel.trim() === selector)) continue;
+      for (const decl of m[2]!.split(';')) {
+        const at = decl.indexOf(':');
+        if (at > 0 && decl.slice(0, at).trim() === prop) out.push(decl.slice(at + 1).trim());
+      }
+    }
+    return out;
   };
 
+  it('the reader reads a whole selector and a whole property (its own controls)', () => {
+    const css = '/* .a .b { color: red; } */ .x .a .b { color: blue; } .a .b, .c { background-color: green; color: gold; }';
+    expect(values(css, '.a .b', 'color')).toEqual(['gold']);
+    expect(values(css, '.x .a .b', 'color')).toEqual(['blue']);
+    expect(values(css, '.a .b', 'background-color')).toEqual(['green']);
+    expect(values(css, '.c', 'color')).toEqual(['gold']);
+    expect(values(css, '.missing', 'color')).toEqual([]);
+  });
+
   it('is the quiet secondary ink outside a programme box, a gated token the row gate measures', () => {
-    const css = read('fleet.css');
-    expect(/\.sess-role\s*\{[^}]*color:\s*var\(--ink-secondary\);/.test(css)).toBe(true);
+    expect(values(read('fleet', 'fleet.css'), '.sess-role', 'color')).toEqual(['var(--ink-secondary)']);
   });
 
   for (const hue of ['cyan', 'violet', 'magenta', 'blue']) {
     it(`is the ${hue} programme's hue inside its box, on the surface the gates measure the hue on`, () => {
-      expect(decl(read('programmeBox.css'), `.pg-box[data-hue='${hue}'] .pg-coord .sess-role`)).toBe(`var(--prog-${hue})`);
+      expect(values(read('fleet', 'programmeBox.css'), `.pg-box[data-hue='${hue}'] .pg-coord .sess-role`, 'color')).toEqual([`var(--prog-${hue})`]);
     });
   }
+
+  it('the header badge is the line\'s glyph size, 1em as the Goals door\'s glyph is, and the card\'s role rule does not reach it', () => {
+    const chat = read('session', 'chat.css');
+    expect(values(chat, '.chat-fact-role svg', 'width')).toEqual(['1em']);
+    expect(values(chat, '.chat-fact-role svg', 'height')).toEqual(['1em']);
+    expect(values(chat, '.chat-coord-goals svg', 'width')).toEqual(['1em']);
+    expect(values(chat, '.chat-fact-role [role="img"]', 'font-size')).toEqual(['var(--fs-meta)']);
+    expect(values(chat, '.chat-fact-role', 'min-height'), 'the detail keeps the line the word took').toEqual(['1lh']);
+    const session = lead();
+    render(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: sessionFacts({ session, now: NOW }) })} />);
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+    const badge = document.querySelector('.chat-head .chat-fact-role [role="img"][aria-label="coordinator"]');
+    expect(badge, 'the details draw the badge in the role detail').not.toBeNull();
+    expect(badge!.classList.contains('sess-role'), 'the card\'s role rule (flex-start, the quiet ink) is not on the header badge').toBe(false);
+  });
 });

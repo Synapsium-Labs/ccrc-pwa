@@ -168,12 +168,12 @@ const NOT_ROLE_BEARING: Readonly<Record<string, string>> = {
   'confirm.tsx': "QuickConfirm's consequence is a sentence of copy, not a control's label; its buttons are Button",
   'control-row.tsx': 'a self-grounded mono status line whose shape the shape census owns; outside Task 14\'s mapping',
   'count-badge.tsx': 'a count on the 11px floor, sized against the glyph it badges',
-  'role-badge.tsx': 'a 16px icon with an accessible name and no text; its size is the icon\'s own, so no type or row role applies (desktop polish C50)',
   'cover-screen.tsx': 'a full-viewport cover: it sets no type and no row height of its own',
   'icon.tsx': 'sized by its caller in em or by prop, so it follows the type around it',
   'limit-bar.tsx': 'draws through Meter; its label is on the 11px floor, below every Refined role',
   'meter.tsx': "its height is the meter's own token, --meter-h, which skins.css already varies",
   'popover.tsx': 'a panel around content its caller passes in: it sets no type and no row height of its own (D-5934)',
+  'role-badge.tsx': 'a 16px icon with an accessible name and no text; its size is the icon\'s own, so no type or row role applies (desktop polish C50)',
   'skeleton.tsx': 'a placeholder sized by its caller',
   'status-dot.tsx': 'a lamp: part of the identity core, fixed across skins',
   'text-link.tsx': 'an inline link inside a sentence: it inherits the type and colour of the text around it, and has no tap floor (the WCAG 2.5.8 in-text exemption)',
@@ -284,6 +284,7 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
   },
   'chat.css': {
     '.chat-coord': META,
+    '.chat-fact-role [role="img"]': META, // the header's role badge: the Goals glyph's size (desktop polish C50)
     '.metachip-glyph': META,
     '.pr-lede': UI,
     '.pr-facts': META,

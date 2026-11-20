@@ -19,7 +19,8 @@ import type { ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { Icon, type IconName } from './icon';
 
-/** A block-level flex box the icon's own size, never shrunk, so the line it sits on keeps its height. */
+/** An inline flex box round the icon, never shrunk. The icon is 16px unless the caller's stylesheet sizes its `svg` (the session
+ *  header sets `1em`), so the line it sits on keeps its own height. */
 export const ROLE_BADGE = 'inline-flex flex-none items-center justify-center';
 
 export interface RoleBadgeProps {

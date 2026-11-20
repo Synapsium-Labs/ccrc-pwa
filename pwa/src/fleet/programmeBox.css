@@ -59,7 +59,7 @@
 .pg-kicker[data-hue='violet'] { --pg: var(--prog-violet); --pg-tint: var(--prog-violet-tint); }
 .pg-kicker[data-hue='magenta'] { --pg: var(--prog-magenta); --pg-tint: var(--prog-magenta-tint); }
 .pg-kicker[data-hue='blue'] { --pg: var(--prog-blue); --pg-tint: var(--prog-blue-tint); }
-.pg-ico { flex: none; display: inline-flex; }
+.pg-ico { flex: none; }
 .pg-sep,
 .pg-also { flex: none; }
 /* The title before the progress: in a narrow column the progress wraps below it, and only a title longer than the
