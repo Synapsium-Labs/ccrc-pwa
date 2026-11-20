@@ -79,6 +79,16 @@ describe('H4: the section and its two subheads', () => {
     expect(within(s).getByRole('heading', { name: new RegExp(`${SECTION}.*2`) })).toBeTruthy();
   });
 
+  it('counts each kind under its own subhead, and both in the head', () => {
+    draw(frame({
+      unowned: [unowned(), unowned({ adminRecord: 'agent-u2' })],
+      leases: [orphanLease()],
+    }));
+    expect(screen.getByText('No single owner').closest('h3')?.textContent).toBe('No single owner2');
+    expect(screen.getByText('Neither session listed').closest('h3')?.textContent).toBe('Neither session listed1');
+    expect(within(section()).getByRole('heading', { name: new RegExp(`${SECTION}\\s*3`) })).toBeTruthy();
+  });
+
   it('draws a subhead only for a kind that has a row', () => {
     draw(frame({ unowned: [unowned()] }));
     expect(screen.getByText('No single owner')).toBeTruthy();
@@ -218,6 +228,8 @@ describe('H4: a worktree whose parent and worker are both unlisted', () => {
     ] }));
     expect(rowOf('moving').textContent).toContain('moving to a run');
     expect(within(rowOf('moving')).queryByRole('button')).toBeNull();
+    // No empty group of controls is drawn either: a row with nothing to offer offers no box.
+    expect(within(rowOf('moving')).queryByRole('group')).toBeNull();
     expect(within(rowOf('old-server')).queryByRole('button')).toBeNull();
     expect(rowOf('old-server').textContent).not.toMatch(/worktree kept|moving to a run|moved to a run/);
   });
