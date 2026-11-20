@@ -49,7 +49,27 @@ section, the precedence sentence, the third `unreachable` case and the api.md po
 ## Consents
 
 - Run 1850 (`coordinator-skill.test.ts`, claim 5838; README.md, claim 5864): one packet of five pin-file hunks and one README
-  hunk, sent to its coordinator under the additive terms the Overlord's clause 21 packet used (mail 27729).
+  hunk, sent to its coordinator under the additive terms the Overlord's clause 21 packet used (mail 27729). Answer: not
+  yet (mail 27742), because those terms cover Overlord runs only until the operator answers that programme's item 496.
+  Its coordinator checked the packet read-only: it applies cleanly at main 6c8f52199c, and a three-way merge with run 1850's
+  frozen tip is clean in both files; the five count words are within its terms, and the two lines of the run refusal list
+  carried from #3088 it would accept on the reading it uses for Overlord packets. When the operator answers, it mails; a yes
+  covers this exact packet if neither file has moved on main since 6c8f52199c, else a rebuilt packet is sent.
+
+The packet, recorded here so that it lands as written (against main 6c8f52199c):
+
+- `server/test/coordinator-skill.test.ts`: the comment "The twenty clauses" becomes "The twenty-two clauses"; clause 22's
+  literal is appended to `CONTRACT` after clause 21's, as it reads in SKILL.md, with a two-line comment (D-8185, Task 6.1 as
+  amended, the console rule of review 2580); "carries all twenty clauses" becomes "carries all twenty-two clauses";
+  `'twenty-two'` joins `WORDS`; clause 17's `toHaveLength(21)` becomes 22; the plan reference's run refusal case names six
+  codes, adding `'ticket-required'`, its title "five" becoming "six"; and a `clause 22, the plan (D-8185)` describe block
+  before the landing order wave 5h block checks that SKILL.md numbers the clause 22, that `plan.put`, `plan.met`,
+  `plan.close` and `linear.create` have client rows, and that the clause names the six item words, "in the console" and
+  "never asks for those approvals in its turn text".
+- `README.md`: the coordinator skill's "its twenty-one" clauses becomes "its twenty-two".
+
+Until it lands, this branch's head reds `coordinator-skill.test.ts` (SKILL.md numbers 22 clauses where the pin holds 21) and
+the count word check (README says twenty-one); the PR is not ready to land before the packet is in it.
 - Run 2846, wave 7 (`references/plan.md`, claim 5788; `coordinator-plan-reference.test.ts`, claim 5791): three plan.md hunks
   and four test hunks (mail 27730).
 - Run 2862, wave 8 (the plan, claim 5802): one hunk in Task 2 (mail 27731); yes (mail 27735: its own plan edits are the Deviations found section and the Wave 8 heading only).
