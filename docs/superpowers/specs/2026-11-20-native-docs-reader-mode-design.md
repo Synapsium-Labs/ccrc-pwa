@@ -220,8 +220,9 @@ sequenceDiagram
 | Exit | XR1 | From XR2 |
 |---|---|---|
 | Esc, browser full screen | The browser owns Esc: it leaves full screen, ccrc follows and leaves reader mode, closing any open frame overlay. Esc never reaches the page here | Same |
-| Esc, fill only, focus in ccrc's overlay | The container's own key handler: hides the overlay first, a second Esc leaves | Same |
-| Esc, fill only, focus in the frame | Not seen: the frame's keys stay in the frame. Exit and Back remain | The frame closes its own open overlay first; with none open it sends `reader {act: 'exit'}` |
+| Esc, fill only, focus in ccrc's overlay | The overlay's own key handler, on the toolbar element: it hides the overlay and returns focus to the frame, and never leaves reader mode | Same |
+| Esc, fill only, focus in the frame | Not seen: the frame's keys stay in the frame. Exit, Back and `r` (with focus in the console) leave | The frame closes its own open overlay first; with none open it sends `reader {act: 'exit'}` |
+| Esc that closes a sheet in reader mode | The sheet's own: it closes the sheet and nothing else. Sheets portal beside the overlay, never inside it, so the Esc never reaches the overlay's handler, as the command layer stands down under an open dialog (`useShortcuts.ts#keysOwnedBySurface`) | Same |
 | Back (button, Alt+Left, Android Back, iOS swipe) | Pops the place | Same |
 | The overlay's Exit | ccrc | Same |
 | The browser's own exit (its banner or gesture) | `fullscreenchange`, ccrc follows | Same |
@@ -261,7 +262,7 @@ flowchart TB
 - **The fill comes first.** On entry ccrc sets `data-reader-mode` on the container. Its rule draws the container `position: fixed; inset: 0` over the console, on the reader's ground, inside the safe areas (`--safe-top`, `--safe-bottom`, and the side insets), at a new layer token `--z-reading` between `--z-toast` and `--z-block`. In the fill, a session-expired or update block (`BlockScreen`, `LoginScreen`, mounted beside the app shell) still draws over reader mode. In element full screen it would not, because only the full-screen subtree draws; so either of them appearing ends reader mode, through one decision event (`block`).
 - **Then full screen, where it exists.** If `document.fullscreenEnabled` is true, ccrc calls `container.requestFullscreen({navigationUI: 'hide'})` in the same task as your tap. A rejection, or an engine without the API, leaves the fill as reader mode. ccrc never retries without a new tap.
 - **Sheets go inside.** In element full screen only the full-screen element's subtree is drawn. The sheets the frame can raise (the external-link sheet, the copy sheet, a "not loaded" chip's sheet) are portalled to the document body today, so they would open unseen. On a Docs page, ccrc's `Sheet` primitive always takes its portal target from a context the reading container provides, in both views, so a sheet open as reader mode starts or ends is never moved and remounted. The container creates no stacking context and no clip in the normal view, so a sheet there draws as it does today.
-- **The rest of the console is suspended.** While reader mode is on, everything outside the container is inert and hidden from assistive technology, applied with the same `hideOthers` the modal layers use and recorded through `ui/src/lib/modal-layers.ts`, so Tab never leaves the overlay and the frame for an invisible head control, and a screen reader never reads it. The command layer's single keys are held, except `r`, and Cmd or Ctrl+K does not open the palette: its branch runs before the layer's key-holding check (`useShortcuts.ts`), so that branch gains the reader-mode test itself. Esc is the container's own key handler, not the command layer's. Toasts draw behind the container and may expire unseen.
+- **The rest of the console is suspended.** While reader mode is on, everything outside the container is inert and hidden from assistive technology, applied with the same `hideOthers` the modal layers use and recorded through `ui/src/lib/modal-layers.ts`, so Tab never leaves the overlay and the frame for an invisible head control, and a screen reader never reads it. The command layer's single keys are held, except `r`, and Cmd or Ctrl+K does not open the palette: its branch runs before the layer's key-holding check (`useShortcuts.ts`), so that branch gains the reader-mode test itself. Esc on ccrc's overlay is the overlay's own key handler, bound on its toolbar element, not the command layer's and not the container's (§3.3). Toasts draw behind the container and may expire unseen.
 - **The mockup frame's own Full screen** (`.docs-mockup[data-frame='full']`) is a different view, for HTML leaves, and is unchanged.
 
 | Decision | Options | Chosen, and why |
@@ -390,7 +391,7 @@ flowchart TB
 | ArrowLeft, PageUp, Shift+Space | Back | Native |
 | ArrowUp, ArrowDown, Home, End | Native scroll | Native |
 | `r` | Leave reader mode | Leave |
-| Esc | In browser full screen, the browser's: it leaves reader mode (§3.3). In the fill, the frame's own open overlay closes first; with none open, reader mode ends | Same |
+| Esc | In browser full screen, the browser's: it leaves reader mode (§3.3). In the fill (from XR2, which forwards it), the frame's own open overlay closes first; with none open, reader mode ends | Same |
 
 - **A tap** is a primary pointer up within 10 px and 500 ms of its down. A long press is not a tap.
 - **Interactive targets** are named by one selector list in the library: `a[href]`, `button`, `summary`, `input`, `select`, `textarea`, `label`, `[role="button"]`, `[tabindex]`, the figure tools, the table filter, cards and menus. Mermaid's Render button is a button, so a tap on it draws the figure and never turns.
@@ -449,7 +450,7 @@ Reader mode never locks orientation (`screen.orientation.lock` stays unused): yo
 
 ### 6.5 Focus order and screen readers
 
-- **On entering,** focus moves into the frame, so its keys work at once: at once where nothing remounts (a phone in XR1, every device in XR2), and on the new mount's `ready` after XR1's desktop remount, through a new `ReaderMount.focus()`. A polite live region in ccrc says "Reader mode. Esc or Back leaves it."
+- **On entering,** focus moves into the frame, so its keys work at once: at once where nothing remounts (a phone in XR1, every device in XR2), and on the new mount's `ready` after XR1's desktop remount, through a new `ReaderMount.focus()`. A polite live region in ccrc says "Reader mode. Back or Exit leaves it." It names those two because they work on every engine and in both waves, while Esc leaves only in browser full screen until XR2.
 - **The overlay** is a `role="toolbar"` region named "Reader mode", not a modal: Exit, the turn setting and Aa (the last two from XR2), then the progress text, which is not focusable. Showing it moves focus to Exit. Tab past Aa returns to the frame. Esc on the overlay hides it and returns focus to the frame, without leaving reader mode.
 - **On leaving,** focus returns to the frame (after XR1's desktop remount, on its `ready`): the control that entered may not exist yet, because the head draws its reader controls only once the frame is ready again.
 - **Behind it,** the console is inert and hidden from assistive technology while reader mode is on (§4.1).
