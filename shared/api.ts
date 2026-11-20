@@ -18,6 +18,7 @@ import type { PerfHealth } from './perf.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
+import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
 
@@ -13400,7 +13401,7 @@ export function approvalDigestBytes(hookInput: Readonly<Record<string, unknown>>
 /** A signed ruling's record (spec §6.3 server half, step 5). `sessionId` is the child's REGISTRY id (the request
  *  body's `sessionId`), not Claude Code's `session_id`; `rowId` is the row the `201` named, and the verifier checks
  *  both (D-5488). `expiresAt` is epoch milliseconds, the request window's end (D-5441). */
-export interface ApprovalRulingRecord {
+export interface ApprovalRulingRecordV1 {
   readonly v: 1;
   readonly rowId: number;
   readonly sessionId: string;
@@ -13414,12 +13415,26 @@ export interface ApprovalRulingRecord {
   readonly expiresAt: number;
 }
 
-/** The bytes the server signs and the verifier checks: the record's ten fields, and only those, in canonical form.
- *  `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented second copy, held
- *  equal by `approval-verify.test.ts`. */
+/** Record v2 (approvals plan 2026-11-18, §3.6, PR 3): v1's ten fields and three more, `authority`, `denyCurrent` (the
+ *  child's deny rules were the box's current ones when the server signed) and `family`. Signed over all thirteen. */
+export interface ApprovalRulingRecordV2 extends Omit<ApprovalRulingRecordV1, 'v'> {
+  readonly v: 2; readonly authority: ApprovalRulingAuthority; readonly denyCurrent: boolean; readonly family: ApprovalRulingFamily;
+}
+/** Either record: what the one signing site signs and the ruling read serves. The name is the union (approvals PR 3), so
+ *  the signer (`approvalsign.ts`), which signs whatever record it is handed, is unchanged: the signing path stays outside
+ *  this diff (`consolidation-path-guard.test.ts`'s W3 arm). */
+export type ApprovalRulingRecord = ApprovalRulingRecordV1 | ApprovalRulingRecordV2;
+
+/** The bytes the server signs and the verifier checks: a v1 record's ten fields, or a v2 record's thirteen, and only
+ *  those, in canonical form. `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented
+ *  second copy of v1's bytes, held equal by `approval-verify.test.ts` (v2's copy is PR 3v's). */
 export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
-  return canonicalJson({ v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
-    nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt });
+  const fields: Record<string, unknown> = { v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
+    nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt };
+  // A v2 record's three fields, each only when present: a record that says `v: 2` without them (an older or a forged one)
+  // keeps v1's bytes, which no verifier accepts as v2.
+  if (r.v === 2) for (const k of ['authority', 'denyCurrent', 'family'] as const) if (r[k] !== undefined) fields[k] = r[k];
+  return canonicalJson(fields);
 }
 
 /** `POST /api/approvals`'s body, as the child's hook sends it through `ccrc-api approvals request` (spec §6.3 hook
@@ -13437,8 +13452,9 @@ export interface ApprovalRequestBody {
 }
 export const APPROVAL_REQUEST_MAX_BYTES = 64 * 1024;
 
-/** `201`'s answer to that request: the row id, and the window the hook waits for (D-5441). */
-export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: number }
+/** `201`'s answer to that request: the row id, the window the hook waits for (D-5441), and the park's word decided at
+ *  mint (approvals PR 3; absent from an older server, which the hook reads as `shadow`). */
+export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: number; readonly park?: ApprovalParkWord }
 
 /** `GET /api/approvals/:id/ruling?nonce=`'s answer: the row's state, and the signed ruling once one is taken. `sig` is
  *  the base64 Ed25519 signature over `approvalRulingBytes(record)`. */
@@ -13464,15 +13480,20 @@ export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; rea
  *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
  *  `operator`  the operator answered the dialog (the option-row answer (`POST /api/questions/session-<id>/answer`)), or the painted dialog closed with
  *              no ruling taken: every approval has an answering principal. Terminal.
- *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal. Terminal.
+ *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal, or a `parked` row's park
+ *              reached its horizon or went void. Terminal.
+ *  `parked`    (approvals PR 3, F8-a) the row's window ended unruled while its stored `parkWord` was `live`: the hook
+ *              printed the park deny, the row is on Waiting on you, and a later ruling is recorded on its park and met by
+ *              the retry. Written only by the questions owner's `parkApproval`, asked of `decideApprovalLapse`. NOT a hook
+ *              stop state: the hook's own `parked` arm prints the park deny.
  *  `unknown`   a token this build does not know, read off disk; never written.
  * `declined`, `released`, `operator` and `stale` are `APPROVAL_HOOK_STOP_STATES`: the ruling route answers them with
  * no ruling, and the hook stops on that answer (D-5440).
  */
-export type ApprovalState = 'held' | 'allowed' | 'denied' | 'declined' | 'released' | 'operator' | 'stale' | 'unknown';
+export type ApprovalState = 'held' | 'allowed' | 'denied' | 'declined' | 'released' | 'operator' | 'stale' | 'parked' | 'unknown';
 
 export const APPROVAL_STATE_MAP: Readonly<Record<ApprovalState, true>> = {
-  held: true, allowed: true, denied: true, declined: true, released: true, operator: true, stale: true, unknown: true,
+  held: true, allowed: true, denied: true, declined: true, released: true, operator: true, stale: true, parked: true, unknown: true,
 };
 
 export const APPROVAL_STATES: readonly ApprovalState[] = Object.keys(APPROVAL_STATE_MAP) as ApprovalState[];
@@ -13524,11 +13545,15 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *  `declined`            the claimant handed this row over and may not rule it later.
  *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
  *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
+ *  `park-ruled`          (approvals PR 3, T8-4) the row's park already holds an unspent ruling from a principal.
+ *  `coordinator-denied`  (approvals PR 3, F3) an allow on a key whose park records the coordinator's deny: a deny is
+ *                        final for every authority.
  */
 export const APPROVAL_REFUSALS = [
   'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
   'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
   'guard-forbidden', 'guard-escalate', 'deny-not-current', 'declined', 'hook-gone', 'already-ruled',
+  'park-ruled', 'coordinator-denied',
 ] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
 
@@ -13594,9 +13619,11 @@ export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
  *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
  *               coordinator that the coordinator never answered, whoever acted after);
  *  `big-call`   a big call the coordinator recorded and carried on from (D-8126): routine and block calls are never lines.
+ *  `parked`     (approvals PR 3) an approval whose window ended unruled and was parked, with its coordinator: on Waiting on
+ *               you, ruled later by its coordinator or the operator. A ruling moved onto the park keeps its allow or deny.
  * A row the operator answered while it was still held is not a line, and neither is a row minted released.
  */
-export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call'] as const;
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call', 'parked'] as const;
 export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
 
 /** Which table a digest line came from, and so which id space `id` is in. */

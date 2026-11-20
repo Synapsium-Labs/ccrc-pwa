@@ -4141,15 +4141,52 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 115: user_version 114 -> 115 ──────────────────────────────────────────
+  // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
+  // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
+  // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
+  // canonical `[tool_name, cwd, tool_input]`), `fetchedAt` (the ruling read's first serve of a ruling, F8-c) and `wouldPark`
+  // (the shadow's record, 1 when a `shadow` row lapsed where a `live` one would have parked). `approval_parks`, one row per
+  // key, written only through `approvalParkStore.ts` from the questions owner: the slots its `live` rows reserve at mint
+  // (at most three), its retries, its first park and horizon (`state` `open` or `void`), a principal's ruling and its one
+  // use (`rulingUses` 0 or 1), and the coordinator's verdicts on the key (F3). The Shadow lanes card's `approval-park` row,
+  // seeded `shadow`, gated in this build until PR 3v (`lane-arm.ts`).
+  // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
+  // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
+  // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108, Overlord gates B (#3076) 109, door
+  // process B1 (#3099) 110, the waiting workers' sleep (#3101) 111, the dispatch cap's switch (#3103) 112, capacity Task 4
+  // (#3117) 113 and the per-team Linear migration (#3109) 114 first, so this is 115. RE-MEASURE the slot before merge (it
+  // must print 114 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN parkWord TEXT;
+  ALTER TABLE approvals ADD COLUMN parkKey TEXT;
+  ALTER TABLE approvals ADD COLUMN fetchedAt INTEGER;
+  ALTER TABLE approvals ADD COLUMN wouldPark INTEGER;
+  CREATE INDEX approvals_by_park_key ON approvals(parkKey) WHERE parkKey IS NOT NULL;
+  CREATE TABLE approval_parks (
+    parkKey TEXT PRIMARY KEY, childId TEXT NOT NULL, runId INTEGER NOT NULL,
+    slots INTEGER NOT NULL DEFAULT 0, retries INTEGER NOT NULL DEFAULT 0,
+    firstRowId INTEGER, parkedAt INTEGER, horizon INTEGER, state TEXT NOT NULL DEFAULT 'open',
+    rulingVerdict TEXT, rulingAuthority TEXT, rulingBy TEXT, rulingReason TEXT, rulingClass TEXT, rulingRowId INTEGER,
+    rulingAt INTEGER, rulingUses INTEGER NOT NULL DEFAULT 0,
+    coordDeclined INTEGER NOT NULL DEFAULT 0, coordDenied INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL
+  );
+  CREATE INDEX approval_parks_by_horizon ON approval_parks(horizon);
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
+  `,
+
+  // ── 116: user_version 115 -> 116 ──────────────────────────────────────────
   // The project row names its Linear workspace and carries two linking facts (Linear hierarchy wave 8, D-8808 and D-8809,
   // plan Tasks 8.1, 8.4 and 8.5), three columns on `project_linking`: `teamWorkspace` is the slot id (a workspace id) the
   // row's team key resolves in, so a key two connected workspaces share never answers `team-ambiguous` for the project (NULL:
   // none set, the key resolves as before); `teamSuggestions` holds the coordinators' suggestions; `teamCallId` names the call
   // that recorded the Overlord's link. THREE NULLABLE COLUMNS, no default, nothing else: an older build opening a file at this
   // `user_version` takes rule 3 and never names them. This is the next free slot by position on `main`: door B1 took 110, the
-  // waiting workers' sleep 111, the cap-counts-working seed 112, the admission wait 113 and wave 7's per-team migration 114
-  // first, so this entry moved up to 115; whoever lands second renumbers (the coordinator's standing license). RE-MEASURE the
-  // slot before the PR and before merge (it must print 114, the count before this entry):
+  // waiting workers' sleep 111, the cap-counts-working seed 112, the admission wait 113, wave 7's per-team migration 114 and
+  // the approvals park (#3106) 115 first, so this entry moved up to 116; whoever lands second renumbers (the coordinator's
+  // standing license). RE-MEASURE the slot before the PR and before merge (it must print 115, the count before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

@@ -519,11 +519,13 @@ describe('the new family\'s own front ladder', () => {
     return { f, post: (url: string, payload: unknown, headers: Record<string, string> = {}) => f.app.inject({ method: 'POST', url, headers, payload: payload as Record<string, unknown> }) };
   };
 
-  it('the operator\'s door: a claimant\'s id is kind-mismatch, a bad id is bad-request, an unknown session is 404', async () => {
+  it('the operator\'s door: an ask id is kind-mismatch, an approval id reaches its arm\'s gate, a bad id is bad-request, an unknown session is 404', async () => {
     const { post: p } = await ladder();
     for (const [url, status, body] of [
       ['/api/questions/ask-1/answer', 400, '{"ok":false,"error":"kind-mismatch"}'],
-      ['/api/questions/approval-1/answer', 400, '{"ok":false,"error":"kind-mismatch"}'],
+      // Approvals PR 3 (H3): an approval id is the operator's ruling on a parked row, so it reaches the approvals lane's
+      // arm, whose account gate answers first (`auth-off` while sign-in is dark); it presses nothing.
+      ['/api/questions/approval-1/answer', 501, '{"ok":false,"error":"auth-off"}'],
       ['/api/questions/ask-01/answer', 400, '{"ok":false,"error":"bad-request"}'],
       ['/api/questions/session-/answer', 400, '{"ok":false,"error":"bad-request"}'],
       ['/api/questions/question-1/answer', 400, '{"ok":false,"error":"bad-request"}'],

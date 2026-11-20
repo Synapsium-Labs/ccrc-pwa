@@ -5,8 +5,8 @@
 // Decide in L1, act in L4. The words are today's branches, named; nothing here changes what the sweep does.
 //
 // Its one runtime import is `askwindow.ts`, a pure L1 module with no imports of its own, where `ASK_ANSWERING_MAX_MS`
-// lives (slug q3c-policy-askwindow). `APPROVAL_RULED_GRACE_MS` stays `watch.ts`'s and is handed in (slug
-// q3c-grace-param).
+// lives (slug q3c-policy-askwindow). `APPROVAL_RULED_GRACE_MS` lives there too since approvals PR 3, and is still handed in
+// (slug q3c-grace-param).
 import type { AskState } from '../../../shared/api.js';
 import { APPROVAL_HOOK_WAIT_S, DIALOG_MULTI_REFUSE_CODES, DIALOG_TEXT_REFUSE_CODES, QUESTION_DOOR_REFUSALS } from '../../../shared/api.js';
 import { ASK_ANSWERING_MAX_MS } from '../askwindow.js';
@@ -91,20 +91,42 @@ export function decideAskLapse(carrier: AskLapseCarrier, read: AskLapseRead, now
 
 // ── The approval half: one row's clock ──────────────────────────────────────────────────────────────────────────
 
-/** What the approval half does with one row: `lapse` (`held` -> `released`, its window `notifyAt` ended), `stale`
- *  (`held` or `released` past the hook's ceiling, `askAt + APPROVAL_HOOK_WAIT_S`), or `none`. */
-export type ApprovalLapse = 'lapse' | 'stale' | 'none';
-export const APPROVAL_LAPSE_ANSWERS: Readonly<Record<ApprovalLapse, true>> = { lapse: true, stale: true, none: true };
+/** What the approval half does with one row: `lapse` (`held` -> `released`, its window `notifyAt` ended), `shadow-park`
+ *  (the same lapse, recording `wouldPark`: the row's stored word is `shadow`, so it would have parked had the lane been
+ *  live), `park` (approvals PR 3: -> `parked`, through `parkApproval` only), `stale` (`held` or `released` past the hook's
+ *  ceiling, `askAt + APPROVAL_HOOK_WAIT_S`, or a `parked` row whose park reached its horizon or went void), or `none`. */
+export type ApprovalLapse = 'lapse' | 'shadow-park' | 'park' | 'stale' | 'none';
+export const APPROVAL_LAPSE_ANSWERS: Readonly<Record<ApprovalLapse, true>> = {
+  lapse: true, 'shadow-park': true, park: true, stale: true, none: true,
+};
 
-/** The row fields the decision reads. */
-export type ApprovalLapseRow = Pick<ApprovalRow, 'state' | 'askAt' | 'notifyAt'>;
+/** The row fields the decision reads: the stored `parkWord` (decided at mint, F1; null on a row minted before PR 3) and
+ *  `fetchedAt` (the ruling read's first serve, F8-c). Optional only so a caller that predates PR 3 reads as before. */
+export type ApprovalLapseRow = Pick<ApprovalRow, 'state' | 'askAt' | 'notifyAt'> & Partial<Pick<ApprovalRow, 'parkWord' | 'fetchedAt'>>;
 
-/** One approval row's next act at `now` (D-5298, D-5441): a `held` row at or past `notifyAt` lapses first; otherwise a
- *  `held` or `released` row at or past the hook's ceiling is `stale`; otherwise `none`. A `held` row due for both
- *  answers `lapse`; the lapsed row it becomes is `released`, and asked again it answers `stale`. */
-export function decideApprovalLapse(row: ApprovalLapseRow, now: number): ApprovalLapse {
-  if (row.state === 'held' && now >= row.notifyAt) return 'lapse';
-  if ((row.state === 'held' || row.state === 'released') && now >= row.askAt + APPROVAL_HOOK_WAIT_S * 1000) return 'stale';
+/** The park as the decision reads it (approvals PR 3): its horizon (null while nothing has parked on it) and whether it is
+ *  void (its run closed, or a pane answer voided it). `null`: the row has no park, or it could not be read. */
+export interface ApprovalLapsePark { readonly horizon: number | null; readonly void: boolean }
+
+/** One approval row's next act at `now` (D-5298, D-5441; approvals PR 3, F1, F2, F8). It reads the row's STORED
+ *  `parkWord`, never the live lane:
+ *  - a `held` row at or past `notifyAt`: `park` when its word is `live`; `shadow-park` when it is `shadow`; else `lapse`;
+ *  - a `parked` row: `stale` when its park is missing, void, or at or past its horizon; else `none`;
+ *  - the last-poll move (F2): an `allowed` or `denied` row the hook never fetched (`fetchedAt` null), whose word is `live`
+ *    (so never a row minted in shadow, nor one minted before PR 3), at or past `notifyAt` plus `graceMs` and before the
+ *    hook's ceiling: `park` (its ruling moves onto the park, so the retry meets it);
+ *  - otherwise a `held` or `released` row at or past the hook's ceiling is `stale`; otherwise `none`.
+ *  A `held` row due for both a lapse and the ceiling answers its lapse first; the `released` row it becomes, asked again,
+ *  answers `stale`. */
+export function decideApprovalLapse(row: ApprovalLapseRow, now: number, graceMs = 0, park: ApprovalLapsePark | null = null): ApprovalLapse {
+  const ceiling = row.askAt + APPROVAL_HOOK_WAIT_S * 1000;
+  if (row.state === 'held' && now >= row.notifyAt) {
+    return row.parkWord === 'live' ? 'park' : row.parkWord === 'shadow' ? 'shadow-park' : 'lapse';
+  }
+  if (row.state === 'parked') return park === null || park.void || (park.horizon !== null && now >= park.horizon) ? 'stale' : 'none';
+  if ((row.state === 'allowed' || row.state === 'denied') && row.fetchedAt === null && row.parkWord === 'live'
+      && now >= row.notifyAt + graceMs && now < ceiling) return 'park';
+  if ((row.state === 'held' || row.state === 'released') && now >= ceiling) return 'stale';
   return 'none';
 }
 
@@ -119,15 +141,17 @@ export interface DeferredApprovalEntry { readonly rowIds: readonly number[] }
 /** The child's rows as the sweep read them (`held`, `allowed`, `denied`), or `unreadable` when the read was refused. */
 export type DeferredApprovalRows = { readonly ok: true; readonly rows: readonly Pick<ApprovalRow, 'id' | 'state' | 'notifyAt' | 'ruledAt'>[] } | { readonly ok: false };
 
-/** One deferred push at `now` (D-5298, D-5440): an unreadable read `wait`s (retried next sweep); a covered row still
- *  `held` inside its window `wait`s; every covered row ruled within the last `graceMs` (the ruled grace, measured
- *  from each row's `ruledAt`: the hook is printing the ruling and the dialog is about to clear) `wait`s; otherwise the
- *  entry goes, `push` while its dialog is still `painted` and `drop` when it is not. */
+/** One deferred push at `now` (D-5298, D-5440): an unreadable read `wait`s (retried next sweep); an entry covering a
+ *  `parked` row is `drop`ped (approvals PR 3, F4, F16: a parked row's push is the outbox's, and the dialog is never pushed
+ *  for a pane press); a covered row still `held` inside its window `wait`s; every covered row ruled within the last
+ *  `graceMs` (the ruled grace, measured from each row's `ruledAt`: the hook is printing the ruling and the dialog is about
+ *  to clear) `wait`s; otherwise the entry goes, `push` while its dialog is still `painted` and `drop` when it is not. */
 export function decideDeferredApprovalPush(
   entry: DeferredApprovalEntry, rows: DeferredApprovalRows, now: number, painted: boolean, graceMs: number,
 ): DeferredApprovalPush {
   if (!rows.ok) return 'wait';
   const mine = rows.rows.filter((x) => entry.rowIds.includes(x.id));
+  if (mine.some((x) => x.state === 'parked')) return 'drop';
   if (mine.some((x) => x.state === 'held' && now < x.notifyAt)) return 'wait';
   const ruledRecently = mine.length === entry.rowIds.length && mine.length > 0
     && mine.every((x) => x.state !== 'held' && x.ruledAt !== null && now < x.ruledAt + graceMs);

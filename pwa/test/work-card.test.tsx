@@ -10,7 +10,7 @@ import { WORK_APART_GROUPS, WORK_COUNTED_GROUPS, WORK_GROUPS, WORK_STATUSES, typ
 import { WorkCard } from '../src/ledgers/WorkCard';
 import type { WorkCardAnswer } from '../src/ledgers/workMapWords';
 import {
-  NOTES, carriedWords, carriedTargetsOf, doneWhenLine, epicChip, foldLabel, headline, initiativeNote, outstandingLine, phaseLine, sourceLine, statusWord,
+  NOTES, carriedWords, carriedTargetsOf, checkpointFacts, doneWhenLine, epicChip, foldLabel, headline, initiativeNote, outstandingLine, phaseLine, sourceLine, statusWord,
   readFailedNote, unreadableNote, untitledWords, wholeEpicLine,
 } from '../src/ledgers/workMapWords';
 import { effectiveValue, stripComments } from './cssRule';
@@ -607,9 +607,16 @@ describe('the layout rows of the plan table', () => {
   const css = stripComments(readFileSync(path.join(__dirname, '../src/ledgers/ledgers.css'), 'utf8'));
   it('a row is one column at 360 and 390, and one row from the wide layouts', () => {
     expect(css).toMatch(/\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
-    // Two steps (WM4, D-8823 `card-width-steps`, fix round 1): two columns from 26rem with the facts under the title, three from 40rem.
+    // Two steps (WM4, D-8823 `card-width-steps`, fix round 1): two columns from 26rem with the facts under the title, three from 43rem.
     expect(css).toMatch(/@container work \(min-width: 26rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*6\.75rem minmax\(0, 1fr\);[^@]*\.wk-card \.wk-facts\s*\{\s*grid-column:\s*2;/);
-    expect(css).toMatch(/@container work \(min-width: 40rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*7\.5rem minmax\(0, 1fr\) minmax\(0, 14rem\)/);
+    expect(css).toMatch(/@container work \(min-width: 43rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*7\.5rem minmax\(0, 1fr\) minmax\(0, 14rem\)/);
+    // The facts go back into the third track from that step: without `grid-column: auto` they stay in column 2, under the title, and the
+    // third track stays empty on every card of 43rem or wider (review 2956 F5).
+    expect(css).toMatch(/@container work \(min-width: 43rem\)\s*\{[^@]*\.wk-card \.wk-facts\s*\{[^}]*grid-column:\s*auto/);
+    // The step keeps a title at least the room a phone gives it (review 2956 F2): the card's width at the step less the three tracks and the chrome
+    // (21 + 16 + 120 + 224 = 381px at 16px a rem) is no less than the phone's 318 - 21 = 297px.
+    const step = Number(/@container work \(min-width: (\d+)rem\)\s*\{[^@]*7\.5rem minmax/.exec(css)![1]);
+    expect(step * 16 - 381, 'a title keeps its phone room at the three-column step').toBeGreaterThanOrEqual(297);
     expect(effectiveValue(css, '.wk-card .wk-strip', 'flex-wrap')).toBe('wrap');
   });
   it('colours are tokens only', () => {
@@ -720,5 +727,34 @@ describe('the page\'s failed read (WM4, D-8823 failed-read-arm)', () => {
   it('spells the sentence once for the server\'s word and the page\'s', () => {
     expect(readFailedNote('x')).toBe('The work could not be read: x');
     expect(unreadableNote('read-failed')).toBe(readFailedNote('a read failed'));
+  });
+});
+
+// Review 2873 F15: every word the server sends is looked up in a table of this build's words, and one this build does not know (a
+// newer server's) reads as itself, never as "undefined".
+describe('a word from a newer server reads as itself (review 2873 F15)', () => {
+  it('a ticket status this build has no word for is drawn as the server wrote it', () => {
+    const t = item('t-1', 'not-started', { status: 'newly-added' as WorkStatus });
+    const { container } = draw(view({ counts: zero({ 'not-started': 1 }), items: [t], epics: [epic(EPIC_A, { total: 1, items: ['t-1'] })] }));
+    expect(container.querySelector('.wk-row .wk-status')!.textContent).toBe('newly-added');
+    expect(container.textContent).not.toContain('undefined');
+    expect(statusWord('constructor' as WorkStatus)).toBe('constructor');
+    expect(statusWord('working')).toBe('working');
+  });
+
+  it('a carried row keeps an unknown status now as the server wrote it', () => {
+    expect(carriedWords.now('newly-added' as WorkStatus)).toBe('now newly-added');
+    expect(carriedWords.now('working')).toBe('now working');
+  });
+
+  it('a checkpoint kind this build has no word for is written as the server wrote it', () => {
+    expect(checkpointFacts({ kind: 'new-kind' as never, state: 'open', metAt: null, evidence: null })).toBe('new-kind · open');
+    expect(checkpointFacts({ kind: 'operator-act', state: 'open', metAt: null, evidence: null })).toBe('operator act · open');
+  });
+
+  it('an unreadable word this build has no phrase for is written as the server wrote it, on the note and on the card', () => {
+    expect(unreadableNote('new-word' as never)).toBe('The work could not be read: new-word');
+    draw({ unreadable: 'new-word' as never });
+    expect(screen.getByRole('alert').textContent).toBe('The work could not be read: new-word');
   });
 });

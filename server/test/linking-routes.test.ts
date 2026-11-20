@@ -380,7 +380,7 @@ describe('POST /api/projects/:project/linking: the workspace', () => {
     expect((await post(app, 'project-a', { teamKey: null, override: null })).json().linking).toMatchObject({ teamKey: null, teamWorkspace: null });
   });
 
-  // F2 (review 2971, the coordinator's ruling: no change of source): a row stored before migration 115 has no workspace.
+  // F2 (review 2971, the coordinator's ruling: no change of source): a row stored before migration 116 has no workspace.
   it("Save of the unchanged key on a pre-migration automatic or Overlord link keeps its source, team name, evidence and time (F2)", async () => {
     await seedWorkspaces();
     app = await open({ coord });

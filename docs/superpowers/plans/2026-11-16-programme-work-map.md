@@ -625,6 +625,44 @@ its plan's clause 21), on the operator's yes.
 **Acceptance.** Every stored plan opens runs exactly as before. **Rollback.** A plain revert, once no stored epic lacks
 waves.
 
+### Task WM7: the carried findings of WM1 to WM4 (D-8845)
+
+The reviews of WM1 (2740), WM2 (2815), WM3 (2873) and WM4 (2956) each left findings graded safe to carry. This task closes them, so the work
+map the operator sees holds up against what a newer server, a narrow window or a malformed row can send. Its note is
+`docs/superpowers/programs/desktop-polish/wm7.md` (every claim labelled measured or inferred, with the mutation table).
+
+**Files:** Modify `pwa/src/ledgers/workRead.ts`, `workMapWords.ts`, `ledgers.css`, `server/src/coord/planRoutes.ts` (two warning lines);
+Test `pwa/test/programme-screen.test.tsx`, `pwa/test/work-card.test.tsx`, `pwa/browser/programme-work-page.browser.test.ts`,
+`server/test/plan-routes.test.ts`, `workMapCases.ts`, `plan-ticket-done.test.ts`, `planTicketDoneCases.ts`; Create
+`server/test/plan-work-wiring.test.ts`; Records `wm1.md`, `wm2.md`, `wm4.md`, `wm7.md`, and the pictures of `wm3` and `wm4`.
+
+**Taken, each red first and red under its mutant:**
+- WM4 (2956): F1, the work read's shape check covers `end`, `beforePlan` and `runs`; F2, the three-column step moves to 43rem, so a title keeps its
+  phone room (measured in Chrome at windows 690, 700, 715, 719, 725, 731 and 740); F3, `wm4.md`'s claim about 1920 corrected (no desktop width
+  draws the one-row layout); F4, t-5's epic and the pictures re-taken; F5, the facts' third-track placement pinned in jsdom and in Chrome. M1 to M5 are
+  corrected in `wm4.md`; M1's twin in D-8823's entry ("17 of 89", it was 18 of 90) and M3 (D-8823's list of edits under another's claim omits the contrast
+  gate's claim 5825 and the coordinator-badge test's 5976, which `wm4.md` §10 records) are named here, since that entry is not edited.
+- WM3 (2873): F15, every lookup of a server word in the card's words falls back to the word.
+- WM2 (2815): F1 to F5 and M2 to M7 as cases (an answered checkpoint item; a foreign-programme and a review evidence run; `doneAt` and a phase finish; a
+  carry on a folded auto key; the last failed run with a second open ticket; the landing line's project; malformed evidence; a run id that differs
+  from its holder key), M3 as a recorded reason with a parity case, M4 as two warnings, M7 as a case that builds the real server; M8 and F6 in `wm2.md`.
+- WM1 (2740): F1 and F2 as cases, F3, F5, F7, F9 to F12 as records (`wm1.md` §7).
+
+**F3 is a record (WM1):** one stored evidence that reads `malformed` makes every `plan ticket-done` in its programme refuse `evidence-unverified`,
+whichever kind is named, and nothing repairs the row (only a hand edit of `coord.db` can make one: the two writers of the column store typed
+evidence). It fails closed, as review 2712 F3 ruled.
+
+**Left:** WM1 F4 (its own direction says later: an `unreadable` arm on `run`, decided in the verdict), F6 (WM5's), F8 (the coordinator's); WM2 M1
+(needs a ruling) and M9 to M11; WM4 M7 to M9. **Closed at main already:** none found; each gap was open.
+
+- **D-8845** — the departures of Task WM7, by slug. `three-column-step-43rem`: the three-column row starts at 43rem, not 40rem (review 2956 F2), so a title
+  keeps at least its phone room; D-8823's entry still names 40rem, and this supersedes it (the spec rules the switch on the card's width, not the figure).
+  `m3-reason-and-parity-case`: M3 is a recorded reason and a parity case, with no comment in `store.ts`, which another wave holds. `f7-recorded-not-edited`:
+  the auth-gate tally comment is left as it is and said so in `wm1.md`. `wm1-f4-left`: left, as its direction says. `wiring-pin-through-the-real-server`: M7 is
+  pinned by a case that builds the real server, not a text scan. `shape-fixtures-widened`: a pure fixture gained `end`, `beforePlan` and `runs`.
+  `fallback-is-the-word`: an unknown server word is drawn as written. Co-edits: `planRoutes.ts`'s two lines and this section, each by the holder's consent of
+  2026-11-20.
+
 ## Carried to other plans
 
 - **The Linear hierarchy plan** (`docs/superpowers/plans/2026-11-10-linear-hierarchy.md`): its Task 5.2 is superseded by

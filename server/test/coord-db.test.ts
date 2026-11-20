@@ -772,10 +772,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[112] (runs.admissionWaitSince, lastRefusedAt and admissionWokenAt, the admission wait, D-6095),
     // and MIGRATIONS[113] (linear_migrations.project, report, putBackAskedAt and reportDoneAt, the per-team migration, Linear
     // hierarchy wave 7, D-8186),
-    // and MIGRATIONS[114] (project_linking.teamWorkspace, teamSuggestions and teamCallId, the project row's Linear workspace,
+    // and MIGRATIONS[114] (approval_parks, four approvals columns and the approval-park lane row, approvals PR 3),
+    // and MIGRATIONS[115] (project_linking.teamWorkspace, teamSuggestions and teamCallId, the project row's Linear workspace,
     // Linear hierarchy wave 8).
-    expect(COORD_SCHEMA_VERSION).toBe(115);
-    expect(MIGRATIONS.length).toBe(115);
+    expect(COORD_SCHEMA_VERSION).toBe(116);
+    expect(MIGRATIONS.length).toBe(116);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -916,8 +917,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[111] (the cap-counts-working lane-arm row, D-8792),
     // and MIGRATIONS[112] (the admission wait columns, D-6095),
     // and MIGRATIONS[113] (the per-team migration's columns, Linear hierarchy wave 7),
-    // and MIGRATIONS[114] (project_linking's three linking columns, Linear hierarchy wave 8); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(115);
+    // and MIGRATIONS[114] (approval_parks, approvals PR 3),
+    // and MIGRATIONS[115] (project_linking's three linking columns, Linear hierarchy wave 8); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(116);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2453,7 +2455,8 @@ describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-fi
     const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
     expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
       'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
-      'answeredBy', 'toolUseId', 'corrected', 'denyCurrent', 'commandWords', 'literalInRoot']);
+      'answeredBy', 'toolUseId', 'corrected', 'denyCurrent', 'commandWords', 'literalInRoot', 'parkWord', 'parkKey', 'fetchedAt',
+      'wouldPark']);
     db.close();
   });
 });
@@ -2698,7 +2701,8 @@ describe('coord.db: continuity_generations and continuity_cursor, the generation
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
-      .toEqual([{ lane: 'anchor-slot', choice: 'shadow', updatedAt: 0 }, { lane: 'cap-counts-working', choice: 'shadow', updatedAt: 0 },
+      .toEqual([{ lane: 'anchor-slot', choice: 'shadow', updatedAt: 0 }, { lane: 'approval-park', choice: 'shadow', updatedAt: 0 },
+        { lane: 'cap-counts-working', choice: 'shadow', updatedAt: 0 },
         { lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 },
         { lane: 'roster-card', choice: 'live', updatedAt: 7 }, { lane: 'working-idle-sleep', choice: 'shadow', updatedAt: 0 }]);
     db.close();

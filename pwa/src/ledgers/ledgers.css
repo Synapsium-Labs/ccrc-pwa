@@ -590,14 +590,17 @@
 /* Two steps, measured on the programme page (WM4, D-8823 `card-width-steps`, as fix round 1 changed it). The left column is a 451px
    card at a 1280 window and 532px at 1470, and a ticket's title must never have less room there than on a phone. So from 26rem a
    row is two columns, the status beside the title with its tag, and the facts on a row of their own under the title (the title keeps
-   the card's width less one 6.75rem status track); the three-column row, status | title | facts, waits for 40rem, where the title
-   keeps more than it had on the narrow step. An empty facts row draws nothing. */
+   the card's width less one 6.75rem status track); the three-column row, status | title | facts, waits for 43rem.
+   The step is 43rem and not 40rem because the three tracks leave the title the card's width less 381px (21 of chrome, 16 of gaps, a 120px
+   status track, a 224px facts track): at 40rem, 640px, that is 259px, under the 297px a phone gives it, and a one-column window of about 690
+   to 719px drew exactly such a card (review 2956 F2). At 43rem, 688px, the title keeps 307px, more than the phone's 297, and every wider card
+   more. An empty facts row draws nothing. */
 @container work (min-width: 26rem) {
   .wk-card .wk-row { grid-template-columns: 6.75rem minmax(0, 1fr); align-items: start; }
   .wk-card .wk-facts { grid-column: 2; }
   .wk-card .wk-facts:empty { display: none; }
 }
-@container work (min-width: 40rem) {
+@container work (min-width: 43rem) {
   .wk-card .wk-row { grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 14rem); }
   .wk-card .wk-facts { grid-column: auto; justify-content: flex-end; text-align: right; }
 }
