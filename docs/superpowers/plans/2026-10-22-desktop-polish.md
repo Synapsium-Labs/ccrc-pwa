@@ -4518,55 +4518,95 @@ title, and no visible "coordinator" text; a worker draws no badge; the command p
 
 **What.** The pure pieces of C49's Helpers section (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.2,
 Figure 2, and §11's H1a row), and nothing that reads, sends or draws: no read, no frame and no UI, which H1b and H2 wire.
-Built on this task's branch, red first (the branch's first commit: 136 cases, every one failing on `main`):
+Built on this task's branch, red first: the branch's first commit held 136 cases (30 for the fact parser, 106 for the decision), every
+one failing on `main`; 26 cases were added after the first mutation round, and fix round 1 (review 2961) added 47 more, most of them in a
+commit of their own before its code and the rest after its mutation round (at the tip: 57 and 152 cases, all of them failing on an
+extraction of `main`, where the symbols do not exist; measured):
 
 - `shared/workflows.ts` (L0, K): `AgentHelperView`, `AgentHelperState` (its runtime list, its final states and its words
   derived from one record), `HelpersUnmeasured`, `HELPER_FINISHED_KEEP_MS` (ten minutes) and `HELPER_KEPT_MAX` (20), the bounds
   of the Agent arm below, `WORKFLOW_AGENT_TYPE` and `isHelperId`. Nothing in `shared/api.ts`, which stays at its cap.
 - `server/src/transcript/parse.ts` (L1, C3): `helperFactsOf(line)` reads an Agent launch result (`async_launched`, or a
-  foreground `completed` with its report and duration) and a task notification (`completed`, `failed`, `killed`, `stopped`).
+  foreground `completed` with its report and duration) and a task notification (`completed`, `failed`, `killed`, `stopped`) in
+  BOTH shapes it is written in: a user record whose content is the envelope (the notification reached an idle main thread), and an
+  `attachment` record, a queued command of mode `task-notification` whose `prompt` is the envelope (it reached a busy one; review
+  2961 F1). A notification seen in both folds to one fact.
   A report and a summary are masked, then cut (review 2900 F15), a report to 16 KiB and a summary to one line of 200 bytes.
 - `server/src/workflows/model.ts` (L1, C3): `decideAgentHelpers` (Figure 2, strongest fact first), `foldHelperFacts`,
-  `isFinishedKept` (the keep's one owner, review 2900 F5), `capKeptWorkflow`, `frameDue` (the frame gate, moved out of
-  `checkWorkflows`) and `isWorkflowAgentName`.
+  `isFinishedKept` (the keep's one owner, review 2900 F5), `seenDrops` (the witness of a drop, which the decision itself uses,
+  review 2961 F13), `capKeptWorkflow`, `frameDue` and `isWorkflowAgentName`. `frameDue` is the gate H1b MOVES here: nothing
+  calls it yet and `checkWorkflows` still decides the gate inline, so until H1b deletes that copy there are two, and H1b pins in
+  a characterization case that they agree on today's inputs (review 2961 F9). The id rule is not a new copy: `isHelperId` reads
+  the one `AGENT_ID_RE` of `shared/continuity-reports.ts` (review 2961 F6).
 
-**The witness of a drop (review 2900 F13).** The process start time alone is not sound: a `/clear` or an in-session
-`resume` runs a SessionStart and empties the roster without a new process, and the dispatcher `/clear`s a worker between
-waves. The decision takes two witnesses as inputs: the roster's own CONTINUITY (a reset empties it whole, so an id listed
-in both readings other than the dropped one proves no reset between them) and `Proc.live.startedAt` against the last
-reading's. `no longer listed` needs both, with fewer than 32 listed in both readings. RESIDUAL: the last listed id's Stop
-looks exactly like a reset, so that helper's state is left out (`agentsUnmeasured: { why: 'unseen' }`) rather than called a drop.
-It is a helper that is usually also final by its notification or its meta's marker a moment later.
+**The witness of a drop (review 2900 F13, review 2961 F2 and F11).** The process start time alone is not sound: a `/clear` or an
+in-session `resume` runs a SessionStart and empties the roster without a new process, and the dispatcher `/clear`s a worker
+between waves. The witness is the roster's own CONTINUITY, vetoed by a measured change of the process start: an id listed in the
+previous roster, absent now, is a seen drop when an id that sat BEFORE it in the previous roster's order is still listed (a reset
+empties the roster whole, and the hook's cap evicts the OLDEST entries first, so an older survivor proves neither happened),
+with fewer than 32 ENTRIES in both readings (the hook counts entries with no id toward its cap) and no change in
+`Proc.live.startedAt` between two readings that measured it; the last measured start is carried across a reading that does not.
+RESIDUALS: the oldest entry's real Stop looks exactly like the cap's eviction, and the last listed id's looks exactly like a
+reset, so those helpers' states are left out (`agentsUnmeasured: { why: 'unseen' }`) rather than called a drop. Such a helper is
+usually final by its notification or its meta's marker a moment later.
+
+**A helper continued after its end (review 2961 F3).** Measured on this box's delegation spool: a continued agent fires a NEW
+`SubagentStart` (116 of 3,323 started agent ids had a start after a stop and a notification, and 87 ids were notified twice), and
+the hook lists it again with the later start; its meta's `finished` marker stays true meanwhile (110 of 122 continued agents'
+metas). So a usable roster that lists the id with a start LATER than the end fact's own time is positive evidence that it runs
+again, and ranks above the end and the marker: the row reads `running`, with no end time, summary or report. Nothing is inferred.
+RESIDUALS: a roster read from a process that is gone, or an end with no readable time, or a start no later than the end's, leaves
+the end where it was; and a helper whose only end evidence is the meta's marker (no notification read) stays `finished` beside a
+listing, because the marker carries no time to compare a start with.
 
 **The roster's read time (review 2900 F6).** `launched` compares the launch result's time with `RosterInput.at`, an input
 H1b fills from `HookReading.at`; `now` decides nothing there (a test moves `now` an hour).
 
 **The bounds (review 2900 F9), each an exported constant.** The Agent arm is at most `HELPER_LISTED_MAX` (32) running rows +
 `HELPER_NONFINAL_MAX` (32) launched, no-longer-listed, session-ended and left-out rows together + `HELPER_KEPT_MAX` (20)
-finished rows = 84 rows, each under 1 KiB (description 200 characters, three labels of 64, a summary of 200 bytes), so the arm
-is under 84 KiB; the eviction keeps the newest and `omitted` counts what it evicted. The fold of launch results and
-notifications keeps `HELPER_FACTS_MAX` (256) ids, and the memory it hands the next reading is bounded by the same constant.
-The workflow arm: a finished (kept) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` (40) agents, running and failed
-first, and says how many it left out; at most 20 finished workflows are kept (H2 applies it). A running workflow keeps today's
-`WORKFLOW_AGENTS_MAX` (120). Not bounded by this task, and said: the count of RUNNING workflows (the reader's budget, H1b)
-and the length of a workflow agent's label and phase (an existing reader's).
+finished rows = 84 rows; the eviction keeps the newest and `omitted` counts what it evicted. The text fields are capped by
+character, not by byte (the description at 200 characters, three labels at 64 each; only the summary has a byte cap, 200), so a
+row's size depends on its text. MEASURED on a row with every field at its cap, serialised as JSON: ASCII text 895 bytes a row
+(73 KiB for 84 rows); 3-byte characters 1,677 bytes (138 KiB); supplementary-plane characters 1,287 bytes (106 KiB). No byte
+cap is added and none is found on the path; pinning a worst-case row's serialised size belongs where the frame is built (H1b).
+The fold of launch results and notifications keeps `HELPER_FACTS_MAX` (256) ids, and the memory it hands the next reading is
+bounded by the same constant. The workflow arm: a finished (kept) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` (40)
+agents, running and failed first, and says how many it left out; at most 20 finished workflows are kept (H2 applies it). A
+running workflow keeps today's `WORKFLOW_AGENTS_MAX` (120). Not bounded by this task, and said: the count of RUNNING workflows
+(the reader's budget, H1b) and the length of a workflow agent's label and phase (an existing reader's).
 
-**Measured and inferred.** The launch result's shape (`async_launched` with `agentId` and `resolvedModel`) and the
-notification's (`task-id`, `status`, `summary`, `result`, as a user record whose content is the envelope) were read on this
-box's own session transcripts: measured. The foreground `completed` result's `content` blocks and `totalDurationMs` are read
-from the broker's fixture of that shape, not from a transcript: inferred. A continued agent (a second notification for one
-id) takes the later end by its time: inferred, untested against a capture.
+**Measured and inferred.** MEASURED on this box's own session transcripts: the launch result's shape (`async_launched` with
+`agentId` and `resolvedModel`); the notification's (`task-id`, `status`, `summary`, `result`) in BOTH record shapes (a user record,
+and an `attachment` record with `queued_command` and `task-notification`; review 2961 F1 counted the second as the only record
+of 27% to 56% of background helpers' notifications); and the foreground `completed` result (39 results, every one a user record
+with a list `content`, a numeric `totalDurationMs` and a `resolvedModel`). MEASURED on the delegation spool: a continued agent
+fires a new `SubagentStart` (above). INFERRED: that the hook's roster lists a continued agent with that later start, from the
+hook's own rule that a start for an unlisted id adds an entry (not read from a live roster).
+
+**Carried to H1b, H2 and the spec, each by name.** To H1b: the roster's read time is stamped by the reader and its readings reach
+the decision in nondecreasing `at`, one memory per feed (review 2961 F7; the fallback read has no time yet); `hookstate.ts`'s
+private `AGENT_ID_RE` folds onto the shared one, with a single-definition holder test (F6); a worst-case row's serialised size
+pinned where the frame is built (F5); `checkWorkflows`' inline gate is deleted and pinned equal to `frameDue` (F9); a `finished`
+row whose last write is read one reading late is held while the tail read is pending (F10c, with the read budget). To H2: a
+finished workflow with no readable end time is drawn once, as §4.3 says, by applying `noEndShown`'s rule where it moves the
+workflow keep onto `isFinishedKept` (F8).
 
 **Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter that holds each TypeScript file as
-the module text and runs the two new test files against a copy of the tree with that one file replaced): 172 mutants run, 172 killed (the decision 106, the fact parser 36, the shared types 30); the first round left 26 alive, which added a case for each, and six mutants were removed rather than killed (the note names each).
-The table is in `docs/superpowers/programs/desktop-polish/h1a.md`.
+the module text and runs the two new test files against a copy of the tree with that one file replaced): the first round ran 172
+mutants, 172 killed (the decision 106, the fact parser 36, the shared types 30); it left 26 alive, which added a case for each, and
+six mutants were removed rather than killed. Fix round 1 re-ran every branch at the new tip, 249 mutants (the decision 161, the fact
+parser 52, the shared types 30, the id rule 6): 244 killed and 5 equivalent, each named in the note; seven mutants survived once
+(a tie of two ends of one outcome, a previous reading with no measured process start, the new process start held after a restart,
+two edges of the surrogate range, a hyphen and a dot in an id) and each got a case. The tables are in
+`docs/superpowers/programs/desktop-polish/h1a.md`.
 
 **Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
 
 - **D-8829** — `helpers-decision-pure`: Task H1a, issued on 2026-11-20. The Agent arm's decision is a pure function of its
   inputs, and it departs from the spec in these places:
-  - `drop-witness-is-continuity` (F13): the witness of a seen drop is the roster's continuity plus the process start, not
-    "no SessionStart between them", which nothing the reader receives states. The residual above is accepted.
+  - `drop-witness-is-continuity` (F13): the witness of a seen drop is the roster's continuity, vetoed by a measured change of
+    the process start, not "no SessionStart between them", which nothing the reader receives states; continuity needs an OLDER
+    survivor (F2). The residuals above are accepted.
   - `seen-drop-persists`: a seen drop stays `no longer listed` on later readings while the roster stays usable, held in the
     memory the decision hands back and forgotten when the roster cannot be used. The spec's "listed in one reading, absent in the
     next" would otherwise flip the row back to a state left out one reading later.
@@ -4580,14 +4620,18 @@ The table is in `docs/superpowers/programs/desktop-polish/h1a.md`.
   - `kept-per-arm`: `HELPER_KEPT_MAX` is the cap of each arm (20 Agent rows and 20 workflow rows), not of both together.
   - `omitted-and-known-leave-the-arm`: the decision returns `omitted` (rows the bounds evicted) and `known` (the frame gate's
     count of known ids); neither is on the wire yet, and H1b decides whether the first is.
+  - `listing-after-the-end-is-running` (F3): a usable roster that lists the id with a start later than the final notification's
+    time ranks above that notification, where Figure 2 puts the final notification first; the spec says nothing of a helper
+    continued after its end.
   - `helperfact-type-lives-in-parse`: `HelperFact` is defined in `parse.ts` and imported by `model.ts` as a type only; the
     spec's table puts the tailer's `HelperFact[]` in `tail.ts`, which only carries it (H1b).
 
-Spec corrections for the coordinator to fold: §3.2's `no longer listed` paragraph (the witness and the residual above);
-§4.2's elapsed for a foreground helper; §5's frame bound (the Agent arm is 84 rows, not 52 KiB's 32 and 20) and the workflow
-arm's bound; and §8's `agentsUnmeasured` condition.
+Spec corrections for the coordinator to fold: §3.2's `no longer listed` paragraph (the witness and the residuals above) and its
+Figure 2 (a listing later than the end ranks above it); §4.2's elapsed for a foreground helper; §5's frame bound (the Agent arm is
+84 rows, about 73 KiB for ASCII text and about 138 KiB for 3-byte characters, not 52 KiB's 32 and 20) and the workflow arm's
+bound; and §8's `agentsUnmeasured` condition.
 
-**Acceptance.** The two new suites pass (42 and 120 cases), every suite that imports one of the three modules passes, and
+**Acceptance.** The two new suites pass (57 and 152 cases), every suite that imports one of the three modules passes, and
 every mutant of every decision branch goes red. `tsc` passes for `server` and `pwa`.
 
 **Rollback.** A plain revert: nothing reads these pieces yet.
