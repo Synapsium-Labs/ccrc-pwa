@@ -71,6 +71,7 @@ The packet, recorded here so that it lands as written (against main 6c8f52199c):
 Until it lands, this branch's head reds `coordinator-skill.test.ts` (SKILL.md numbers 22 clauses where the pin holds 21) and
 the count word check (README says twenty-one); the PR is not ready to land before the packet is in it.
 - Run 2846, wave 7 (`references/plan.md`, claim 5788; `coordinator-plan-reference.test.ts`, claim 5791): three plan.md hunks
-  and four test hunks (mail 27730).
+  and four test hunks (mail 27730); yes (mail 27761: wave 7 edits only plan.md's `plan map-propose` section and the test's
+  map-propose case; whichever lands second merges the other).
 - Run 2862, wave 8 (the plan, claim 5802): one hunk in Task 2 (mail 27731); yes (mail 27735: its own plan edits are the Deviations found section and the Wave 8 heading only).
 - api.md: run 2810's claim ended when #3088 merged; claimed by this run.
