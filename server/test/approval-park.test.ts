@@ -20,7 +20,7 @@ import { approvalDecision } from '../src/coord/digest.js';
 import { APPROVAL_INPUT_RETENTION_DAYS, approvalRulingBytes, isApprovalState, type ApprovalRulingRecord } from '../../shared/api.js';
 import { APPROVAL_PARK_HORIZON_MS } from '../../shared/approval-park.js';
 import { APPROVAL_PARK_LANE } from '../../shared/lane-arm.js';
-import { CHILD, CHILD2, hookInput, PARENT, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
+import { CHILD, CHILD2, DUNE, hookInput, PARENT, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
 
 let f: (Approvals & { runId: number }) | undefined;
 afterEach(async () => { if (f) await f.close(); f = undefined; });
@@ -135,6 +135,27 @@ describe('the mint decision (F1)', () => {
     r.lapse(pastWindow(r, ids[3]!));
     expect(ids.map((id) => r.row(id).state)).toEqual(['parked', 'parked', 'parked', 'released']);
   });
+  it('a mint after a pane answer voided the key\'s park is capped, and never parks (review 2889 F4)', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    expect(r.f.coord.markApprovalOperatorRows([a.id], Date.now())).toBe(1);
+    const b = await minted(r.raise());
+    expect(b.park).toBe('capped');
+    r.lapse(pastWindow(r, b.id));
+    expect(r.row(b.id).state).not.toBe('parked');
+  });
+  it('a mint after the key\'s park passed its horizon is capped, and never parks (review 2889 F4)', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    // The park's two hours have passed (its horizon moved into the past, so the claimant is measured at the real clock).
+    r.f.coord.db.prepare('UPDATE approval_parks SET horizon = ? WHERE parkKey = ?').run(Date.now() - 1, r.row(a.id).parkKey);
+    const b = await minted(r.raise());
+    expect(b.park).toBe('capped');
+    r.lapse(pastWindow(r, b.id));
+    expect(r.row(b.id).state).not.toBe('parked');
+  });
   it('a row ruled inside its window releases its slot', async () => {
     const r = await rig();
     const a = await minted(r.raise());
@@ -189,21 +210,27 @@ describe('the state: one write site, the vocabularies, the readers (F8-a, F4, F9
     r.q.noteRulingServed(r.row(a.id), Date.now(), GRACE);
     expect(r.row(a.id)).toMatchObject({ state: 'parked', ruling: null, fetchedAt: null });
   });
-  it('a pane press marks a parked row operator and voids its park; a later ruling on it is refused (F4)', async () => {
+  it('a pane press on another prompt of the child voids no parked prompt: two parked rows keep their parks (review 2889 F3)', async () => {
     const r = await rig();
     const a = await minted(r.raise());
-    r.lapse(pastWindow(r, a.id));
+    const b = await minted(r.raise(hookInput({ command: 'rm -rf dist' })));
+    r.lapse(Math.max(pastWindow(r, a.id), pastWindow(r, b.id)));
+    expect([r.row(a.id).state, r.row(b.id).state]).toEqual(['parked', 'parked']);
+    const c = await minted(r.raise(hookInput({ command: 'rm -rf out' })));
     expect(r.f.coord.markApprovalOperator(CHILD, Date.now())).toBe(1);
-    expect(r.row(a.id).state).toBe('operator');
-    expect(parkOf(r, a.id)?.voided).toBe(true);
-    expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(409);
+    expect(r.row(c.id).state).toBe('operator');
+    expect([r.row(a.id).state, r.row(b.id).state]).toEqual(['parked', 'parked']);
+    expect([parkOf(r, a.id)?.voided, parkOf(r, b.id)?.voided]).toEqual([false, false]);
+    expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(200);
   });
-  it('markApprovalOperatorRows does the same for the rows it names', async () => {
+  it('a press on the cleared dialog\'s own rows (markApprovalOperatorRows) marks a parked row operator and voids its park (F4)', async () => {
     const r = await rig();
     const a = await minted(r.raise());
     r.lapse(pastWindow(r, a.id));
     expect(r.f.coord.markApprovalOperatorRows([a.id], Date.now())).toBe(1);
+    expect(r.row(a.id).state).toBe('operator');
     expect(parkOf(r, a.id)?.voided).toBe(true);
+    expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(409);
   });
   it('the coordinator\'s card does not list a parked row (heldApprovalsFor)', async () => {
     const r = await rig();
@@ -254,6 +281,52 @@ describe('the key (F8-d)', () => {
   });
 });
 
+/** A resumed child (D-5362): wave 1's run (the one its mark names) closes and the next wave's run binds it. The child's mark
+ *  is NEVER rewritten here, because production never rewrites it on a resume. Answers the new run's id. */
+const resume = (r: Rig, from: number): number => {
+  r.f.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(from);
+  return r.f.run(PARENT, CHILD);
+};
+
+describe('the park follows the child\'s live binding run, not its mark (review 2889 F2)', () => {
+  it('a resumed child whose mark names closed wave 1 parks on wave 2\'s run, and the park stays live', async () => {
+    const r = await rig();
+    const run2 = resume(r, r.f.runId);
+    const a = await minted(r.raise());
+    expect(r.row(a.id).parkKey).toContain(`${CHILD}:${run2}:`);
+    r.lapse(pastWindow(r, a.id));
+    r.lapse(pastWindow(r, a.id) + 1);
+    expect(r.row(a.id).state).toBe('parked');
+    expect(parkedApprovalsFor(r.f.coord, Date.now()).map((p) => p.id)).toEqual([a.id]);
+    expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(200);
+  });
+  it('a wave 3 retry does not meet a wave 2 ruling of the same command', async () => {
+    const r = await rig();
+    const run2 = resume(r, r.f.runId);
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(200);
+    const run3 = resume(r, run2);
+    const b = await minted(r.raise());
+    expect(r.row(b.id).parkKey).toContain(`${CHILD}:${run3}:`);
+    expect(r.row(b.id).state).toBe('held');
+    expect(parkOf(r, a.id)?.ruling?.spent).toBe(false);
+  });
+  it('the retry treats a closed run\'s park as void: its ruling is not met, and the row is held fresh', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(200);
+    r.f.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(r.f.runId);
+    // A binding read that still answers the run (it closed between that read and the meet): the void rule decides.
+    const stale = async () => ({ kind: 'held', parent: PARENT, runId: r.f.runId, bindingRunId: r.f.runId }) as const;
+    const b = await minted(r.raise(ORDINARY, { heldFor: stale as never }));
+    expect(r.row(b.id).parkKey).toBe(r.row(a.id).parkKey);
+    expect(r.row(b.id).state).toBe('held');
+    expect(parkOf(r, a.id)?.ruling?.spent).toBe(false);
+  });
+});
+
 describe('the rule door on a parked row, and the operator\'s core', () => {
   it('the coordinator\'s ruling is recorded on the park, nothing is signed, and the child is nudged', async () => {
     const r = await rig();
@@ -299,6 +372,25 @@ describe('the rule door on a parked row, and the operator\'s core', () => {
     expect(sent.pop()).toMatchObject({ code: 400 });
     await approvalOperatorArm({ body: { kind: 'approval', verdict: 'allow' } } as never, reply() as never, a.id, { gate: pass, questions: r.q });
     expect(sent.pop()).toMatchObject({ code: 200, body: { ok: true, state: 'parked', recorded: 'allow' } });
+  });
+  it('the operator\'s arm asks the gate for a step-up, and a session with none rules nothing (review 2889 F5)', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    const sent: { code: number; body: unknown }[] = [];
+    const reply = { c: 0, code(n: number) { reply.c = n; return reply; }, send(b: unknown) { sent.push({ code: reply.c, body: b }); return reply; }, header() { return reply; } };
+    // The gate as `accounts/gate.ts` behaves for a signed-in session with no recent step-up: it passes a route that asks
+    // none, and refuses `step-up-required` when the route asks for one.
+    const asked: unknown[] = [];
+    const unfresh = (_q: unknown, rp: typeof reply, opts: { cap: unknown; stepUp?: boolean }) => {
+      asked.push(opts);
+      if (opts.stepUp === true) { rp.code(403).send({ ok: false, error: 'step-up-required' }); return { pass: false } as const; }
+      return { pass: true, actor: { label: 'device', idHash8: '00000000' }, sessionIdHash: 'x' } as const;
+    };
+    await approvalOperatorArm({ body: { kind: 'approval', verdict: 'allow' } } as never, reply as never, a.id, { gate: unfresh as never, questions: r.q });
+    expect(asked).toEqual([{ cap: null, stepUp: true }]);
+    expect(sent.pop()).toMatchObject({ code: 403, body: { error: 'step-up-required' } });
+    expect(parkOf(r, a.id)?.ruling ?? null).toBeNull();
   });
 });
 
@@ -395,15 +487,26 @@ describe('the coordinator\'s verdicts on the key (F3)', () => {
 });
 
 describe('the last poll (F8-c, F2)', () => {
-  it('fetchedAt is recorded when a ruling is served the grace before its expiry, and not later', async () => {
+  it('fetchedAt is recorded on every serve of a ruling, whatever the time left before its expiry (F1)', async () => {
     const r = await rig();
     const a = await minted(r.raise());
     await r.rule(a.id, 'allow');
     const exp = r.row(a.id).notifyAt;
-    r.q.noteRulingServed(r.row(a.id), exp - GRACE + 1, GRACE);
-    expect(r.row(a.id).fetchedAt).toBeNull();
-    r.q.noteRulingServed(r.row(a.id), exp - GRACE, GRACE);
-    expect(r.row(a.id).fetchedAt).toBe(exp - GRACE);
+    r.q.noteRulingServed(r.row(a.id), exp - 1, GRACE);
+    expect(r.row(a.id).fetchedAt).toBe(exp - 1);
+    r.q.noteRulingServed(r.row(a.id), exp - 500, GRACE);
+    expect(r.row(a.id).fetchedAt, 'the first serve is kept').toBe(exp - 1);
+  });
+  it('a ruling served inside the last seconds was used: the sweep never parks it, and no mail says run it again (F1)', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    await r.rule(a.id, 'allow');
+    // The hook read the allow 1 s before its expiry and printed it: the command ran.
+    r.q.noteRulingServed(r.row(a.id), r.row(a.id).notifyAt - 1_000, GRACE);
+    r.lapse(r.row(a.id).notifyAt + GRACE);
+    expect(r.row(a.id).state).toBe('allowed');
+    expect(parkOf(r, a.id)?.ruling ?? null).toBeNull();
+    expect(r.mail(CHILD, `approval ${a.id} ruled`)).toBe(0);
   });
   it('an allowed row the hook never fetched, minted live, moves onto the park; the child is nudged; the retry meets it', async () => {
     const r = await rig();
@@ -434,6 +537,24 @@ describe('the one signing site\'s deny currency (F2\'s carry from PR 0\'s review
     const r = await rig();
     const a = await minted(r.raise());
     const res = await r.rule(a.id, 'allow', { denyStanding: async () => 'history' });
+    expect(res).toMatchObject({ status: 409, body: { error: 'deny-not-current' } });
+    expect(r.row(a.id).state).toBe('held');
+  });
+  it('a reclaim landing during the standing read: the claimant is measured again before signing, and the allow is refused (review 2889 F9)', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    const reclaimDuringRead = async () => {
+      r.f.coord.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(DUNE, r.f.runId);
+      return 'current' as const;
+    };
+    const res = await r.rule(a.id, 'allow', { denyStanding: reclaimDuringRead });
+    expect(res).toMatchObject({ status: 409, body: { error: 'parent-changed' } });
+    expect(r.row(a.id).state).toBe('held');
+  });
+  it('a standing read that throws fails closed: the allow is refused deny-not-current (review 2889 F9)', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    const res = await r.rule(a.id, 'allow', { denyStanding: async () => { throw new Error('fixture: the managed deny file is unreadable'); } });
     expect(res).toMatchObject({ status: 409, body: { error: 'deny-not-current' } });
     expect(r.row(a.id).state).toBe('held');
   });

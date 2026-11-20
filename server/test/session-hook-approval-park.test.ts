@@ -22,8 +22,8 @@ const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const ID = 'project-a-quiet-basin';
 const UUID = '00000000-0000-4000-8000-0000000000aa';
 const DENY_FILE = '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n';
-const VERIFIER_NAME = ['approval', '-', 'verify', '.mjs'].join('');
-const PUB_NAME = ['approval', '-signing', '.pub'].join('');
+const VERIFIER_NAME = 'approval-verify.mjs';
+const PUB_NAME = 'approval-signing.pub';
 
 type Payload = Record<string, unknown> & { tool_input: Record<string, unknown> };
 const MAIN: Payload = (() => {
