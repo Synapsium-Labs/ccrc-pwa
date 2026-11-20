@@ -430,10 +430,9 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
 
   // D-8790: `working` is the waiting case now, so the pin stands on a `dispatched` run (its brief unread).
   it('an own-run hold on a dispatched run is still held by the run, never put to sleep by the hold passing (D-8789)', () => {
-    const v = stopDoneVerdict(base({
+    expect(stopDoneVerdict(base({
       row: row({ held: OWN }), heldKind: 'run-own', store: runAt('dispatched', null), live: quiet(7 * HOUR),
-    }));
-    expect(v.act).toBe('hold');
+    }))).toEqual({ act: 'hold', reason: 'not-done' });
   });
 
   // D-8789, the coordinator's ruling for a change live at merge: the own-run hold passing never puts a worker to sleep

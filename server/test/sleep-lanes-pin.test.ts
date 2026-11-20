@@ -600,16 +600,19 @@ describe('the difference table (run-done | idle-hours), one row each', () => {
     expect(hbv(hbRow({ child: { kind: 'none' } })(HB)), 'idle-hours puts a non-child to sleep').toBe('hibernate');
   });
 
-  it('held — a hold naming the worker\'s OWN open run is `run-own` and passes run-done; another session\'s open run stays `run-live` (D-8789)', () => {
+  it('held — a hold naming the worker\'s own newest placed run is `run-own` and passes run-done; another session\'s open run stays `run-live` (D-8789)', () => {
     const coord = { run: (id: number) => (id === 9
       ? { ok: false, detail: 'unreadable' }
       : { ok: true, run: { id, state: id === 5 ? 'done' : 'awaiting-review', sessionId: id === 7 ? 'other-worker' : 'this-worker' } }) as never };
     const own = `${PROGRAMME_HOLD} run:6`;
-    expect(heldKindOf(own, coord, 'this-worker'), 'its own open run').toBe('run-own');
-    expect(heldKindOf(`${PROGRAMME_HOLD} run:7`, coord, 'this-worker'), 'another session\'s open run').toBe('run-live');
+    const me = (newestPlacedRunId: number | null) => ({ sessionId: 'this-worker', newestPlacedRunId });
+    expect(heldKindOf(own, coord, me(6)), 'its own newest placed run').toBe('run-own');
+    expect(heldKindOf(own, coord, me(8)), 'its own open run, but not its newest placed one').toBe('run-live');
+    expect(heldKindOf(own, coord, me(null)), 'no placed run names it: nothing is its own').toBe('run-live');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:7`, coord, me(7)), 'another session\'s open run').toBe('run-live');
     expect(heldKindOf(own, coord, null), 'a caller that names no session never answers run-own').toBe('run-live');
-    expect(heldKindOf(`${PROGRAMME_HOLD} run:5`, coord, 'this-worker'), 'a terminal run reads as before').toBe('run-terminal');
-    expect(heldKindOf(`${PROGRAMME_HOLD} run:9`, coord, 'this-worker'), 'a failed read holds').toBe('unreadable');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:5`, coord, me(5)), 'a terminal run reads as before').toBe('run-terminal');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:9`, coord, me(9)), 'a failed read holds').toBe('unreadable');
     const held = (k: StopDoneHeldKind, holdOkVerb = true) => sdv({ ...SD, heldKind: k, holdOkVerb, row: { ...SD.row, held: own } });
     expect(held('run-own'), 'passes, with the hold handed to --hold-ok').toBe('hibernate');
     expect(held('run-own', false), 'no hold-ok token: held').toBe('held');
