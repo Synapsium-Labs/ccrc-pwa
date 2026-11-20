@@ -173,6 +173,9 @@ export interface DocsVisit {
   /** How many re-lists of this page's listing served a range read that waited for one: a leaf that waits restarts when
    *  it moves, with the pin it was given or an identical one (a worktree that moved and came back). */
   readonly rangeRelists: number;
+  /** Whether a range read of this page waits for a re-list now (`rangeFailed` took one that has not answered): a leaf that
+   *  mounts meanwhile holds the stale pin, so it waits for `rangeRelists` to move instead of reading it. */
+  readonly rangeWaiting: boolean;
   /** The freshness chip's tap: one manual POST, only while the tree slot is ok and no POST is in flight. */
   refreshManual(): void;
   /** `unresolved-ref`'s Fetch from origin: one manual POST, only while the slot holds that word. */
@@ -730,6 +733,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     updatedTo,
     pendingFragment,
     rangeRelists: tKey === null || page?.kind !== 'path' ? 0 : st.rangeRelists.get(relistPageKey(tKey, page.section, page.path)) ?? 0,
+    rangeWaiting: tKey !== null && page?.kind === 'path' && st.rangeWaits.has(relistPageKey(tKey, page.section, page.path)),
     retryTree: () => {
       const t = targetOf(pageRef.current);
       if (t === null) return;

@@ -4,7 +4,7 @@
 // part a link names, from the pre-pass's heading ids. Placeholders only (`demo`, `specs/...`).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type React from 'react';
-import type { ComponentProps } from 'react';
+import { StrictMode, type ComponentProps } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocListPin, type DocPin } from '../../shared/docs';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
@@ -139,7 +139,7 @@ describe('RangeLeaf: one read per read key', () => {
 describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
   /** The range side of the visit, which owns the one re-list rule: `stale` is what it answers to a failed read. */
   const fakeVisit = (stale: 'relist' | 'changing' | 'other') =>
-    ({ rangeFailed: vi.fn((_word: string) => stale), rangeRead: vi.fn(), rangeRetry: vi.fn(), rangeRelists: 0 });
+    ({ rangeFailed: vi.fn((_word: string) => stale), rangeRead: vi.fn(), rangeRetry: vi.fn(), rangeRelists: 0, rangeWaiting: false });
   /** The same visit after a re-list that started after the failure has answered (its counter moved). */
   const afterRelist = (v: ReturnType<typeof fakeVisit>) => ({ ...v, rangeRelists: v.rangeRelists + 1 });
   const failing = (word: string, commits: string[]): RangeLoader => ({
@@ -214,6 +214,90 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
     await waitFor(() => expect(screen.getByText('shown')).toBeTruthy());
     expect(visit.rangeRead).toHaveBeenCalledTimes(1);
     expect(visit.rangeFailed).not.toHaveBeenCalled();
+  });
+
+  /** A loader whose first prepares answer `words` (refusals), then serves `BYTES`; `calls` counts its prepares. */
+  const refusesThenServes = (words: string[]) => {
+    const s = servingLoader(BYTES);
+    const calls: number[] = [];
+    const loader: RangeLoader = {
+      async prepare(t, signal) {
+        const w = words[calls.length];
+        calls.push(calls.length);
+        return w !== undefined ? failedAnswer(w) : s.loader.prepare(t, signal);
+      },
+      frame: (t, snapshot, offset, length, signal) => s.loader.frame(t, snapshot, offset, length, signal),
+    };
+    return { loader, calls };
+  };
+  const saves = (): { clicks: HTMLAnchorElement[]; restore: () => void } => {
+    const clicks: HTMLAnchorElement[] = [];
+    const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this); });
+    return { clicks, restore: () => spy.mockRestore() };
+  };
+
+  it('a Download-only leaf whose read meets a re-list reads again when it answers, and saves (X2 P1, review F2)', async () => {
+    const { clicks, restore } = saves();
+    try {
+      const visit = fakeVisit('relist');
+      const { loader, calls } = refusesThenServes(['unknown-commit']);
+      const props = (v: typeof visit) => ({ target: target(BYTES.length), cls: 'other' as const, name: 'b.bin', loader, visit: v });
+      const { rerender } = render(<RangeLeaf {...props(visit)} />);
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
+      expect(clicks).toHaveLength(0);
+      rerender(<RangeLeaf {...props(afterRelist(visit))} />);
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      expect(clicks[0]!.download).toBe('b.bin');
+      expect(calls).toHaveLength(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a leaf with a view whose Download tap meets a re-list saves after it, not just reads', async () => {
+    const { clicks, restore } = saves();
+    try {
+      const visit = fakeVisit('other');
+      visit.rangeFailed.mockReturnValueOnce('other').mockReturnValueOnce('relist');
+      const { loader, calls } = refusesThenServes(['snapshot-gone', 'unknown-commit']);
+      const props = (v: typeof visit) => ({ target: target(BYTES.length), cls: 'markdown' as const, name: 'a.md', loader, visit: v });
+      const { rerender } = render(<RangeLeaf {...props(visit)}>{() => <p>shown</p>}</RangeLeaf>);
+      await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
+      rerender(<RangeLeaf {...props(afterRelist(visit))}>{() => <p>shown</p>}</RangeLeaf>);
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      expect(calls).toHaveLength(3);
+    } finally {
+      restore();
+    }
+  });
+
+  it('saveOnOpen: a view-less leaf reads and saves as it opens, once even under StrictMode', async () => {
+    const { clicks, restore } = saves();
+    try {
+      const { loader, calls } = refusesThenServes([]);
+      render(<StrictMode><RangeLeaf target={target(BYTES.length)} cls="other" name="b.bin" loader={loader} saveOnOpen /></StrictMode>);
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(clicks, 'saved once').toHaveLength(1);
+      expect(calls.length, 'the aborted first mount read nothing more than the second').toBeLessThanOrEqual(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a leaf that mounts while its page has a re-list pending waits for it, and reads when it answers', async () => {
+    const visit = { ...fakeVisit('other'), rangeWaiting: true };
+    const { loader, calls } = refusesThenServes([]);
+    const { rerender } = render(<RangeLeaf {...propsOf(target(BYTES.length), loader, visit)}>{() => <p>shown</p>}</RangeLeaf>);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(calls, 'no read on the stale pin').toHaveLength(0);
+    expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy();
+    rerender(<RangeLeaf {...propsOf(target(BYTES.length), loader, { ...visit, rangeWaiting: false, rangeRelists: 1 })}>{() => <p>shown</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByText('shown')).toBeTruthy());
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -516,18 +600,15 @@ describe('a version page above its class cap reads by range (X2 P1, review Q4)',
       const { targets, f } = openVersion('big.bin', src, (n) => tooLarge(n, BLOB_2));
       await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
       expect(targets, 'nothing is read until a Download is tapped').toHaveLength(0);
-      fireEvent.click(screen.getByText('Download'));
-      // The file route's answer is the probe: the leaf now shows the range body, with its own sentence and Download.
-      await waitFor(() => expect(screen.getByText(fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(src.length) }))).toBeTruthy());
-      expect(f.file, 'the probe asked the file route once').toHaveBeenCalledTimes(1);
-      expect(targets, 'and read nothing by range itself').toHaveLength(0);
-      expect(clicks).toHaveLength(0);
+      // One tap: the file route's answer is the probe, and the leaf it hands over reads by range and saves at once.
       fireEvent.click(screen.getByText('Download'));
       await waitFor(() => expect(clicks).toHaveLength(1));
       expect(clicks[0]!.download).toBe('big.bin');
+      expect(f.file, 'the probe asked the file route once').toHaveBeenCalledTimes(1);
       expect(targets).toHaveLength(1);
       expect(targets[0]).toMatchObject(versionTarget(src.length));
-      expect(f.file, 'the range Download does not ask the file route again').toHaveBeenCalledTimes(1);
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(clicks, 'saved once').toHaveLength(1);
     } finally {
       spy.mockRestore();
     }

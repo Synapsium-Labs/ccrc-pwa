@@ -456,10 +456,14 @@ export function DocsLeaf(p: {
     // One range read of `rpin`'s bytes, the view by class: an image on its own page, Markdown in parts, a text file as
     // source in parts, any other class a Download that reads by range first.
     // `blob`: the blob of the bytes when it is not the listing's (a version page's, named by the answer).
-    const rangeBody = (rpin: DocListPin, range: DocsRangePin, size: number, rentry: DocsEntry, blob?: string): ReactNode => (
+    // `saveOnOpen`: the leaf was handed over by a Download tap (the file route's refusal), so it saves as it opens.
+    const rangeBody = (
+      rpin: DocListPin, range: DocsRangePin, size: number, rentry: DocsEntry, blob?: string, saveOnOpen = false,
+    ): ReactNode => (
       <RangeLeaf
         key={rangeReadKey({ project: page.project, pin: rpin, range, size })}
         target={{ project: page.project, pin: rpin, range, size }} cls={cls} name={name} loader={rangeLoader} visit={visit}
+        saveOnOpen={saveOnOpen}
       >
         {cls === 'raster'
           ? (read) => (
@@ -489,7 +493,8 @@ export function DocsLeaf(p: {
       : cls === 'raster' || cls === 'other' ? told
         : file.s === 'failed' ? rangeOfTooLarge(file.body) : null;
     if (over !== null) {
-      body = rangeBody(pin, { kind: 'blob', sha: over.blob }, over.size, entry, over.blob);
+      // A class with no view (`other`) was told by `DownloadButton`'s tap, so its first tap saves.
+      body = rangeBody(pin, { kind: 'blob', sha: over.blob }, over.size, entry, over.blob, cls === 'other' && told !== null);
     } else if (cls === 'raster' && rasterByRange) {
       // X2 P1 (spec 4.3): an image above its class cap, or a draft image with no fingerprint, is shown on its own page
       // from bytes read by range, after its header's dimensions pass the image-view ceilings.

@@ -67,19 +67,25 @@ export function RangeLeaf(p: {
   readonly children?: (read: RangeBytes) => ReactNode;
   /** The visit, which owns the one automatic re-list (spec 4.3 item 1) for this page: a refused read is handed to it, and
    *  it answers whether it re-listed, has no re-list left, or the word is none of its business. */
-  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists'>;
+  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'>;
+  /** A leaf with no view reads and saves as it opens (a Download tap already made, as on a version page where the file
+   *  route's refusal named the blob), instead of waiting for a tap of its own. The leaf is keyed by its read key, so this
+   *  runs once per such answer. */
+  readonly saveOnOpen?: boolean;
 }): ReactNode {
   const key = rangeReadKey(p.target);
   const verdict = rangeVerdict(p.target.size, p.cls, p.target.range.kind);
   const hasView = p.children !== undefined;
   // The newest props, read by a read in flight: a re-render's new objects never restart it.
-  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit });
-  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit };
+  const saveOnOpen = p.saveOnOpen === true;
+  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit, saveOnOpen });
+  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit, saveOnOpen };
   const [state, setState] = useState<ReadState>({ s: 'idle' });
   const ac = useRef<AbortController | null>(null);
-  // True while a re-list is pending for this leaf: the read starts again when the visit says a re-list that started after
-  // the failure has answered, whatever pin it gave (a worktree that moved and came back gives the same one).
-  const pending = useRef(false);
+  // Set while a re-list is pending for this leaf, with what the read it interrupted was for (`save`: a Download, which
+  // saves the bytes): the read starts again, for the same purpose, when the visit says a re-list that started after the
+  // failure has answered, whatever pin it gave (a worktree that moved and came back gives the same one).
+  const pending = useRef<{ readonly save: boolean } | null>(null);
   const relists = p.visit.rangeRelists;
   const lastRelists = useRef(relists);
 
@@ -87,7 +93,7 @@ export function RangeLeaf(p: {
     ac.current?.abort();
     const mine = new AbortController();
     ac.current = mine;
-    pending.current = false;
+    pending.current = null;
     const { target, loader } = latest.current;
     setState({ s: 'reading', done: 0, total: target.size });
     void readRange(loader, target, {
@@ -99,7 +105,7 @@ export function RangeLeaf(p: {
         const { why } = r;
         const stale: RangeStale = why.kind === 'answer' && why.answer.s === 'failed'
           ? latest.current.visit.rangeFailed(why.answer.body.failure) : 'other';
-        pending.current = stale === 'relist';
+        pending.current = stale === 'relist' ? { save } : null;
         setState({ s: 'failed', why, stale });
         return;
       }
@@ -109,18 +115,29 @@ export function RangeLeaf(p: {
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' }, stale: 'other' }); });
   }, []);
 
-  // A leaf with a view reads as soon as it opens, once per read key; leaving it aborts the read, whatever its state.
+  // A leaf with a view reads as soon as it opens, once per read key (a leaf with none does when `saveOnOpen`); leaving it
+  // aborts the read, whatever its state. While the visit still has a re-list pending for this page (a leaf that mounted
+  // under it), the pin it was given is the stale one: it waits for that re-list instead of reading it.
   useEffect(() => {
-    if (verdict !== 'over-ceiling' && hasView) start(false);
+    if (verdict !== 'over-ceiling' && (hasView || latest.current.saveOnOpen)) {
+      const save = !hasView;
+      if (latest.current.visit.rangeWaiting) {
+        pending.current = { save };
+        setState({ s: 'failed', why: { kind: 'aborted' }, stale: 'relist' });
+      } else {
+        start(save);
+      }
+    }
     return () => { ac.current?.abort(); ac.current = null; };
   }, [key, verdict, hasView, start]);
-  // A re-list that served this leaf's wait starts the read it asked for, with the pin it now has (one that moved the read
-  // key too has been started by the effect above, which cleared `pending`).
+  // A re-list that served this leaf's wait starts the read it asked for, with the pin it now has and for the same purpose
+  // (one that moved the read key too has been started by the effect above, which cleared `pending`).
   useEffect(() => {
     if (lastRelists.current === relists) return;
     lastRelists.current = relists;
-    if (pending.current && verdict !== 'over-ceiling' && hasView) start(false);
-  }, [relists, verdict, hasView, start]);
+    const waiting = pending.current;
+    if (waiting !== null && verdict !== 'over-ceiling') start(waiting.save);
+  }, [relists, verdict, start]);
   const { target } = p;
   const view = p.children;
 
@@ -167,7 +184,7 @@ export function RangeLeaf(p: {
             // A stale pin is mended by a new listing, not by sending it again: re-list through the visit, and the read
             // starts when that listing answers, with the pin it gives or the same one.
             if (state.stale === 'other') { start(false); return; }
-            pending.current = true;
+            pending.current = { save: false };
             setState({ s: 'failed', why, stale: 'relist' });
             latest.current.visit.rangeRetry();
           }}>{DOCS_RANGE_TEXT.readAgain}</Button>}
