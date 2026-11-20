@@ -90,7 +90,9 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
 /** The operator's write: the key and the override, who and when; the reading is left as it is. D-8405: a write that
  *  changes the key makes it the operator's (`teamSourceAfterWrite`), and the pass's team and evidence go with the old key;
  *  one that sends the stored key back keeps whoever set it. D-8808: `w.workspace` is the DECIDED workspace
- *  (`workspaceAfterWrite`), written with the key in the same statement; absent writes none. Read and written in one transaction. */
+ *  (`workspaceAfterWrite`), written with the key in the same statement: a string or null is written as it is, and ABSENT
+ *  leaves the stored workspace untouched here too (one meaning at the wire and at the store: omitted keeps). The route
+ *  always passes the decided one. Read and written in one transaction. */
 export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBody, by: string, at: number): void {
   tx(db, () => {
     const before = db.prepare('SELECT teamKey, teamSource FROM project_linking WHERE project = ?').get(project) as
@@ -100,7 +102,8 @@ export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBod
     db.prepare(
       'INSERT INTO project_linking (project, teamKey, override, setBy, setAt, teamSource, teamAt, teamWorkspace) VALUES (?, ?, ?, ?, ?, ?, ?, ?) '
       + 'ON CONFLICT(project) DO UPDATE SET teamKey = excluded.teamKey, override = excluded.override, '
-      + 'setBy = excluded.setBy, setAt = excluded.setAt, teamSource = excluded.teamSource, teamWorkspace = excluded.teamWorkspace'
+      + 'setBy = excluded.setBy, setAt = excluded.setAt, teamSource = excluded.teamSource'
+      + (w.workspace !== undefined ? ', teamWorkspace = excluded.teamWorkspace' : '')
       + (keyChanged ? ', teamName = NULL, teamEvidence = NULL, teamAt = excluded.teamAt' : ''),
     ).run(project, w.teamKey, w.override, by, at, teamSourceAfterWrite(prior, w.teamKey), keyChanged ? at : null, w.workspace ?? null);
   });

@@ -712,7 +712,7 @@ export function setLinearOwnerForAll(db: DatabaseSync, linearOwner: string): num
 }
 
 /** Every project the hierarchy settings can name: each `project_linking` row and each programme's home, with its settings. */
-export interface HierarchyProjectFacts { project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean; /** The `project_linking` row's insertion order: the first project that set a team key. Null for a project with no row. */ order: number | null; /** D-8808: the workspace id the row's key resolves in; null or absent: none set. */ workspaceId?: string | null }
+export interface HierarchyProjectFacts { project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean; /** The `project_linking` row's insertion order: the first project that set a team key. Null for a project with no row. */ order: number | null; /** D-8808: the workspace id the row's key resolves in. Absent reads as null (`hierarchyProjectsOf` always fills it; `teamOwnerProject` folds both). */ workspaceId?: string | null }
 export function hierarchyProjectsOf(db: DatabaseSync): HierarchyProjectFacts[] {
   const rows = db.prepare(
     'SELECT project, teamKey, initiatives, linearOwner, ownsTeam, rowid AS ord, teamWorkspace FROM project_linking '

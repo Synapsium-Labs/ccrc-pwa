@@ -57,6 +57,21 @@ interface Rig {
   sync: PlanSync; build: (over?: Partial<PlanSyncDeps>) => PlanSync;
 }
 const ok = (value: Record<string, unknown> = {}, created: string | null = null): CcrcOpOutcome => ({ ok: true, value, created });
+describe('Linear hierarchy wave 8 (D-8808): a project row pinned to a workspace resolves its key there', () => {
+  it('a key two workspaces share is routed to the workspace the row names, and routes nowhere without it', async () => {
+    const r = await rig();
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: 'bbbbbbbb-1111-4000-8000-00000000000b', key: 'AAA', name: 'Team A in B' }] });
+    r.dir.entries = DIRECTORY;
+    await r.sync.tick(afterDebounce(r));
+    expect(r.asks).toEqual([]);   // team-ambiguous: neither workspace is chosen for the project
+    r.db.prepare('UPDATE project_linking SET teamWorkspace = ? WHERE project = ?').run(WS.b.id, 'project-a');
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(r.asks.length).toBeGreaterThan(0);
+    expect(r.asks.every((a) => a.workspaceId === WS.b.id)).toBe(true);
+  });
+});
+
 const fail = (word: Extract<CcrcOpOutcome, { ok: false; maybeSent: boolean }>['word'], maybeSent = false): CcrcOpOutcome => ({ ok: false, word, maybeSent });
 
 let counter = 1000;

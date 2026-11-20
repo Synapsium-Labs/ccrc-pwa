@@ -89,6 +89,13 @@ describe('project_linking.teamWorkspace', () => {
     setLinking(db, 'project-a', { teamKey: 'AAA', override: null, workspace: null }, 'device-1', 300);
     expect(linkingOf(db, 'project-a').teamWorkspace).toBeNull();
   });
+  it('setLinking has one meaning for the workspace: null clears, a string writes, absent leaves it as it is', () => {
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: null, workspace: WS }, 'device-1', 1);
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: 'private' }, 'device-1', 2);
+    expect(linkingOf(db, 'project-a')).toMatchObject({ override: 'private', teamWorkspace: WS });
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: 'private', workspace: null }, 'device-1', 3);
+    expect(linkingOf(db, 'project-a').teamWorkspace).toBeNull();
+  });
   it('a project with no row reads a null workspace', () => {
     expect(linkingOf(db, 'project-none').teamWorkspace).toBeNull();
   });
