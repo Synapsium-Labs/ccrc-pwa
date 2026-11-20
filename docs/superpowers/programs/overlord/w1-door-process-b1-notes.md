@@ -203,3 +203,5 @@ is taken here.
       project.
   - At load 17 to 24, `start-doors-characterization` and `run-close-switch` failed only as vitest timeouts at 20 s, on a
     different case each run (1, 2 and 1 for the first; 3 and then 6 for the second). CI is the arbiter.
+  - `coord-db`, run alone from load 27, failed seven or more cases, every one a vitest timeout (the migration-failure sweep
+    at 137 s among them). None is a `continuity_*` or migration 110 case. CI passed the file on b94660f4a.
