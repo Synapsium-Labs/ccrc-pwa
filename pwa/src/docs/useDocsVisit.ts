@@ -164,13 +164,8 @@ export interface DocsVisit {
    *  re-list, so the leaf waits for the new pin; `changing`: it asked and the re-list is spent, so the leaf says the
    *  listing changed and offers Read it through `rangeRetry`; `other`: not a re-list word, or a version page). On
    *  `relist` the read waits as a file read does: the re-list that STARTS after this call and answers moves
-   *  `rangeRelists`, whatever pin it gives. `save`: the read was a Download, whose save the visit keeps for the leaf that
-   *  starts next for the page (`rangeTakeSave`), since a new read key remounts the leaf that waited. A hand-built visit
-   *  in a test takes the stub of `docsFixtures.ts`. */
-  rangeFailed(word: DocsFailure, save: boolean): RangeStale;
-  /** Whether a Download is left for the leaf that starts for this page now, taken once (a re-list released a wait that
-   *  was a Download). Cleared when the page changes, so a page left unprompted never saves. */
-  rangeTakeSave(): boolean;
+   *  `rangeRelists`, whatever pin it gives. A hand-built visit in a test takes the stub of `docsFixtures.ts`. */
+  rangeFailed(word: DocsFailure): RangeStale;
   /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does. */
   rangeRead(): void;
   /** Read it after a spent re-list: re-lists again and waits for it as `rangeFailed` does, taking no one-shot. */
@@ -224,11 +219,8 @@ interface Store {
   readonly slotSeq: Map<string, number>;
   /** Per page (`relistPageKey`): a range read waiting for the re-list that starts after its failure, as a file entry's
    *  `relistAfter` does; and the count of re-lists that served such a read (`DocsVisit.rangeRelists`). */
-  readonly rangeWaits: Map<string, { readonly treeKey: string; readonly relistAfter: number; readonly save: boolean }>;
+  readonly rangeWaits: Map<string, { readonly treeKey: string; readonly relistAfter: number }>;
   readonly rangeRelists: Map<string, number>;
-  /** Pages whose released wait was a Download (`save`): the next leaf that starts for the page takes it once
-   *  (`rangeTakeSave`), whether the leaf that waited survived the re-list or was remounted by a new read key. */
-  readonly rangeSaves: Set<string>;
 }
 
 function newStore(): Store {
@@ -236,7 +228,7 @@ function newStore(): Store {
     alive: false, targets: new Map(), trees: new Map(), treeInflight: new Set(), refreshInflight: new Set(),
     freshness: new Map(), files: new Map(), shown: new Map(), updatedTo: new Map(),
     timers: new Set(), refreshTimers: new Map(), aborts: new Map(), seq: 0, slotSeq: new Map(),
-    rangeWaits: new Map(), rangeRelists: new Map(), rangeSaves: new Set(),
+    rangeWaits: new Map(), rangeRelists: new Map(),
   };
 }
 
@@ -342,7 +334,6 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   // The same for a Download's save left for the next leaf of a page (`rangeSaves`): a page left unprompted never saves.
   useEffect(() => {
     setHeld((h) => (h !== null && h.key !== pageKey ? null : h));
-    st.rangeSaves.clear();
   }, [pageKey]);
   const pendingFragment = held !== null && held.key === pageKey ? held.fragment : null;
   // Spec 4.3 items 3 and 4: one Set each, per mount. A key is added BEFORE its POST, synchronously.
@@ -402,21 +393,20 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
 
   /** Release the range reads that waited for `tKey`'s re-list and whose word landed before the request numbered `seq`
    *  started (a listing that FAILED releases them all: `Infinity`, so the leaf reads again and says "changing"). A
-   *  Download among them leaves its save for the next leaf that starts for the page. */
+   *  A save is never carried across: it answers its own tap, in the leaf that took it. */
   const releaseRangeWaiters = (tKey: string, seq: number): void => {
     for (const [pk, w] of st.rangeWaits) {
       if (w.relistAfter < seq && w.treeKey === tKey) {
         st.rangeWaits.delete(pk);
         st.rangeRelists.set(pk, (st.rangeRelists.get(pk) ?? 0) + 1);
-        if (w.save) st.rangeSaves.add(pk);
       }
     }
   };
 
   /** A range read waits for a re-list that starts after now (the file route's `relistAfter`), whatever pin the new listing
-   *  gives: a same-pin answer is released too. `save`: the read was a Download. */
-  const awaitRelist = (t: Target, pk: string, save: boolean): void => {
-    st.rangeWaits.set(pk, { treeKey: treeKey(t.project, t.ref), relistAfter: st.seq, save });
+   *  gives: a same-pin answer is released too. */
+  const awaitRelist = (t: Target, pk: string): void => {
+    st.rangeWaits.set(pk, { treeKey: treeKey(t.project, t.ref), relistAfter: st.seq });
     listTree(t);
   };
 
@@ -543,9 +533,12 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       changed();
     }, (err: unknown) => {
       st.treeInflight.delete(key);
-      // A listing that failed serves no waiting range read: release them as a failure, so no leaf waits for good.
-      releaseRangeWaiters(key, Number.POSITIVE_INFINITY);
-      changed();
+      // A listing that failed serves no waiting range read: release them as a failure, so no leaf waits for good (an
+      // unmounted visit has no leaf, as on the success path).
+      if (st.alive) {
+        releaseRangeWaiters(key, Number.POSITIVE_INFINITY);
+        changed();
+      }
       throw err;
     });
   };
@@ -776,14 +769,14 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       }
       changed();
     },
-    rangeFailed: (word, save) => {
+    rangeFailed: (word) => {
       const p = pageRef.current;
       const t = targetOf(p);
       if (t === null || p?.kind !== 'path' || !relistsOn(word, p.at !== null)) return 'other';
       const pk = relistPageKey(treeKey(t.project, t.ref), p.section, p.path);
       // The same one-shot as the file route's: one automatic re-list per page, spent here too.
       if (!takeAutoRetry('relist', pk, '')) return 'changing';
-      awaitRelist(t, pk, save);
+      awaitRelist(t, pk);
       changed();
       return 'relist';
     },
@@ -791,14 +784,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       const p = pageRef.current;
       const t = targetOf(p);
       if (t === null || p?.kind !== 'path') return;
-      awaitRelist(t, relistPageKey(treeKey(t.project, t.ref), p.section, p.path), false);
+      awaitRelist(t, relistPageKey(treeKey(t.project, t.ref), p.section, p.path));
       changed();
-    },
-    rangeTakeSave: () => {
-      const p = pageRef.current;
-      const t = targetOf(p);
-      if (t === null || p?.kind !== 'path') return false;
-      return st.rangeSaves.delete(relistPageKey(treeKey(t.project, t.ref), p.section, p.path));
     },
     rangeRead: () => {
       const p = pageRef.current;

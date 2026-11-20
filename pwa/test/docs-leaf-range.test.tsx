@@ -142,8 +142,8 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
   /** The range side of the visit, which owns the one re-list rule: `stale` is what it answers to a failed read. */
   const fakeVisit = (stale: 'relist' | 'changing' | 'other') =>
     ({
-      rangeFailed: vi.fn((_word: string, _save: boolean) => stale), rangeRead: vi.fn(), rangeRetry: vi.fn(), rangeRelists: 0,
-      rangeWaiting: false, rangeTakeSave: vi.fn(() => false),
+      rangeFailed: vi.fn((_word: string) => stale), rangeRead: vi.fn(), rangeRetry: vi.fn(), rangeRelists: 0,
+      rangeWaiting: false,
     });
   /** The same visit after a re-list that started after the failure has answered (its counter moved). */
   const afterRelist = (v: ReturnType<typeof fakeVisit>) => ({ ...v, rangeRelists: v.rangeRelists + 1 });
@@ -170,7 +170,7 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
       await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
       expect(screen.queryByRole('alert'), 'no "listing changed" while the re-list runs').toBeNull();
       expect(visit.rangeFailed).toHaveBeenCalledTimes(1);
-      expect(visit.rangeFailed).toHaveBeenCalledWith(word, false);
+      expect(visit.rangeFailed).toHaveBeenCalledWith(word);
       rerender(<RangeLeaf {...propsOf(withCommit('e'), loader, afterRelist(visit))}>{() => <p>view</p>}</RangeLeaf>);
       await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]));
     },
@@ -241,7 +241,10 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
     return { clicks, restore: () => spy.mockRestore() };
   };
 
-  it('a Download-only leaf whose read meets a re-list reads again when it answers, and saves (X2 P1, review F2)', async () => {
+  /** The note a Download a re-list interrupted shows: the fact, then the way on. */
+  const AGAIN = DOCS_VIEW_TEXT.changing + ' ' + DOCS_VIEW_TEXT.tapDownloadAgain;
+
+  it('a Download-only leaf whose read meets a re-list never saves on its own: the note and its Download show, and a new tap saves once', async () => {
     const { clicks, restore } = saves();
     try {
       const visit = fakeVisit('relist');
@@ -250,8 +253,12 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
       const { rerender } = render(<RangeLeaf {...props(visit)} />);
       fireEvent.click(screen.getByText('Download'));
       await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
-      expect(clicks).toHaveLength(0);
       rerender(<RangeLeaf {...props(afterRelist(visit))} />);
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(AGAIN));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(clicks, 'no unprompted save').toHaveLength(0);
+      expect(calls, 'nothing read after the re-list').toHaveLength(1);
+      fireEvent.click(screen.getByText('Download'));
       await waitFor(() => expect(clicks).toHaveLength(1));
       expect(clicks[0]!.download).toBe('b.bin');
       expect(calls).toHaveLength(2);
@@ -260,7 +267,7 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
     }
   });
 
-  it('a leaf with a view whose Download tap meets a re-list saves after it, not just reads', async () => {
+  it('a leaf with a view whose Download tap meets a re-list reads again to show the document, never saves on its own, and a new tap saves once', async () => {
     const { clicks, restore } = saves();
     try {
       const visit = fakeVisit('other');
@@ -272,8 +279,12 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
       fireEvent.click(screen.getByText('Download'));
       await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
       rerender(<RangeLeaf {...props(afterRelist(visit))}>{() => <p>shown</p>}</RangeLeaf>);
-      await waitFor(() => expect(clicks).toHaveLength(1));
+      await waitFor(() => expect(screen.getByText('shown')).toBeTruthy());
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(clicks, 'no unprompted save').toHaveLength(0);
       expect(calls).toHaveLength(3);
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
     } finally {
       restore();
     }
@@ -294,7 +305,7 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
     }
   });
 
-  it('a Download tap while the page waits for a re-list waits as the mount does, then reads and saves', async () => {
+  it('a Download tap while the page waits for a re-list waits, then shows the note and its Download without saving; a new tap saves once', async () => {
     const { clicks, restore } = saves();
     try {
       const visit = { ...fakeVisit('other'), rangeWaiting: true };
@@ -306,6 +317,11 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
       expect(calls, 'the stale pin is not read').toHaveLength(0);
       expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy();
       rerender(<RangeLeaf {...props({ ...visit, rangeWaiting: false, rangeRelists: 1 })} />);
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(AGAIN));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(clicks, 'no unprompted save').toHaveLength(0);
+      expect(calls).toHaveLength(0);
+      fireEvent.click(screen.getByText('Download'));
       await waitFor(() => expect(clicks).toHaveLength(1));
       expect(calls).toHaveLength(1);
     } finally {
@@ -701,7 +717,7 @@ describe('a version page above its class cap reads by range (X2 P1, review Q4)',
   });
 });
 
-describe('a save is one-shot and survives its remount (X2 P1, review F2)', () => {
+describe('a save answers only its own tap (X2 P1, review F2)', () => {
   const clickSpy = (): { clicks: HTMLAnchorElement[]; restore: () => void } => {
     const clicks: HTMLAnchorElement[] = [];
     const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this); });
@@ -766,7 +782,7 @@ describe('a save is one-shot and survives its remount (X2 P1, review F2)', () =>
     return { f, listingCount: () => listings };
   };
 
-  it('a Download whose re-list changes the read key (a new stat pin) still saves once, after the leaf remounts', async () => {
+  it('a Download whose re-list changes the read key (a new stat pin) never saves on its own after the remount; a new tap saves once', async () => {
     const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
     const { f } = movingDraft('big.bin', src.length);
     const served = servingLoader(src);
@@ -791,11 +807,70 @@ describe('a save is one-shot and survives its remount (X2 P1, review F2)', () =>
       render(<Harness />);
       await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
       fireEvent.click(screen.getByText('Download'));
-      await waitFor(() => expect(clicks).toHaveLength(1));
+      // The re-list moved the read key, so the leaf was remounted: it is a fresh Download-only leaf, and nothing saves.
+      await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(2));
       await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-      expect(clicks, 'saved once').toHaveLength(1);
-      expect(prepares, 'the refused read, and the one of the new pin').toHaveLength(2);
+      expect(screen.getByText('Download'), 'its Download shows').toBeTruthy();
+      expect(clicks, 'no unprompted save').toHaveLength(0);
+      expect(prepares, 'only the refused read so far').toHaveLength(1);
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
       expect(prepares[1]).not.toBe(prepares[0]);
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+      expect(clicks, 'the new tap saved once').toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a re-list released after leaving the page does not save when the page is opened again: its Download shows and a tap saves once', async () => {
+    const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
+    const draftAt = (path: string) => entry('specs', path, { draft: draftOf('modified', { fp: null, size: src.length, mtimeNs: '1700000000000000000' }) });
+    const tree = treeOk({ drafts: holder(), entries: [draftAt('a.bin'), draftAt('b.bin')] });
+    const f = fakeLoaders();
+    let calls = 0;
+    let release: (() => void) | null = null;
+    f.tree.mockImplementation(() => {
+      calls += 1;
+      // The re-list (the second listing) is held until the page has been left.
+      if (calls === 2) return new Promise((resolve) => { release = () => resolve(okTree(tree)); });
+      return Promise.resolve(okTree(tree));
+    });
+    const served = servingLoader(src);
+    let refused = false;
+    const prepares: string[] = [];
+    const rangeLoader: RangeLoader = {
+      async prepare(t, signal) {
+        prepares.push(t.pin.path);
+        if (t.pin.path === 'a.bin' && !refused) { refused = true; return failedAnswer('worktree-moved'); }
+        return served.loader.prepare(t, signal);
+      },
+      frame: (t, snapshot, offset, length, signal) => served.loader.frame(t, snapshot, offset, length, signal),
+    };
+    function Harness(p: { page: ReturnType<typeof leafOf> }): React.ReactNode {
+      const visit = useDocsVisit(p.page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={p.page} parser={parser} rangeLoader={rangeLoader} />;
+    }
+    const A = leafOf('/docs/demo/specs/a.bin?ref=main');
+    const B = leafOf('/docs/demo/specs/b.bin?ref=main');
+    const { clicks, restore } = clickSpy();
+    try {
+      const { rerender } = render(<Harness page={A} />);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(calls).toBe(2));
+      rerender(<Harness page={B} />);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      await act(async () => { release?.(); });
+      rerender(<Harness page={A} />);
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(screen.getByText('Download'), 'its Download shows').toBeTruthy();
+      expect(clicks, 'no unprompted save').toHaveLength(0);
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+      expect(clicks, 'the tap saved once').toHaveLength(1);
     } finally {
       restore();
     }

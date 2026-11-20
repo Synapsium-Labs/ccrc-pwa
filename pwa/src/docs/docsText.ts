@@ -455,6 +455,8 @@ export const DOCS_VIEW_TEXT = {
   submodule: 'This is a git submodule; Docs does not open it.',
   nothingToShow: 'There is no committed version of this file to show here.',
   changing: 'The listing changed while Docs read this file.',
+  /** After `changing`, for a Download a re-list interrupted: it is never saved on its own. */
+  tapDownloadAgain: 'Tap Download again.',
   source: 'Source',
   download: 'Download',
   downloadFailed: 'Download failed: {sentence}',

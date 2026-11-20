@@ -47,6 +47,8 @@ type ReadState =
   | { s: 'done'; bytes: Uint8Array<ArrayBuffer>; digest: string }
   /** A re-list is under way (the visit took it, or the page already waits for one): loading, until it answers. */
   | { s: 'waiting' }
+  /** A re-list answered a view-less leaf's wait: it asks for a new tap. */
+  | { s: 'again' }
   | { s: 'failed'; why: RangeReadFailure; stale: Exclude<RangeStale, 'relist'> };
 
 /** The bytes a range read gave, and their digest (the snapshot's sha256, which a stat-pinned draft's page pin takes as
@@ -69,7 +71,7 @@ export function RangeLeaf(p: {
   readonly children?: (read: RangeBytes) => ReactNode;
   /** The visit, which owns the one automatic re-list (spec 4.3 item 1) for this page: a refused read is handed to it, and
    *  it answers whether it re-listed, has no re-list left, or the word is none of its business. */
-  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting' | 'rangeTakeSave'>;
+  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'>;
   /** A leaf with no view reads and saves as it opens (a Download tap already made, as on a version page where the file
    *  route's refusal named the blob), instead of waiting for a tap of its own. The leaf is keyed by its read key, so this
    *  runs once per such answer. */
@@ -84,10 +86,11 @@ export function RangeLeaf(p: {
   latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit, saveOnOpen };
   const [state, setState] = useState<ReadState>({ s: 'idle' });
   const ac = useRef<AbortController | null>(null);
-  // Set while a re-list is pending for this leaf, with what the read it interrupted was for (`save`: a Download, which
-  // saves the bytes): the read starts again, for the same purpose, when the visit says a re-list that started after the
-  // failure has answered, whatever pin it gave (a worktree that moved and came back gives the same one).
-  const pending = useRef<{ readonly save: boolean } | null>(null);
+  // True while a re-list is pending for this leaf: when the visit says a re-list that started after the failure has
+  // answered, whatever pin it gave (a worktree that moved and came back gives the same one), a leaf with a view reads
+  // again to show the document, and a leaf with none asks for a new tap. A save never follows a re-list: it answers the
+  // tap that made it, in the same leaf, with no re-list in between.
+  const pending = useRef(false);
   const relists = p.visit.rangeRelists;
   const lastRelists = useRef(relists);
 
@@ -95,7 +98,7 @@ export function RangeLeaf(p: {
     ac.current?.abort();
     const mine = new AbortController();
     ac.current = mine;
-    pending.current = null;
+    pending.current = false;
     const { target, loader } = latest.current;
     setState({ s: 'reading', done: 0, total: target.size });
     void readRange(loader, target, {
@@ -106,13 +109,12 @@ export function RangeLeaf(p: {
       if (!r.ok) {
         const { why } = r;
         const stale: RangeStale = why.kind === 'answer' && why.answer.s === 'failed'
-          ? latest.current.visit.rangeFailed(why.answer.body.failure, save) : 'other';
+          ? latest.current.visit.rangeFailed(why.answer.body.failure) : 'other';
         if (stale === 'relist') {
-          pending.current = { save };
+          pending.current = true;
           setState({ s: 'waiting' });
           return;
         }
-        pending.current = null;
         setState({ s: 'failed', why, stale });
         return;
       }
@@ -125,33 +127,27 @@ export function RangeLeaf(p: {
   // A leaf with a view reads as soon as it opens, once per read key (a leaf with none does when `saveOnOpen`); leaving it
   // aborts the read, whatever its state. While the visit still has a re-list pending for this page (a leaf that mounted
   // under it), the pin it was given is the stale one: it waits for that re-list instead of reading it.
-  // A Download that a re-list interrupted before a new read key remounted this leaf is left in the visit, and the leaf
-  // that starts next takes it once (`mountSave`, per read key, so StrictMode's second run keeps what the first took).
-  const mountSave = useRef<{ readonly key: string; readonly save: boolean } | null>(null);
   useEffect(() => {
-    if (mountSave.current?.key !== key) mountSave.current = { key, save: latest.current.visit.rangeTakeSave() };
-    const carried = mountSave.current.save;
-    if (verdict !== 'over-ceiling' && (hasView || latest.current.saveOnOpen || carried)) {
-      const save = carried || !hasView;
+    if (verdict !== 'over-ceiling' && (hasView || latest.current.saveOnOpen)) {
       if (latest.current.visit.rangeWaiting) {
-        pending.current = { save };
+        pending.current = true;
         setState({ s: 'waiting' });
       } else {
-        start(save);
+        start(!hasView);
       }
     }
     return () => { ac.current?.abort(); ac.current = null; };
   }, [key, verdict, hasView, start]);
-  // A re-list that served this leaf's wait starts the read it asked for, with the pin it now has and for the same purpose
-  // (one that moved the read key too has been started by the effect above, which cleared `pending`). The visit's copy of
-  // a Download's save is taken here too, so a later remount does not save it again.
+  // A re-list that served this leaf's wait: a leaf with a view reads again with the pin it now has, to show the document;
+  // one with none says the file changed and waits for a new tap (one that moved the read key too was remounted, and its
+  // mount effect above started it fresh).
   useEffect(() => {
     if (lastRelists.current === relists) return;
     lastRelists.current = relists;
-    const waiting = pending.current;
-    if (waiting === null || verdict === 'over-ceiling') return;
-    const carried = latest.current.visit.rangeTakeSave();
-    start(waiting.save || carried);
+    if (!pending.current || verdict === 'over-ceiling') return;
+    pending.current = false;
+    if (latest.current.hasView) start(false);
+    else setState({ s: 'again' });
   }, [relists, verdict, start]);
   const { target } = p;
   const view = p.children;
@@ -173,7 +169,7 @@ export function RangeLeaf(p: {
       onClick={() => {
         if (state.s === 'done') { saveBytes(p.name, state.bytes); return; }
         // A page that waits for a re-list holds the stale pin: the Download waits for it as the mount does.
-        if (latest.current.visit.rangeWaiting) { pending.current = { save: true }; setState({ s: 'waiting' }); return; }
+        if (latest.current.visit.rangeWaiting) { pending.current = true; setState({ s: 'waiting' }); return; }
         start(true);
       }}>
       {DOCS_VIEW_TEXT.download}
@@ -192,6 +188,15 @@ export function RangeLeaf(p: {
     // A re-list is under way: loading, as the file route shows it, until it answers.
     return <p className="docs-loading" role="status">{DOCS_VIEW_TEXT.loading}</p>;
   }
+  if (state.s === 'again') {
+    // A Download a re-list interrupted never saves on its own: the file changed, and the next tap is the user's.
+    return (
+      <>
+        <p className="docs-note" role="alert">{DOCS_VIEW_TEXT.changing + ' ' + DOCS_VIEW_TEXT.tapDownloadAgain}</p>
+        <div className="docs-leaf-actions">{download}</div>
+      </>
+    );
+  }
   if (state.s === 'failed') {
     return (
       <>
@@ -203,7 +208,7 @@ export function RangeLeaf(p: {
             // A stale pin is mended by a new listing, not by sending it again: re-list through the visit, and the read
             // starts when that listing answers, with the pin it gives or the same one.
             if (state.stale === 'other') { start(false); return; }
-            pending.current = { save: false };
+            pending.current = true;
             setState({ s: 'waiting' });
             latest.current.visit.rangeRetry();
           }}>{DOCS_RANGE_TEXT.readAgain}</Button>}
