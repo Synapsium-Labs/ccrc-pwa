@@ -1211,3 +1211,55 @@ builds each move's line in the Codex step's own shape (`<lane>: <class> <from> �
 built from the lanes that hold a class registry, so it never sees an Anthropic lane, and an Anthropic lane's causes are
 A2.5's. A test reds when an Anthropic move never reaches the push. Cost if wrong: the push decision and the `lanes`
 answer carry one more lane kind.
+
+### D-8818 — the Anthropic arm is its own module, `deploy/models-anthropic.mjs`
+
+Where: wave A2 (Tasks A2.3 to A2.5; the plan's file lists name `deploy/models-op.mjs`). Ruled by the programme's
+coordinator on 2026-11-20 (the wave's growth ruling, slug `anthropic-arm-own-module`). With the arm inside,
+`deploy/models-op.mjs` grew by 402 net code lines and passed 3,000 lines, so the growth check's large-file row would
+have listed it. The arm moved out whole: it imports only `shared/*`, never the op, and every helper the two share
+reaches it through one `io` object the op builds at load, so nothing is copied and there is no import cycle. The
+Codex arm is unchanged, and the module ships in the install tree. Cost if wrong: one more file in the op's closure,
+and the op still sits within ten lines of 3,000, so the next addition there meets the same row.
+
+### D-8819 — the Models sheet words the refusals of a hold on an Anthropic lane
+
+Where: wave A2 (Task A2.3), `pwa/src/accounts/modelsSheetWords.ts`, which the plan's A2 file lists do not name.
+Ruled by the programme's coordinator on 2026-11-20 (slug `sheet-words-anthropic-holds`). The codes guard
+(`server/test/models-verb-codes.test.ts`) reds on any code `hold`, `release` or `revert` can print without a sentence,
+so the four an Anthropic hold prints (`alias-source-absent`, `aliases-file-unreadable`, `aliases-file-invalid`,
+`settings-overrides-hold`), and D-8820's `alias-hold-not-applied`, got one each; the three codes only
+`aliases-refresh` prints are listed in the guard as another op's. Cost if wrong: Task A4.3, which rewrites the sheet
+for Anthropic lanes, may reword five sentences.
+
+### D-8820 — `hold` and `revert` on an Anthropic lane refuse until Task A3.4
+
+Where: wave A2 (Task A2.3), against D-8747's admitted ops; review 2886, F1, ruled by the programme's coordinator on
+2026-11-20. Nothing launches a held id on an Anthropic lane until ccd applies it (Task A3.4), so between the waves a
+`hold` or `revert` there would answer ok while every new session still launched on the alias's current id. Both now
+refuse at the arm's door, `alias-hold-not-applied`, and write nothing; `release` stays open, since it can clear a hold
+made by hand. One constant marks the gate (`ANTHROPIC_HOLDS_APPLIED` in `deploy/models-anthropic.mjs`), and A2.3's
+hold path stays whole behind it, its tests run through a copy with the gate open (`server/test/modelsOpCopy.ts`).
+Task A3.4 opens or removes the gate in the release that makes ccd apply holds; ccd and the op always ship in one
+build. Cost if wrong: an operator cannot hold or revert an Anthropic class until A3.4 lands, and doctor's
+`model-held-behind` remedy, written for after A3.4, names a release of a hold that cannot be made meanwhile.
+
+### D-8821 — two unmeasured-session words for an Anthropic lane's advance file
+
+Where: wave A2 (Task A2.5), `advance-health`'s `sessionsUnmeasured` on an Anthropic lane; review 2886, F7, ruled by
+the programme's coordinator on 2026-11-20. The plan's word list names no word for an advance file that cannot be
+used. Every session of such a lane is named with the file's own blocked cause, `advance-file-unreadable` or
+`advance-file-invalid`, as the aliases file's two causes already are, never one folded word. The Codex arm's own
+fold is unchanged. Cost if wrong: one more word in doctor's unmeasured count.
+
+### D-8822 — `shared/model-aliases.mjs` imports `shared/model-advance.mjs`, and the named members the plan did not list
+
+Where: wave A2 (Tasks A2.1, A2.2 and A2.5); review 2886, F11 and F12, ruled by the programme's coordinator on
+2026-11-20. The plan says the module imports `./models.mjs` only. It also imports `./model-advance.mjs`, for
+`BEHIND_AFTER_MS`, `compareVersions`, `isoSeconds` and `isAt`, so each has one owner; that module imports only
+`./models.mjs`, so the ring rules hold. Named members the plan did not list: `rowLaunchable`, `VERSION_RE` (the
+writer's build test uses it) and `heldUnobserved` (the one rule that a held class's id resting on no evidence, or on
+evidence older than the standing hold, is unobserved, asked by the resolver and again by the health reading, so a
+class reverted right after a move is named by nothing until a refresh reads newer evidence) in
+`shared/model-aliases.mjs`; `SIDECAR_TS_MAX_S`, `AT_RE` and `isAt` in `shared/model-advance.mjs`. Cost if wrong: a
+wider API surface on two shared modules, each member with one owner.

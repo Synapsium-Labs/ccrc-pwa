@@ -242,17 +242,26 @@ export function coordinatorRole(session: FleetSession): boolean {
   return role === 'coordinator';
 }
 
-/** The word the header and the session details say for a coordinator, and the palette's session entries too. */
+/** The word a coordinator is called: the badge's accessible name (D-8817), and the palette's session entries' text, which
+ *  the operator types to search. No row or header draws it as visible text any more. */
 export const COORDINATOR_WORD = 'coordinator';
 
-/** THE role fact: the card's (D-8142) and the header's one object, so the word and its title have one home. */
-/** The role's hover title, written once: the card's role cell and the header's role detail both read it. */
+/** The role's hover title, written once: the card's role badge and the header's read it. */
 export const COORDINATOR_ROLE_TITLE = 'this session is its project\'s coordinator';
+
+/** THE coordinator badge (the operator's note of 2026-11-19, D-8817), spelt once: the icon, the accessible name and the
+ *  hover title `RoleBadge` (`@ccrc/ui`) draws, which the card's role cell and the header's role detail both spread. */
+export const COORDINATOR_BADGE = { icon: 'network', label: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE } as const;
+
+/** The role fact: the card's (D-8142) and the header's one object. It is the name and title the badge carries (the same two
+ *  constants as `COORDINATOR_BADGE`), as a `Fact`, for the one place that asks whether a card has a role cell. */
 const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE };
 
-/** The width the card's role cell takes on the context line: the word and its middot separator (D-8142). A branch
- *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
-export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
+/** The width the card's role cell takes on the context line, in characters of the meta line's mono face (D-8142, D-8817):
+ *  the badge's 16px icon, 2.2 characters at the meta line's `--fs-xs` (12px), rounded up to 3, and its middot separator. A
+ *  branch beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. The cell was 11 characters and
+ *  the separator (14) when it drew the word. */
+export const ROLE_CELL_CHARS = 3 + ' · '.length;
 
 /** D-8771: the words `backgroundWords` puts after its count (`in background`), TAKEN FROM ITS OWN OUTPUT, so the words are
  *  spelt once, in `shared/api.ts`: a reword there reaches the card's uncounted form and the allowance below together. */

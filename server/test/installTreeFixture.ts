@@ -107,12 +107,17 @@ export const TREE_FILES = [
   // ERR_MODULE_NOT_FOUND. Copied, never stubbed, for the GPT lane's reason above.
   'ccd/ccrc-models-probe',
   'deploy/models-op.mjs',
+  // The Anthropic arm of the models op (model-class Anthropic arm A2): `deploy/models-op.mjs` imports it at load, so a
+  // placed tree without it fails every models verb with ERR_MODULE_NOT_FOUND.
+  'deploy/models-anthropic.mjs',
   'deploy/litellm-config.template.yaml',
   'shared/modelenv.mjs',
   'shared/litellm.mjs',
   // The auto-advance plan's pure rules (Codex arm, Task 3): `deploy/models-op.mjs` imports them at load, so a
   // placed tree without this file fails every models verb with ERR_MODULE_NOT_FOUND.
   'shared/model-advance.mjs',
+  // The Anthropic arm's pure rules (model-class Anthropic arm A2): `deploy/models-op.mjs` imports them at load too.
+  'shared/model-aliases.mjs',
   'shared/model-suggest.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any

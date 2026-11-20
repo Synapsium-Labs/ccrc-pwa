@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "fetchedAt": 1795000000000,
+  "staleAt": 1795000600000,
+  "resolution": "token_org",
+  "organizationUuid": "00000000-0000-4000-8000-000000000000",
+  "catalog": {
+    "config": {
+      "provider_alias_targets": {
+        "opus": { "default": "claude-opus-9-1" },
+        "sonnet": { "default": "claude-sonnet-9-1" },
+        "haiku": { "default": "claude-haiku-9-1" },
+        "fable": { "default": "claude-fable-9-2" }
+      },
+      "models": [
+        { "id": "claude-opus-9-1", "name": "Opus 9.1", "min_claude_code_version": "9.0.0",
+          "runtime": { "effort_levels": ["low", "high"], "default_effort": "high" }, "thinking": { "type": "effort" } },
+        { "id": "claude-sonnet-9-1", "name": "Sonnet 9.1", "min_claude_code_version": null,
+          "runtime": { "effort_levels": ["low", "high"], "default_effort": "low" }, "thinking": { "type": "effort" } },
+        { "id": "claude-haiku-9-1", "name": "Haiku 9.1", "min_claude_code_version": null,
+          "runtime": {}, "thinking": { "type": "none" } },
+        { "id": "claude-fable-9-2", "name": "Fable 9.2", "min_claude_code_version": "9.5.0",
+          "runtime": { "effort_levels": ["low", "high"], "default_effort": "high" }, "thinking": { "type": "effort" } }
+      ]
+    }
+  }
+}

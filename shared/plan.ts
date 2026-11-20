@@ -185,6 +185,11 @@ export type WorkStatus = (typeof WORK_STATUSES)[number];
 export const WORK_GROUPS = ['done', 'in-progress', 'waiting-on-you', 'held', 'not-started', 'dropped', 'closed',
   'left-open', 'failed'] as const;
 export type WorkGroup = (typeof WORK_GROUPS)[number];
+/** The groups a headline's or a chip's "N of M" counts: closed, left open, dropped and failed count apart (review 2873 F3). */
+export const WORK_APART_GROUPS = ['dropped', 'closed', 'left-open', 'failed'] as const satisfies readonly WorkGroup[];
+export type WorkCountedGroup = Exclude<WorkGroup, (typeof WORK_APART_GROUPS)[number]>;
+export const WORK_COUNTED_GROUPS: readonly WorkCountedGroup[] =
+  WORK_GROUPS.filter((g): g is WorkCountedGroup => !(WORK_APART_GROUPS as readonly WorkGroup[]).includes(g));
 /** Where the map comes from (spec §5.1, D19): `ended` when the plan has an end; `plan` with a ticket to count;
  *  `declared-empty` when `plan put` ran with nothing to count; `runs` (no plan) otherwise. */
 export const WORK_SOURCES = ['plan', 'declared-empty', 'ended', 'runs'] as const;
@@ -233,6 +238,9 @@ export interface WorkPhaseView {
   counts: Record<WorkGroup, number>;
   /** Carried out of this phase. */
   carried: number;
+  /** The keys of the tickets carried out of this phase, in plan order (a subset of `items`): a closed ticket is never one,
+   *  whatever carry is recorded, since `workMapOf` reads it closed first (Table 6a; review 2873 F2). */
+  carriedOut: string[];
   /** The epics this phase takes on whole. */
   wholeEpics: string[];
   /** Ticket keys, plan order: its own work, its closed and left-open tickets, and the ones carried out of it. */

@@ -44,6 +44,7 @@ import {
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
+import { modelSwitchesSinceStart, type HookStoreRead, type ModelSwitchRow } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
@@ -1018,6 +1019,10 @@ export type LastRunsResult =
      *  sessions a run PARKED at review, merge or close names (the idle set without `planned`), newest or not, so the
      *  policy's parked clock is not cut short by a newer done run beside it. */
     lastPlaced: LastRun[]; openPlacedWorkers: string[]; parkedPlacedWorkers: string[];
+    /** D-8790, additive: the asked sessions an ACTIVE run names that is NOT their newest placed run
+     *  (the same negative predicate as `openPlacedWorkers`). A worker whose newest placed run is itself active is held
+     *  by a second active run only; for every other worker this answers what `openPlacedWorkers` does. */
+    otherOpenPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
@@ -5137,6 +5142,7 @@ export class CoordStore {
     if (sessionIds.length === 0) {
       return {
         ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+        otherOpenPlacedWorkers: [],
       };
     }
     const ph = placeholders(sessionIds.length);
@@ -5179,9 +5185,15 @@ export class CoordStore {
     const parked = (this.db.prepare(
       `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
     ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
+    // D-8790: an active run beside the newest placed one (`planned` is never active, so the newest
+    // placed run is the newest whose state is not `planned`, as `newest(true)` reads it).
+    const other = (this.db.prepare(
+      `SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      'AND r.id <> (SELECT MAX(n.id) FROM runs n WHERE n.sessionId = r.sessionId AND n.state <> ?)',
+    ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
-      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked,
+      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked, otherOpenPlacedWorkers: other,
     };
   }
 
@@ -5520,6 +5532,8 @@ export class CoordStore {
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
   startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
+  /** Overlord W1 door process B1: the session's reported model switches since its generation's start, by the server's clock (the off-model input's read). */
+  modelSwitchesOf(sessionId: string, startId: number): HookStoreRead<ModelSwitchRow[]> { return modelSwitchesSinceStart(this.db, sessionId, startId); }
   /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
   liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }

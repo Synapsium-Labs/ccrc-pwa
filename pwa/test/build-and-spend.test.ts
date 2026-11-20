@@ -27,7 +27,7 @@ import { ts } from '../../server/test/scan/parse';
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, SessionUsage } from '../../shared/api';
 import {
-  COORDINATOR_WORD, coordinatorRole, headerFacts, sessionFacts as fleetFacts,
+  COORDINATOR_BADGE, COORDINATOR_WORD, coordinatorRole, headerFacts, sessionFacts as fleetFacts,
 } from '../src/fleet/sessionFacts';
 import { sessionFacts } from '../src/session/buildAndSpend';
 import { fleetSession } from './fleetFixture';
@@ -165,7 +165,9 @@ describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
       }
       return null;
     };
-    expect(importedFrom(details, 'COORDINATOR_WORD'), 'SessionDetails.tsx imports COORDINATOR_WORD from fleet/sessionFacts, its one owner').toBe('../fleet/sessionFacts');
+    // D-8817: the details draw the badge, spread from `COORDINATOR_BADGE` (its label is COORDINATOR_WORD, in sessionFacts.ts).
+    expect(importedFrom(details, 'COORDINATOR_BADGE'), 'SessionDetails.tsx imports COORDINATOR_BADGE from fleet/sessionFacts, its one owner').toBe('../fleet/sessionFacts');
+    expect(COORDINATOR_BADGE.label).toBe(COORDINATOR_WORD);
     const spelled = nodes(details, (n) => isCoordinatorLiteral(n) || (ts.isJsxText(n) && n.text.trim() === 'coordinator'));
     expect(spelled.map((n) => n.getText()), 'SessionDetails.tsx spells the word').toEqual([]);
 

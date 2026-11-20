@@ -77,7 +77,7 @@ const word = (v: StopDoneVerdict | HibernateVerdict): string => (v.act === 'hold
 // run-done's input: everything clear, the live state read and idle, the run closed past the grace, the marker 7 h quiet.
 const SD: StopDoneInput = {
   row: row(ID) as unknown as StopDoneInput['row'], heldKind: 'none', holdOkVerb: true,
-  store: { ok: true, last: { runId: 7, state: 'done', closedAt: NOW - GRACE - MIN }, openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false },
+  store: { ok: true, last: { runId: 7, state: 'done', closedAt: NOW - GRACE - MIN }, openWorker: false, parkedWorker: false, otherOpenWorker: false, openClaimant: false, claim: false, mail: false },
   viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS, verb: true, overlord: false, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK(7 * HOUR) },
   now: NOW, graceMs: GRACE,
@@ -107,7 +107,8 @@ const RUN_DONE: readonly Rung<StopDoneInput, StopDoneHold>[] = [
   { name: 'substrate', word: 'substrate', touches: ['substrate'], set: sdRow({ substrate: STANDING }) },
   { name: 'runs-unreadable', word: 'runs-unreadable', touches: ['store.ok'], set: sdStore({ ok: false, detail: 'fixture' }) },
   { name: 'no-run', word: 'no-run', touches: ['last.state', 'last.closedAt'], set: sdLast(null) },
-  { name: 'not-done', word: 'not-done', touches: ['last.state'], set: sdLast({ state: 'working' }) },
+  // D-8790: `working` is the waiting case now, so the rung stands on a `dispatched` run.
+  { name: 'not-done', word: 'not-done', touches: ['last.state'], set: sdLast({ state: 'dispatched' }) },
   { name: 'close-unplaced', word: 'close-unplaced', touches: ['last.closedAt'], set: sdLast({ closedAt: null }) },
   { name: 'grace', word: 'grace', touches: ['last.closedAt'], set: sdLast({ closedAt: NOW - GRACE + 1 }) },
   { name: 'run-worker', word: 'run-worker', touches: ['openWorker'], set: sdStore({ openWorker: true }) },
@@ -138,6 +139,8 @@ const RUN_DONE_ALSO: readonly Rung<StopDoneInput, StopDoneHold>[] = [
   { name: 'unmeasured (turn verdict)', word: 'unmeasured', touches: [], set: sdLive({ turn: 'unmeasured' }) },
   { name: 'marker (unreadable)', word: 'marker', touches: [], set: sdLive({ mark: { ok: false, reason: 'foreign' } }) },
   { name: 'marker-background (bg -1)', word: 'marker-background', touches: [], set: sdMark({ bg: -1 }) },
+  // D-8791 (review 2887 F2): the waiting case under `mail-disabled`, decided after the ladder (`stopDoneVerdict`).
+  { name: 'mail-disabled (the waiting case)', word: 'mail-disabled', touches: [], set: (i) => sdIn({ mailDisabled: 'set' })(sdLast({ state: 'working', closedAt: null })(i)) },
   { name: 'scheduled (crons absent)', word: 'scheduled', touches: [], set: sdMark({ crons: null }) },
   { name: 'recent (no stamp)', word: 'recent', touches: [], set: sdMark({ turnAt: null, stopAt: null, restartAt: null }) },
 ];
@@ -432,11 +435,14 @@ function sdDeps(w: World): StopDoneSweepDeps {
           program: 'p', programTitle: null, claimedBy: 'lane-a-project-a',
         })),
         openPlacedWorkers: asked.filter((id) => w.openWorker.has(id)), parkedPlacedWorkers: [],
+        otherOpenPlacedWorkers: asked.filter((id) => w.openWorker.has(id)),
       }) as never,
       activeClaims: () => [],
       outstandingMailFor: (id: string) => (w.mail.has(id) ? [{ parkedAt: null }] : []) as never,
       recordFeedEvent: () => undefined,
       run: (runId: number) => ({ ok: true, run: { id: runId, state: 'working', reviews: null } }) as never,
+      laneArmSetting: () => ({ kind: 'absent' as const }),
+      runEvents: () => [],
     },
     runCcd: runCcdOf(w),
     fleetState: { ccdVerbs: w.verbs } as unknown as FleetState,
@@ -453,6 +459,7 @@ function sdDeps(w: World): StopDoneSweepDeps {
     serial: serialOf(w),
     queueRun: queueOf(w),
     listing: listingOf(w, []),
+    stallNotice: () => ({ queued: false, why: 'duplicate' as const }),
     startedAt: STARTED,
     now: () => w.now,
   };
@@ -630,7 +637,7 @@ describe('the difference table (run-done | idle-hours), one row each', () => {
   });
 
   it('differs: the run clock — run-done holds no-run, not-done, close-unplaced and grace after runs-unreadable; idle-hours has none', () => {
-    expect([sdLast(null), sdLast({ state: 'working' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
+    expect([sdLast(null), sdLast({ state: 'dispatched' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
       .toEqual(['no-run', 'not-done', 'close-unplaced', 'grace']);
     expect(sdv(sdStore({ ok: false, detail: 'x', last: null })(SD))).toBe('runs-unreadable');
     expect(Object.keys(HB.store).sort(), 'idle-hours\' store read carries no run').toEqual(['claim', 'mail', 'ok', 'openClaimant', 'openWorker']);
@@ -1358,7 +1365,7 @@ describe('C4b: one row per SleepPolicy field, each value answering the old verdi
   });
 
   it('field runClock: run-done reads the run\'s close after runs-unreadable (no-run, not-done, close-unplaced, grace); idle-hours reads no run', () => {
-    expect([sdLast(null), sdLast({ state: 'working' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
+    expect([sdLast(null), sdLast({ state: 'dispatched' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
       .toEqual(['no-run', 'not-done', 'close-unplaced', 'grace']);
     expect(sdv(sdLast(null)(sdStore({ openWorker: true })(SD))), 'the run clock stands above run-worker').toBe('no-run');
     expect(hibernateVerdict(HB, NOW, N)).toStrictEqual({ act: 'hibernate', idleMs: 7 * HOUR });

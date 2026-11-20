@@ -1449,6 +1449,12 @@ export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
  *  evidence). ccd's `echo hibernate-fresh` and `server/test/ccdCapTokens.ts` are the other two spellings. */
 export const HIBERNATE_FRESH_CAP = 'hibernate-fresh';
 
+/** The `ccd caps` token that says this box's session hook sends the witness (Overlord W1 door process B1): the call digest of
+ *  each door call, reported before the call runs. The Overlord's witness port answers `unmeasured` until it is advertised, so a
+ *  server updated first refuses the Overlord's writes 502 and fires no latch (`capSupported`, false on no evidence). ccd's
+ *  `echo door-witness-v1` and `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const DOOR_WITNESS_CAP = 'door-witness-v1';
+
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
  * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an
