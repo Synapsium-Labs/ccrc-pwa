@@ -254,14 +254,18 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
       const at = now();
       const call = callBodyOf(overlordLinkCallBody(c.project, chosen, candidates), at);
       if (!call.ok) return refuseRoute(reply, 'write-failed', { detail: call.detail });
-      const workspaceId = chosen.workspaceId ?? null;
+      // The ROUTED slot's workspace and name are stored, never a candidate's null (D-8809): a key one slot holds, stored with
+      // none, would make a later operator Save of the same key (which sends that slot's id) read as a pair change.
+      const workspaceId = pair.workspaceId;
+      const workspaceName = routableTeams(linear).find((t) => t.key === chosen.key && t.workspaceId === workspaceId)?.workspaceName
+        ?? chosen.workspaceName ?? null;
       const callId = store.linkTeamOverlord(c.project, { key: chosen.key, name: chosen.name, evidence: chosen.evidence, workspace: workspaceId },
         { program: LINEAR_SYNC_PROGRAMME, madeBy: c.byId, call: call.call, build: opts.build ?? null }, at);
       if (callId === null) return refuseRoute(reply, 'team-set', { detail: 'the project got a key, or the operator decided it, meanwhile' });
       if (opts.notice !== undefined && opts.bus !== undefined) announceBigCall({ notice: opts.notice, bus: opts.bus }, LINEAR_SYNC_PROGRAMME, callId, call.call);
       const answer: TeamConfirmAnswer = {
         ok: true, project: c.project, callId,
-        link: { key: chosen.key, teamName: chosen.name, workspaceId, workspaceName: workspaceId === null ? null : (chosen.workspaceName ?? null), evidence: chosen.evidence },
+        link: { key: chosen.key, teamName: chosen.name, workspaceId, workspaceName, evidence: chosen.evidence },
       };
       return answer;
     } catch (err) {

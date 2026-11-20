@@ -257,17 +257,19 @@ describe('POST /api/linking/confirm (D-8809)', () => {
     unlinked();
   });
 
-  it("a coordinator's suggestion is a candidate the Overlord may confirm; one stored without a workspace takes workspace null", async () => {
+  it("a coordinator's suggestion is a candidate the Overlord may confirm; one stored without a workspace links with the one slot that holds its key", async () => {
     const r = await rig();
     s.recordLinkingReading('project-a', MEASURED);
     expect(s.recordTeamSuggestion('project-a', { by: 'lane-c', key: 'BBB', workspaceId: null, workspaceName: null, teamName: 'Beta Team', why: 'the branches say so', at: 1 })).toBe('written');
     const res = await confirm(r, { team: 'BBB', workspace: null });
     expect(res.statusCode).toBe(200);
-    expect(res.json().link).toEqual({ key: 'BBB', teamName: 'Beta Team', workspaceId: null, workspaceName: null, evidence: { kind: 'suggested', by: 'lane-c', why: 'the branches say so' } });
+    // The routed slot's workspace is stored, never the candidate's null: a later operator Save of the same key sends that
+    // slot's id, which must not read as a pair change (D-8809).
+    expect(res.json().link).toEqual({ key: 'BBB', teamName: 'Beta Team', workspaceId: WS_B, workspaceName: 'Workspace B', evidence: { kind: 'suggested', by: 'lane-c', why: 'the branches say so' } });
     const call = s.callById(res.json().callId)!;
     expect(call.chosen).toBe('Beta Team');
     expect(call.why).toContain('suggested by lane-c: the branches say so');
-    expect(s.linkingOf('project-a')).toMatchObject({ teamKey: 'BBB', teamWorkspace: null, teamLink: { source: 'overlord' } });
+    expect(s.linkingOf('project-a')).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B, teamLink: { source: 'overlord' } });
   });
 
   it('a slot that no longer holds the pair is team-unknown: no link, no call (final review I3)', async () => {
