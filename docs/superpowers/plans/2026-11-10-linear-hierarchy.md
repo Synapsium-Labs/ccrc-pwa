@@ -347,11 +347,11 @@ number from `POST /api/ledger/deviations`.
   until the issue changes in Linear when Linear refused that one issue (`linear-forbidden`, `linear-invalid`), or when
   ccrc's shaper reads it `malformed` because a field of the issue is outside the grammar (the by-id read shapes the whole
   issue); it may clear on a retry when the body could not be read (a transport fault), or when a readable response
-  carried no `data` or no issue, which the shaper reads `malformed` too. A door re-reads the issue on every call and, for a
+  carried no `data` or no `issue` key, which the shaper reads `malformed` too (a readable null issue is `not-found`). A door re-reads the issue on every call and, for a
   decision that binds the issue, refuses `unreachable` on any unmeasured answer, reading no retry table
   (`inboundDoorVerdict`). `RETRY_WORDS` is the close lane's, and that lane gives `malformed` up past its last backoff
   step, whether it came from its write or from its own by-id re-read; amended by review 2920 F4, review 2929 F3, review
-  2960 F1, review 3106 F1 and F2, and review 3110 F1 to F4), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  2960 F1, review 3106 F1 and F2, review 3110 F1 to F4, and review 3121 A2), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
   before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
