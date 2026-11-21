@@ -5245,7 +5245,8 @@ export class CoordStore {
       `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
     ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     // D-8790: an active run beside the newest placed one (`planned` is never active, so the newest
-    // placed run is the newest whose state is not `planned`, as `newest(true)` reads it).
+    // placed run is the newest whose state is not `planned`). Unlike `newest(true)`, this subquery counts an in-place
+    // run, which here only ever holds a session awake (review 3023 F4-a).
     const other = (this.db.prepare(
       `SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
       'AND r.id <> (SELECT MAX(n.id) FROM runs n WHERE n.sessionId = r.sessionId AND n.state <> ?)',

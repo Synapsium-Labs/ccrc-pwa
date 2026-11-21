@@ -1049,7 +1049,7 @@ export async function bindRunInPlace(
   // From here every read and write names the claimant the store recorded (equal to `by`, the request step proved it),
   // never the request's own value: the registry paths below are built from a stored id.
   const { run, claimant } = request.plan;
-  const caller = decideInPlaceCaller(run, await deps.attribute(by, byUuid),
+  const caller = decideInPlaceCaller(run, await deps.attribute(claimant, byUuid),
     await fieldMeasured(deps.io, deps.cfg.registryDir, claimant, 'project'));
   if (caller !== null) return caller;
   // D-8085, D-8086: the landing intents a plain dispatch holds are held by the in-place bind too, under the same holder

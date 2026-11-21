@@ -743,8 +743,11 @@ const baseBranchOf = (base: string | null): string | null =>
  * branch (its workspace is the coordinator's), any registry row's branch in the project (another session's workspace,
  * whose PR its own pr-state line binds), and the project's base branch, as each of those rows' recorded `base` names it.
  * An unlistable registry, a missing claimant row, and a row of the project (or of a project that could not be read)
- * whose branch could not be read all refuse: an unreadable input never frees. Then the landing intents, under the
- * holder check the dispatch takes (`intentHeldRefusal`). The plan is the branch and the parsed keys.
+ * with a plain field that could not be read, or whose branch could not be read or is empty, all refuse: an unreadable
+ * input never frees. So does an unknown base (review 3023 F3-a): when no row of the project, the claimant's included,
+ * records a readable `base` (a coordinator on the project's main checkout, with no ws-add row beside it), the base
+ * branch cannot be told from a sibling's. Then the landing intents, under the holder check the dispatch takes
+ * (`intentHeldRefusal`). The plan is the branch and the parsed keys.
  */
 export function decideInPlaceTarget(
   run: RunRow, by: string, branch: unknown, registry: RegistryRead, intents: unknown,
@@ -754,16 +757,24 @@ export function decideInPlaceTarget(
     return { ok: false, kind: 'bad-request', detail: 'branch: must be the sibling worktree\'s bare git branch name' };
   }
   if (!registry.listed || !registry.records.some((r) => r.id === by)) return { ok: false, kind: 'registry-unmeasurable' };
+  let baseKnown = false;
   for (const r of registry.records) {
     const project = measuredProjectOf({ kind: 'found', record: r });
     const inProject = r.id === by || project === null || project === run.project;
     if (!inProject) continue;
-    if (r.branch === null && r.branchEvidence === 'unreadable') return { ok: false, kind: 'registry-unmeasurable' };
+    if (r.plainFieldUnreadable === true || r.branchEvidence === 'unreadable' || r.branchEvidence === 'empty') {
+      return { ok: false, kind: 'registry-unmeasurable' };
+    }
     if (r.branch === branch || baseBranchOf(r.base) === branch) {
       const what = r.branch === branch ? (r.id === by ? 'the claimant\'s own workspace branch' : `the workspace branch of ${r.id}`)
         : 'the project\'s base branch';
       return { ok: false, kind: 'bad-request', detail: `branch: ${branch} is ${what}, not a sibling worktree's` };
     }
+    if (baseBranchOf(r.base) !== null) baseKnown = true;
+  }
+  if (!baseKnown) {
+    return { ok: false, kind: 'bad-request', detail: 'branch: the project\'s base branch is unknown (no registry row of '
+      + 'the project records a base), so no branch can be shown to be a sibling worktree\'s' };
   }
   const parsed = parseLandingIntents(intents);
   if (!parsed.ok) return { ok: false, kind: 'bad-request', detail: parsed.detail };

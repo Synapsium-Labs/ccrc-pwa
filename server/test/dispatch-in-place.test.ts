@@ -758,6 +758,35 @@ describe('fix round 1 (review 2993): what an in-place run is for (D-6096)', () =
       expect(await bind(b, id, 'feat/sibling')).toEqual({ ok: false, kind: 'registry-unmeasurable' });
       expect(okRun(b.coord.run(id))!.state).toBe('planned');
     });
+
+    // Review 3023 F3-a: an unknown base refuses in every state, not only when some row records one.
+    it('F3-a: a claimant on the project\'s main checkout, with no ws-add row beside it, cannot bind main', async () => {
+      const b = build();
+      for (const f of ['branch', 'base', 'workspace']) rmSync(path.join(b.home, '.cc-sessions', `${BOSS}.${f}`));
+      const id = b.open();
+      expect(await bind(b, id, 'main'))
+        .toEqual({ ok: false, kind: 'bad-request', detail: expect.stringContaining('base branch is unknown') });
+      expect(okRun(b.coord.run(id))!.state).toBe('planned');
+    });
+
+    it('F3-a: a row of the project whose base cannot be read refuses', async () => {
+      const b = build();
+      seedRow(b.home, 'demo-other');
+      const field = path.join(b.home, '.cc-sessions', 'demo-other.base');
+      rmSync(field);
+      mkdirSync(field);
+      const id = b.open();
+      expect(await bind(b, id, 'feat/sibling')).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+      expect(okRun(b.coord.run(id))!.state).toBe('planned');
+    });
+
+    it('F3-a: a row of the project with an empty branch refuses', async () => {
+      const b = build();
+      seedRow(b.home, 'demo-other', { branch: '' });
+      const id = b.open();
+      expect(await bind(b, id, 'feat/sibling')).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+      expect(okRun(b.coord.run(id))!.state).toBe('planned');
+    });
   });
 
   it('F4: an in-place run is never its coordinator\'s run as worker, so a finished one does not read released', async () => {

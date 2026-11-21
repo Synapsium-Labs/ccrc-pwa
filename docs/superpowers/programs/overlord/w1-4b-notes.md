@@ -65,8 +65,11 @@ follow, each under a slug below.
   failed close. The review-run close stays as on main, so a self-claimed review run's close still releases or re-holds.
   An ordinary run self-claimed by a reclaim can leave a `program:… run:R` hold, naming a terminal run, on the heir's
   workspace. The sleep path passes such a hold (`run-terminal`), and the operator can clear it by hand.
-- `base-branch-from-registry` (F3): no reader names a project's base branch, so the bind takes it from the `base` each of
-  the project's registry rows records (`origin/main` names `main`).
+- `base-branch-from-registry` (F3, amended by review 3023 F3-a): no reader names a project's base branch, so the bind
+  takes it from the `base` each of the project's registry rows records (`origin/main` names `main`). An unknown base
+  refuses: when no row of the project, the claimant's included, records a base (a coordinator on the main checkout, with
+  no ws-add row beside it), the bind answers `bad-request`. A row of the project with a plain field that could not be
+  read, or with an empty branch, refuses `registry-unmeasurable`, as an unreadable branch already did.
 - `stall-import-pin-admits-acts-on-claimant` (F8): the stall watch's import pin (`stall-vocabulary.test.ts`) admits
   `actsOnClaimant` alone from `rundefs.ts`, which is L1 and imports only L0, beside `sessionRoleOf` from `roleOf`. The
   ruled single predicate needs it.
@@ -87,6 +90,15 @@ fixed with no change of behaviour:
   check moved into `inPlaceRequest`. The request step now hands back the claimant as the store recorded it (equal to
   `by`, which it proved), and every read and write after it names that stored id.
 
+## Fix round 2 (review 3023), as ruled
+
+- F3-a: an unknown base refuses in every state (the departure above). There is one red case each: the claimant on a
+  main checkout with no ws-add row binding `main`, an unreadable `.base`, and an empty branch. Each was mutation-measured
+  on a scratch copy restored from a saved file.
+- F4-a: the comment near `other` in `lastRunBySession` no longer says that subquery reads as `newest(true)` does.
+- CodeQL-a: the attribution names the stored claimant too. No refusal changes, because the request step proved it equal
+  to `by`.
+
 ## Follow-ups (nothing acts on them in this PR)
 
 - `in-place-run-close-lane-reads-claimant`: when an in-place run's coordinator is gone, the run-close lane's R6 branch
@@ -100,6 +112,18 @@ fixed with no change of behaviour:
   committed work keeps its branch) make the worst case friction. Not traced end to end.
 - `abandon-commit-stale-without-act`: the abandon's commit step reads a refusal as `stale` even when no fleet act ran
   (a stored id no verb may name, or an in-place run). This is main's behaviour, and it is kept here.
+- `raw-in-place-readers` (review 3023 F8-a): three readers still test `run.inPlace === true`, not `actsOnClaimant`:
+  `resolveDoneBranch`'s in-place arm, `verifyDone`'s sibling PR-line read and the send-back cap check. After a coord.db rebuild `inPlace` is
+  lost, so a rebuilt in-place run's send-back is charged at the cap and its done-claim is measured on the registry
+  branch. Both fail closed (`stale-tip`, or a wait at the cap). The ruled single predicate covers the close and the stall
+  watch only.
+- `in-place-done-fail-closed-costs` (review 3023 F1-a): (a) the in-place done branch names no project, so the
+  lineage acceptance never applies and a live tip that is the claim plus clean base merges answers `stale-tip`;
+  (b) with no ws-add row in the project, `pr-state --project` gives no full line and the verdict is
+  `pr-unmeasurable`; (c) an unpushed local sibling tip binds no PR, so an open claim regresses. All three fail closed.
+- `advance-gate-in-place-edge-pin` (review 3023 F2-a): the advance gate's `cap` row knows nothing of in-place runs. The
+  exemption is the check `sendBackCapCheck` hands it, and the gate's one production caller always builds the check
+  that way. A pin on the in-place edge would catch a future caller that skips it.
 - The landing-checks pass reads an in-place run's PR in its coordinator's workspace by the episode's explicit PR
   number. It is read-only, so this is a note only.
 
