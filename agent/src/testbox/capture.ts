@@ -66,9 +66,11 @@ const MATCHED = new Set(['PreToolUse', 'PostToolUse', 'PermissionRequest']);
 const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** `<config>/settings.json`: every event in {@link CAPTURE_EVENTS} and the statusline run the recorder, which is told
- *  what called it by its one argument. `node` runs the recorder by its absolute path. */
-export function captureSettings(node: string, recorder: string): Record<string, unknown> {
-  const cmd = (what: string): string => `${sq(node)} ${sq(recorder)} ${what}`;
+ *  what called it by its one last argument. `recorder` is the command that runs it, as argv: the node binary and the
+ *  compiled recorder's absolute path in production (`captureRecord.ts#recorderPath`), and in the tests the same with
+ *  Node's type-stripping flag before the recorder's source, so nothing is compiled at test time. */
+export function captureSettings(recorder: readonly string[]): Record<string, unknown> {
+  const cmd = (what: string): string => `${recorder.map(sq).join(' ')} ${what}`;
   const hooks: Record<string, unknown> = {};
   for (const ev of CAPTURE_EVENTS) {
     hooks[ev] = [{ ...(MATCHED.has(ev) ? { matcher: '*' } : {}), hooks: [{ type: 'command', command: cmd(ev) }] }];
