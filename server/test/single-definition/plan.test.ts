@@ -26,6 +26,16 @@ describe('the plan vocabulary has one home (D-8181)', () => {
     }
   });
 
+  // D-8808 (review 3196 F2): the page that holds every project's Linear row is spelled once. The server's item text and the
+  // console's link both read the shared constant; the two sign-in links name the same page for passkeys and stay literal.
+  it('the Linear projects settings path is declared once, in shared/ledgers.ts (D-8808)', () => {
+    expect(holders(decl('LINEAR_PROJECTS_SETTINGS_PATH'))).toEqual(['shared/ledgers.ts']);
+    expect(holders(/\bLINEAR_SETTINGS_PATH\s*=\s*['"`]/)).toEqual([]);
+    expect(holders(/['"`]\/settings\/security\/?['"`]/)).toEqual([
+      'pwa/src/fleet/PasskeyNotice.tsx', 'pwa/src/screens/settings/SignInGateCard.tsx', 'shared/ledgers.ts',
+    ]);
+  });
+
   it('the work map\'s status-to-group table is declared once, beside its one decider (programme work map WM2, D-8779)', () => {
     expect(holders(decl('WORK_STATUS_GROUP'))).toEqual(['server/src/coord/workMap.ts']);
     expect(holders(decl('workMapOf'))).toEqual(['server/src/coord/workMap.ts']);

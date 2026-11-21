@@ -162,7 +162,7 @@ the hierarchy card says the owner could not be measured, and Upkeep does not sen
 fallback belongs to measured none only. Map Return preserves the item and stored map on `unreachable`, `team-ambiguous`
 or `no-linear-owner`, pairing a successful settlement with its recipient mail in one transaction. Apply completion retries
 if needed to classify an unnamed declared programme rather than omitting it. The ownerless ambiguous inbound issue
-still waits quietly and counts in the console; `w8-ambiguous-notice` is carried until after the pilot.
+waits and counts in the console; since run 3187 (`w8-ambiguous-notice`, below) it raises the shared-key item.
 
 ## Run 3082 (`w8-pilot-guards`): what was built
 
@@ -204,3 +204,31 @@ workspaces from the key-only path: one unpinned holder whose key two readable wo
 lookup finds its row, and the row's workspace has no owner (403 `not-linear-owner`); with `[null]` changed to `[]` the key-only
 owner is told the issue is not inbound (409). It passes against the code before the move. The pin for a team no project holds
 is named for the answer it pins. A1: the shared-key pin's label reaches its case name.
+
+## Run 3187 (`w8-ambiguous-notice`): what was built
+
+Review 3048 F5 asked whether an issue should wait with no word to anyone when its team key's only holders are rows naming no
+workspace and two connected workspaces hold the key. It now raises an item; D-8808 records the departure.
+
+| Step | Built | Test |
+|---|---|---|
+| The decision | `planPolicy.ts#sharedKeyItemVerdict` reads the route step's owner verdicts for the waiting issues: it raises each key measured `team-ambiguous` (upper-case, once) that no open item carries, and settles an open item when no waiting issue of its key is ambiguous or unmeasured, and only when the Linear store could be listed (an unreadable slot with nothing waiting does not hold it: a new ambiguous issue raises it again). `sharedKeyProjects` names the rows holding the key that name no workspace | `plan-policy.test.ts`, describe `the shared-key item decision`; removing the read-routing guard reds a unit pin and a lane pin |
+| The lane | The route step collects each waiting issue's verdict, raises with `coord.raiseItem` and settles with `coord.moveItem`, as it does the owner item; no new notifier | `plan-inbound.test.ts`, the describe headed `a team key two workspaces hold`: one item for two issues in two workspaces over two beats, no owner item and no mail; settled when the row is pinned and the issue is mailed; held open while the store cannot be listed even with nothing waiting; nothing raised on an unread store or an unread second workspace; nothing for a key one workspace holds. Without the lane change the first three go red |
+| The item kind | A new `ItemAction` verb, `linear-team-workspace` `{ teamKey }`, with no acts (the coordinator's ruling on the departure question, run 3187: a new verb rather than a reason on `linear-owner`, whose Name control does not fix this shape, or a prose-keyed item). The settings path is `LINEAR_PROJECTS_SETTINGS_PATH` in `shared/ledgers.ts`, beside the verb | `plan-vocabulary.test.ts`: the verb parses, a missing or empty key does not, and a verb the build does not know reads as no action |
+| The console | `LinearItemControls` draws the step's sentence and a link to Settings, Security, on the item page and on a Waiting row; an act sent anyway is `item-act-mismatch` at the route. A console that does not know a verb draws no controls and shows the item plain | `linear-item-controls.test.tsx`, describe `the shared-key item`: the sentence, the link and its route, no button, the row, and an unknown verb drawn plain |
+
+Review (the per-task reviewer's five minors, all taken): the settings path is defined once, in `shared/ledgers.ts`, and the
+console's `LINEAR_SETTINGS_PATH` is that constant; the plan's follow-up list moves `w8-ambiguous-notice` to its built clause;
+the item's how line no longer promises a mail or an ask on every close; this note and D-8808 say "cannot be listed" for the
+settle guard; D-8808 says what a rollback leaves.
+
+**Fix round 1 (review 3196).** F1: the console's sentence said the item closes once the team's waiting issues route,
+which is untrue when the chosen project's owner is gone (the issues then wait on a Name a Linear owner item while this one
+settles); it now says the item closes once no waiting issue of the team depends on the workspace choice, as the server's how
+line does, in `migrationWords.ts`, its pinned test and the verb's comment. F2: `single-definition/plan.test.ts` pins the
+settings path to its one declaration in `shared/ledgers.ts`, forbids a literal `LINEAR_SETTINGS_PATH`, and lists every literal
+spelling of the page (the shared constant and the two sign-in links, which name Security for passkeys); a second literal
+copy, measured by restoring the console's old one, reds it. D-8808 says the item was built before the pilot, at the
+coordinator's call.
+
+The test typecheck (`test/tsconfig.tests.json`) was killed by the test slice's memory cap here; CI's run on the tip checks it.

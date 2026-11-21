@@ -2,7 +2,9 @@
 // each sends, a refusal in its fixed sentence, and the map body's order (counts, then one group per class; D-8737).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ItemAction } from '../../shared/ledgers';
+import { LINEAR_PROJECTS_SETTINGS_PATH, type ItemAction } from '../../shared/ledgers';
+import { matchRoute } from '../src/lib/routes';
+import { linearOf } from '../src/ledgers/ItemActs';
 import type { MapCounts, MapEntry } from '../../shared/plan';
 import { MAP_CLASSES } from '../../shared/plan';
 import { api } from '../src/lib/api';
@@ -196,6 +198,7 @@ describe('the hierarchy items\' controls', () => {
     const actions: ItemAction[] = [
       { verb: 'linear-map', migrationId: 3 }, { verb: 'linear-report', migrationId: 3 }, { verb: 'linear-drift', bindingId: 8 },
       { verb: 'linear-initiatives', workspaceId: 'AAA' }, { verb: 'linear-owner', project: 'project-a' },
+      { verb: 'linear-team-workspace', teamKey: 'AAA' },
     ];
     vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [] });
     for (const action of actions) {
@@ -297,5 +300,36 @@ describe('an item view handed no body', () => {
     render(<ItemView item={act({ verb: 'linear-map', migrationId: 3 })} migration={{ counts: COUNTS, entries: ENTRIES }}
                      onTick={async () => {}} onDismiss={async () => {}} programmeLive={true} now={NOW} />);
     expect(document.querySelector('[data-migration-counts]')).not.toBeNull();
+  });
+});
+
+describe('the shared-key item (D-8808, review 3048 F5)', () => {
+  it('says what to do on the project row and links the project settings page, with no act to send', () => {
+    const call = sent();
+    const { container } = controls({ verb: 'linear-team-workspace', teamKey: 'AAA' });
+    expect(screen.getByText(LINEAR_ITEM_TEXT.teamWorkspace('AAA'))).toBeTruthy();
+    expect(LINEAR_ITEM_TEXT.teamWorkspace('AAA')).toBe("On the row of the project that owns team AAA, choose its Workspace, then Save. This item closes itself once no waiting issue of the team depends on the workspace choice.");
+    const link = screen.getByRole('link', { name: LINEAR_ITEM_TEXT.openSettings });
+    expect(link.getAttribute('href')).toBe(LINEAR_PROJECTS_SETTINGS_PATH);
+    expect(container.querySelectorAll('button')).toHaveLength(0);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('links a page the route table knows: Settings, Security, where the project rows are', () => {
+    expect(matchRoute(LINEAR_PROJECTS_SETTINGS_PATH)?.route.id).toBe('settings-security');
+  });
+
+  it('draws its link on a Waiting row too', () => {
+    expect(linearOf(act({ verb: 'linear-team-workspace', teamKey: 'AAA' }), 'row')).toEqual({ verb: 'linear-team-workspace', teamKey: 'AAA' });
+  });
+
+  it('a verb this console does not know draws no controls, so the item reads as a plain one', () => {
+    const unknown = { verb: 'linear-not-yet', teamKey: 'AAA' } as unknown as ItemAction;
+    expect(linearOf(act(unknown), 'item')).toBeNull();
+    const { container } = controls(unknown);
+    expect(container.innerHTML).toBe('');
+    render(<ItemView item={act(unknown, { title: 'A later item', why: 'Said by a newer server.', how: [] })}
+                     onTick={async () => {}} onDismiss={async () => {}} programmeLive={true} now={NOW} />);
+    expect(screen.getByText('Said by a newer server.')).toBeTruthy();
   });
 });

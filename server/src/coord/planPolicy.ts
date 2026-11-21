@@ -889,6 +889,28 @@ export function ownerItemReady(
   return owner.kind === 'owner' && owner.live && !waiting.some((issue) => workspace === issue.workspaceId && row?.teamKey?.toUpperCase() === issue.teamKey.toUpperCase());
 }
 
+/** D-8808 (review 3048 F5): the shared-key item's decision, over the inbound route step's owner verdicts for the `waiting` issues.
+ *  `raise`: the team keys (upper-case, sorted) whose issues wait because the owner rule MEASURED them `team-ambiguous` (the holders
+ *  that could serve the issue's workspace are rows naming no workspace, and two readable workspaces hold the key), less the keys an
+ *  open item already carries. `settle`: the open items whose key no waiting issue still measures ambiguous or unmeasured (its
+ *  issues routed, or none waits); none while the routing is unread, so an item never settles on unmeasured. */
+export function sharedKeyItemVerdict(
+  verdicts: readonly { teamKey: string; owner: TeamOwner }[], open: readonly { id: number; teamKey: string }[], routesRead: boolean,
+): { raise: string[]; settle: number[] } {
+  const up = (k: string): string => k.toUpperCase();
+  const ambiguous = new Set(verdicts.filter((v) => v.owner.kind === 'none' && v.owner.reason === 'team-ambiguous').map((v) => up(v.teamKey)));
+  const unsettled = new Set([...ambiguous, ...verdicts.filter((v) => v.owner.kind === 'unmeasured').map((v) => up(v.teamKey))]);
+  const carried = new Set(open.map((i) => up(i.teamKey)));
+  return {
+    raise: [...ambiguous].filter((k) => !carried.has(k)).sort(),
+    settle: routesRead ? open.filter((i) => !unsettled.has(up(i.teamKey))).map((i) => i.id) : [],
+  };
+}
+
+/** The projects the shared-key item names: the rows holding the key that name no workspace, sorted. */
+export const sharedKeyProjects = (team: string, rows: readonly HierarchyProjectFacts[]): string[] =>
+  teamHolders(team, rows).filter((r) => r.workspaceId == null).map((r) => r.project).sort();
+
 // ── The inbound path's bodies and verdict (Task 4.3) ──
 
 export interface PlanTriageBody {
