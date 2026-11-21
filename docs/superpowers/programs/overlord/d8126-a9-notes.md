@@ -46,7 +46,8 @@ whether another run named it as the worker, and ignored `mail-disabled`. Rebuilt
 | `rollout-unlisted-claimant-settles` | A claimant of an open run with no registry row gets no mail and does not hold the pass: there is no session to tell, and one revived later starts on the new cards (A9-1, A9-2). |
 | `rollout-after-settle-is-quiet` | A coordinator that first claims a run after the pass settled gets no mail: it starts on the new cards. One that claims in the window before the first settled pass is told too, which costs one mail. |
 | `revision-in-l1` | `COORDINATOR_SKILL_REVISION` lives in the L1 file, not in `shared/api.ts` (which sits at its growth cap): only the server reads it. A test pins that clause 21 of the shipped `SKILL.md` is the autonomy clause it names. |
-| `rollout-no-index-call` | `server/src/index.ts` is not touched: the watcher's tick runs the lane. |
+| `rollout-wired-in-index` | The lane runs only where the composition root sets `deps.skillRolloutRevision` (`index.ts`), as `planSync` and `driftPass` do. The first push ran it on every watcher, and the fast run went red in five watcher test files (asks-mint, questions-pin, questions-sequence-pin, ask-restart, stall-sweep): the lane mailed their fixtures' claimants. A pin reads the gate in `FleetWatcher.tick` and the one assignment in `index.ts`. |
+| `shared-deps-line-with-3052` | `server/src/deps.ts` and `server/src/index.ts` are held by run 3052's claim. Its worker agreed to the two additive lines and their import, and the coordinator ruled the overlap; whichever PR lands second absorbs `main`. |
 
 ## Tests run (each file alone, through `ccrc test`)
 
@@ -54,7 +55,7 @@ whether another run named it as the worker, and ignored `mail-disabled`. Rebuilt
 `compact-card`, `session-hook-start-loads`, `session-hook-start-report`, `skill-rollout`, `lane-schedule`, the whole
 `single-definition/` directory, `growth-check`, `rings/`, `anchors`, `citations`, `mail-hardening`, the server
 typecheck and the server tests' typecheck (`typecheck-tests` itself needs the PWA's packages, which this workspace did
-not install). `rings/watcher-store-port` lost its worker to a SIGKILL once under load and passed alone.
+not install). `rings/watcher-store-port` lost its worker to a SIGKILL once under load and passed alone. After the fix round: the five files above passed, but for `stall-sweep`'s M8a case, which timed out at 20 s locally at load 7, alone too. Its watchers set no revision, so the lane never runs there, and the case passed in CI on the first push.
 
 ## Guards measured red
 

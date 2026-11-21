@@ -200,7 +200,6 @@ import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import { skillInstallPass } from './coord/skillInstallLane.js';
-import { COORDINATOR_SKILL_REVISION } from './coord/skillRollout.js';
 import { rolloutListingOf, skillRolloutPass } from './coord/skillRolloutLane.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
@@ -2914,8 +2913,10 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
       const skillCoord = this.deps.coord;
       if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
-      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing; record-only feed rows, never a push.
-      if (skillCoord !== undefined) void this.runLane('skillRollout', () => skillRolloutPass({ coord: skillCoord, revision: COORDINATOR_SKILL_REVISION, settled: this.skillRolloutSettled, log: (line) => console.warn(line),
+      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing; record-only feed rows, never a push. Only where
+      // `index.ts` set the revision (`deps.skillRolloutRevision`): a test's or a script's watcher never mails its claimants.
+      const rolloutRevision = this.deps.skillRolloutRevision;
+      if (skillCoord !== undefined && rolloutRevision !== undefined) void this.runLane('skillRollout', () => skillRolloutPass({ coord: skillCoord, revision: rolloutRevision, settled: this.skillRolloutSettled, log: (line) => console.warn(line),
         record: (e, dedupeKey) => this.pushOne({ kind: 'coord', sessionId: e.sessionId, project: '', title: e.title, body: e.body, runId: null, recordAlways: true, recordOnly: true, dedupeKey }, this.activeProjects) }, rolloutListingOf(registryRead)))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });

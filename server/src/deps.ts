@@ -225,6 +225,8 @@ export interface Deps {
   planSync?: PlanSync | null;
   /** D-8183: the Linear drift pass, built once in `index.ts` after `planSync`; the watcher's `linearDrift` lane ticks it and the item route's `hand`/`keep` reach `act`. Absent (a test, a script): the lane does nothing and the acts are `unavailable`. */
   driftPass?: DriftPass | null;
+  /** D-8126 (A9-3): the coordinator skill revision the rollout lane announces (`coord/skillRolloutLane.ts`), set in `index.ts`. Absent (a test, a script): the lane does not run. */
+  skillRolloutRevision?: string;
   /** D-8186: the per-team migration, built once in `index.ts` after `planSync`; the watcher's `linearMigration` lane ticks it, the
    *  plan routes' `plan map-propose` and the hierarchy routes' doors reach it. Absent (a test, a script): the lane does nothing and
    *  its doors are `unavailable`. */

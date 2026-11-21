@@ -285,8 +285,18 @@ describe('the watcher runs the lane on its tick (D-8126, A9-3)', () => {
     expect(at, 'the tick runs the lane').toBeGreaterThan(-1);
     expect(tick.indexOf("this.runLane('skillRollout'", at + 1), 'one call site').toBe(-1);
     const call = tick.slice(at, tick.indexOf('?.catch(', at));
-    for (const part of ['skillRolloutPass({', 'revision: COORDINATOR_SKILL_REVISION', 'settled: this.skillRolloutSettled',
+    for (const part of ['skillRolloutPass({', 'revision: rolloutRevision', 'settled: this.skillRolloutSettled',
       'recordAlways: true, recordOnly: true, dedupeKey', 'rolloutListingOf(registryRead)']) expect(call).toContain(part);
+    // Gated on the revision the composition root sets: a watcher built without it (a test, a script) never runs the lane.
+    expect(tick).toContain('const rolloutRevision = this.deps.skillRolloutRevision;');
+    expect(tick.slice(tick.lastIndexOf('\n', at), at)).toContain('rolloutRevision !== undefined');
+  });
+
+  it('the composition root sets the shipped revision, once', () => {
+    const index = fs.readFileSync(path.join(ROOT, 'server/src/index.ts'), 'utf8');
+    expect(index.split('\n').filter((l) => l.startsWith('deps.skillRolloutRevision = '))).toEqual([
+      'deps.skillRolloutRevision = COORDINATOR_SKILL_REVISION;   // D-8126 (A9-3): the watcher\'s `skillRollout` lane runs only where this is set',
+    ]);
   });
 });
 
