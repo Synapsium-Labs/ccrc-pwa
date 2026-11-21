@@ -486,9 +486,10 @@ number from `POST /api/ledger/deviations`.
   known workspace, the inbound and migration lanes use one owner rule: `teamOwnerProject` answers an owner with its
   project, measured none, or unmeasured. A pinned row counts in its own workspace; an unpinned row counts only where its
   key routes uniquely, and in neither workspace when two hold it. `measuredTeamRoutes` distinguishes a failed listing or a
-  configured slot without a current team record from a measured absence. A holder that outranks every row naming the key in
-  that workspace, pinned or not, is the owner whatever the routing, so a failed listing and an unreadable slot answer alike;
-  the answer is unmeasured only when an unpinned row that outranks it exists and its routing cannot be read (review 3073 F8).
+  configured slot without a current team record from a measured absence. A holder pinned to the workspace that outranks every
+  row naming the key there, pinned or not, is the owner whatever the routing, so a failed listing and an unreadable slot
+  answer alike; the answer is unmeasured only when an unpinned row outranks it and that row's routing cannot be read (review
+  3073 F8).
   Possible owners are refusal evidence only.
   Plan triage (including Close and Raise) and plan-map refuse `unreachable` before an issue read or write when ownership is
   unmeasured; a key-only diagnostic never authorizes either. Plan-map uses the same snapshot for authorization and its
@@ -497,9 +498,10 @@ number from `POST /api/ledger/deviations`.
   stays unmeasured it spends one governed read per such row a beat and makes no progress: accepted as the lane's retry
   pattern (review 3073 F7). Waiting work stays retryable; `plan take` refuses `unreachable` before effects, for Close as well
   as Return, when the handed row's owner cannot be measured (F9), and it reads the store even for a programme that names no
-  project, so a readable store never answers `unreachable` (F10). Drift Hand refuses `unreachable`
-  when it needs the team owner and cannot measure it. The hierarchy card says both the owner and the migration state are not measured when an unpinned row's routing cannot be
-  measured, with no listing at all as well, and offers no Reshape then (F1); Upkeep suppresses the notice;
+  project, so a readable store is never left unread there (F10). Drift Hand refuses `unreachable`
+  when it needs the team owner and cannot measure it. The hierarchy card says both the owner and the migration state are not measured whenever the row's team owner cannot be
+  measured (an unpinned row's routing unread, with no listing at all as well, or a pinned row outranked by such a row), and
+  offers no Reshape then (F1); Upkeep suppresses the notice;
   the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
   workspace-qualified owner with no issues for that team still waiting.
   Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
