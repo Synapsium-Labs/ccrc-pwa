@@ -9,8 +9,8 @@ import { TESTBOX_ADMIN_SUBS, type TestboxActState, type TestboxAdminStatus } fro
 import { actorOf, knownFleetIdentity } from './accounts/audit.js';
 import type { Deps } from './deps.js';
 import type { MeasuredRead, TestboxSyncAsked } from './io.js';
-import { runsLogDates, testboxBlock, type RunsLogRead, type TestboxAnswer, type TestboxBlock } from './testbox.js';
-import { readAdminStatus } from './testboxAdmin.js';
+import { runsLogDates, testboxBlock, toolsSyncNeedsHome, type RunsLogRead, type TestboxAnswer, type TestboxBlock } from './testbox.js';
+import { decisionOf, readAdminStatus } from './testboxAdmin.js';
 
 /** `CCRC_TESTBOX_POLL`'s default (`ccd/testbox-knobs`), the lane's interval only until an answer carries the setting. */
 export const TESTBOX_POLL_DEFAULT_MS = 30_000;
@@ -121,11 +121,24 @@ export class TestboxLane {
   }
 
   /** The card's **Bring tools up to date** and the update lane's signal (spec §2.7, §2.10): the op's one write, then
-   *  a fresh pass so the block shows the sync. */
+   *  a fresh pass so the block shows the sync. A box whose last sync died for want of a HOME (`toolsSyncNeedsHome`, the
+   *  decision; stale-tree-recovery-over-admin-lane) first gets the admin lane's `tools-home`, recorded as the server's
+   *  repair; its answer, whatever it is, never stops the sync. */
   async toolsSync(): Promise<TestboxSyncAsked> {
+    const d = this.deps();
+    if (d.testboxAdmin !== undefined && toolsSyncNeedsHome(this.held)) await this.toolsHome(d, d.testboxAdmin);
     let r: TestboxSyncAsked;
     try { r = await this.deps().io.testboxToolsSync(); } catch { r = { ok: false, reason: 'unanswered' }; }
     void this.sweep(true);
     return r;
+  }
+
+  /** `tools-home` once, and its ledger row by the server (a short act: no act id). */
+  private async toolsHome(d: TestboxLaneDeps, ops: NonNullable<TestboxLaneDeps['testboxAdmin']>): Promise<void> {
+    const ran = await ops.run('tools-home', {}).catch(() => ({ kind: 'lost' as const }));
+    const decided = decisionOf(ran);
+    const outcome = decided.kind === 'ok' ? { outcome: 'ok' as const } : { outcome: decided.audit, code: decided.code };
+    d.testboxAudit?.write({ act: 'repair', ...outcome, fleetIdentity: knownFleetIdentity(d.fleetIdentity), actor: SERVER_ACTOR });
+    if (decided.kind !== 'ok') console.warn(`ccrc-server: testbox: tools-home did not apply (${decided.code}) — the tool sync is sent anyway`);
   }
 }

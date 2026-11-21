@@ -1183,3 +1183,81 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin disc
     expect(ops(h)).toEqual([]);
   });
 });
+
+// stale-tree-recovery-over-admin-lane (testbox-sync-home): `tools-home` gives the box's tools unit a HOME through one runtime
+// drop-in, for a box whose installed tool sync predates `_tbt_home` (deploy/testbox/bin/tools-sync#@tbt-home). The verb's
+// side runs against the fake ssh; the box's side (the one-line program) runs for real against a fixture path, with a fake
+// `systemctl` on PATH, so no row touches /run or a system manager.
+describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin tools-home (testbox-sync-home)', () => {
+  const DROPIN = '/run/systemd/system/ccrc-testbox-tools.service.d/60-ccrc-testbox-home.conf';
+  const ANSWER = (out: string, rc = '0'): string[] => [escapeRe(DROPIN), rc, out];
+
+  it('a short act: one box call writes the drop-in with HOME=%h and reloads the system manager, and the answer says written', () => {
+    const h = fixture({}, WITH(ANSWER('written\\n')));
+    connectedTo(h);
+    const before = sshCalls(h).length;
+    expect(json(verb(h, 'tools-home', '--from', 'pwa'))).toEqual({ ok: true, home: 'written' });
+    const calls = cmds(h).slice(before);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/^sh -c set -e; .*systemctl daemon-reload; echo written sh /);
+    expect(calls[0]).toContain(` ${DROPIN} `);
+    expect(calls[0]!.endsWith(' [Service] Environment=HOME=%h')).toBe(true);
+    expect(calls[0]).not.toContain('\n');
+    expect(existsSync(join(h.home, 'systemd-run-calls')), 'a short act never detaches').toBe(false);
+  });
+
+  it('a drop-in already in place is kept, and the answer says so', () => {
+    const h = fixture({}, WITH(ANSWER('kept\\n')));
+    connectedTo(h);
+    expect(json(verb(h, 'tools-home', '--from', 'pwa'))).toEqual({ ok: true, home: 'kept' });
+  });
+
+  it.each([
+    ['the box command fails', ANSWER('', '1')],
+    ['the box answers neither word', ANSWER('something else\\n')],
+  ])('%s: tools-home-failed', (_n, rule) => {
+    const h = fixture({}, WITH(rule));
+    connectedTo(h);
+    expect(json(verb(h, 'tools-home', '--from', 'pwa'))).toEqual({ ok: false, code: 'tools-home-failed' });
+  });
+
+  it('with no connection, or a connection with no pinned host key, it answers not-connected and reaches no box', () => {
+    const h = fixture();
+    expect(json(verb(h, 'tools-home', '--from', 'pwa'))).toEqual({ ok: false, code: 'not-connected' });
+    expect(sshCalls(h)).toEqual([]);
+    const p = fixture({}, WITH(ANSWER('written\\n')));
+    connectedTo(p);
+    rmSync(p.pin);
+    const before = sshCalls(p).length;
+    expect(json(verb(p, 'tools-home', '--from', 'pwa'))).toEqual({ ok: false, code: 'not-connected' });
+    expect(sshCalls(p).length).toBe(before);
+  });
+
+  it('is busy while a long act holds the lock, and reaches no box', () => {
+    const h = fixture({}, WITH(ANSWER('written\\n')));
+    connectedTo(h);
+    const before = sshCalls(h).length;
+    const r = sh(h, SRC + 'exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; _tba_main tools-home --from pwa', [VERB]);
+    expect(json(r)).toEqual({ ok: false, code: 'busy' });
+    expect(sshCalls(h).length).toBe(before);
+  });
+
+  it('the box program writes the file once, reloads once, and keeps it on a second run', () => {
+    const h = fixture();
+    const bin = join(h.home, 'box-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'systemctl'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(h.home, 'systemctl-calls')}'\n`, { mode: 0o755 });
+    const file = join(h.home, 'run', 'ccrc-testbox-tools.service.d', '60-ccrc-testbox-home.conf');
+    const run = (): { out: string; err: string; rc: number } => sh(h, `. "$1"; shift; PATH="${bin}:$PATH" sh -c "$TBA_TOOLS_HOME_SH" sh "$@"`,
+      [VERB, file, '# a comment', '[Service]', 'Environment=HOME=%h']);
+    const first = run();
+    expect(first.rc, first.err).toBe(0);
+    expect(first.out).toBe('written\n');
+    expect(readFileSync(file, 'utf8')).toBe('# a comment\n[Service]\nEnvironment=HOME=%h\n');
+    expect((statSync(file).mode & 0o777).toString(8)).toBe('644');
+    expect(existsSync(`${file}.tmp`)).toBe(false);
+    const second = run();
+    expect(second.out).toBe('kept\n');
+    expect(readFileSync(join(h.home, 'systemctl-calls'), 'utf8')).toBe('daemon-reload\n');
+  });
+});
