@@ -11,7 +11,7 @@ import { WorksOnChip } from '../fleet/SessionLine';
 import { workingOnCard } from '../fleet/fleetTree';
 import type { SessionWorktree } from '../fleet/sessionWorktrees';
 import {
-  creatorChip, inferredChip, offerOf, presenceWord, worktreeControls, worktreeLine, worktreeStateParts,
+  creatorChip, inferredChip, offerOf, presenceUnmeasured, presenceWord, worktreeControls, worktreeLine, worktreeStateParts,
 } from '../fleet/delegationWords';
 
 /** The section's note-sized heading line (its title, then the presence line when there is one). */
@@ -50,8 +50,9 @@ export function SessionWorktrees({ worktrees, project, nowMs, detailsStay = () =
   };
   if (worktrees.length === 0) return null;
   const now = nowMs ?? Date.now();
-  // The presence on disk the wire did not measure, said once in the head (spec §4.4), in the Archive's words (`presenceWord`).
-  const presence = presenceWord(worktrees.filter(({ lease: l }) => l.workspace !== 'present').length);
+  // The presence on disk the wire did not measure, said once in the head (spec §4.4), in the Archive's words and by its count
+  // (`presenceWord`, `presenceUnmeasured`).
+  const presence = presenceWord(presenceUnmeasured(worktrees.map(({ lease: l }) => l)));
   return (
     <div className="sess-worktrees" ref={keepHost}>
       <span className={NOTE_CLASS} ref={heading} tabIndex={-1}>Worktrees</span>
@@ -65,7 +66,12 @@ export function SessionWorktrees({ worktrees, project, nowMs, detailsStay = () =
         return (
           <WorkLine key={l.leaseId} parts={[...w.parts, ...worktreeStateParts(l, now)]} title={w.title} nameAt={w.nameAt}>
             {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
-            {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
+            {chips.some((c) => c !== null) && (
+              // One box, so the row wraps the pair together (D-6999: side by side; review 3123 F6).
+              <span className="proj-work-chips">
+                {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
+              </span>
+            )}
             {controls !== null && <WorktreeControls leaseId={l.leaseId} worktree={l.adminRecord} controls={controls}
               offer={offerOf(l.leaseId, controls, l)} nowMs={now} getHeading={() => heading.current ?? restFocusAt()} />}
           </WorkLine>

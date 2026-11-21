@@ -23,11 +23,12 @@ import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { withRunBinding } from '../test/runBindingFixture';
 import { activity, frame, lease, unowned } from '../test/delegationFixture';
 import { LIVENESS_QUALIFIER } from '../src/fleet/delegationWords';
+import { PANEL_BANNED, SECTION_4_4_WORDS } from '../test/panelCensus';
 
-/** The broker's condition words and their sentences: since H3 (D-8875) no row of the fleet list or the session panel says
- *  one (spec 2026-11-19 §4.4), so they are the words the census below must not find. */
-const CONDITION_WORDS = Object.values(LIVENESS_QUALIFIER).map((q) => q.word);
-const CONDITION_SENTENCES = Object.values(LIVENESS_QUALIFIER).map((q) => q.title);
+/** The broker's condition words: since H3 (D-8875) no row of the fleet list or the session panel says one (spec 2026-11-19
+ *  §4.4), so they are the words the census below must not find. §4.4's five, written out on their own (`panelCensus.ts`,
+ *  HF2), and the table's words, whatever it says; the census below also bans the table's sentences (`PANEL_BANNED`). */
+const CONDITION_WORDS = [...new Set([...SECTION_4_4_WORDS, ...Object.values(LIVENESS_QUALIFIER).map((q) => q.word)])];
 
 const NOW = Date.now();
 
@@ -213,7 +214,7 @@ const measureParts = ({ words, floorCh, gapFloor }: { words: readonly string[]; 
 
 /** What every row's words must hold wherever they are drawn: the condition word and the last part whole, the name at
  *  its floor, no line that starts with a middot, and every separator unclipped and drawn in its gap. */
-const expectWords = (words: readonly PartsFit[]): void => {
+const expectWords = (words: readonly PartsFit[], width: number): void => {
   for (const w of words) {
     expect(w.condition, `${w.text}: its condition word is whole`).toBe(true);
     expect(w.last, `${w.text}: its last part is whole`).toBe(true);
@@ -226,7 +227,12 @@ const expectWords = (words: readonly PartsFit[]): void => {
     // Review 1435 F2: every mid-line separator is drawn in the gap between its part and the one before.
     expect(w.missingSeparators, `${w.text}: every mid-line separator is drawn in its gap`).toEqual([]);
   }
-  expect(words.reduce((n, w) => n + w.midLine, 0), 'some separator is measured mid-line').toBeGreaterThan(0);
+  // A positive control, per width. At a desk some separator is measured mid-line: the path shares its row's line there (HF2
+  // fix round 1, review 3184 F2: this is what catches a path put on a line of its own at every width). Below the desk a path
+  // takes a line of its own since HF2 (D-8877; review 3123 F3), so a two-part row there has no mid-line separator at all: its
+  // one separator starts the path's line, and the control counts it there (where the check above asks it is not drawn).
+  if (touch(width)) expect(words.reduce((n, w) => n + w.midLine + w.lineStarts, 0), 'some separator is measured').toBeGreaterThan(0);
+  else expect(words.reduce((n, w) => n + w.midLine, 0), 'some separator is measured mid-line').toBeGreaterThan(0);
 };
 
 describe.each(SKINS)('the fleet list draws no delegation row on a card in %s (D-8782)', (skin) => {
@@ -402,7 +408,7 @@ describe.each(SKINS)('the session\'s worktree section in %s (D-8782)', (skin) =>
           // (D-8875) no worktree row says a condition word.
           const words = await page.evaluate(measureParts, { words: CONDITION_WORDS, floorCh: NAME_FLOOR_CH, gapFloor: GAP_FLOOR_PX });
           expect(words.filter((w) => w.hasCondition).length, 'no worktree row has a condition word').toBe(0);
-          expectWords(words);
+          expectWords(words, width);
           const shown = await page.evaluate(measureSectionControls);
           expect(shown.controls.map((c) => c.text).sort(), 'the worktree controls').toEqual(
             ['Attach to…', 'Keep worktree', 'Keep worktree', 'Not delegated', 'Not delegated']);
@@ -633,14 +639,23 @@ const HEAD_FIXTURE: AppFixture = {
 };
 
 describe.each(SKINS)('the session header sheds its broker lists in %s (H3)', (skin) => {
-  for (const [theme, width] of [[PHOSPHOR, 390], ['light', 390], [PHOSPHOR, 1280], ['light', 1280]] as const) {
+  for (const [theme, width] of [[PHOSPHOR, 360], ['light', 360], [PHOSPHOR, 390], ['light', 390], [PHOSPHOR, 1280], ['light', 1280]] as const) {
     it(`${theme} at ${width}: no toggle, entry, condition word or unmeasured; each worktree's path on the screen`, async () => {
       const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, HEAD_FIXTURE);
       try {
         await page.goto(`${server!.origin}/s/${HEAD_ID}`);
         await page.waitForSelector('.chat-head', { timeout: 20_000 });
+        // HF2 fix round 1 (review 3184 F1): the door is opened the way a reader opens it, a tap on a phone, and nothing after
+        // the tap puts the rail back: Refined's phone rail scrolls sideways and this fixture's branch chip is wider than it, so
+        // reaching the door scrolls the rail, and the paths must start on the screen in that state.
         const door = page.getByRole('button', { name: 'Session details' });
-        if (await door.count() > 0 && await door.getAttribute('aria-expanded') === 'false') await door.click();
+        // Where the closed door sits: past the rail's right edge means reaching it scrolls the rail (the positive control below).
+        const doorBeyond = await page.evaluate(() => {
+          const d = document.querySelector<HTMLElement>('.chat-details-toggle');
+          const rail = d?.closest<HTMLElement>('.ref-chip-rail') ?? null;
+          return d !== null && rail !== null && d.getBoundingClientRect().right > rail.getBoundingClientRect().right + 0.5;
+        });
+        if (await door.count() > 0 && await door.getAttribute('aria-expanded') === 'false') await (width < 900 ? door.tap() : door.click());
         await page.waitForSelector('.chat-head .sess-worktrees .proj-work >> nth=1', { state: 'attached', timeout: 20_000 });
         await page.evaluate(async () => { await document.fonts.ready; });
         await page.waitForTimeout(300);
@@ -663,19 +678,52 @@ describe.each(SKINS)('the session header sheds its broker lists in %s (H3)', (sk
             return { text: p.textContent ?? '', onScreen: r.width > 0 && r.left >= c.left - 0.5 && r.left < c.right };
           });
           const section = head.querySelector<HTMLElement>('.sess-worktrees')!;
+          const rail = head.querySelector<HTMLElement>('.ref-chip-rail');
+          const doorEl = head.querySelector<HTMLElement>('.chat-details-toggle');
+          const sr = section.getBoundingClientRect();
+          const sc = clipOf(section);
+          const dr = doorEl?.getBoundingClientRect() ?? null;
+          const dc = doorEl === null ? null : clipOf(doorEl);
           return { texts, paths, toggles: head.querySelectorAll('.sess-subagents, .sess-entries, .sess-subagent-list').length,
-            presence: (section.innerText.match(/presence on disk not measured for 1 tree/g) ?? []).length };
+            presence: (section.innerText.match(/presence on disk not measured for 1 tree/g) ?? []).length,
+            railOverflow: rail === null ? 0 : rail.scrollWidth - rail.clientWidth,
+            // The section's own start (its head and every row's left edge) inside the rail's window, not only the paths'.
+            sectionIn: sr.left >= sc.left - 0.5 && sr.right <= sc.right + 0.5,
+            // The door just tapped stays where the tap found it: inside the rail's window, and focused.
+            doorIn: dr === null || dc === null ? null : dr.left >= dc.left - 0.5 && dr.right <= dc.right + 0.5,
+            doorFocused: doorEl !== null && document.activeElement === doorEl };
         });
         expect(read.toggles, 'no toggle and no list').toBe(0);
         const all = read.texts.join(' \n ');
         expect(all, 'no count or toggle of subagents or entries').not.toMatch(/\bsubagents?\b|\d+ delegated|⑂/i);
         expect(all, 'no subagent or entry name').not.toMatch(/reconcile every reader|read the plan|\bexplore\b|\bverify\b/);
-        expect([...CONDITION_WORDS, ...CONDITION_SENTENCES, 'unmeasured'].filter((w) => all.toLowerCase().includes(w.toLowerCase())),
+        expect(PANEL_BANNED.filter((w) => all.toLowerCase().includes(w.toLowerCase())),
           'no condition word, sentence or unmeasured').toEqual([]);
         expect(read.paths.map((p) => p.text), 'each worktree row says its path').toEqual([
           '/w/project-c/.claude/worktrees/agent-h1', '/w/project-c/.claude/worktrees/agent-h2']);
         for (const p of read.paths) expect(p.onScreen, `${p.text}: its path starts on the screen`).toBe(true);
+        expect(read.sectionIn, 'the worktrees section lies inside the rail\'s window').toBe(true);
         expect(read.presence, 'the presence line, once, in the section\'s head').toBe(1);
+        if (skin === REFINED && width < 900) {
+          // A positive control: the closed door sat past the rail's edge, so the tap scrolled the rail to reach it (review 3184 F1).
+          expect(doorBeyond, 'positive control: the closed door sat past the rail\'s edge').toBe(true);
+          expect(read.railOverflow, 'the open rail is no wider than its window').toBeLessThanOrEqual(1);
+          expect(read.doorIn, 'the door the tap opened lies in the rail\'s window').toBe(true);
+          expect(read.doorFocused, 'the door keeps the focus the tap gave it').toBe(true);
+          // Closed again by a tap, the rail is the sideways row it was: wider than its window, and a sideways wheel scrolls it.
+          await door.tap();
+          await page.waitForFunction(() => document.querySelector('.chat-head .sess-worktrees') === null, null, { timeout: 5_000 });
+          const box = (await page.locator('.ref-chip-rail').boundingBox())!;
+          const before = await page.evaluate(() => document.querySelector<HTMLElement>('.ref-chip-rail')!.scrollLeft);
+          await page.mouse.move(box.x + box.width / 2, box.y + 12);
+          await page.mouse.wheel(before > 0 ? -400 : 400, 0);
+          await page.waitForFunction((b) => document.querySelector<HTMLElement>('.ref-chip-rail')!.scrollLeft !== b, before, { timeout: 5_000 });
+          const closed = await page.evaluate(() => {
+            const rail = document.querySelector<HTMLElement>('.ref-chip-rail')!;
+            return { overflow: rail.scrollWidth - rail.clientWidth > 1, expanded: document.querySelector('.chat-details-toggle')?.getAttribute('aria-expanded') };
+          });
+          expect(closed, 'closed: a sideways row again, and the wheel scrolls it').toEqual({ overflow: true, expanded: 'false' });
+        }
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

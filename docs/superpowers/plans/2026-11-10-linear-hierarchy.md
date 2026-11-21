@@ -487,11 +487,11 @@ number from `POST /api/ledger/deviations`.
   project ownership: a coordinator suggests for any keyless project its programme files into, and the console shows who
   suggested; the Overlord's call says only "suggested by a coordinator" (review 2971 F6, F7). The README's
   machine-lane count word moves (ninety-six after the absorbs) under the packet terms of the run that holds README.md. The wave's one
-  migration took slot 116 after the absorbs of main (wave 7 took 114, the approvals park 115). One bend of the rings rule is stated
-  here, not hidden: the choice of which inbound row a `plan triage` acts on (searching every workspace that holds the key,
-  preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
-  another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
-  it into the policy. The migration lane (wave 7's code) and the plan-map route resolve a team through the project row's
+  migration took slot 116 after the absorbs of main (wave 7 took 114, the approvals park 115). The choice of which inbound row a
+  `plan triage` acts on (searching every workspace that holds the key, preferring the caller's) decides in `planPolicy.ts`,
+  as the pure `triageLookup` and `triageChoice` beside `triageVerdict`, since run 3155 (`w8-triage-l1`) moved it out of
+  `planRoutes.ts`, where it had stayed as a stated bend of the rings rule while `planPolicy.ts` was held by another wave; the
+  route reads and acts only, and the verdict still requires the chosen row's owner to be the caller. The migration lane (wave 7's code) and the plan-map route resolve a team through the project row's
   workspace since run 3027 built `w8-migration-workspace` (reviews 2997 and 3038). The start, open-issue read and console
   state never select the first workspace holding a key. Reshape returns the routing refusal before checking migration state:
   a shared key on a row with no workspace is `team-ambiguous`, even when another workspace has already migrated it. For a
@@ -510,25 +510,41 @@ number from `POST /api/ledger/deviations`.
   stays unmeasured it spends one governed read per such row a beat and makes no progress: accepted as the lane's retry
   pattern (review 3073 F7). Waiting work stays retryable; `plan take` refuses `unreachable` before effects, for Close as well
   as Return, when the handed row's owner cannot be measured (F9), and it reads the store even for a programme that names no
-  project, so a readable store is never left unread there (F10). Drift Hand refuses `unreachable`
+  project, so a readable store is never left unread there (F10).
+  The doors' two other `unreachable` arms are workspace measurements (review 3121 F1, recorded here at review 3144 F5): a take
+  into an epic, and a triage hand to the caller's own programme, refuse when the workspace of the epic cannot be measured
+  (`destinationRefusal`), and a take into an epic or a close of an issue with no handed row refuses when the programme home's
+  workspace cannot be measured (`upkeepLookupOf`), before the issue is looked up: either the Linear store could not be read,
+  where a retry helps, or no slot routes the home's team, where the project's linking needs one. Drift Hand refuses `unreachable`
   when it needs the team owner and cannot measure it. The hierarchy card says both the owner and the migration state are not measured whenever the row's team owner cannot be
   measured (an unpinned row's routing unread, with no listing at all as well, or a pinned row outranked by such a row), and
   offers no Reshape then (F1). A pinned row whose own workspace cannot be measured (its slot unreadable or its listing
   failed, the measurement Reshape makes) shows its measured owner and a migration state of not measured, with no Reshape
   (review 3087 F1; any pinned row, not only the top one, as built: review 3096 F1); Upkeep suppresses the notice;
   the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
-  workspace-qualified owner with no issues for that team still waiting.
+  workspace-qualified owner with no issues for that team still waiting. The one measured none that waited silently (review 3048 F5) now raises an
+  item: when the owner rule answers `team-ambiguous` for a waiting issue (the holders that could serve its workspace are rows
+  naming no workspace, and two readable workspaces hold the key), the inbound lane's route step raises one *Choose the Linear
+  workspace of team KEY* item per team key while none is open, naming those projects and the settings page whose Workspace
+  routes the team, and settles it once no waiting issue of the key measures ambiguous or unmeasured, never while the
+  Linear store cannot be listed (`sharedKeyItemVerdict` decides, beside `ownerItemReady`). Unmeasured routing raises nothing. The wire's
+  item action gains one verb, `linear-team-workspace` with its `teamKey`, which takes no act (`LINEAR_ITEM_ACTS` gives it
+  none) and which the console draws as the step and a link to Settings, Security; the stored action column is unchanged
+  (its JSON reads the new verb, and a reader that does not know a verb reads no action, so an older console draws a plain
+  item), and there is no migration (the coordinator's answer to the departure question, run 3187). After a rollback to a
+  build that does not know the verb, an open item of it reads as a plain item no lane settles: the operator dismisses it.
   Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
   `no-linear-owner` when otherwise there is no recipient. It settles only with recipient mail in the same transaction;
   refusals leave the item, map and note retry intact. The console's item act path says a Return sentence for
   `no-linear-owner` and `team-ambiguous` (the map and the note are kept), and one sentence for `unreachable` on Hand and
   Return alike (review 3073 F5, F6). Migration completion waits rather than dropping an unnamed declared
-  programme whose membership cannot be measured. Ambiguous inbound with no owner still waits quietly and counts in the console.
-  Follow-ups this wave leaves:
+  programme whose membership cannot be measured. Ambiguous inbound with no owner waits, counts in the console and, since run
+  3187, raises the shared-key item above. Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
-  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill`, `w8-triage-l1` and
-  `w8-ambiguous-notice` (after the pilot);
-  `w8-write-ambiguous` was built in the review's fix round and dropped, and `w8-migration-workspace` by run 3027. Record: the
+  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor` and `w8-overlord-skill`;
+  `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
+  `w8-triage-l1` by run 3155, and `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
+  coordinator's call, since it only adds an item. Record: the
   wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,

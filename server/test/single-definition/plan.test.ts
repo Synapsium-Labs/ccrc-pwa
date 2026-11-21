@@ -4,6 +4,11 @@ import { ALL, rel, stallCode } from './helpers.js';
 
 describe('the plan vocabulary has one home (D-8181)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  // `re` must carry the `g` flag, or `match` returns the first hit only and the count is always 1.
+  const occurrences = (re: RegExp): string[] => ALL.flatMap((f) => {
+    const n = stallCode(f).match(re)?.length ?? 0;
+    return n === 0 ? [] : [`${rel(f)}: ${n}`];
+  }).sort();
   const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
 
   it('CONTROL: the pattern sees a declaration and passes over a use', () => {
@@ -24,6 +29,17 @@ describe('the plan vocabulary has one home (D-8181)', () => {
       'WORK_STATUSES', 'WORK_GROUPS', 'WORK_SOURCES', 'WORK_VERDICT_READS', 'WORK_READ_FAILED']) {
       expect(holders(decl(c)), c).toEqual(['shared/plan.ts']);
     }
+  });
+
+  // D-8808 (review 3196 F2): the page that holds every project's Linear row is spelled once. The server's item text and the
+  // console's link both read the shared constant; the two sign-in links name the same page for passkeys and stay literal.
+  // Review 3199 F2: the row counts occurrences, so a second copy inside a listed file reds it too.
+  it('the Linear projects settings path is declared once, in shared/ledgers.ts (D-8808)', () => {
+    expect(holders(decl('LINEAR_PROJECTS_SETTINGS_PATH'))).toEqual(['shared/ledgers.ts']);
+    expect(holders(/\bLINEAR_SETTINGS_PATH\s*=\s*['"`]/)).toEqual([]);
+    expect(occurrences(/['"`]\/settings\/security\/?['"`]/g)).toEqual([
+      'pwa/src/fleet/PasskeyNotice.tsx: 1', 'pwa/src/screens/settings/SignInGateCard.tsx: 2', 'shared/ledgers.ts: 1',
+    ]);
   });
 
   it('the work map\'s status-to-group table is declared once, beside its one decider (programme work map WM2, D-8779)', () => {

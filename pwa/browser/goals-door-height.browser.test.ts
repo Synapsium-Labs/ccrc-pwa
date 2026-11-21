@@ -17,7 +17,8 @@
 //     `Door` of the shared primitive at the end of the status row, `drawMainsDoor`), and the door keeps its 44 px floor. Where
 //     the out header still has its door (any session with a fact) "in" and "out" are equal, as they were. The out header of
 //     a session with nothing to show is shorter than main's by the door's row, which is F3 to F6's gain, so "in equals out"
-//     is not asked of it.
+//     is not asked of it, except where the Goals door stands on Back's row (Instrument below 900), which takes no row of the
+//     header's: there "in" equals "out" for every session (session helpers HF2, review 2995 F1).
 //   - THE BOUND at a desk (900 and up), any width, any content: "in" is never taller than "out" by more than the door's own
 //     row, measured from the page as the door's rendered height plus its container's computed row-gap, and no other row of
 //     the header changes height (the title, and every one of the coordination line and the chip row that does not hold the
@@ -323,7 +324,11 @@ async function checkPairs(skin: Skin, width: number, pairs: readonly Pair[], mod
         // "in" and "out" are equal. Where it has none (nothing to show) the claim is that "in" is no taller than main drew it:
         // the out header with main's Details door, which the Goals door takes the row of. A door that adds a row of its own, or that
         // is taller than it was, reds here.
-        const mains = mainsOut;
+        // Session helpers HF2 (D-8877; review 2995 F1): where the door stands on Back's row (Instrument below 900) it takes no
+        // row of the header's, so "in" equals "out" there whether or not the out header has a Details door; main's copy bounds
+        // only a door that takes the row main's Details door held (Refined's phone rail). Before, Instrument's in-programme
+        // header could grow about 25 px unseen (main 159.75 against in and out 134.75).
+        const mains = expectedSlot(skin, width, p.shape) === 'back-row' ? null : mainsOut;
         if (mains === null) {
           if (Math.abs(grew) > 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h}`);
         } else if (inside.h > mains + 0.5) {

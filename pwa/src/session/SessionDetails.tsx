@@ -113,8 +113,10 @@ export function SessionDetails({ facts, coordination }: {
   // Review 2995 F2: whether the details region is drawn, decided by THIS render, which every change of the facts makes. The
   // worktree controls read it when their row leaves holding the focus: a region that goes in the same commit (its last
   // worktree and its only other fact left together) cannot take the focus, so it goes to the header's title.
+  // One answer, read by the render below and by the worktree controls (review 3123 F14: it was spelled twice).
+  const drawnNow = shown && (wide || open);
   const drawn = useRef(false);
-  drawn.current = shown && (wide || open);
+  drawn.current = drawnNow;
   const details = (
     <div className="chat-facts" id={detailsId} tabIndex={-1}>
       {rows.name !== null && <Detail title="this session's name">{rows.name}</Detail>}
@@ -160,7 +162,7 @@ export function SessionDetails({ facts, coordination }: {
           details
         </Door>
       )}
-      {shown && (wide || open) && details}
+      {drawnNow && details}
     </>
   );
 }

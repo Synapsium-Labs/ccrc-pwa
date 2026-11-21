@@ -68,8 +68,8 @@ The plan's "Deviations found" carries both entries in full. In short:
   three) and in `linearOwnerOfProject`; the suggest door and the confirm re-check the pair against the live Linear store and refuse
   `team-ambiguous` for a shared key with no workspace; a workspace-only change makes the link the operator's.
 - **Delivery decides nothing new (fix round 1, F5).** When the write reads the Linear store (`writeReadsStore`) and the
-  confirm's stored workspace name (`confirmedWorkspaceName`) are L1 deciders in `linking/policy.ts`; the triage row choice
-  (`w8-triage-l1`) stays the one stated bend.
+  confirm's stored workspace name (`confirmedWorkspaceName`) are L1 deciders in `linking/policy.ts`; the triage row choice,
+  the one stated bend, moved into `planPolicy.ts` with run 3155 (`w8-triage-l1`, below), so no bend remains.
 - **The card.** Save waits for a workspace when the typed key is in two workspaces. A candidate row's React key names its
   evidence kind and suggester too, so one pair offered twice is two rows (fix round 1, A2).
   The picker offers the legacy key's workspace too while it routes like a slot (learned, not superseded): the workspaces
@@ -86,9 +86,9 @@ The plan's "Deviations found" carries both entries in full. In short:
   by the packet the README's holding run approved; the ticket can close with the PR.
 - `w8-overlord-skill`: the Overlord skill's door table gains `link_team`, and says when it suggests instead (below `full`).
 - `w8-call-anchor`: address one call by id on the Waiting on you screen, so the Overlord link's line links to its call.
-- `w8-triage-l1`: move the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`) into `planPolicy.ts` beside
-  `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It stayed in the route because `planPolicy.ts` was held by
-  another wave; stated as a bend in D-8808.
+- `w8-triage-l1`: built by run 3155 (below). It moved the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`)
+  into `planPolicy.ts` beside `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It had stayed in the route because
+  `planPolicy.ts` was held by another wave; D-8808 stated it as a bend.
 - `w8-skill-section`: the coordinator skill's plan reference gains the section below, in a PR of its own: the review
   judge refuses a PR that changes a rules file and anything else (`rules-mixed`), so it left this one. Its text, as built
   and reviewed in Task 8.6 and the final fixes, to append after `## plan take` in `ccd/coordinator-skill/references/plan.md`
@@ -162,7 +162,7 @@ the hierarchy card says the owner could not be measured, and Upkeep does not sen
 fallback belongs to measured none only. Map Return preserves the item and stored map on `unreachable`, `team-ambiguous`
 or `no-linear-owner`, pairing a successful settlement with its recipient mail in one transaction. Apply completion retries
 if needed to classify an unnamed declared programme rather than omitting it. The ownerless ambiguous inbound issue
-still waits quietly and counts in the console; `w8-ambiguous-notice` is carried until after the pilot.
+waits and counts in the console; since run 3187 (`w8-ambiguous-notice`, below) it raises the shared-key item.
 
 ## Run 3082 (`w8-pilot-guards`): what was built
 
@@ -185,3 +185,50 @@ routing stays unmeasured it spends one governed read per such row a beat and mak
 lane's retry pattern: the read is rate-governed, and reading first keeps the retire outcome for a row that left the managed
 teams. F9: `plan take` refuses `unreachable` for Close as well as Return when the handed row's owner cannot be measured; it is
 recorded in D-8808.
+
+## Run 3155 (`w8-triage-l1`): what was built
+
+A behaviour-preserving move: no answer any caller of `plan triage` sees changed. D-8808's bend sentence now records the move.
+
+| Step | Built | Test |
+|---|---|---|
+| Characterization first | Route-level pins of today's triage answers, green against the old code in their own commit: one workspace (the owner's raise, another caller's `not-linear-owner`, `issue-not-inbound` for a row no longer waiting and for an identifier with no row), a shared key with both holders pinned (each caller's own row is chosen, even when it is not the first found), a shared key with an unpinned holder (the marked unpinned holder owns in neither workspace, per F8 above, so its triage is `not-linear-owner` while the pinned holder's is taken), an unreadable store (`unreachable` for a possible owner, `not-linear-owner` for anyone else) and a team no project holds (`not-linear-owner` for the one caller the pin runs; the same answer with a row found or not, so this pins the answer only). The two lookup terms (F4 above) were already pinned | `plan-inbound.test.ts`, the describe headed D-8808 (`w8-triage-l1`); every case asserts the status and word, which row moved, that every other row is unchanged, and no Linear write |
+| The move | `planPolicy.ts#triageLookup` answers the workspaces whose row the route reads, or `[null]` for the identifier unique across workspaces; `planPolicy.ts#triageChoice` picks the row (the caller's owner row, else one the caller may own while ownership is unmeasured, else the first, else the key-only diagnostic). Both use the policy's one holder predicate, `teamHolders`, now exported; the route's `plan map-propose` reads it too, in place of its own copy of the predicate. The route's `triageOf` reads the rows and the inbound rows and acts on the answer; it decides nothing. The move commit changes no test | the pins above, unchanged and green |
+| `teamHolders` | The route-local copy is removed; `teamDoor` reads the policy's for the projects whose workspaces it loads | as above |
+| Unit pins | The two deciders' cases as pure functions. Each preference step was removed alone and a pin went red: the caller's owner row at the route and in a unit pin, the row the caller may own while ownership is unmeasured in a unit pin only (no route pin reaches it). The order of those two steps is pinned by `an owned row beats an earlier unmeasured one`, red when they are swapped (fix round 1). The `[null]` answer changed to `[]` reds three unit pins and six route pins, two of them in the describe headed D-8808 (review 3180 F1) | `plan-policy.test.ts`, describe `triageLookup and triageChoice` |
+
+**Fix round 1 (review 3172).** F1: the order pin gave the earlier unmeasured row a possible owner other than the caller, so
+swapping the owner and unmeasured steps left it green; project-b's named owner is now the caller, and the swap reds it. F2:
+D-8808's follow-up list moves `w8-triage-l1` to its built clause. F3: a route pin now separates the identifier lookup across
+workspaces from the key-only path: one unpinned holder whose key two readable workspaces hold resolves to no workspace, the
+lookup finds its row, and the row's workspace has no owner (403 `not-linear-owner`); with `[null]` changed to `[]` the key-only
+owner is told the issue is not inbound (409). It passes against the code before the move. The pin for a team no project holds
+is named for the answer it pins. A1: the shared-key pin's label reaches its case name.
+
+## Run 3187 (`w8-ambiguous-notice`): what was built
+
+Review 3048 F5 asked whether an issue should wait with no word to anyone when its team key's only holders are rows naming no
+workspace and two connected workspaces hold the key. It now raises an item; D-8808 records the departure.
+
+| Step | Built | Test |
+|---|---|---|
+| The decision | `planPolicy.ts#sharedKeyItemVerdict` reads the route step's owner verdicts for the waiting issues: it raises each key measured `team-ambiguous` (upper-case, once) that no open item carries, and settles an open item when no waiting issue of its key is ambiguous or unmeasured, and only when the Linear store could be listed (an unreadable slot with nothing waiting does not hold it: a new ambiguous issue raises it again). `sharedKeyProjects` names the rows holding the key that name no workspace | `plan-policy.test.ts`, describe `the shared-key item decision`; removing the read-routing guard reds a unit pin and a lane pin |
+| The lane | The route step collects each waiting issue's verdict, raises with `coord.raiseItem` and settles with `coord.moveItem`, as it does the owner item; no new notifier | `plan-inbound.test.ts`, the describe headed `a team key two workspaces hold`: one item for two issues in two workspaces over two beats, no owner item and no mail; settled when the row is pinned and the issue is mailed; held open while the store cannot be listed even with nothing waiting; nothing raised on an unread store or an unread second workspace; nothing for a key one workspace holds. Without the lane change the first three go red |
+| The item kind | A new `ItemAction` verb, `linear-team-workspace` `{ teamKey }`, with no acts (the coordinator's ruling on the departure question, run 3187: a new verb rather than a reason on `linear-owner`, whose Name control does not fix this shape, or a prose-keyed item). The settings path is `LINEAR_PROJECTS_SETTINGS_PATH` in `shared/ledgers.ts`, beside the verb | `plan-vocabulary.test.ts`: the verb parses, a missing or empty key does not, and a verb the build does not know reads as no action |
+| The console | `LinearItemControls` draws the step's sentence and a link to Settings, Security, on the item page and on a Waiting row; an act sent anyway is `item-act-mismatch` at the route. A console that does not know a verb draws no controls and shows the item plain | `linear-item-controls.test.tsx`, describe `the shared-key item`: the sentence, the link and its route, no button, the row, and an unknown verb drawn plain |
+
+Review (the per-task reviewer's five minors, all taken): the settings path is defined once, in `shared/ledgers.ts`, and the
+console's `LINEAR_SETTINGS_PATH` is that constant; the plan's follow-up list moves `w8-ambiguous-notice` to its built clause;
+the item's how line no longer promises a mail or an ask on every close; this note and D-8808 say "cannot be listed" for the
+settle guard; D-8808 says what a rollback leaves.
+
+**Fix round 1 (review 3196).** F1: the console's sentence said the item closes once the team's waiting issues route,
+which is untrue when the chosen project's owner is gone (the issues then wait on a Name a Linear owner item while this one
+settles); it now says the item closes once no waiting issue of the team depends on the workspace choice, as the server's how
+line does, in `migrationWords.ts`, its pinned test and the verb's comment. F2: `single-definition/plan.test.ts` pins the
+settings path to its one declaration in `shared/ledgers.ts`, forbids a literal `LINEAR_SETTINGS_PATH`, and lists every literal
+spelling of the page (the shared constant and the two sign-in links, which name Security for passkeys); a second literal
+copy, measured by restoring the console's old one, reds it. D-8808 says the item was built before the pilot, at the
+coordinator's call.
+
+The test typecheck (`test/tsconfig.tests.json`) was killed by the test slice's memory cap here; CI's run on the tip checks it.

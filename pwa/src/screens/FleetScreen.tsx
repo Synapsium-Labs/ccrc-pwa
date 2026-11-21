@@ -3,7 +3,7 @@
 // offline/notice banners, skeletons while the first snapshot is in flight, a
 // friendly first-run block, and a floating "+" within thumb reach that opens
 // the NewSessionSheet.
-import { useEffect, useSyncExternalStore } from 'react';
+import { Fragment, useEffect, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
   ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton, useNow,
@@ -37,7 +37,7 @@ import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
 import { PROJECT_ADD_TEXT } from '../fleet/projectAddWords';
 import { openSession } from '../fleet/openers';
-import { archiveDoorWord, unownedTotal } from '../fleet/delegationWords';
+import { archiveDoorParts, unownedTotal } from '../fleet/delegationWords';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
@@ -123,7 +123,9 @@ export function FleetScreen({
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
-  const delegation = useStore((s) => s.delegation);
+  // The Archived row's unowned count, selected as a number (session helpers HF2, review 2988 F7): a delegation frame that leaves
+  // the count as it was re-renders nothing here, as `sessionWorktrees.ts` selects a plain-value key for the same reason.
+  const unowned = useStore((s) => unownedTotal(s.delegation, s.sessions));
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -170,10 +172,11 @@ export function FleetScreen({
   // size must describe the same pass over the same list.
   const archived = archivedSummary(sessions);
   // The same foot row is also the door to the Archive's "Work no session owns" (H4, review 2966 F5): the words say what is
-  // there, and the row draws when either half has something. `archiveDoorWord` is L1's; this draws what it says.
-  const archiveDoor = archiveDoorWord(
+  // there, and the row draws when either half has something. `archiveDoorParts` is L1's; this draws what it says.
+  // Its halves are drawn as one box each, so a narrow row breaks between them (review 2988 F8).
+  const archiveDoor = archiveDoorParts(
     archived.count > 0 ? `Archived on disk · ${archived.count} · ${archivedSizeText(archived)}` : null,
-    unownedTotal(delegation, sessions),
+    unowned,
   );
   // Build 7's run board footer (fix, review findings 11/23): `state`, never
   // `closedAt` — `isRunClosed` is the same split `RunsScreen` itself now uses
@@ -349,7 +352,7 @@ export function FleetScreen({
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared
               project cards (`FleetCards`), which that table also places in its project mode. */}
           {FleetList === null ? <FleetCards selectedId={selectedId} onOpen={open} /> : <FleetList />}
-          {archiveDoor !== null && (
+          {archiveDoor.length > 0 && (
             /* Folded, never hidden — and never a place that DELETES anything:
                this routes to a list, and every removal still goes through the
                audit and the fingerprint.
@@ -369,7 +372,11 @@ export function FleetScreen({
                fold were already using for a strictly smaller set. Same set as
                `/archive`, which is where this goes. */
             <BareRow className="fleet-archived-row" onClick={() => navigate('/archive')}>
-              {archiveDoor}
+              {/* A no-break space before the `·` between the halves, so the separator ends the first line, never starts the
+                  second; each half an inline block, which moves to the next line whole. */}
+              {archiveDoor.map((half, i) => (
+                <Fragment key={i}>{i > 0 && '\u00A0· '}<span className="inline-block">{half}</span></Fragment>
+              ))}
             </BareRow>
           )}
         </>

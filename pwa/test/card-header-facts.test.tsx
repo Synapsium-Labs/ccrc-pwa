@@ -561,6 +561,40 @@ describe('the new header: no subagent and no delegated fact (H3, D-8875)', () =>
       cleanup();
     }
   });
+
+  // Review 3123 F12 (HF2, D-8877): a count drawn in other words (`2 helpers`, a bare `2`) has none of the three the case above
+  // looks for, so the header is also the same markup with and without its subagents (C46's technique, the row's guard above),
+  // in both skins, on a phone with its door opened and at a desk. The same header with `subagents: null` is the control.
+  it('HF2-H3: the rendered header is the same markup with and without subagents, in either skin, phone and desk', () => {
+    // React's ids differ between two roots; nothing else may.
+    const markup = (): string => document.querySelector('.chat-head')!.outerHTML.replace(/«[^»]*»|:r[0-9a-z]+:|_r_[0-9a-z]+_/g, 'ID');
+    for (const skin of ['instrument', 'refined'] as const) {
+      for (const desk of [false, true]) {
+        vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
+          matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+          addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+        }) as unknown as MediaQueryList);
+        act(() => setSkin(skin));
+        const drawn = (session: FleetSession): string => {
+          const f = sessionFacts({ ...input, session } as unknown as FactInput);
+          render(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: f })} />);
+          const toggle = screen.queryByRole('button', { name: /details/i });
+          if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+          const out = markup();
+          cleanup();
+          return out;
+        };
+        // A task tally gives the session a details row, so the header draws its meta row: the comparison reads it (the
+        // mutation run's survivor `meta-draws-helper-count` lived while this session had no details row at all).
+        const tallied = { ...busy, tasks: { done: 1, total: 3, running: 1, active: null } };
+        const bare = drawn({ ...tallied, subagents: null });
+        expect(bare, `${skin}: the control header is drawn`).toContain(busy.workspace!);
+        expect(bare, `${skin}, ${desk ? 'desk' : 'phone'}: the control draws the meta row`).toContain('sess-meta');
+        expect(drawn(tallied), `${skin}, ${desk ? 'desk' : 'phone'}: the same with and without subagents`).toBe(bare);
+        vi.restoreAllMocks();
+      }
+    }
+  });
 });
 
 // The run page's header is a superset of the run row (the runs rebuild, Task 7, D-8072; spec 2026-11-04 §8.4; D-5545): every

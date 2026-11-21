@@ -262,4 +262,53 @@ describe('review 3099 F1: `asked` is an ask with no answer yet', () => {
     expect(f.sent, 'the reset forgot the ask').toHaveLength(2);
     store.getState().disconnect();
   });
+
+  // Review 3123 F10 (HF2, D-8877): review 3099 F1's other path. An answer that was KEPT ends the ask too, so when a later frame
+  // drops the row (and the answer with it) and the row comes back at the same id and end, it asks again. A guard: green at
+  // `main`, red under the mutant that forgets the ask only when the answer is dropped on arrival.
+  it('E: an answer kept, then dropped by a later frame; the row back at the same end asks again', () => {
+    const f = fakeSocket();
+    const store = createSessionStore('cc-h2-k', { makeSocket: () => f.ws });
+    const ask = (id: string): void => (store.getState() as unknown as { requestHelperReport(id: string): void }).requestHelperReport(id);
+    store.getState().connect();
+    f.open();
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] });
+    f.sent.length = 0;
+    ask('a1');
+    expect(f.sent).toHaveLength(1);
+    store.getState().apply(answer('a1', 'the report'));
+    expect((store.getState() as unknown as { reports: Reports }).reports, 'the answer is kept').toEqual({ a1: { report: 'the report', cut: false, end: 5_000 } });
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [] }); // a frame drops the row, and its answer
+    expect((store.getState() as unknown as { reports: Reports }).reports).toEqual({});
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] }); // back, at the same id and end
+    ask('a1');
+    expect(f.sent, 'the kept answer ended the ask, so the row asks again').toHaveLength(2);
+    store.getState().disconnect();
+  });
+
+  // Review 3123 F11 (HF2): the other half of the reset's condition. A backlog onto the SAME transcript (a reconnect, a rotation in
+  // place) keeps the helper rows, so it keeps their asks: a row still waiting for its answer does not ask twice. A guard: green
+  // at `main`, red under the mutant that forgets every ask on any backlog.
+  it('F: a backlog onto the same transcript keeps the asks; the row still waiting does not ask again', () => {
+    const f = fakeSocket();
+    const store = createSessionStore('cc-h2-l', { makeSocket: () => f.ws });
+    const ask = (id: string): void => (store.getState() as unknown as { requestHelperReport(id: string): void }).requestHelperReport(id);
+    store.getState().connect();
+    f.open();
+    store.getState().apply({ type: 'backlog', uuid: 'u', events: [], offset: 0, file: '/t/a.jsonl', missing: false });
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] });
+    f.sent.length = 0;
+    ask('a1');
+    expect(f.sent).toHaveLength(1);
+    store.getState().apply({ type: 'backlog', uuid: 'u', events: [], offset: 0, file: '/t/a.jsonl', missing: false });
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] });
+    ask('a1');
+    expect(f.sent, 'the ask still stands: no second request').toHaveLength(1);
+    // The control: onto another transcript, the same row asks again (case D).
+    store.getState().apply({ type: 'backlog', uuid: 'u2', events: [], offset: 0, file: '/t/b.jsonl', missing: false });
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] });
+    ask('a1');
+    expect(f.sent).toHaveLength(2);
+    store.getState().disconnect();
+  });
 });

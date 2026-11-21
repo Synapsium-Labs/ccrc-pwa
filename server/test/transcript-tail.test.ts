@@ -68,7 +68,15 @@ describe('readBacklog', () => {
       ...localIO,
       readFileFromMeasured: async () => ({ ok: false, reason: 'unreadable' }),
     };
-    expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: size, missing: false, measured: false });
+    // HF1 (review 3067 F5): the tailer starts at the file's size, so the start scan's seam is there too: the scan
+    // reads the bytes this window read could not, and the absence of `scanEnd` no longer also means "unread".
+    expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: size, missing: false, measured: false, scanEnd: size });
+  });
+
+  it('(HF1, review 3067 F5) an empty transcript\'s seam is its start: `scanEnd` 0, so its absence means only "no file measured"', async () => {
+    const file = tmpFile();
+    writeFileSync(file, '');
+    expect(await readBacklog(localIO, file, 50)).toEqual({ events: [], offset: 0, missing: false, measured: true, scanEnd: 0 });
   });
 
   it('a transcript unlinked between the stat and the read is a MEASURED absence', async () => {

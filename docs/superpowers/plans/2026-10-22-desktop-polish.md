@@ -4953,6 +4953,96 @@ goes red or is recorded as equivalent, and `tsc` passes for `server`, its tests 
 **Rollback.** A plain revert. The scan only adds facts the fold already accepts. The fold's new tie rule and bound, the
 bounded order and the strip go back to H1b's.
 
+**Corrected on 2026-11-21 (Task HF1, D-8876; review 3067 F1 and F10).** Three sentences above are wrong, and the HF1
+section below has the full record:
+
+- The mutation run's round 1 killed 36 of 43 mutants, not 45 of 52. Seven survived, as said. **Measured:** the note's table
+  has 43 rows, seven of them survivors, and no row backs the 52. Round 2's 42 of 42 is those 43 less D7.
+- F5's strip removes nothing. Format, bidi and line-separator characters and U+2060 to U+206F are in the set, so each run
+  of them becomes a space, white space collapses, and the ends are trimmed (`shared/unprintable.ts#stripLine`).
+- Table 13's correction also changes the table's caption, "Seven PRs, each red first", to eight. It is the H1c row that
+  D-8862's corrections already name, not a second one.
+- The cost measurement was made with a scratch script that is not in the repository. Its method is in `h1c.md` §4, and
+  review 3067 repeated one row with its own script: 1 read, 262,144 bytes, a stop on time, 2 to 3 ms.
+
+### Task HF1: the start scan's carried findings (D-8876) — now
+
+**What.** Review 3067 read H1c (#3149) and found no grade-a finding. It carried ten findings to a later follow-up
+(`h1c.md`, review 3067 F1 to F10), and review 3080 carried one more (F1, the migration slots). This task fixes all eleven,
+so the start scan is pinned and its gaps are closed. Nothing is drawn by this task. It was built red first: the branch's
+first commit holds the tests, and `docs/superpowers/programs/desktop-polish/hf1.md` records which failed on `main`.
+
+- `server/src/transcript/tail.ts` (L3, C3), F5: `readBacklog` answers `scanEnd` wherever its tailer starts on a measured
+  file. That is the window's first byte, or the file's size when the window read fails (the unreadable arm), or 0 for an
+  empty file. So a stream whose window read failed still runs its scan, from where its tailer starts. `scanEnd` is absent
+  only with `missing`, so one absence no longer stands for absent, empty and unread.
+- `server/src/workflows/helperScan.ts` (L3, C3), F6, F7 and F8:
+  - F6: a scan that stopped `unreadable` starts again on the stream's next new seam, once per seam. Seams are compared by
+    value: file, end and cut.
+  - F7: each later usable roster lowers the cutoff to the minimum of old and new. A scan that stopped on time reads on from
+    where it stopped once its last read's oldest line is no longer older than the cutoff.
+  - F8: the scan keeps its running pump's promise, so the tests wait on it.
+- `server/src/sessionws.ts`: **unchanged**. The stream already turns any `scanEnd` into its seam, so F5 needs no line there,
+  and its per-PR growth budget is not spent (**measured**: `git diff --stat` names no `sessionws.ts`).
+- Tests: `helper-scan` (F2, F3, F4, F6, F7 and F8's wait), `transcript-tail` (F5's two arms), `sessionws-helpers` (F5
+  through a stream), and the new `migration-slots` (review 3080 F1).
+
+**F7, lowered and not waited for.** The other way was to start the scan only once a usable roster arrives. That fails a
+session whose hook state is never usable: its scan would never run, or would run late, and every row would wait for it.
+Lowering costs nothing when the first roster was already right. When a helper is listed later, the scan pays only for the
+reads that helper needs. And a scan that already stopped on time is not lost: it reads on from where it stopped, without
+reading a byte twice, inside the same 8 MiB. The cutoff only falls, and only a usable roster moves it, so a clock that steps
+back, with no usable roster, does not reopen a time stop.
+
+**The carried tests.**
+- F2: a range read that rejects ends the scan `unreadable` and keeps what it found, with no unhandled rejection.
+- F3: one line older than the cutoff, the oldest in its read, stops the scan after exactly that read.
+- F4: past the 256-id bound, an id is ranked by the newer of its two facts, in both directions.
+- F8: the helper-scan test's `drain` waits on the pump's own promise, never on a count of real ticks.
+
+Each case goes red under its mutant.
+
+**Records.** F1 and F10 are corrected in the dated note at the end of Task H1c's section above, and in `h1c.md`. F9 is
+corrected in `h1c.md` alone, because only the note carried the cell. The H1c PR's body keeps its old figure: it is merged,
+and nothing here edits it.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter of H1c's kind, one test file per
+process in a scratch copy of the tree):
+- round 1: 21 of 24 mutants killed. Three survived in `helperScan.ts`: a seam compared without its cut, a resume that skips
+  its check, and the check made strict. Each got a case.
+- round 2: `helperScan.ts` 16 of 16, run whole again; the 8 in `tail.ts`, `model.ts` and `schema.ts` were killed in round 1.
+
+The table is in `hf1.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8876** — `start-scan-carries`: Task HF1, issued on 2026-11-21. The carries of reviews 3067 and 3080. It departs from
+  the spec and from D-8873 in these places:
+  - `scan-end-is-where-the-tailer-starts` (review 3067 F5): `BacklogRead.scanEnd` is present on every measured file: the
+    window's first byte, the file's size when the window read fails, or 0 for an empty file. This replaces D-8873's "Absent
+    when no window was read".
+  - `scan-restarts-on-a-new-seam` (review 3067 F6): a scan stopped `unreadable` starts again on a seam that differs by value,
+    once per seam, and its cost adds up across restarts. This amends D-8873's `scan-once-per-reader` for that one stop.
+  - `scan-cutoff-only-falls` (review 3067 F7): later usable rosters lower the cutoff, and a scan stopped on time resumes
+    when its stop no longer holds. This amends D-8873's cutoff, which was fixed at the first reading. The spec's "whichever
+    comes first" holds against the cutoff in force.
+  - `scan-pump-is-awaitable` (review 3067 F8): `HelperStartScan` keeps its running pump's promise in a private field that
+    the test reads; `step` still never awaits it.
+  - `migration-slots-pinned` (review 3080 F1): `server/test/migration-slots.test.ts` pins slots 106 to 117 of `MIGRATIONS`,
+    each by a fragment of its DDL that no other entry carries.
+  - `h1c-records-corrected` (review 3067 F1, F9, F10): the dated note in Task H1c's section, and `h1c.md`.
+
+Spec corrections for the coordinator to fold:
+
+- §3.1, "The start scan": the time bound's cutoff falls with each later usable roster, and a time stop it no longer holds is
+  lifted. A read that fails ends the scan until the stream's next new seam.
+
+**Acceptance.** The new cases pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red, and `tsc` passes for `server` and its tests.
+
+**Rollback.** A plain revert. The backlog's absent `scanEnd` and the fixed cutoff come back, and so does the stop on a
+failed read. A stream whose window read failed then draws its helpers from the roster and its meta alone, as on `main`.
+
 ### Task H1b: the helpers reach the frame and the store (D-8862) — now
 
 **What.** C49's H1b row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1, §5, §8, Table 12 and Table
@@ -5288,6 +5378,128 @@ goes red or its disposition is recorded in the note, `tsc` passes for `pwa` and 
 the matrix of "Acceptance (the matrix, per PR)" for the whole session panel, Helpers included.
 
 **Rollback.** A plain revert: nothing leaves the wire or the server, and `FleetSession.subagents` is still sent.
+
+### Task HF2: the session panel's carried findings (D-8877) — now
+
+**What.** The findings H3 (#3153) and its neighbours carried, none blocking, in the session panel, its header and the Archive:
+review 3123 (H3) F1 to F14, with the coordinator's two rulings (recorded call 98: `readDelegation`'s tidying and
+`LIVENESS_QUALIFIER` stay as wire tolerance; a toast about the operator's own act is outside §4.4); review 2995 (C51) F1, F3,
+F4 and F5; review 2988 (H4) F6, F7 and F8. Spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4.4, §4.5 and
+§10. Red first: a test commit before the code, each case red at `main` or a guard whose mutant it kills (the note lists which).
+
+- `pwa/src/fleet/sessionFacts.ts` (L1, C1): `headerMetaCells`, the header's meta row cell by cell, the one reading of which
+  cells it draws; `headerMetaHasCells` asks it (review 2995 F3).
+- `pwa/src/fleet/SessionMeta.tsx` (L4, C1): the header mode draws exactly the cells `headerMetaCells` names, in its order.
+- `pwa/src/fleet/delegationWords.ts` (L1, C1): `presenceUnmeasured` (the one count of trees whose presence was not measured,
+  the session panel's and the Archive's), `archiveDoorParts` (the foot row's two halves); the `WorkWords` doc says what a row
+  does with its path now (3123 F8); `archiveDoorWord` had no reader left and goes.
+- `pwa/src/lib/format.ts` (L1, a leaf that imports nothing): `pathBreaks`, a path cut after each `/`. It sits with the pure
+  formatters, not in the words module, so `WorkLine.tsx` names no module of the delegation broker (the closed scope census,
+  `delegation-wave3.integration`).
+- `pwa/src/fleet/WorkLine.tsx` (L4, C1): the path drawn as one box per piece.
+- `pwa/src/session/chat.css`: below the desk a path takes a line of its own, after the row's short words; its pieces are inline
+  boxes; a raw worktree's two chips are one box; the strips give way before the composer (they shrink, the Helpers strip never
+  below its head, and scroll on a screen too short for that).
+- `pwa/src/skins/refined/refined.css` (review 3184 F1, fix round 1): while Refined's phone rail wraps (the details open with
+  worktrees drawn), its items and chips are capped at the row's width and their text wraps inside, so nothing is wider than
+  the rail.
+- `pwa/src/session/SessionWorktrees.tsx`, `SessionDetails.tsx` (L4, C3): the chip box and the shared count; the details' drawn
+  answer spelled once.
+- `pwa/src/stores/session.ts` (L4, C3): `resetsHelpers`, the one decision of a helper reset, read by the reducer and the asks.
+- `pwa/src/screens/FleetScreen.tsx` (L4, C1): the unowned count selected as a number; the foot row's halves drawn as boxes.
+- `pwa/src/fleet/SessionLine.tsx`, `fleet.css`, `ui/src/components/workflow-strip.tsx`: comments only (3123 F14, F4).
+  `fleet.css` keeps its code lines (2518, measured).
+- Tests: `pwa/test/panelCensus.ts` (new, the census's one owner), `fleet-screen-frame.test.tsx` (new), and cases in
+  `session-panel-sheds`, `card-header-facts`, `header-details-facts`, `helpers-report-store`, `delegation-words`,
+  `fleet-screen`, `session-worktrees` and the real-Chrome `session-panel-words`, `helpers-rail`, `archive-unowned`,
+  `delegation-rows` and `goals-door-height`.
+- Records: `docs/superpowers/programs/desktop-polish/h3.md` (its §6 labels and its matrix's cells, 3123 F3 to F9),
+  `c51.md` (2995 F4 and F5), the broker spec's H3 amendment (3123 F9: "drawn nowhere", not "read and drawn nowhere"), and the
+  note `docs/superpowers/programs/desktop-polish/hf2.md`.
+
+**Each finding, taken.** Review 3123: F1 the census list holds §4.4's five words as literals (`panelCensus.ts`), and the table's
+words are pinned to them; F2 a session whose only header fact is its subagents draws no details row and no door (HF2-4); F3 the
+path (below); F4 the record (below); F5 and F7 the strips give way (below); F6 the chip box; F8 the `WorkWords` doc; F9 h3.md's
+labels and the broker amendment; F10 and F11 the store's cases E and F; F12 the header is the same markup with and without its
+subagents (HF2-H3, C46's technique) and the presence count is pinned at 2 and 3 trees (HF2-3); F13 the rail's no-break is
+measured at 1600 with a state group wider than its line; F14 the comments, the one reset, the drawn answer spelled once and the
+one presence count. Review 2995: F1 in Instrument below 900 the in-programme header equals the one out of it; F3
+`headerMetaCells`; F4 and F5 c51.md's figure and screenshot sentence, scoped (and the same figures in Task C51's section above
+are corrected by this entry, not edited there). Review 2988: F6 the Archive's focus in a real Chrome; F7 the selected count;
+F8 the foot row's halves.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8877** — `session-panel-carried-findings`: Task HF2, issued on 2026-11-21. The session panel's carried findings of
+  reviews 3123, 2995 and 2988, and it departs from the spec and from earlier entries in these places:
+  - `meta-cells-one-list` (review 2995 F3): the header's meta row is drawn from one list, `headerMetaCells`, which the details
+    row's decision asks; no second reading of the row's conditions.
+  - `census-holds-the-spec-words` (review 3123 F1): the census's banned list has one owner, `pwa/test/panelCensus.ts`, which
+    writes §4.4's five words out as the spec spells them and adds the table's words and sentences; `LIVENESS_QUALIFIER` stays
+    as wire tolerance (call 98), so this amends D-8875's `liveness-qualifier-kept-as-census`: the table is no longer the list.
+  - `path-on-its-own-line-below-the-desk` (review 3123 F3): below 900 px a worktree's path takes the row's full width, drawn
+    after the row's short words (what made it, `via`, the disposition), which share the first line; the DOM keeps the words'
+    order (maker, path, via, disposition), so a reader hears them as before. At every width the path breaks after a `/`, and
+    inside a piece only when the piece is wider than the line: each piece is an inline box, because a `<wbr>` alone lost to a
+    hyphen inside a piece, which a browser filling the line greedily takes first (measured). It costs 12.5 to 18 px of header
+    at 390 px (and Instrument's 360) where the middle column had fitted (measured).
+  - `separator-may-start-a-line` (review 3123 F4, the record fix): this amends D-8875's `narrow-section-two-lines-everywhere`,
+    which said "a separator never starts a line". A separator of a Helpers line 2 can start a line, between its facts
+    (measured: the 1600 px rail drew `Sonnet` / `· high ·`) and inside a state group (inferred: the same mechanism). Chrome
+    breaks after any inline block whatever follows it; a no-break space and a word joiner before the `·` were each measured
+    not to hold. The code fix would move every separator into the box before it and hide the ones that lead a part the width
+    hides (the tokens, the phone's elapsed), restructuring H2's line 2 and its pins; the slug is the smaller true fix. A state
+    group still breaks only between its words, never inside one (measured in the rail, F13).
+  - `chips-one-box` (review 3123 F6): a raw worktree's `inferred` and `Bash call …` chips are one box, so the row wraps them
+    together (D-6999: side by side).
+  - `strips-give-way` (review 3123 F5 and F7): the strips under the transcript may shrink, the Helpers strip first, never below
+    its head, and scroll on a screen too short for that, so the composer and its key-hint row stay inside the pane and the
+    window with every door open. Before, the column ran past the pane: at a desk the chat's `overflow: hidden` (D-161) cut the
+    key-hint row under Instrument's status bar (22 and 24 px at 1280 and 1600), and on a phone the composer fell below the
+    window (48 to 83 px at 360 and 390). The cut at 1280 predates H3 (review 3123 saw it on both sides); its cause is the
+    open strip's height (H2's half of the viewport) plus an open header, which this task's strips now absorb.
+  - `presence-count-one-rule` (review 3123 F14): one count, `presenceUnmeasured`, for the session's worktrees head and the
+    Archive's section (they spelled it `!== 'present'` and `=== 'unmeasured'`).
+  - `unowned-count-selected` (review 2988 F7): the fleet screen selects the unowned count, a number, so a frame that leaves it
+    as it was re-renders nothing of the screen.
+  - `foot-row-halves` (review 2988 F8): the fleet foot's both-state row draws its two halves as boxes joined by a `·` after a
+    no-break space, so a narrow row breaks between them; `archiveDoorWord` had no reader left and goes.
+  - `instrument-phone-goals-equal` (review 2995 F1): where the Goals door stands on Back's row (Instrument below 900) the
+    in-programme header equals the one out of it within 0.5 px, for every session; main's frozen Details door bounds only
+    Refined's phone rail.
+  - `open-rail-holds-no-overflow` (review 3184 F1, fix round 1): this amends D-8782's wrapping rail (review 2864 F6). On
+    Refined's phone, while the details are open with worktrees drawn, the rail wraps, and now its items and chips take the
+    shared caps back (the row's width, the text wrapping inside, the coordination line wrapping), as at a desk. Before, a chip
+    wider than the closed rail scrolled it to reach the door, and the open rail kept that scroll: the door, every fact and
+    every worktree path started 80 px left of the screen at 390 (measured, a real tap, both themes, and at 360). With nothing
+    wider than the rail the scroll is spent, and every line starts on the screen; the door keeps its focus. The closed rail is
+    the sideways row it was. It costs 20 px of open header at 360 and 390 for a session whose model and branch chips are
+    wider than the rail (measured from the pictures), and nothing where they fit.
+
+Spec corrections for the coordinator to fold: §10 (line 2's separators may start a line; the state group breaks only between
+its words) and Table 5's caption; §4.4 (the presence line's count, one rule); Task C51's section above (its "24 px … 25 px"
+figures are a main-checkout coordinator's, and a workspace coordinator drops 21.5 px; its "rounded up" picture sentence is false
+for the two Refined 360 pictures): c51.md carries both, measured by review 2995.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H2's and H3's: each TypeScript or
+CSS file held as a Python module's text, each mutant written into a scratch copy of the tree under the session's temp root, its
+kill files run through `ccrc test`, and a run the memory cap killed run again rather than counted): pass 1 ran 34 mutants, 28
+killed; of the 6 survivors two were missing or vacuous cases (HF2-6 added, HF2-H3 made to read the meta row), one an equivalent
+clause (removed from the code), one written on the wrong element (rewritten), and two equivalent. At the tip, **33 mutants, 31
+killed, 2 equivalent**; `main`'s census and `main`'s Goals pin each let their finding's mutant through (measured). The table is
+in `docs/superpowers/programs/desktop-polish/hf2.md`.
+
+**Looked at in the real app.** The production build in a real Chrome: the whole session panel (`session-panel-words`) and the
+Archive section with the fleet foot (`archive-unowned`), in Refined and Instrument, dark and light, at 360, 390, 1280, 1600 and
+1920 px, before (`origin/main`) and after. Fix round 1 (review 3184) adds the header after a real tap on the details door
+(`delegation-rows`), in both skins and themes at 360, 390 and 1280, before (the first tip, `68d70aef12`) and after. The pairs
+are under `docs/design/2026-11-19-session-helpers-design/hf2/`, and the matrix is in the note and the PR.
+
+**Acceptance.** The new cases pass, every suite that imports a changed module passes, every mutant of a new decision branch goes
+red or its disposition is recorded in the note, `tsc` passes for `pwa` and `ui`, the PWA builds, and the PR body carries the
+matrix of "Acceptance (the matrix, per PR)" for the session panel and the Archive section.
+
+**Rollback.** A plain revert: nothing leaves the wire or the server.
 
 ## Acceptance (the matrix, per PR)
 

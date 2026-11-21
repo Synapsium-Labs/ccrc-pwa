@@ -1,4 +1,4 @@
-// The words of the five hierarchy items' controls and of the map and report body (Linear hierarchy design §11.3 and §11.4,
+// The words of the six hierarchy items' controls and of the map and report body (Linear hierarchy design §11.3 and §11.4,
 // D-8184, D-8737). L1: pure, no I/O. The sentences a refusal says are `refusalWords.ts`'s (`linearItemErrorText`).
 import type { LinearActionVerb } from '../../../shared/ledgers';
 import { MAP_CLASSES, type MapClass, type MapCounts, type MapEntry, type MigrationView, type MigrationWaitingWhy } from '../../../shared/plan';
@@ -16,12 +16,16 @@ export const LINEAR_ITEM_TEXT = {
   unread: 'The coordinators could not be read, so none can be named now. Reload the item to try again.',
   queued: 'The check is queued. This item closes when Linear answers.', sent: 'Sent.',
   notQueued: 'Nothing was queued: this server has no check it can run for this workspace (no Linear key serves it, or the plan sync is off). The item stays open.',
+  /** D-8808: the shared-key item has no act; its remedy is the project row's Workspace, on the page the link opens. */
+  openSettings: 'Open the Linear project settings',
+  teamWorkspace: (team: string) => `On the row of the project that owns team ${team}, choose its Workspace, then Save. This item closes itself once no waiting issue of the team depends on the workspace choice.`,
 } as const;
 
 /** What each control group is called to a screen reader (the group's `aria-label`): a sentence, never the verb. */
 export const LINEAR_GROUP_WORDS: Readonly<Record<LinearActionVerb, string>> = {
   'linear-map': 'Act on the map', 'linear-report': 'Act on the report', 'linear-drift': 'Act on the drift',
   'linear-initiatives': 'Act on the initiatives check', 'linear-owner': 'Name the Linear owner',
+  'linear-team-workspace': "Choose the team's workspace",
 };
 
 /** The map and report body's own sentences: its two region names and its table's three headers. */

@@ -1,13 +1,14 @@
-// The controls of the five hierarchy items (Linear hierarchy design §11.3 and §11.4, D-8184): each act of `LINEAR_ITEM_ACTS`, one
-// control, one body to `POST /api/items/:id/linear`. The map's Approve and the report's Put back ask first (`QuickConfirm`); Return
+// The controls of the six hierarchy items (Linear hierarchy design §11.3 and §11.4, D-8184): each act of `LINEAR_ITEM_ACTS`, one
+// control, one body to `POST /api/items/:id/linear`. The shared-key item (D-8808) takes no act: it links the project settings. The map's Approve and the report's Put back ask first (`QuickConfirm`); Return
 // carries a note; Name picks one live coordinator and asks. A refusal is said in its fixed sentence (`linearItemErrorText`), never
 // the box's text, and the controls stay for another try. Only an open item draws them, and a saved copy draws them disabled.
 import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, QuickConfirm, Select, TextInput } from '@ccrc/ui';
-import { isLinearItemAction, type LinearItemAct, type LinearItemAction } from '../../../shared/ledgers';
+import { Button, QuickConfirm, Select, TextInput, TextLink } from '@ccrc/ui';
+import { isLinearItemAction, LINEAR_PROJECTS_SETTINGS_PATH, type LinearItemAct, type LinearItemAction } from '../../../shared/ledgers';
 import type { ItemView } from '../../../shared/ledgers';
 import { api } from '../lib/api';
+import { inAppClick } from '../fleet/settingsText';
 import { linearItemErrorText } from '../lib/refusalWords';
 import { LINEAR_GROUP_WORDS, LINEAR_ITEM_TEXT as T, nameConsequence } from './migrationWords';
 import './ledgers.css';
@@ -96,6 +97,12 @@ export function LinearItemControls({ item, handWords, enabled = true, onActed }:
               <Button variant="primary" size="fit" disabled={off || owner === ''} onClick={() => setAsk('name')}>{T.name}</Button>
             </>
           )
+      )}
+      {action.verb === 'linear-team-workspace' && (
+        <>
+          <p className="wi-hint">{T.teamWorkspace(action.teamKey)}</p>
+          <TextLink href={LINEAR_PROJECTS_SETTINGS_PATH} onClick={inAppClick(LINEAR_PROJECTS_SETTINGS_PATH)}>{T.openSettings}</TextLink>
+        </>
       )}
       <QuickConfirm open={ask === 'approve'} title={T.approveTitle} consequence={T.approveConsequence} confirmLabel={T.approveConfirm}
                     onClose={() => setAsk(null)} onConfirm={() => send({ act: 'approve' })} />

@@ -19,6 +19,7 @@ import { REFINED_SET } from '../src/skins/refined/parts';
 import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
 import { sessionFacts, type FactInput } from '../src/fleet/sessionFacts';
 import { LIVENESS_QUALIFIER, readDelegation } from '../src/fleet/delegationWords';
+import { PANEL_BANNED, SECTION_4_4_WORDS, bannedIn } from './panelCensus';
 import { worktreeSidesKey, worktreesOf } from '../src/fleet/sessionWorktrees';
 import { createSessionStore, getSessionStore } from '../src/stores/session';
 import { InspectorSections } from '../src/inspector/InspectorSections';
@@ -75,10 +76,6 @@ const LEASES = DELEGATION_LIVENESS.map((l, i) => lease({
   sourceKind: i === 0 ? 'raw' : 'agent', disposition: 'retained', expiresAt: '2026-11-28T10:00:00.000Z',
 }));
 
-/** Every word and sentence the broker's liveness says (`LIVENESS_QUALIFIER`), and the bare `unmeasured`. */
-const BANNED: readonly string[] = [
-  ...new Set(Object.values(LIVENESS_QUALIFIER).flatMap((q) => [q.word, q.title])), 'unmeasured',
-];
 /** What a reader of `root` meets: its text, and every title, accessible name and description in it. */
 function everything(root: ParentNode): string[] {
   const out = [(root as Element).textContent ?? ''];
@@ -90,8 +87,6 @@ function everything(root: ParentNode): string[] {
   }
   return out;
 }
-const bannedIn = (texts: readonly string[]): string[] =>
-  BANNED.filter((w) => texts.some((t) => t.toLowerCase().includes(w.toLowerCase())));
 
 /** SessionDetails at `width`, its door opened on a phone, over facts built from `input` (handed on as it is, so a field the
  *  model no longer takes is simply not read). */
@@ -290,4 +285,39 @@ describe('the focus when the details go behind their door (H3, review 2995 F2)',
     expect(screen.getByRole('button', { name: 'Session details' }).getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement, 'the focus rests on the header\'s title').toBe(document.querySelector('.chat-head .chat-title'));
   });
+});
+
+// Review 3123 F1 (HF2, D-8877): the census's banned list holds §4.4's five words as the spec spells them, on their own, so an
+// edit to `LIVENESS_QUALIFIER` (kept as wire tolerance, read by no page) cannot loosen it. RED FIRST: at `main` the list was the
+// table's words alone, and a row drawing "not confirmed" passed the census once the table's `live` word was changed.
+describe('the census list is §4.4\'s five words (HF2, review 3123 F1)', () => {
+  it('HF2-1: the banned list holds each of §4.4\'s five words, spelled as the spec spells them', () => {
+    expect([...SECTION_4_4_WORDS]).toEqual(['not confirmed', 'stop not seen', 'session asleep', 'end recorded', 'unmeasured']);
+    for (const w of SECTION_4_4_WORDS) expect(PANEL_BANNED, w).toContain(w);
+    // And the table's own words and sentences, whatever they say.
+    for (const q of Object.values(LIVENESS_QUALIFIER)) expect(PANEL_BANNED).toEqual(expect.arrayContaining([q.word, q.title]));
+  });
+
+  it('HF2-2: a row saying one of the five is caught by the census, whatever the table says', () => {
+    for (const w of SECTION_4_4_WORDS) {
+      expect(bannedIn([`agent worktree · ${w} · worktree kept`]), w).toContain(w);
+    }
+  });
+});
+
+// Review 3123 F12 (HF2): the head's count of trees whose presence was not measured is pinned at more than one tree.
+describe('the worktrees head counts every tree whose presence was not measured (HF2, review 3123 F12)', () => {
+  for (const [unmeasured, said] of [[2, '2 trees'], [3, '3 trees']] as const) {
+    it(`HF2-3: ${unmeasured} of 4 not measured: the head says "${said}", once`, () => {
+      const w = readDelegation(frame({ leases: [0, 1, 2, 3].map((i) => lease({
+        leaseId: `lease-${i}`, parentId: 'coord-a', adminRecord: `agent-${i}`, canonicalPath: `/work/project-a/.claude/worktrees/agent-${i}`,
+        workspace: i < unmeasured ? 'unmeasured' : 'present', disposition: 'retained', expiresAt: null,
+      })) }));
+      const key = worktreeSidesKey('coord-a', w, [SELF]);
+      details({ session: { ...SELF, subagents: null, tasks: null }, now: NOW, worktrees: worktreesOf(w.leases, key) });
+      const section = document.querySelector<HTMLElement>('.sess-worktrees')!;
+      expect(section.querySelectorAll('.proj-work')).toHaveLength(4);
+      expect((section.textContent ?? '').split(`presence on disk not measured for ${said}`).length - 1).toBe(1);
+    });
+  }
 });

@@ -165,7 +165,9 @@ function Glyph({ it }: { it: HelperItem }): ReactNode {
 }
 
 const SEP = ' · ';
-/** Inside the state group a no-break space goes before each `·`, so a separator ends a line and never starts one (F2). */
+/** Inside the state group a no-break space goes before each `·` (review 3099 F2). It keeps the space from breaking before the
+ *  `·`, but Chrome also breaks after any inline block whatever follows it, and each word here is one, so a `·` can still start
+ *  a line (measured between line 2's facts, session helpers HF2, D-8877; review 3123 F4: the plan's slug says so). */
 const GSEP = '\u00A0· ';
 /** The state with its times: one line-2 group (`.helper-fact`) that the cases find as `.helper-state`. */
 const STATE_GROUP = 'helper-fact helper-state';

@@ -8,9 +8,14 @@
 // scanned BACKWARDS from the stream's seam for helper facts only: launch results and task notifications, through the one
 // parser the tailer uses (`transcript/parse.ts#helperFactsOf`). It stops at whichever comes first:
 //  - time: a segment whose oldest line is older than `scanCutoff` (the earliest start of a listed Agent helper, and ten
-//    minutes before now, whichever is earlier), so it covers every listed helper and every one the keep could still show;
+//    minutes before now, whichever is earlier), so it covers every listed helper and every one the keep could still show.
+//    The cutoff only falls: each later usable roster lowers it to the minimum of old and new, and a scan that stopped on
+//    time reads on, from where it stopped, when its last read's oldest line is no longer older than it (review 3067 F7,
+//    session helpers HF1, D-8876). Lowered, not waited for: a session whose roster is never usable still gets its scan,
+//    at once, and one that lists a helper later costs only the reads that helper needs;
 //  - bytes: `HELPER_SCAN_BYTES` (8 MiB), as `HELPER_SCAN_CHUNKS` reads of `READ_FROM_MAX_BYTES` (256 KiB, review 2900 F10);
-//  - the file's start, or a read that fails (the scan ends; what it found stands).
+//  - the file's start, or a read that fails or rejects (the scan ends; what it found stands). A scan that stopped on a
+//    failed read starts again on the stream's next NEW seam (another backlog), once per seam (review 3067 F6, HF1).
 //
 // THE SEAM, so no byte is read twice (review 2900 F4). The stream's forward reading starts at one offset, and the scan ends
 // there: on a backlog stream, the backlog window's first byte (`BacklogRead.scanEnd`); on a resumed stream, the client's
@@ -49,6 +54,8 @@ const SCAN_SIZES: readonly number[] = Array<number>(HELPER_SCAN_CHUNKS).fill(REA
 /** Where the stream's own reading of the transcript began: the scan ends there. `cut`: the partial line the backlog's
  *  window started in, which the backlog dropped (absent on a resumed stream). */
 export interface HelperScanSeam { readonly file: string; readonly end: number; readonly cut?: string }
+/** One seam is another by value: a backlog that hands over the same window again is the same seam. */
+const sameSeam = (a: HelperScanSeam, b: HelperScanSeam): boolean => a.file === b.file && a.end === b.end && a.cut === b.cut;
 
 /** Why the scan stopped, measured. */
 export type HelperScanStop = 'time' | 'bytes' | 'start' | 'unreadable';
@@ -83,13 +90,19 @@ function oldestTime(lines: readonly string[]): number | null {
  */
 export class HelperStartScan {
   private walk: ReturnType<typeof walkBack> | null = null;
+  /** The seam the walk started from (the last one, after a restart). */
+  private seam: HelperScanSeam | undefined;
   private cutoff = 0;
+  /** The oldest time in the read that stopped the scan on time: a cutoff lowered to it or below reads on (F7). */
+  private stoppedOn: number | null = null;
   private cut: string | undefined;
   private end = 0;
   private newest = true;
   private quota = 0;
   private pumping = false;
   private inflight = false;
+  /** The running pump's end, so a caller can wait for the reads a reading granted; never awaited by `step`. */
+  private pumpDone: Promise<void> = Promise.resolve();
   private found: HelperFact[] = [];
   /** Measured: the bytes and range reads it spent, and why it stopped (null while it runs or before it starts). */
   readonly cost: { bytes: number; reads: number; stop: HelperScanStop | null } = { bytes: 0, reads: 0, stop: null };
@@ -97,18 +110,19 @@ export class HelperStartScan {
   /** `transcript`: the file whose session dir this reader reads (`read.ts#sessionDirOf`'s inverse). */
   constructor(private readonly io: FleetIO, private readonly transcript: string) {}
 
-  /** Start the scan on the first seam for this transcript, grant it this reading's reads, and hand over the facts it found
-   *  since the last step. Never awaits a read. */
+  /** Start the scan on the first seam for this transcript (or again on a new one after a failed read), lower its cutoff
+   *  by a usable roster, grant it this reading's reads, and hand over the facts it found since the last step. Never awaits
+   *  a read. */
   step(i: { scan?: HelperScanSeam; roster: RosterInput; now: number }): HelperFact[] {
-    if (this.walk === null && this.cost.stop === null && i.scan !== undefined && i.scan.file === this.transcript) {
-      this.walk = walkBack(this.io, i.scan.file, i.scan.end, SCAN_SIZES);
-      this.end = i.scan.end;
-      this.cut = i.scan.cut;
-      this.cutoff = scanCutoff(i.roster, i.now);
+    const seam = i.scan !== undefined && i.scan.file === this.transcript ? i.scan : undefined;
+    if (seam !== undefined && (this.seam === undefined || (this.cost.stop === 'unreadable' && !sameSeam(seam, this.seam)))) {
+      this.begin(seam, scanCutoff(i.roster, i.now));
+    } else if (this.walk !== null && i.roster.kind === 'usable') {
+      this.lower(scanCutoff(i.roster, i.now));
     }
     if (this.walk !== null && this.cost.stop === null) {
       this.quota = HELPER_SCAN_CHUNKS_PER_READING - Number(this.inflight); // a read still in flight counts against this grant
-      void this.pump();
+      if (!this.pumping) this.pumpDone = this.pump(); // a pump already running takes the new grant
     }
     const out = this.found;
     this.found = [];
@@ -118,9 +132,30 @@ export class HelperStartScan {
   /** Whether the scan has stopped. */
   get done(): boolean { return this.cost.stop !== null; }
 
-  /** The reads this reading granted, one at a time; a pump already running takes the new grant. */
+  /** A walk from `seam` down: the first, or a restart after a failed read (F6), whose bytes and reads add to the cost. */
+  private begin(seam: HelperScanSeam, cutoff: number): void {
+    this.seam = seam;
+    this.walk = walkBack(this.io, seam.file, seam.end, SCAN_SIZES);
+    this.end = seam.end;
+    this.cut = seam.cut;
+    this.newest = true;
+    this.cutoff = cutoff;
+    this.stoppedOn = null;
+    this.cost.stop = null;
+  }
+
+  /** The cutoff only falls (F7). A time stop stands while the read that made it is still older than the cutoff. */
+  private lower(cutoff: number): void {
+    if (cutoff >= this.cutoff) return;
+    this.cutoff = cutoff;
+    if (this.cost.stop === 'time' && this.stoppedOn !== null && this.stoppedOn >= cutoff) {
+      this.cost.stop = null;
+      this.stoppedOn = null;
+    }
+  }
+
+  /** The reads this reading granted, one at a time. */
   private async pump(): Promise<void> {
-    if (this.pumping) return;
     this.pumping = true;
     try {
       this.stopAtEnd();
@@ -137,7 +172,7 @@ export class HelperStartScan {
         const lines = this.linesOf(r.segment);
         for (const l of lines) this.found.push(...helperFactsOf(l));
         const oldest = oldestTime(lines);
-        if (oldest !== null && oldest < this.cutoff) this.cost.stop = 'time';
+        if (oldest !== null && oldest < this.cutoff) { this.cost.stop = 'time'; this.stoppedOn = oldest; }
         this.stopAtEnd();
       }
     } finally {

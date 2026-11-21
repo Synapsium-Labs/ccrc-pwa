@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   diffPlan, epicForWave, epicIsDone, linearOwnerOf, listedWaves, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
-  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, ownerItemReady, parsePlanTake, parsePlanTriage, teamOwnerProject, teamOwnerDiagnostic, triageVerdict,
+  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, ownerItemReady, parsePlanTake, parsePlanTriage, teamOwnerProject, teamOwnerDiagnostic, triageChoice, triageLookup, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
 import * as policy from '../src/coord/planPolicy.js';
@@ -411,5 +411,114 @@ describe('triageVerdict (D-8183)', () => {
   });
   it('the owner is judged before the issue', () => {
     expect(triageVerdict('coord-b', owner, null)).toEqual({ ok: false, word: 'not-linear-owner' });
+  });
+});
+
+describe('triageLookup and triageChoice (D-8808, w8-triage-l1)', () => {
+  const noWs = new Map<string, string | null>();
+  const slot = (workspaceId: string, teamKeys: string[]) => ({ ref: { source: 'file' as const, id: workspaceId }, workspaceId, urlKey: workspaceId, teamKeys });
+  const unreadable = (...w: string[]) => ({ ...routesFor('ws-a'), unreadableWorkspaces: new Set(w) });
+
+  it('answers [null] with no holder of the key', () => {
+    expect(triageLookup('AAA', [], noWs, routesFor('ws-a'))).toEqual([null]);
+    expect(triageLookup('AAA', [projectFacts('project-a', { teamKey: 'BBB' })], new Map([['project-a', 'ws-a']]), routesFor('ws-a'))).toEqual([null]);
+  });
+  it('names the holders\' workspaces in row order, skipping a holder with none and repeats', () => {
+    const rows = [projectFacts('project-a'), projectFacts('project-b'), projectFacts('project-c'), projectFacts('project-d')];
+    const ws = new Map<string, string | null>([['project-a', 'ws-a'], ['project-b', 'ws-b'], ['project-c', null], ['project-d', 'ws-a']]);
+    expect(triageLookup('AAA', rows, ws, routesFor('ws-a', 'ws-b'))).toEqual(['ws-a', 'ws-b']);
+  });
+  it('adds every workspace the listing could not read', () => {
+    const rows = [projectFacts('project-a', { workspaceId: 'ws-a' })];
+    expect(triageLookup('AAA', rows, new Map([['project-a', 'ws-a']]), unreadable('ws-z'))).toEqual(['ws-a', 'ws-z']);
+  });
+  it('adds the slot listing the key while an unpinned holder is unmeasured, and no slot of another key', () => {
+    const routes = { ...unreadable('ws-c'), slots: [slot('ws-a', ['AAA', 'CCC']), slot('ws-b', ['BBB']), slot('ws-d', ['DDD'])] };
+    expect(triageLookup('AAA', [projectFacts('project-a')], noWs, routes)).toEqual(['ws-c', 'ws-a']);
+    // A pinned holder alone leaves the unpinned term off.
+    expect(triageLookup('AAA', [projectFacts('project-a', { workspaceId: 'ws-a' })], noWs, routes)).toEqual(['ws-c']);
+    // Readable routing leaves it off too.
+    expect(triageLookup('AAA', [projectFacts('project-a')], noWs, routesFor('ws-a', 'ws-b'))).toEqual([null]);
+  });
+  it('adds a pinned holder\'s workspace whose routing is unmeasured, and only with routes in hand', () => {
+    const rows = [projectFacts('project-b', { workspaceId: 'ws-b' })];
+    expect(triageLookup('AAA', rows, noWs, { ...routesFor('ws-a'), unreadableLegacy: true })).toEqual(['ws-b']);
+    expect(triageLookup('AAA', rows, noWs, routesFor('ws-a', 'ws-b'))).toEqual([null]);
+    expect(triageLookup('AAA', rows, noWs, null)).toEqual([null]);
+  });
+
+  const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
+  const found = (...w: string[]) => w.map((workspaceId) => ({ teamKey: 'AAA', workspaceId, tag: workspaceId }));
+  const pinnedRows = [projectFacts('project-a', { order: 1, workspaceId: 'ws-a' }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b', linearOwner: 'coord-b' })];
+  const routes2 = routesFor('ws-a', 'ws-b');
+
+  it('prefers the row whose owner in its own workspace is the caller over the first', () => {
+    const r = triageChoice('AAA', 'coord-b', found('ws-a', 'ws-b'), pinnedRows, f, routes2);
+    expect(r.row).toMatchObject({ workspaceId: 'ws-b' });
+    expect(r.owner).toMatchObject({ kind: 'owner', project: 'project-b', id: 'coord-b' });
+    expect(triageChoice('AAA', 'coord-of-project-a', found('ws-b', 'ws-a'), pinnedRows, f, routes2).row).toMatchObject({ workspaceId: 'ws-a' });
+  });
+  it('prefers a row the caller may own while it is unmeasured over the first', () => {
+    const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b', linearOwner: 'coord-b' })];
+    const r = triageChoice('AAA', 'coord-b', found('ws-a', 'ws-b'), rows, f, null);
+    expect(r.row).toMatchObject({ workspaceId: 'ws-b' });
+    expect(r.owner).toEqual({ kind: 'unmeasured', possibleIds: ['coord-of-project-a', 'coord-b'] });
+  });
+  it('an owned row beats an earlier unmeasured one', () => {
+    // The earlier row's unmeasured owner may be the caller too (project-b's named owner), so only the order of the two
+    // preference steps decides: swapped, the earlier unmeasured row would win (review 3172 F1).
+    const rows = [projectFacts('project-a', { order: 1, workspaceId: 'ws-a', linearOwner: 'coord-a' }), projectFacts('project-b', { order: 2, linearOwner: 'coord-a' })];
+    const r = triageChoice('AAA', 'coord-a', found('ws-b', 'ws-a'), rows, f, unreadable('ws-b'));
+    expect(r.row).toMatchObject({ workspaceId: 'ws-a' });
+    expect(r.owner).toMatchObject({ kind: 'owner', id: 'coord-a' });
+    expect(triageChoice('AAA', 'coord-a', found('ws-b'), rows, f, unreadable('ws-b')).owner).toEqual({ kind: 'unmeasured', possibleIds: ['coord-a'] });
+  });
+  it('is the first row, with its owner, when the caller owns none', () => {
+    const r = triageChoice('AAA', 'nobody', found('ws-a', 'ws-b'), pinnedRows, f, routes2);
+    expect(r.row).toMatchObject({ workspaceId: 'ws-a' });
+    expect(r.owner).toMatchObject({ kind: 'owner', project: 'project-a', id: 'coord-of-project-a' });
+  });
+  it('answers no row and the key-only diagnostic when nothing was found', () => {
+    expect(triageChoice('AAA', 'coord-b', [], pinnedRows, f, routes2)).toEqual({ row: null, owner: teamOwnerDiagnostic('AAA', pinnedRows, f) });
+    expect(triageChoice('AAA', 'coord-b', [], pinnedRows, f, routes2).owner).toMatchObject({ kind: 'owner', project: 'project-a' });
+    expect(triageChoice('CCC', 'coord-b', [], pinnedRows, f, routes2)).toEqual({ row: null, owner: { kind: 'none', reason: null } });
+  });
+  it('drops a row of another key, and reads the key without case', () => {
+    const other = [{ teamKey: 'BBB', workspaceId: 'ws-a' }, { teamKey: 'aaa', workspaceId: 'ws-b' }];
+    expect(triageChoice('AAA', 'nobody', other, pinnedRows, f, routes2).row).toEqual(other[1]);
+    expect(triageChoice('AAA', 'nobody', [other[0]!], pinnedRows, f, routes2).row).toBeNull();
+  });
+});
+
+describe('the shared-key item decision (D-8808, review 3048 F5)', () => {
+  const owner = { kind: 'owner', project: 'project-a', id: 'coord-a', source: 'named', live: false, gone: true } as const;
+  const ambiguous = { kind: 'none', reason: 'team-ambiguous' } as const;
+  const noHolder = { kind: 'none', reason: null } as const;
+  const unmeasured = { kind: 'unmeasured', possibleIds: [] } as const;
+
+  it('raises each key the owner rule measured ambiguous, once, upper-case, less the keys an open item carries', () => {
+    const v = policy.sharedKeyItemVerdict([
+      { teamKey: 'aaa', owner: ambiguous }, { teamKey: 'AAA', owner: ambiguous }, { teamKey: 'CCC', owner: ambiguous }, { teamKey: 'BBB', owner: ambiguous },
+      { teamKey: 'DDD', owner: noHolder }, { teamKey: 'EEE', owner: unmeasured }, { teamKey: 'FFF', owner },
+    ], [{ id: 7, teamKey: 'ccc' }], true);
+    expect(v).toEqual({ raise: ['AAA', 'BBB'], settle: [] });
+  });
+
+  it('settles an open item only when no waiting issue of its key is ambiguous or unmeasured, and only on a read routing', () => {
+    const open = [{ id: 1, teamKey: 'AAA' }, { id: 2, teamKey: 'BBB' }, { id: 3, teamKey: 'ccc' }, { id: 4, teamKey: 'DDD' }];
+    const verdicts = [
+      { teamKey: 'AAA', owner: ambiguous }, { teamKey: 'BBB', owner: unmeasured }, { teamKey: 'CCC', owner: noHolder }, { teamKey: 'ccc', owner },
+    ];
+    expect(policy.sharedKeyItemVerdict(verdicts, open, true)).toEqual({ raise: [], settle: [3, 4] });
+    expect(policy.sharedKeyItemVerdict(verdicts, open, false)).toEqual({ raise: [], settle: [] });
+    expect(policy.sharedKeyItemVerdict([], open, false)).toEqual({ raise: [], settle: [] });
+  });
+
+  it('names the rows holding the key that name no workspace, sorted', () => {
+    const rows = [
+      projectFacts('project-c'), projectFacts('project-a', { teamKey: 'aaa' }), projectFacts('project-b', { workspaceId: 'ws-b' }),
+      projectFacts('project-d', { teamKey: 'BBB' }),
+    ];
+    expect(policy.sharedKeyProjects('AAA', rows)).toEqual(['project-a', 'project-c']);
   });
 });
