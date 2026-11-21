@@ -1,7 +1,7 @@
 // D-8186, D-8808 (review 2997 F1, F2): the migration resolves a project's team by the project row's workspace, never by "the first
 // workspace holding the key". Two workspaces (ws-a, ws-b) both hold team AAA; project-a is pinned to ws-a, project-b to ws-b.
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanMigRigs, leaf, migRig, SLUG } from './migrationRig.js';
+import { cleanMigRigs, entry, leaf, migRig, SLUG } from './migrationRig.js';
 import { seedSlot, WS } from './linearProxyRig.js';
 
 afterEach(cleanMigRigs);
@@ -146,6 +146,47 @@ describe('the console view is the project row\'s own', () => {
 });
 
 describe('programme matches take the workspace too', () => {
+  it('a declared epic in the other workspace is refused even with the same team key', async () => {
+    const r = await twoWorkspaces();
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA', WS.a.id);
+    if (!open.ok) throw new Error('read');
+    const backlog = [{ slug: 'prog-new', title: 'New', epics: [{ key: 'e2', title: 'Epic', summary: 'Summary', project: 'project-b', checkpoints: [] }] }];
+    expect(r.mig.storeProposal('AAA', 'coord-a', { entries: [], backlog }, open)).toMatchObject({ ok: false, word: 'plan-bad-body', detail: 'epic-other-team:prog-new/e2' });
+  });
+
+  it('declare mail for a ws-b migration reaches its programme, not a ws-a programme', async () => {
+    const r = await twoWorkspaces();
+    r.addProgramme('prog-a2', 'active', { home: 'project-a' });
+    r.addProgramme('prog-b2', 'active', { home: 'project-b' });
+    const a = r.openRun('prog-a2', 'working');
+    const b = r.openRun('prog-b2', 'working');
+    r.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run('coord-a2', a);
+    r.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run('coord-b2', b);
+    r.plan.insertMigration({ workspaceId: WS.b.id, teamKey: 'AAA', project: 'project-b', now: r.t.now });
+    await r.tick();
+    const mailed = (to: string) => (r.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE toId = ? AND subject LIKE '%declare the plan%'").get(to) as { n: number }).n;
+    expect(mailed('coord-a2')).toBe(0);
+    expect(mailed('coord-b2')).toBe(1);
+  });
+
+  it('a ws-b apply does not require a declared ws-a programme plan', async () => {
+    const r = await twoWorkspaces();
+    r.db.prepare('UPDATE programs SET planRequired = 0 WHERE slug = ?').run(SLUG);
+    r.db.prepare("UPDATE project_linking SET linearOwner = 'coord-b' WHERE project = 'project-b'").run();
+    r.addIssue(1);
+    expect(r.mig.start('project-b', await r.mig.workspaceOfProject('project-b')).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA', WS.b.id);
+    if (!open.ok) throw new Error('read');
+    const proposal = r.mig.storeProposal('AAA', 'coord-b', { entries: [entry(1, 'stale')] }, open);
+    if (!proposal.ok) throw new Error(`proposal refused: ${proposal.detail}`);
+    const m = r.plan.migrationById(proposal.migrationId)!;
+    expect(r.mig.act(m.itemId!, m.id, 'approve', null)).toEqual({ ok: true });
+    await r.until(() => r.stateOf(m.id) === 'applied');
+    expect(r.stateOf(m.id)).toBe('applied');
+    expect(r.db.prepare('SELECT planRequired FROM programs WHERE slug = ?').get(SLUG)).toMatchObject({ planRequired: 0 });
+  });
+
   it('a leaf placed in an epic whose project is the other workspace\'s AAA is refused leaf-other-team', async () => {
     const r = await twoWorkspaces();
     r.addIssue(1);
