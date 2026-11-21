@@ -1,11 +1,13 @@
 // Session helpers HF1, review 3080 F1: which migration holds each of the newest slots, pinned by its DDL.
 //
-// A migration's slot is its `user_version`: `db.ts` runs `MIGRATIONS[v]` for every `v` at or past a database's version,
-// so a live database already at 117 never runs a migration moved into 116 or below. The slots are positional, and two
-// branches that each append one are renumbered at landing (schema.ts' banners say so), so a swap of two neighbouring
-// entries is the mistake a landing can make. Before this file nothing caught it: review 3080 measured a swap of 116 and
-// 117 that survived run-close-switch and was killed in coord-db by its banner-order case only, and a whole-block swap
-// with the banners left in order survived both. This pins each newest slot to a DDL fragment no other entry carries.
+// A slot is an index into `MIGRATIONS`: `db.ts` runs `MIGRATIONS[v]` for every `v` at or past a database's
+// `user_version`, so a live database at version 117 has run indices 0 to 116 and never runs a migration moved into one of
+// them. The slots are positional, and two branches that each append one are renumbered at landing (schema.ts' banners say
+// so), so a swap of two neighbouring entries is the mistake a landing can make. Before this file nothing caught every
+// form of it: review 3080 measured two swaps of the newest two entries (then the in-place bind and S1's end basis): one
+// that moved the SQL alone, banners left in order, survived coord-db; one that moved each whole entry, banners included,
+// was killed by coord-db's banner-order case alone and survived run-close-switch. This pins each newest slot to a DDL
+// fragment no other entry carries, so a swap of either form is red here.
 //
 // A new migration appends a slot and changes no row here; add its row in the PR that adds it, if it wants one. A row is
 // never edited: a slot that changed under a live database is the defect this file exists to catch.

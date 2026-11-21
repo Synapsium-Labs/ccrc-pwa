@@ -4953,6 +4953,96 @@ goes red or is recorded as equivalent, and `tsc` passes for `server`, its tests 
 **Rollback.** A plain revert. The scan only adds facts the fold already accepts. The fold's new tie rule and bound, the
 bounded order and the strip go back to H1b's.
 
+**Corrected on 2026-11-21 (Task HF1, D-8876; review 3067 F1 and F10).** Three sentences above are wrong, and the HF1
+section below has the full record:
+
+- The mutation run's round 1 killed 36 of 43 mutants, not 45 of 52. Seven survived, as said. **Measured:** the note's table
+  has 43 rows, seven of them survivors, and no row backs the 52. Round 2's 42 of 42 is those 43 less D7.
+- F5's strip removes nothing. Format, bidi and line-separator characters and U+2060 to U+206F are in the set, so each run
+  of them becomes a space, white space collapses, and the ends are trimmed (`shared/unprintable.ts#stripLine`).
+- Table 13's correction also changes the table's caption, "Seven PRs, each red first", to eight. It is the H1c row that
+  D-8862's corrections already name, not a second one.
+- The cost measurement was made with a scratch script that is not in the repository. Its method is in `h1c.md` §4, and
+  review 3067 repeated one row with its own script: 1 read, 262,144 bytes, a stop on time, 2 to 3 ms.
+
+### Task HF1: the start scan's carried findings (D-8876) — now
+
+**What.** Review 3067 read H1c (#3149) and found no grade-a finding. It carried ten findings to a later follow-up
+(`h1c.md`, review 3067 F1 to F10), and review 3080 carried one more (F1, the migration slots). This task fixes all eleven,
+so the start scan is pinned and its gaps are closed. Nothing is drawn by this task. It was built red first: the branch's
+first commit holds the tests, and `docs/superpowers/programs/desktop-polish/hf1.md` records which failed on `main`.
+
+- `server/src/transcript/tail.ts` (L3, C3), F5: `readBacklog` answers `scanEnd` wherever its tailer starts on a measured
+  file. That is the window's first byte, or the file's size when the window read fails (the unreadable arm), or 0 for an
+  empty file. So a stream whose window read failed still runs its scan, from where its tailer starts. `scanEnd` is absent
+  only with `missing`, so one absence no longer stands for absent, empty and unread.
+- `server/src/workflows/helperScan.ts` (L3, C3), F6, F7 and F8:
+  - F6: a scan that stopped `unreadable` starts again on the stream's next new seam, once per seam. Seams are compared by
+    value: file, end and cut.
+  - F7: each later usable roster lowers the cutoff to the minimum of old and new. A scan that stopped on time reads on from
+    where it stopped once its last read's oldest line is no longer older than the cutoff.
+  - F8: the scan keeps its running pump's promise, so the tests wait on it.
+- `server/src/sessionws.ts`: **unchanged**. The stream already turns any `scanEnd` into its seam, so F5 needs no line there,
+  and its per-PR growth budget is not spent (**measured**: `git diff --stat` names no `sessionws.ts`).
+- Tests: `helper-scan` (F2, F3, F4, F6, F7 and F8's wait), `transcript-tail` (F5's two arms), `sessionws-helpers` (F5
+  through a stream), and the new `migration-slots` (review 3080 F1).
+
+**F7, lowered and not waited for.** The other way was to start the scan only once a usable roster arrives. That fails a
+session whose hook state is never usable: its scan would never run, or would run late, and every row would wait for it.
+Lowering costs nothing when the first roster was already right. When a helper is listed later, the scan pays only for the
+reads that helper needs. And a scan that already stopped on time is not lost: it reads on from where it stopped, without
+reading a byte twice, inside the same 8 MiB. The cutoff only falls, and only a usable roster moves it, so a clock that steps
+back, with no usable roster, does not reopen a time stop.
+
+**The carried tests.**
+- F2: a range read that rejects ends the scan `unreadable` and keeps what it found, with no unhandled rejection.
+- F3: one line older than the cutoff, the oldest in its read, stops the scan after exactly that read.
+- F4: past the 256-id bound, an id is ranked by the newer of its two facts, in both directions.
+- F8: the helper-scan test's `drain` waits on the pump's own promise, never on a count of real ticks.
+
+Each case goes red under its mutant.
+
+**Records.** F1 and F10 are corrected in the dated note at the end of Task H1c's section above, and in `h1c.md`. F9 is
+corrected in `h1c.md` alone, because only the note carried the cell. The H1c PR's body keeps its old figure: it is merged,
+and nothing here edits it.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter of H1c's kind, one test file per
+process in a scratch copy of the tree):
+- round 1: 21 of 24 mutants killed. Three survived in `helperScan.ts`: a seam compared without its cut, a resume that skips
+  its check, and the check made strict. Each got a case.
+- round 2: `helperScan.ts` 16 of 16, run whole again; the 8 in `tail.ts`, `model.ts` and `schema.ts` were killed in round 1.
+
+The table is in `hf1.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8876** — `start-scan-carries`: Task HF1, issued on 2026-11-21. The carries of reviews 3067 and 3080. It departs from
+  the spec and from D-8873 in these places:
+  - `scan-end-is-where-the-tailer-starts` (review 3067 F5): `BacklogRead.scanEnd` is present on every measured file: the
+    window's first byte, the file's size when the window read fails, or 0 for an empty file. This replaces D-8873's "Absent
+    when no window was read".
+  - `scan-restarts-on-a-new-seam` (review 3067 F6): a scan stopped `unreadable` starts again on a seam that differs by value,
+    once per seam, and its cost adds up across restarts. This amends D-8873's `scan-once-per-reader` for that one stop.
+  - `scan-cutoff-only-falls` (review 3067 F7): later usable rosters lower the cutoff, and a scan stopped on time resumes
+    when its stop no longer holds. This amends D-8873's cutoff, which was fixed at the first reading. The spec's "whichever
+    comes first" holds against the cutoff in force.
+  - `scan-pump-is-awaitable` (review 3067 F8): `HelperStartScan` keeps its running pump's promise in a private field that
+    the test reads; `step` still never awaits it.
+  - `migration-slots-pinned` (review 3080 F1): `server/test/migration-slots.test.ts` pins slots 106 to 117 of `MIGRATIONS`,
+    each by a fragment of its DDL that no other entry carries.
+  - `h1c-records-corrected` (review 3067 F1, F9, F10): the dated note in Task H1c's section, and `h1c.md`.
+
+Spec corrections for the coordinator to fold:
+
+- §3.1, "The start scan": the time bound's cutoff falls with each later usable roster, and a time stop it no longer holds is
+  lifted. A read that fails ends the scan until the stream's next new seam.
+
+**Acceptance.** The new cases pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red, and `tsc` passes for `server` and its tests.
+
+**Rollback.** A plain revert. The backlog's absent `scanEnd` and the fixed cutoff come back, and so does the stop on a
+failed read. A stream whose window read failed then draws its helpers from the roster and its meta alone, as on `main`.
+
 ### Task H1b: the helpers reach the frame and the store (D-8862) — now
 
 **What.** C49's H1b row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1, §5, §8, Table 12 and Table

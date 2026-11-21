@@ -12,8 +12,8 @@ The measured transcripts are named by size only.
 | `server/src/workflows/helperScan.ts` (new) | L3, C3 | The scan: `HelperStartScan`, `scanCutoff`, `HelperScanSeam`, `HELPER_SCAN_BYTES`, `HELPER_SCAN_CHUNKS`, `HELPER_SCAN_CHUNKS_PER_READING`; its header records the seam, the pace and the "legitimately different" reason |
 | `server/src/workflows/read.ts` | L3, C3 | One call site in `SessionWorkflows.readAll` (and its field and constructor line); F1 in `markLastWriteUnreadable` (co-edit, the H2 worker's consent of 2026-11-21) |
 | `server/src/transcript/tail.ts` | L3, C3 | `BacklogRead.scanEnd` and `BacklogRead.cut` |
-| `server/src/sessionws.ts` | L4, C3 | The stream's seam (`helperScan`), set on a resume and by each backlog, passed to `readAll`; F8's comment (co-edit) |
-| `server/src/workflows/model.ts` | L1, C3 | `laterEnd`, `earlierLaunch` and `foldHelperFacts`' bound made order-independent; `orderHelperHook(last, next, lagMs)`; `helperDisplayText` on `stripLine` (co-edit) |
+| `server/src/sessionws.ts` | L4, C3 | The stream's seam (`helperScan`), set on a resume and by each backlog, passed to `readAll`; F8's comment (co-edit, the H2 worker's consent of 2026-11-21) |
+| `server/src/workflows/model.ts` | L1, C3 | `laterEnd`, `earlierLaunch` and `foldHelperFacts`' bound made order-independent; `orderHelperHook(last, next, lagMs)`; `helperDisplayText` on `stripLine` (co-edit, the H2 worker's consent of 2026-11-21) |
 | `server/src/sessionFeed.ts` | L4, C3 | `PUBLISHED_FRESH_MS` exported and passed to `orderHelperHook` |
 
 Tests: `helper-scan` (new), and cases added to `helpers-read`, `helpers-frame`, `session-feed-hook-at` and
@@ -42,7 +42,8 @@ file runs there through `ccrc test` with `--maxWorkers=2`, and the original is w
 non-zero with no failed test is retried and never counted as a kill. One kill was also reproduced by hand (S7: the
 one-read-at-a-time case fails). Load 7.1 to 9.2, 2026-11-21.
 
-Round 1: 52 mutants, 45 killed, 7 survived. Round 2, after six cases were added and one equivalent rank removed: 42 of 42
+Round 1: 43 mutants, 36 killed, 7 survived. (Corrected on 2026-11-21 by Task HF1, D-8876, review 3067 F1: this said 52
+mutants and 45 killed. **Measured:** the table below has 43 rows, seven of them survivors, and no row backs the 52.) Round 2, after six cases were added and one equivalent rank removed: 42 of 42
 killed. (D7 is gone with its code. The model module's first attempt stopped on a failing baseline, the four H1a pins above;
 the module was re-run after they moved.)
 
@@ -68,7 +69,7 @@ the module was re-run after they moved.)
 | S15 | `start` and `bytes` swapped | killed | killed |
 | S16 | bytes counted with the carried piece | killed | killed |
 | S17 | 64 KiB chunks, four times as many | killed | killed |
-| S18 | the oldest time skips the first timed line | killed | killed |
+| S18 | as run, the oldest time returns no time (a `continue` for the return), which repeats S6. The mutant this row named, skipping the first timed line, was never run, and it survives both rounds' cases (review 3067 F3; HF1 adds the case that kills it) | killed | killed |
 | R1 | the scan's facts dropped in `readAll` | killed (sessionws-helpers) | killed |
 | R2 | F1: the measured last write nulled | killed (helpers-read) | killed |
 | R3 | F2: no early reserve | killed (helpers-read) | killed |
@@ -97,6 +98,10 @@ the module was re-run after they moved.)
 On this box, 2026-11-21 03:12Z, load about 9.4, through the real `readBacklog` and `HelperStartScan` over `localIO`, on four
 real session transcripts: T0 1.05 GB, T1 11.5 MB, T2 2.0 MB and T3 2.8 MB (this session's own, live). The readings were
 stepped back to back, each one after the last one's reads ended, so the times below are read time, not the 2 s tick.
+(Added on 2026-11-21 by Task HF1, review 3067 F10: the script that stepped them was a scratch script, not in the
+repository, so this table can be repeated by its method only. Review 3067 repeated it with its own script and measured
+the same thing. A reload with no listed helper took 1 read, 262,144 bytes, a stop on time, 2 to 3 ms. With a listed
+helper it read below the seam in 23 reads over 6 readings, 35 to 38 ms for two scans.)
 
 | Transcript | Case | Readings | Reads | Bytes read | Stop | Read time |
 |---|---|---|---|---|---|---|
@@ -129,7 +134,7 @@ extraction of `main` (66c63606c3):
 | `claimant-client-skew` | killed by the test slice's memory cap (5 kills) | 116 of 116 pass | |
 | `ask-pairing-transcript` | one case times out at 60 s | 2697 of 2697 pass | |
 | `reclaim-pause-pin` | one case times out at 20 s | times out again (load 11.4); a second run alone, 78 of 78 pass (load 8.9) | 78 of 78 pass (load 5.7) |
-| `ask-pairing-skew` | the C7q case times out at 60 s | the same | the same case times out at 60 s, and 18 more fail after it |
+| `ask-pairing-skew` | the C7q case times out at 60 s | the same | the same case times out at 60 s. (Corrected by HF1, review 3067 F9: this said "and 18 more fail after it". Those 18 came from an extraction with no `pwa` and `ui` dependencies linked. With them linked, review 3067 measured only C7q failing, 78.8 s against 60 s at load 7.6. **Inferred:** the 18 are an artefact of the extraction.) |
 | `secret-mask` | the slow-typing case times out at 20 s | the same | the same case times out at 20 s |
 | `session-ladders-characterization` | the fresh-heartbeat case: `claimProbe` reads `gone` | the same, and its frame row | the same (its `NOW` is read at module load, so a slow run ages the fresh heartbeat) |
 | tests typecheck | killed by the memory cap | killed again; then eight errors, all in `agent/src` (this work tree had no `agent/node_modules`) | |

@@ -78,9 +78,10 @@ const NO_ROSTER: RosterInput = { kind: 'unusable', why: { why: 'absent' } };
 const size = (): number => statSync(file).size;
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 2));
 
-/** Wait until the reads this reading granted have ended. */
+/** Wait until the reads this reading granted have ended: on the pump itself, never on a count of real ticks (review 3067
+ *  F8, HF1), so a slow disk cannot end the wait early and leave the next step to reset the grant. */
 async function pumped(scan: HelperStartScan): Promise<void> {
-  for (let k = 0; k < 50 && (scan as unknown as { pumping: boolean }).pumping; k++) await tick();
+  await (scan as unknown as { pumpDone: Promise<void> }).pumpDone;
 }
 
 /** Step the scan as readings would, at least once and until it stops (or `max` readings), and every fact it handed over.
@@ -538,6 +539,33 @@ describe('(HF1) a new seam after a failed read, and a later roster (review 3067 
     await drain(scan, { file, end: size() }, { now: NOW - 3_600_000, max: 2 }); // a clock stepped back, with no usable roster
     expect(io.ranges).toHaveLength(reads);
     expect(scan.cost.stop).toBe('time');
+  });
+
+  it('F7 (added after the first mutation round): a cutoff lowered but still later than the stopping read\'s oldest line leaves the stop standing; one lowered to that line exactly reads on', async () => {
+    hourBack(); // the read that stops it on time has its oldest line at NOW - 3_000_000 (the 2 MiB block)
+    const io = ranged();
+    const scan = new HelperStartScan(io, file);
+    await drain(scan, { file, end: size() });
+    const reads = io.ranges.length;
+    await drain(scan, { file, end: size() }, { roster: listed(NOW - 1_200_000), max: 2 }); // lower, not low enough
+    expect(io.ranges).toHaveLength(reads);
+    expect(scan.cost.stop).toBe('time');
+    const on = await drain(scan, { file, end: size() }, { roster: listed(NOW - 3_000_000) }); // the stop no longer holds: equal is not older
+    expect(io.ranges.length).toBeGreaterThan(reads);
+    expect(scan.cost.stop).toBe('time'); // and stops again at a1's launch, older than the new cutoff
+    expect(on.facts.map((f) => f.id)).toEqual(['a1']);
+  });
+
+  it('F6 (added after the first mutation round): a seam is the same seam only with the same cut', async () => {
+    writeFileSync(file, launchLine('a1', NOW - 60_000) + fillerBlock(NOW - 50_000, 300 * KIB));
+    const io = ranged();
+    io.failAt = 0;
+    const scan = new HelperStartScan(io, file);
+    await drain(scan, { file, end: size(), cut: 'one' });
+    expect(scan.cost.stop).toBe('unreadable');
+    await drain(scan, { file, end: size(), cut: 'two' });
+    expect(io.ranges.length).toBeGreaterThan(1);
+    expect(scan.cost.stop).toBe('start');
   });
 
   it('F7: the minimum of old and new: a running scan keeps an earlier cutoff when a later reading\'s cutoff is later', async () => {

@@ -30,8 +30,10 @@ export interface BacklogRead {
   /** The tailer's SECOND output (session helpers H1b, D-8862): the helper facts of every whole line in the window read, not
    *  only the last `lastN` events' (they cost no read). Absent when there is none, so a read with none is what it was. */
   helpers?: HelperFact[];
-  /** Where the window began (session helpers H1c, D-8873): the start scan's seam, so it reads only the bytes before it
-   *  (`workflows/helperScan.ts`). Absent when no window was read. */
+  /** Where the tailer's reading begins (session helpers H1c, D-8873): the start scan's seam, so it reads only the bytes before
+   *  it (`workflows/helperScan.ts`). The window's first byte; the file's size when the window could not be read, so the scan
+   *  still reads what the window would have (review 3067 F5, HF1, D-8876); 0 for an empty file. Absent only when no file
+   *  was measured (`missing`), so one absence no longer stands for absent, empty and unread. */
   scanEnd?: number;
   /** The partial line the window began inside, which the backlog drops and the scan joins to its head; absent at offset 0. */
   cut?: string;
@@ -45,7 +47,7 @@ export interface BacklogRead {
 export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<BacklogRead> {
   const st = await io.statMeasured(file);
   if (!st.ok) return { events: [], offset: 0, missing: true, measured: st.reason === 'absent' };
-  if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true };
+  if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true, scanEnd: 0 };
   const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
   const res = await io.readFileFromMeasured(file, start);
   if (!res.ok) {
@@ -56,7 +58,7 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
     // PWA rendering an empty chat over a transcript nobody could read — the
     // empty-backlog-with-a-real-offset defect this replaced (D-1403).
     const absent = res.reason === 'absent';
-    return { events: [], offset: st.size, missing: absent, measured: absent };
+    return { events: [], offset: st.size, missing: absent, measured: absent, ...(absent ? {} : { scanEnd: st.size }) };
   }
   let text = res.data;
   let cut: string | undefined;
