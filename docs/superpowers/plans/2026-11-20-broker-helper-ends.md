@@ -150,7 +150,7 @@ spec allows: a command would still need a server door to reach the watcher's one
   measures the registry (one listing, then each listed parent's incarnation, read twice) for the parents a verdict reads
   only (`backfillParentsToRead`), and decides nothing. It joins `box-token-census.test.ts` as a lane source of its own
   (`DELEGATION_BACKFILL_DOORS`), `auth-gate.test.ts`'s route tally (291 to 293), and CLAUDE.md's door prose in one sentence.
-- [x] **The dry run:** the count it would close, by kind and by how long ago each was opened (1 to 7, 7 to 30, 30 days
+- [x] **The dry run:** the count it would close, by kind and by how long each has been quiet (1 to 7, 7 to 30, 30 days
   and more); how many of those a lease or lineage row names (released or not, open or closed); how many failed the
   positive check; how many are under 24 hours; how many the pass already closed; in a re-run, how many qualify but are
   not on the list; and F4's count. The words ride every report. It writes nothing (B-D1, RT-1). Pasted, as counts, into
@@ -279,8 +279,14 @@ one (`isEndable`), so S2 adds no end rule of its own.
   - `unknown-state-untouched`: the pass closes `active` records only; `unknown` has no writer and is left alone, so the
     undo can give back `active`.
   - `parents-read-only-when-decisive`: the route reads the registry only for the parents of open agent and workflow
-    records quiet for 24 hours and under 7 days; a listing that does not read leaves every such parent unmeasured.
-  - `age-bands-by-opening`: "by kind and age" is by kind and by how long ago the record was opened, in three bands.
+    records quiet for 24 hours and under 7 days; no registry listing yet leaves every such parent unmeasured.
+  - `listed-ids-from-the-watcher`: the route reads which parents are listed from the watcher's listed ids
+    (`currentRegistryIds()`, derived once in `registry.ts`, the one reader of `*.uuid` names), not from a listing of its
+    own; only each listed parent's incarnation is read at the request.
+  - `age-bands-by-quiet`: "by kind and age" is by kind and by how long the record has been quiet, in three bands. The
+    first edge is the positive check's seven days of quiet (`DELEGATION_BACKFILL_PROVEN_QUIET_MS`, the coordinator's ruling
+    on the seven-day census, 2026-11-21), so the band says which records the check passes on quiet alone; that constant
+    joins `token-shared.test.ts`'s census as its twentieth separate quantity.
   - `one-writer-instant-max-and-final-status`: review 3026 F9; `maxInstant` in `delegation-model.ts`,
     `isFinalNotification` in `delegation-end-basis.ts`.
   - `check-and-assertion-not-narrowed`: review 3026 F9's question, decided no (the plan's F9 item).
