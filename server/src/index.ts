@@ -50,6 +50,7 @@ import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
 import { planStorePort } from './coord/planStore.js';
+import { COORDINATOR_SKILL_REVISION } from './coord/skillRollout.js';
 import { quizLanePortOf } from './continuity/quizStore.js';
 import { QUIZ_RECORD_READY } from './continuity/quiz.js';
 import { canonicalJson } from '../../shared/api.js';
@@ -439,6 +440,7 @@ try {
   console.warn(`ccrc-server: decision model: the boot release of stale reservations failed: ${err instanceof Error ? err.message : String(err)}`);
 }
 deps.linearPolicy = allowAll;
+deps.skillRolloutRevision = COORDINATOR_SKILL_REVISION;   // D-8126 (A9-3): the watcher's `skillRollout` lane runs only where this is set
 // The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
 deps.planSync = planSyncFor({
   coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,
