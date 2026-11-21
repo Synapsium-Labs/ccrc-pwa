@@ -5016,16 +5016,26 @@ workflow opens too); Table 12 (`HelpersSection.tsx` also exports the column's st
 
 **Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H1a's and H1b's: each
 TypeScript file held as a Python module's text, each mutant written into a scratch copy of the tree outside the work tree,
-removed after the run, its test files run once through `ccrc test`): 77 mutants at the tip, 73 killed and 4 accepted (three change only what the stream holds in memory, never an
-answer; one is a branch the reader cannot reach). The first pass found one defect, fixed here (a notification that is no
-row's could evict a drawn row's report: `boundReports`), and seven missing cases, each added. The table is in
-`docs/superpowers/programs/desktop-polish/h2.md`.
+removed after the run, its test files run once through `ccrc test`): 77 mutants at the tip, 73 killed and 4 accepted (two change only what the stream holds in memory, never an
+answer; one is a branch the reader cannot reach; the fourth, `bound-shown-without-report`, does change an answer and became
+the code in fix round 1, review 3072 F5). The first pass found one defect, fixed here (a notification that is no row's could
+evict a drawn row's report: `boundReports`), and seven missing cases, each added. Fix round 1 ran 44 mutants of the branches
+it changed: 44 killed. The tables are in `docs/superpowers/programs/desktop-polish/h2.md`.
 
 **Looked at in the real app.** The production build, through the browser harness, at 360, 1280 and 1600 px, in Refined and
 Instrument, dark (Phosphor) and light, the strip collapsed and open, the fold open and a report expanded: the screenshots are
 in the note and under `docs/design/2026-11-19-session-helpers-design/h2/`. The first look found a defect, fixed in this
 task: at 360 px the glance cut line 1 to one letter (the row glyph's grid area leaked into the glance's grid); the
-real-Chrome test now checks the glance's order, room and line.
+real-Chrome test now checks the glance's order, room and line. Fix round 1 retook every image, and its look found the narrow
+rail clipping a too-long state group, fixed there.
+
+**Fix round 1 (review 3072).** F1 (the meter-ring block of `lanes-row.browser.test.ts` selects the Helpers row's meter), F2
+(an answer is kept with its row's end), F3 (a state outside the vocabulary draws the neutral glyph), F4 (no answer before the
+stream's first reading; the store owns the ask and asks again after a stream's first frame; no wire change), F5, F6 (spec §10
+followed: at the phone width elapsed is in line 2), F7, F8, F11, F12, F13 and F14's separators, each with its case; F9, F10
+and the rest of F14 are records in the note. **The matrix that binds H2 is its brief's** (360, 1280 and 1600 px, both skins,
+light and dark, the fold open and closed, a report expanded); the "Acceptance (the matrix, per PR)" section below, with 390
+and 1920, is the programme's final gate, not this task's.
 
 **Acceptance.** The new suites pass (server 2 files, PWA 4 files and the real-Chrome file), every suite that imports a
 changed module passes, every mutant of a new decision branch goes red or its disposition is recorded in the note, `tsc`
