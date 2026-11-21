@@ -11,7 +11,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 
 export type MailKeyModule = typeof import('../../src/coord/mailKey.js');
 
-const REQ: KeyedSend = { toId: 'coordinator', runId: 7, kind: 'status', subject: 's', body: 'b', artifacts: ['/a', '/b'], inReplyTo: 5 };
+const REQ: KeyedSend = { toId: 'coordinator', runId: 7, kind: 'status', subject: 's', body: 'b', artifacts: ['/a', '/b'], inReplyTo: 5,
+  urgent: false };
 const PRIOR: KeyedMail = { ...REQ, id: 41 };
 
 /** One change per field, and the field the conflict must name. Literal on purpose: a new compared field is a choice. */
@@ -28,6 +29,8 @@ const CHANGED: readonly [string, Partial<KeyedSend>][] = [
   ['artifacts', { artifacts: [] }],
   ['inReplyTo', { inReplyTo: 6 }],
   ['inReplyTo', { inReplyTo: null }],
+  // Ruling N10 (mid-turn mail, plan Task 2.4): a keyed retry that adds or drops `urgent` is a different mail.
+  ['urgent', { urgent: true }],
 ];
 
 export function mailKeyVerdictCases(m: MailKeyModule): Record<string, SuiteCase> {
@@ -36,10 +39,10 @@ export function mailKeyVerdictCases(m: MailKeyModule): Record<string, SuiteCase>
       expect(m.mailKeyVerdict(REQ, null)).toEqual({ verdict: 'new' });
     },
     'the same fields answer the prior id': () => {
-      expect(m.mailKeyVerdict(REQ, PRIOR)).toEqual({ verdict: 'same', id: 41 });
-      expect(m.mailKeyVerdict({ ...REQ, artifacts: [...REQ.artifacts] }, PRIOR)).toEqual({ verdict: 'same', id: 41 });
+      expect(m.mailKeyVerdict(REQ, PRIOR)).toEqual({ verdict: 'same', id: 41, urgent: false });
+      expect(m.mailKeyVerdict({ ...REQ, artifacts: [...REQ.artifacts] }, PRIOR)).toEqual({ verdict: 'same', id: 41, urgent: false });
       expect(m.mailKeyVerdict({ ...REQ, runId: null, artifacts: [], inReplyTo: null },
-        { ...PRIOR, runId: null, artifacts: [], inReplyTo: null })).toEqual({ verdict: 'same', id: 41 });
+        { ...PRIOR, runId: null, artifacts: [], inReplyTo: null })).toEqual({ verdict: 'same', id: 41, urgent: false });
     },
     'a different field is a conflict naming that field and the prior mail': () => {
       for (const [field, change] of CHANGED) {
@@ -51,17 +54,22 @@ export function mailKeyVerdictCases(m: MailKeyModule): Record<string, SuiteCase>
     },
     'every differing field is named, in the fixed order': () => {
       expect(m.mailKeyVerdict({ ...REQ, body: 'x', toId: 'y' }, PRIOR)).toMatchObject({ verdict: 'conflict', fields: ['toId', 'body'] });
-      expect(m.KEYED_FIELDS).toEqual(['toId', 'runId', 'kind', 'subject', 'body', 'artifacts', 'inReplyTo']);
+      expect(m.KEYED_FIELDS).toEqual(['toId', 'runId', 'kind', 'subject', 'body', 'artifacts', 'inReplyTo', 'urgent']);
+    },
+    // Ruling N10: the replay of an urgent mail echoes the STORED mark (`mail.urgentAs`), so the route answers `urgent: true`.
+    'a same answer carries the stored urgent mark, and a dropped mark is a conflict': () => {
+      expect(m.mailKeyVerdict({ ...REQ, urgent: true }, { ...PRIOR, urgent: true })).toEqual({ verdict: 'same', id: 41, urgent: true });
+      expect(m.mailKeyVerdict(REQ, { ...PRIOR, urgent: true })).toMatchObject({ verdict: 'conflict', fields: ['urgent'] });
     },
     // Review 2725 F4: the store reads a lone surrogate back as U+FFFD, so a retry of such text is the same mail.
     'text compares as the store keeps it: a lone surrogate matches U+FFFD, and nothing else is folded': () => {
       const stored = { ...PRIOR, subject: 's\ufffd', body: 'a\ufffdb\ufffd', artifacts: ['/a\ufffd', '/b'] };
       expect(m.mailKeyVerdict({ ...REQ, subject: 's\udc00', body: 'a\ud800b\udbff', artifacts: ['/a\ud83d', '/b'] }, stored))
-        .toEqual({ verdict: 'same', id: 41 });
-      expect(m.mailKeyVerdict({ ...REQ, toId: 'c\ud800' }, { ...PRIOR, toId: 'c\ufffd' })).toEqual({ verdict: 'same', id: 41 });
+        .toEqual({ verdict: 'same', id: 41, urgent: false });
+      expect(m.mailKeyVerdict({ ...REQ, toId: 'c\ud800' }, { ...PRIOR, toId: 'c\ufffd' })).toEqual({ verdict: 'same', id: 41, urgent: false });
       // A well-formed pair is text, never folded; a different character is a different mail.
       expect(m.mailKeyVerdict({ ...REQ, body: '\ud83d\ude00' }, { ...PRIOR, body: '\ufffd\ufffd' })).toMatchObject({ fields: ['body'] });
-      expect(m.mailKeyVerdict({ ...REQ, body: '\ud83d\ude00' }, { ...PRIOR, body: '\ud83d\ude00' })).toEqual({ verdict: 'same', id: 41 });
+      expect(m.mailKeyVerdict({ ...REQ, body: '\ud83d\ude00' }, { ...PRIOR, body: '\ud83d\ude00' })).toEqual({ verdict: 'same', id: 41, urgent: false });
       expect(m.mailKeyVerdict({ ...REQ, body: 'a\ud800b' }, { ...PRIOR, body: 'a?b' })).toMatchObject({ fields: ['body'] });
       expect(m.mailKeyVerdict({ ...REQ, artifacts: ['/a\ud800', '/b'] }, { ...PRIOR, artifacts: ['/a?', '/b'] }))
         .toMatchObject({ fields: ['artifacts'] });
@@ -81,9 +89,11 @@ const MAIL_KEY_SET: MutantSet<MailKeyModule> = {
     { id: 'K4 a prefix is the same list', old: 'a.length === b.length && ', new: '' },
     { id: 'K5 order ignored', old: 'a.every((p, i) => sameText(p, b[i]!))', new: 'a.every((p) => b.includes(p))' },
     { id: 'K6 a conflict reads as same', old: 'if (fields.length === 0) return', new: 'if (fields.length <= 1) return' },
-    { id: 'K7 the new id, not the prior', old: "return { verdict: 'same', id: prior.id };", new: "return { verdict: 'same', id: 0 };" },
+    { id: 'K7 the new id, not the prior', old: "return { verdict: 'same', id: prior.id, urgent: prior.urgent };", new: "return { verdict: 'same', id: 0, urgent: prior.urgent };" },
     { id: 'K8 a field left out', old: "'toId', 'runId', 'kind', 'subject', 'body', 'artifacts', 'inReplyTo'", new: "'toId', 'kind', 'subject', 'body', 'artifacts', 'inReplyTo'" },
-    { id: 'K9 inReplyTo left out', old: "'artifacts', 'inReplyTo'] as const", new: "'artifacts'] as const" },
+    { id: 'K9 inReplyTo left out', old: "'artifacts', 'inReplyTo', 'urgent'] as const", new: "'artifacts', 'urgent'] as const" },
+    { id: 'K14 urgent left out (N10)', old: "'inReplyTo', 'urgent'] as const", new: "'inReplyTo'] as const" },
+    { id: 'K15 the replay without the echo (N10)', old: 'urgent: prior.urgent };', new: 'urgent: false };' },
     { id: 'K10 text compared raw', old: '? !sameText(a, b) : a !== b;', new: '? a !== b : a !== b;' },
     { id: 'K11 artifacts compared raw', old: 'a.every((p, i) => sameText(p, b[i]!))', new: 'a.every((p, i) => p === b[i])' },
     { id: 'K12 nothing folded', old: "s.replace(LONE_SURROGATES, '\\ufffd')", new: 's' },

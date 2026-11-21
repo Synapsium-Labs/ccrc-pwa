@@ -36,6 +36,7 @@ import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operat
 import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
+import { MAIL_HOLD_LANE_ROW } from './coord/mailHoldLane.js';
 import { createLandingJournal } from './coord/landingJournal.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
@@ -330,6 +331,8 @@ await notifyLog.load();
 
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
+// Mid-turn mail (plan Task 4.4): a landed ack kicks the mailhold projection, so a released hold clears at the next tick.
+deps.onMailAcked = () => watcher.kick(MAIL_HOLD_LANE_ROW);
 
 // Design 2026-09-20 §8: a `ready` frame measures the fleet node at once. The
 // handshake is when an agent that just restarted — a self-update among the

@@ -222,9 +222,15 @@ describe('mail_client_key_once (the database half)', () => {
     expect(() => c.insertMail({ ...row, fromId: 'demo-c', clientKey: 'k' })).not.toThrow();
     c.insertMail(row); c.insertMail(row); c.insertMail({ ...row, clientKey: null });
     expect(c.mailByClientKey('demo-a', 'k')).toEqual({ id: first.id, toId: 'demo-b', runId: null, kind: 'status',
-      subject: 's', body: 'b', artifacts: [], inReplyTo: null });
+      subject: 's', body: 'b', artifacts: [], inReplyTo: null, urgent: false });
     expect(c.mailByClientKey('demo-a', 'absent')).toBeNull();
     expect(c.mailByClientKey('demo-z', 'k')).toBeNull();
+  });
+
+  it('reads the urgent mark back from mail.urgentAs (ruling N10)', () => {
+    const c = store();
+    const r = c.insertMail({ ...row, clientKey: 'k-urgent', urgentAs: 'coordinator' });
+    expect(c.mailByClientKey('demo-a', 'k-urgent')).toMatchObject({ id: r.id, urgent: true });
   });
 
   it('stores inReplyTo as sent, and names its own clash and no other error', () => {
