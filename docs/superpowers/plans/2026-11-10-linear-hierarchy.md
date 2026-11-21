@@ -501,7 +501,9 @@ number from `POST /api/ledger/deviations`.
   project, so a readable store is never left unread there (F10). Drift Hand refuses `unreachable`
   when it needs the team owner and cannot measure it. The hierarchy card says both the owner and the migration state are not measured whenever the row's team owner cannot be
   measured (an unpinned row's routing unread, with no listing at all as well, or a pinned row outranked by such a row), and
-  offers no Reshape then (F1); Upkeep suppresses the notice;
+  offers no Reshape then (F1). A pinned top row whose own workspace cannot be measured (its slot unreadable or its listing
+  failed, the measurement Reshape makes) shows its measured owner and a migration state of not measured, with no Reshape
+  (review 3087 F1); Upkeep suppresses the notice;
   the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
   workspace-qualified owner with no issues for that team still waiting.
   Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and

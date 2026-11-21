@@ -395,14 +395,16 @@ export function hierarchyStateOf(m: MigrationFacts | null): { state: HierarchySt
   }
 }
 
-/** F1 (D-8186, D-8808): the console state of a project row. A row whose team owner is not measured (`teamOwnerUnmeasured`, the pick
- *  the card's owner display reads: no listing, an unreadable slot, or an unpinned holder that outranks a pinned row) says
- *  `unmeasured`, never "not-migrated", and Reshape is not offered for it. A row with no team key has none to measure. The caller
- *  only supplies the rows and the routing. */
+/** F1 (D-8186, D-8808): the console state of a project row. It says `unmeasured`, never "not-migrated", and Reshape is not offered,
+ *  when either measurement cannot be made: the row's own workspace (`measuredProjectTeam` with the row's pin, the measurement
+ *  Reshape's `workspaceOfProject` makes: an unpinned row's routing, or a pinned row's own slot or a failed listing; review 3087 F1)
+ *  or its team owner (`teamOwnerUnmeasured`, the pick the card's owner line reads: a pinned row outranked by an unpinned holder
+ *  whose routing cannot be read). A row with no team key has none to measure. The caller only supplies the rows and the routing. */
 export function hierarchyStateOfRow<M extends MigrationFacts & { id: number; workspaceId: string; teamKey: string }>(
   row: { teamKey: string | null; workspaceId: string | null }, rows: readonly HierarchyProjectFacts[], migrations: readonly M[], routing: TeamRoutes | null,
 ): { state: HierarchyState; at: number | null; itemId: number | null } {
-  if (row.teamKey !== null && teamOwnerUnmeasured(row, rows, routing)) return { state: 'unmeasured', at: null, itemId: null };
+  if (row.teamKey !== null && (measuredProjectTeam(routing, { teamKey: row.teamKey, workspaceId: row.workspaceId }).kind === 'unmeasured'
+    || teamOwnerUnmeasured(row, rows, routing))) return { state: 'unmeasured', at: null, itemId: null };
   return hierarchyStateOf(migrationOfProject(row, migrations, routing?.slots ?? null));
 }
 
