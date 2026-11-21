@@ -22,10 +22,7 @@ import { elapsedShort } from '../lib/elapsed';
 import { useNow } from '../lib/use-now';
 import { CollapsibleStrip } from '../primitives/collapsible-strip';
 import { Meter } from '../primitives/meter';
-import {
-  AGENT_HELPER_STATE_WORDS, HELPER_REPORT_MAX_BYTES,
-  type AgentHelperState, type AgentHelperView, type WorkflowAgentView, type WorkflowView,
-} from '../../../shared/workflows';
+import type { AgentHelperState, AgentHelperView, WorkflowAgentView, WorkflowView } from '../../../shared/workflows';
 import './workflow-strip.css';
 
 /** `↓ 2.5m tokens`'s number, the way Claude Code writes it: 980, 12.4k, 2.5m. */
@@ -47,9 +44,11 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(h / 24)}d${h % 24}h`;
 }
 
-/** One row of the section: an Agent helper or a workflow. */
+/** One row of the section: an Agent helper, with its state's word as `helpersWords.ts` decided it, or a workflow. The
+ *  words travel as data because this package takes types only from shared/ (`ui-package-boundary.test.ts`); a null word
+ *  is a state whose word is left out. */
 export type HelperItem =
-  | { readonly kind: 'agent'; readonly id: string; readonly agent: AgentHelperView }
+  | { readonly kind: 'agent'; readonly id: string; readonly agent: AgentHelperView; readonly stateWord: string | null }
   | { readonly kind: 'workflow'; readonly id: string; readonly workflow: WorkflowView };
 
 /** What `helpersWords.ts` decided for the section: the head's counts and its notes, said once, and the two lists. */
@@ -58,6 +57,8 @@ export interface HelpersView {
   readonly notes: readonly string[];
   readonly main: readonly HelperItem[];
   readonly finished: readonly HelperItem[];
+  /** What a cut report says under its text, with the cap in it. */
+  readonly cutNote: string;
 }
 
 /** The server's answer to one report request, as the store keeps it; absent while none came. */
@@ -112,7 +113,7 @@ const whatOf = (it: HelperItem): string =>
 export function mainFacts(it: HelperItem): string[] {
   if (it.kind === 'agent') {
     const a = it.agent;
-    return present([a.agentType === null ? 'subagent' : `subagent · ${a.agentType}`, a.model, a.effort, AGENT_HELPER_STATE_WORDS[a.state]]);
+    return present([a.agentType === null ? 'subagent' : `subagent · ${a.agentType}`, a.model, a.effort, it.stateWord]);
   }
   const w = it.workflow;
   return present([
@@ -125,7 +126,7 @@ export function mainFacts(it: HelperItem): string[] {
 export function finishedFacts(it: HelperItem): string[] {
   if (it.kind === 'agent') {
     const a = it.agent;
-    return present([AGENT_HELPER_STATE_WORDS[a.state], duration(a.startedAt, a.endedAt), a.summary]);
+    return present([it.stateWord, duration(a.startedAt, a.endedAt), a.summary]);
   }
   const w = it.workflow;
   const word = w.state === 'running' ? 'running' : FINAL_WORD[w.state];
@@ -226,7 +227,7 @@ function WorkflowDetail({ w }: { w: WorkflowView }): ReactNode {
 
 /** The report a finished helper opens to (§4.3): its first `REPORT_LINES` lines, then Show all and Copy. */
 const REPORT_LINES = 4;
-function Report({ answer }: { answer: HelperReportView | undefined }): ReactNode {
+function Report({ answer, cutNote }: { answer: HelperReportView | undefined; cutNote: string }): ReactNode {
   const [all, setAll] = useState(false);
   if (answer === undefined) return <div className="helper-report" />; // asked, and no answer yet (an older server never gives one)
   if (answer.report === null) return <div className="helper-report"><p className="helper-note">This report is no longer held: its row left the keep.</p></div>;
@@ -242,13 +243,13 @@ function Report({ answer }: { answer: HelperReportView | undefined }): ReactNode
         )}
         <button type="button" className={`helper-report-link ${FOCUS_RING}`} onClick={copy}>Copy</button>
       </span>
-      {answer.cut && <p className="helper-note">{`The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`}</p>}
+      {answer.cut && <p className="helper-note">{cutNote}</p>}
     </div>
   );
 }
 
-function HelperRow({ it, now, finished, reports, onReport }: {
-  it: HelperItem; now: number; finished: boolean;
+function HelperRow({ it, now, finished, cutNote, reports, onReport }: {
+  it: HelperItem; now: number; finished: boolean; cutNote: string;
   reports: Readonly<Record<string, HelperReportView>>; onReport: (id: string) => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
@@ -280,7 +281,7 @@ function HelperRow({ it, now, finished, reports, onReport }: {
         {tokens !== null && <span className="helper-tokens">{tokens}</span>}
       </span>
       {open && w !== null && <div className="helper-detail"><WorkflowDetail w={w} /></div>}
-      {open && hasReport && <Report answer={reports[it.id]} />}
+      {open && hasReport && <Report answer={reports[it.id]} cutNote={cutNote} />}
     </li>
   );
 }
@@ -299,7 +300,7 @@ export function HelpersList({ view, reports, onReport }: {
       {view.main.length > 0 && (
         <li className="helpers-main-item">
           <ol className="helpers-main">
-            {view.main.map((it) => <HelperRow key={`${it.kind}:${it.id}`} it={it} now={now} finished={false} reports={reports} onReport={onReport} />)}
+            {view.main.map((it) => <HelperRow key={`${it.kind}:${it.id}`} it={it} now={now} finished={false} cutNote={view.cutNote} reports={reports} onReport={onReport} />)}
           </ol>
         </li>
       )}
@@ -310,7 +311,7 @@ export function HelpersList({ view, reports, onReport }: {
           </button>
           {foldOpen && (
             <ol className="helpers-finished">
-              {view.finished.map((it) => <HelperRow key={`${it.kind}:${it.id}`} it={it} now={now} finished reports={reports} onReport={onReport} />)}
+              {view.finished.map((it) => <HelperRow key={`${it.kind}:${it.id}`} it={it} now={now} finished cutNote={view.cutNote} reports={reports} onReport={onReport} />)}
             </ol>
           )}
         </li>

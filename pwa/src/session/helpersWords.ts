@@ -12,7 +12,10 @@
 // answers null and the section draws nothing, never a "none" or a "no helpers" that one of the two would make false.
 import type { HelperItem } from '@ccrc/ui';
 import { elapsedShort } from '@ccrc/ui';
-import { isFinalHelperState, type AgentHelperView, type HelpersUnmeasured, type WorkflowView } from '../../../shared/workflows';
+import {
+  AGENT_HELPER_STATE_WORDS, HELPER_REPORT_MAX_BYTES, isFinalHelperState,
+  type AgentHelperView, type HelpersUnmeasured, type WorkflowView,
+} from '../../../shared/workflows';
 
 export interface HelpersWordsInput {
   readonly workflows: readonly WorkflowView[];
@@ -28,7 +31,11 @@ export interface HelpersWords {
   readonly notes: string[];
   readonly main: HelperItem[];
   readonly finished: HelperItem[];
+  readonly cutNote: string;
 }
+
+/** A cut report's note, with the cap the server cut it at (`HELPER_REPORT_MAX_BYTES`, one owner). */
+const CUT_NOTE = `The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`;
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
@@ -61,7 +68,7 @@ const endOf = (it: HelperItem): number => (it.kind === 'agent' ? it.agent.endedA
 export function helpersView(i: HelpersWordsInput): HelpersWords | null {
   const items: HelperItem[] = [
     ...i.workflows.map((workflow): HelperItem => ({ kind: 'workflow', id: workflow.id, workflow })),
-    ...i.agents.map((agent): HelperItem => ({ kind: 'agent', id: agent.id, agent })),
+    ...i.agents.map((agent): HelperItem => ({ kind: 'agent', id: agent.id, agent, stateWord: AGENT_HELPER_STATE_WORDS[agent.state] })),
   ];
   if (items.length === 0 && !i.workflowsUnreadable) return null;
   const running = items.filter(isRunning).sort((a, b) => startOf(a) - startOf(b) || (a.id < b.id ? -1 : 1));
@@ -85,5 +92,5 @@ export function helpersView(i: HelpersWordsInput): HelpersWords | null {
   }
   if (i.workflowsUnreadable) notes.push(i.workflows.length > 0 ? 'workflow state not re-read: showing the last read' : 'workflow state could not be read');
 
-  return { count: counts.length === 0 ? null : counts.join(' · '), notes, main, finished };
+  return { count: counts.length === 0 ? null : counts.join(' · '), notes, main, finished, cutNote: CUT_NOTE };
 }

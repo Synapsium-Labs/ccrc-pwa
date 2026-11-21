@@ -1,17 +1,18 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import type { AgentHelperView, WorkflowView } from '../../../shared/workflows';
+import { AGENT_HELPER_STATE_WORDS, HELPER_REPORT_MAX_BYTES, type AgentHelperView, type WorkflowView } from '../../../shared/workflows';
 import { HelpersStrip, type HelperItem, type HelpersView } from './workflow-strip';
 
 // Session helpers H2 (D-8872): the Helpers section, which replaced the workflow strip in place. Its head words and lists
 // come from the PWA's words module; these stories hand them in as it would. Invented data, neutral names.
 const NOW = Date.now();
-const agent = (id: string, o: Partial<AgentHelperView> = {}): HelperItem => ({
-  kind: 'agent', id,
-  agent: {
+const agent = (id: string, o: Partial<AgentHelperView> = {}): HelperItem => {
+  const view: AgentHelperView = {
     id, description: `Measure the ${id} sources`, agentType: 'general-purpose', model: 'Sonnet', effort: 'high', state: 'running',
     startedAt: NOW - 725_000, endedAt: null, lastActivityAt: NOW - 20_000, tokens: 41_000, summary: null, hasReport: false, ...o,
-  },
-});
+  };
+  return { kind: 'agent', id, agent: view, stateWord: AGENT_HELPER_STATE_WORDS[view.state] };
+};
+const CUT_NOTE = `The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`;
 const workflow = (id: string, o: Partial<WorkflowView> = {}): HelperItem => ({
   kind: 'workflow', id,
   workflow: {
@@ -23,7 +24,7 @@ const workflow = (id: string, o: Partial<WorkflowView> = {}): HelperItem => ({
 });
 
 const RUNNING: HelpersView = {
-  count: '3 running · 2 finished', notes: [],
+  count: '3 running · 2 finished', notes: [], cutNote: CUT_NOTE,
   main: [agent('server'), agent('transcript', { lastActivityAt: NOW - 11 * 60_000, tokens: 63_000 }), workflow('wf_00000000-aaa')],
   finished: [
     agent('panel', { state: 'done', startedAt: NOW - 400_000, endedAt: NOW - 148_000, summary: 'header facts only', hasReport: true }),
@@ -53,7 +54,7 @@ export const Running: Story = {};
 export const Stale: Story = {
   args: {
     view: {
-      count: '2 helpers', notes: ['live state not known: no news from the session for 41m'],
+      count: '2 helpers', notes: ['live state not known: no news from the session for 41m'], cutNote: CUT_NOTE,
       main: [agent('fixtures', { state: 'unmeasured' }), agent('release note', { state: 'unmeasured' })], finished: [],
     },
   },
@@ -63,7 +64,7 @@ export const Stale: Story = {
 export const States: Story = {
   args: {
     view: {
-      count: '1 running · 2 finished', notes: [],
+      count: '1 running · 2 finished', notes: [], cutNote: CUT_NOTE,
       main: [agent('fixtures', { agentType: 'Explore', model: 'Haiku', effort: null }), agent('release note', { state: 'unlisted', lastActivityAt: NOW - 180_000 })],
       finished: [
         agent('migration order', { state: 'stopped', startedAt: NOW - 30_000, endedAt: NOW - 8_000 }),
