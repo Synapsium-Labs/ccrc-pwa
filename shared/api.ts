@@ -15,7 +15,7 @@ import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { ReadFailure } from './agent-protocol.js';
 import type { PerfHealth } from './perf.js';
-import type { HelperFrameMembers, WorkflowView } from './workflows.js';
+import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
@@ -4948,15 +4948,16 @@ export type SessionStreamMsg =
        *  absence renders the strip as it always did. */
       touchedAt?: number }
   /** D-5560: the workflows Claude Code is running in this session, plus any
-   *  that finished in the last `WORKFLOW_EVICT_MS` (`shared/workflows.ts`).
+   *  that finished in the last `HELPER_FINISHED_KEEP_MS` (ten minutes since H2, D-8872; `shared/workflows.ts`).
    *  Sent on connect whenever the session has a workflow directory (an empty
    *  list included, so a reconnecting client drops rows that finished while it
    *  was away), then on change only; never for a session that has run none.
    *  `unreadable: true` — this box could not list the session's workflow
    *  directory this pass: `workflows` is then the last rows it DID read (or
    *  none), and the panel says so rather than reading an empty list as "nothing
-   *  running". Absent from an older server: no frame, no panel. */
-  | ({ type: 'workflows'; workflows: WorkflowView[]; unreadable?: true } & HelperFrameMembers)
+   *  running". Absent from an older server: no frame, no panel. `HelperReportAnswer` (H2, D-8872) is the answer to the
+   *  client's `helper-report` request: one finished helper's report, on demand, never on this frame. */
+  | ({ type: 'workflows'; workflows: WorkflowView[]; unreadable?: true } & HelperFrameMembers) | HelperReportAnswer
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -4972,8 +4973,9 @@ export type SessionStreamMsg =
 /** PWA → server, on the per-session socket. `visible` is the operator's own
  *  report that this session is on screen and focused; the server suppresses
  *  pushes for it while any client says so — for as long as the claim stays
- *  fresh (see the two constants below). */
-export type SessionClientMsg = { type: 'visible'; visible: boolean };
+ *  fresh (see the two constants below). `HelperReportRequest` (H2, D-8872) asks
+ *  for one finished helper's report (`shared/workflows.ts`). */
+export type SessionClientMsg = { type: 'visible'; visible: boolean } | HelperReportRequest;
 
 /**
  * The presence heartbeat, defined ONCE for both halves because they are one

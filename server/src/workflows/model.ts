@@ -29,13 +29,13 @@ import {
   HELPER_SUMMARY_MAX_BYTES,
   WORKFLOW_AGENTS_MAX,
   WORKFLOW_AGENT_TYPE,
-  WORKFLOW_EVICT_MS,
   WORKFLOW_KEPT_AGENTS_MAX,
   isFinalHelperState,
   isHelperId,
   type AgentHelperState,
   type AgentHelperView,
   type HelperFrameMembers,
+  type HelperReportAnswer,
   type HelpersUnmeasured,
   type WorkflowAgentState,
   type WorkflowAgentView,
@@ -447,12 +447,35 @@ export function summaryView(id: string, f: SummaryFacts, summaryMtime: number, n
   };
 }
 
-/** The rows to show at `now`: every running one, and a finished one until
- *  `WORKFLOW_EVICT_MS` after its end — oldest start first, unknown starts last. */
-export function selectRows(views: readonly WorkflowView[], now: number): WorkflowView[] {
-  return views
-    .filter((v) => v.state === 'running' || (v.endedAt !== null && now - v.endedAt < WORKFLOW_EVICT_MS))
-    .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+/**
+ * The workflow rows to send at `now` (H2, D-8872; spec §4.3): every running one, and a finished one while `isFinishedKept`
+ * keeps it by its end time — the keep's one clock, which the Agent arm asks too. Claude Code's own 30 s retired here. A
+ * finished row with no readable end time is drawn in the reading that decided it and leaves with the next (`noEndShown`,
+ * the Agent arm's rule; review 2961 F8): `summaryView` always gives one, so it guards the type's null. At most
+ * `HELPER_KEPT_MAX` finished rows, the newest by end time (a null end ranks newest, as it was decided this reading), each
+ * cut to `WORKFLOW_KEPT_AGENTS_MAX` agents. Oldest start first, unknown starts last.
+ */
+export function keepWorkflows(views: readonly WorkflowView[], now: number, noEndShown: ReadonlySet<string>):
+  { rows: WorkflowView[]; noEndShown: ReadonlySet<string> } {
+  const shown = new Set<string>();
+  const finals: WorkflowView[] = [];
+  const rows: WorkflowView[] = [];
+  for (const v of views) {
+    if (v.state === 'running') { rows.push(v); continue; }
+    if (v.endedAt === null) {
+      if (noEndShown.has(v.id)) continue; // drawn once already: it leaves with this reading
+      shown.add(v.id);
+    } else if (!isFinishedKept(v.endedAt, now)) continue;
+    finals.push(v);
+  }
+  const rank = (v: WorkflowView): number => v.endedAt ?? Infinity;
+  const kept = finals.sort((a, b) => rank(b) - rank(a) || (a.id < b.id ? -1 : 1)).slice(0, HELPER_KEPT_MAX);
+  const keptIds = new Set(kept.map((v) => v.id));
+  return {
+    rows: [...rows, ...kept.map(capKeptWorkflow)]
+      .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    noEndShown: new Set([...shown].filter((id) => keptIds.has(id))),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -679,11 +702,10 @@ export interface AgentArm {
   memory: HelperMemory;
 }
 
-/** Whether a finished helper or workflow is still kept, by its END TIME (review 2900 F5): the keep's one owner. An end
- *  time that cannot be read is not kept HERE. The rule that a final row with no readable end time is drawn once and leaves
- *  with the next reading is not this function's: for an Agent row it is `decideAgentHelpers`'s `noEndShown` memory, and H2,
- *  which moves the workflow keep onto this function, applies the same draw-once rule to a finished workflow (spec §4.3;
- *  review 2961 F8). */
+/** Whether a finished helper or workflow is still kept, by its END TIME (review 2900 F5): the keep's one owner, asked by
+ *  `decideAgentHelpers`, by `keepWorkflows` and by `read.ts`'s `finishedView` (H2, D-8872). An end time that cannot be read
+ *  is not kept HERE. The rule that a final row with no readable end time is drawn once and leaves with the next reading is
+ *  not this function's: it is `decideAgentHelpers`'s and `keepWorkflows`' `noEndShown` memory (spec §4.3; review 2961 F8). */
 export const isFinishedKept = (endedAt: number | null, now: number): boolean => endedAt !== null && now - endedAt < HELPER_FINISHED_KEEP_MS;
 
 /** A kept (finished) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` agents, running and failed first, and says what it left out. */
@@ -986,4 +1008,50 @@ export function helpersFrame(a: {
     ...(a.readEvery !== null ? { readEvery: a.readEvery } : {}),
   };
   return { due: frameDue({ workflows: a.read.kind, unreadable: w.unreadable, knownHelpers: a.arm.known, sentBefore: a.sentBefore }), frame };
+}
+
+// ---------------------------------------------------------------------------
+// Session helpers H2 (D-8872; spec 2026-11-19-session-helpers-design §4.3, §8, J10): reports travel on request.
+
+/** One report the stream holds, with the end fact it came with (its outcome, time, source and summary), so it is kept only
+ *  while the fold's end for its id is that same fact. */
+export interface HeldReport {
+  text: string;
+  cut: boolean;
+  end: { outcome: HelperEnd['outcome']; at: number | null; from: HelperEnd['from']; summary: string | null };
+}
+
+const sameEnd = (a: HeldReport['end'], b: HelperEnd): boolean =>
+  a.outcome === b.outcome && a.at === b.at && a.from === b.from && a.summary === b.summary && b.hasReport;
+
+/**
+ * The reports to hold after a reading's facts were folded (`folded`): each incoming fact's report (masked, then cut at
+ * `HELPER_REPORT_MAX_BYTES` at parse time, reviews 2900 F7 and F15) is held while the fold's end for its id is that fact,
+ * so a later end replaces it and an earlier one arriving late does not. A held report whose id's end moved on, or whose id
+ * the fold forgot, is dropped. At most `HELPER_KEPT_MAX` are held, the newest by end time (a null time ranks newest), the
+ * order the finished fold keeps rows by, so a row the keep still draws keeps its report. `prev` is never mutated.
+ */
+export function holdReports(prev: ReadonlyMap<string, HeldReport>, facts: readonly HelperFact[], folded: ReadonlyMap<string, HelperIdFacts>): Map<string, HeldReport> {
+  const out = new Map<string, HeldReport>();
+  for (const [id, h] of prev) {
+    const end = folded.get(id)?.end ?? null;
+    if (end !== null && sameEnd(h.end, end)) out.set(id, h);
+  }
+  for (const f of facts) {
+    if (f.status === 'async_launched' || f.report === null || f.report === '') continue;
+    const end = folded.get(f.id)?.end ?? null;
+    const mine = { outcome: HELPER_OUTCOME[f.status], at: f.at, from: f.source, summary: f.summary };
+    if (end !== null && sameEnd(mine, end)) out.set(f.id, { text: f.report, cut: f.reportCut, end: mine });
+  }
+  if (out.size <= HELPER_KEPT_MAX) return out;
+  const rank = (h: HeldReport): number => h.end.at ?? Infinity;
+  const newest = [...out].sort(([a, x], [b, y]) => rank(y) - rank(x) || (a < b ? -1 : 1)).slice(0, HELPER_KEPT_MAX);
+  return new Map(newest);
+}
+
+/** The answer to a `helper-report` request: the held report of a row the last reading DREW with `hasReport`, else
+ *  `report: null` (an unknown id, or one evicted from the keep), never a stale or another helper's text. */
+export function reportAnswer(held: ReadonlyMap<string, HeldReport>, drawn: readonly AgentHelperView[], id: string): HelperReportAnswer {
+  const h = drawn.some((a) => a.id === id && a.hasReport) ? held.get(id) : undefined;
+  return h === undefined ? { type: 'helper-report', id, report: null, cut: false } : { type: 'helper-report', id, report: h.text, cut: h.cut };
 }

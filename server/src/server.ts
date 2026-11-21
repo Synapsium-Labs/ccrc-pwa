@@ -27,6 +27,7 @@ import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
+import { isHelperId } from '../../shared/workflows.js';
 import { buildAgreement, defaultCachePath, inventoryBuildAgreement, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -188,9 +189,11 @@ import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
  * so a member added to it lands here as a compile error rather than as a frame
  * silently ignored.
  */
-function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
+export function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
   if (raw === null || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
+  // H2 (D-8872): one finished helper's report, asked by its agent id (`isHelperId`, the one rule); anything else is null.
+  if (o['type'] === 'helper-report') return isHelperId(o['id']) ? { type: 'helper-report', id: o['id'] } : null;
   if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
   return { type: 'visible', visible: o['visible'] };
 }
@@ -2401,7 +2404,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m !== null) viewers.setVisible(token, m.visible ? id : null);
+        if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
+        else if (m?.type === 'helper-report') stream.helperReport(m.id);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {

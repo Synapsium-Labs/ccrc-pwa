@@ -27,13 +27,18 @@ import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import { walkBack } from '../backread.js';
 import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
-import { WORKFLOW_EVICT_MS, isFinalHelperState, isHelperId, type AgentHelperState, type WorkflowView } from '../../../shared/workflows.js';
+import { isFinalHelperState, isHelperId, type AgentHelperState, type HelperReportAnswer, type WorkflowView } from '../../../shared/workflows.js';
 import type { HelperFact } from '../transcript/parse.js';
 import {
   decideAgentHelpers,
   emptyHelperMemory,
   foldHelperFacts,
+  holdReports,
   isAgentHelper,
+  isFinishedKept,
+  keepWorkflows,
+  reportAnswer,
+  type HeldReport,
   isWorkflowAgentName,
   lastLineTime,
   parseHelperMeta,
@@ -55,7 +60,6 @@ import {
   runningView,
   RUN_ID_RE,
   scriptNameFor,
-  selectRows,
   splitLines,
   summaryView,
   workflowLastActivity,
@@ -137,6 +141,8 @@ export class SessionWorkflows {
   private runCursor = 0;
   /** Agent reads left this tick (tails, metas, stats of starts). */
   private budget = 0;
+  /** H2 (D-8872): finished runs with no readable end time already drawn once (`keepWorkflows`' memory). */
+  private noEndShown: ReadonlySet<string> = new Set();
 
   /** H1b: the session's Agent helpers, read beside its workflows and rebuilt with them when the session dir changes. */
   private readonly helpers: SessionHelpers;
@@ -151,6 +157,9 @@ export class SessionWorkflows {
     const workflows = await this.read(proc, now);
     return { workflows, helpers: await this.helpers.read({ ...agents, proc, now }) };
   }
+
+  /** H2 (D-8872): the answer to a `helper-report` request, from what the last reading held and drew. */
+  reportOf(id: string): HelperReportAnswer { return this.helpers.reportOf(id); }
 
   private get runsDir(): string { return path.join(this.sessionDir, 'subagents', 'workflows'); }
   private summaryPath(runId: string): string { return path.join(this.sessionDir, 'workflows', `${runId}.json`); }
@@ -222,17 +231,21 @@ export class SessionWorkflows {
         views.push(run.view);
       }
     }
-    return { kind: 'read', workflows: selectRows(views, now) };
+    const kept = keepWorkflows(views, now, this.noEndShown);
+    this.noEndShown = kept.noEndShown;
+    return { kind: 'read', workflows: kept.rows };
   }
 
   /** The cheap verdicts and the journal; a running run is finished by `read`. */
   private async decideAndFold(id: string, run: RunCache, proc: Proc, now: number): Promise<{ kind: 'view'; view: WorkflowView | null } | { kind: 'running'; unread: boolean }> {
     const held = (view: WorkflowView | null) => ({ kind: 'view' as const, view });
-    // A run already ruled finished-and-dropped or interrupted is not re-read
-    // every tick: only every RESTAT_EVERY-th, to catch a resume in place. An
-    // never-decided one waits on the same cadence while the process stays unmeasured.
+    // A run already ruled finished (kept or dropped) or interrupted is not re-read
+    // every tick: only every RESTAT_EVERY-th, to catch a resume in place. A kept
+    // finished run is held as read, and `keepWorkflows` drops it at its end time
+    // plus the keep, so it costs no stat per reading (H2, D-8872; review 2900 F5).
+    // A never-decided one waits on the same cadence while the process stays unmeasured.
     const quiet = run.decision === 'interrupted' || (run.decision === 'undecided' && proc.kind === 'unmeasured')
-      || (run.decision === 'finished' && run.view === null);
+      || run.decision === 'finished';
     if (quiet && this.tick - run.statTick < RESTAT_EVERY) return held(run.view);
     run.statTick = this.tick - run.stagger; // brought forward once, then every RESTAT_EVERY
     run.stagger = 0;
@@ -423,11 +436,13 @@ export class SessionWorkflows {
     return run.summary;
   }
 
-  /** A finished run's row while it is inside Claude Code's 30 s; null after,
-   *  and the summary is never read for a run that finished before that. */
+  /** A finished run's row while the keep may still hold it; null after, and the summary is never read for a run that
+   *  finished before that. The summary's mtime is never earlier than the end it records (it is written at the end), so a
+   *  run `isFinishedKept` drops at its mtime is dropped at its end too: the keep's one clock decides (H2, D-8872), and
+   *  `keepWorkflows` rules on the row's own end time. */
   private async finishedView(id: string, run: RunCache, now: number): Promise<WorkflowView | null> {
     const at = run.summaryMtime!;
-    if (now - at >= WORKFLOW_EVICT_MS) return null;
+    if (!isFinishedKept(at, now)) return null;
     const facts = await this.summaryOf(id, run);
     // A summary that is not one (torn mid-write, or a status outside the three)
     // has no state to show: the row waits for the next pass rather than guessing.
@@ -490,6 +505,10 @@ interface HelperCache {
  */
 export class SessionHelpers {
   private facts: Map<string, HelperIdFacts> = new Map();
+  /** H2 (D-8872): the reports of the fold's own end facts, at most `HELPER_KEPT_MAX` (`model.ts#holdReports`). */
+  private reports: ReadonlyMap<string, HeldReport> = new Map();
+  /** The rows the last reading drew: a report is answered only for one of them (`model.ts#reportAnswer`). */
+  private drawn: AgentArm['agents'] = [];
   private memory: HelperMemory = emptyHelperMemory();
   private readonly cache = new Map<string, HelperCache>();
   /** Each id's state at the last decision: what "not final" means for the tier. */
@@ -505,6 +524,7 @@ export class SessionHelpers {
     this.tick++;
     let budget = HELPER_READS_PER_TICK;
     this.facts = foldHelperFacts(this.facts, i.facts);
+    this.reports = holdReports(this.reports, i.facts, this.facts);
     const entries = i.roster.kind === 'usable' ? i.roster.entries : [];
     const nameOf = new Map<string, string>();
     for (const e of entries) if (isHelperId(e.id)) nameOf.set(e.id, e.name);
@@ -598,11 +618,15 @@ export class SessionHelpers {
     }
     const arm = decideAgentHelpers({ now: i.now, roster: i.roster, proc: i.proc, facts: this.facts, metas, memory: this.memory });
     this.memory = arm.memory;
+    this.drawn = arm.agents;
     this.last = new Map(arm.agents.map((a) => [a.id, a.state]));
     // Forget an id nothing names any more: not listed, no fact, no row.
     for (const id of [...this.cache.keys()]) if (!nameOf.has(id) && !this.facts.has(id) && !this.last.has(id)) this.cache.delete(id);
     return { arm, readEvery: refreshed < open.length ? { refreshed, of: open.length } : null };
   }
+
+  /** H2 (D-8872): the answer to a `helper-report` request for `id`. */
+  reportOf(id: string): HelperReportAnswer { return reportAnswer(this.reports, this.drawn, id); }
 
   private metaOf(id: string): { path: 'agent'; agentType: string | null } | undefined {
     const m = this.cache.get(id)?.meta;
