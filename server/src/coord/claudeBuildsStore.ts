@@ -11,10 +11,10 @@ import {
 
 interface Row {
   build: string; source: string; capture: string; cwd: number; seenAt: number; attempts: number;
-  lastAttemptAt: number | null; notSent: string | null; verdictAt: number | null; output: string | null;
+  lastAttemptAt: number | null; notSent: string | null; verdictAt: number | null; output: string | null; fails: number;
 }
 
-const COLUMNS = 'build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output';
+const COLUMNS = 'build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails';
 
 /** Every row, newest build first. A row the table's CHECKs let through but this build cannot read (a build off the grammar)
  *  is left out, so no reader trusts what it cannot name. Throws when the table cannot be read: the caller says so. */
@@ -26,7 +26,7 @@ export function claudeBuildRecords(db: DatabaseSync): ClaudeBuildRecord[] {
     const notSent = r.notSent !== null && r.notSent in BUILD_CAPTURE_NOT_SENT_MAP ? r.notSent as BuildCaptureNotSent : null;
     out.push({
       build: r.build, source: r.source as ClaudeBuildRecord['source'], capture: r.capture as ClaudeBuildRecord['capture'],
-      cwd: r.cwd === 1, seenAt: r.seenAt, attempts: r.attempts, lastAttemptAt: r.lastAttemptAt, notSent, verdictAt: r.verdictAt, output: r.output,
+      cwd: r.cwd === 1, seenAt: r.seenAt, attempts: r.attempts, lastAttemptAt: r.lastAttemptAt, notSent, verdictAt: r.verdictAt, output: r.output, fails: r.fails,
     });
   }
   return out.sort((a, b) => compareClaudeVersions(b.build, a.build));
@@ -49,14 +49,16 @@ export function markClaudeBuildAttempt(db: DatabaseSync, build: string, now: num
   ).run(sent ? 1 : 0, now, sent ? null : tried, build).changes) === 1;
 }
 
-/** A capture's verdict, on a `queued` row only (a verdict never overwrites another). False when no queued row names it. */
+/** A capture's verdict, on a `queued` row only (a verdict never overwrites another); a failure counts one more `fails`, the
+ *  retry ceiling's count (migration 119). False when no queued row names it. */
 export function recordClaudeBuildVerdict(db: DatabaseSync, r: BuildCaptureResult, now: number): boolean {
-  return Number(db.prepare("UPDATE claude_builds SET capture = ?, cwd = ?, output = ?, verdictAt = ? WHERE build = ? AND capture = 'queued'")
-    .run(r.pass ? 'pass' : 'fail', r.pass && r.cwd ? 1 : 0, r.output, now, r.build).changes) === 1;
+  return Number(db.prepare("UPDATE claude_builds SET capture = ?, cwd = ?, output = ?, verdictAt = ?, fails = fails + ? WHERE build = ? AND capture = 'queued'")
+    .run(r.pass ? 'pass' : 'fail', r.pass && r.cwd ? 1 : 0, r.output, now, r.pass ? 0 : 1, r.build).changes) === 1;
 }
 
-/** The operator's **Capture again**: a `fail` row goes back to `queued`, its verdict and output cleared and its retry clock
- *  reset, so the next pass sends it. */
+/** **Capture again**, the operator's and the capture lane's automatic retry alike (the one writer of the move): a `fail` row
+ *  goes back to `queued`, its verdict and output cleared and its retry clock reset, so the next pass sends it. Its `fails`
+ *  count is kept, so the retry ceiling still counts. */
 export type ClaudeBuildRequeue = 'queued' | 'unknown-build' | 'not-failed';
 export function requeueClaudeBuild(db: DatabaseSync, build: string): ClaudeBuildRequeue {
   const changed = Number(db.prepare(

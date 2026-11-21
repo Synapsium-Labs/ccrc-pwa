@@ -11,8 +11,10 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  APPROVAL_CLASS_MAP, FORBIDDEN_PATTERNS, approvalClass, isApprovalClass, rootsForChild, type ApprovalClass, type ApprovalCtx,
+  APPROVAL_CLASS_MAP, FORBIDDEN_PATTERNS, approvalBuildRoute, approvalClass, classOnBuild, isApprovalClass, rootsForChild,
+  type ApprovalClass, type ApprovalCtx,
 } from '../src/coord/approvalguard.js';
+import { BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
 import {
   BASH_DOCUMENTED_VARIABLES, BASH_STARTUP_VARIABLES, BASH_VARIABLES, ENV_VARIABLES, POSIX_SPECIAL_PARAMETERS,
   ZSH_DOCUMENTED_VARIABLES, ZSH_STARTUP_VARIABLES, ZSH_VARIABLES, isUserVariable,
@@ -44,6 +46,26 @@ describe('the class map (D-5299)', () => {
     for (const v of Object.values(APPROVAL_CLASS_MAP)) expect(v.length).toBeGreaterThan(10);
     expect(isApprovalClass('ordinary')).toBe(true);
     expect(isApprovalClass('allow')).toBe(false);
+  });
+});
+
+describe('a build not yet trusted is routed, but never allowed (slug untrusted-build-routes-escalate)', () => {
+  it('approvalBuildRoute: trusted carries its cwd; a build the record names is held as escalate; no build or no record is refused', () => {
+    expect(approvalBuildRoute({ kind: 'trusted', cwd: true })).toEqual({ kind: 'trusted', cwd: true });
+    expect(approvalBuildRoute({ kind: 'trusted', cwd: false })).toEqual({ kind: 'trusted', cwd: false });
+    const words = Object.fromEntries(BUILD_UNTRUSTED_REASONS.map((reason) => [reason, approvalBuildRoute({ kind: 'untrusted', reason }).kind]));
+    expect(words).toEqual({
+      unread: 'refused', 'record-unreadable': 'refused',
+      'not-captured': 'held-escalate', 'capture-queued': 'held-escalate', 'capture-failed': 'held-escalate',
+    });
+  });
+  it('classOnBuild: ordinary is escalate on a build not yet trusted; forbidden and escalate stay; a trusted build keeps every class', () => {
+    const held = approvalBuildRoute({ kind: 'untrusted', reason: 'capture-queued' });
+    const trusted = approvalBuildRoute({ kind: 'trusted', cwd: true });
+    expect(classOnBuild('ordinary', held)).toBe('escalate');
+    expect(classOnBuild('escalate', held)).toBe('escalate');
+    expect(classOnBuild('forbidden', held)).toBe('forbidden');
+    for (const c of ['ordinary', 'escalate', 'forbidden'] as const) expect(classOnBuild(c, trusted)).toBe(c);
   });
 });
 

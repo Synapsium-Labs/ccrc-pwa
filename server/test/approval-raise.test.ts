@@ -104,27 +104,36 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     expect(body).toContain('Allow it once');
   });
 
-  it('step 10: a liveVersionOf that answers null is version-unverified, unread; an uncaptured build names itself (D-8289)', async () => {
+  it('step 10: a liveVersionOf that answers null is version-unverified, unread (D-8289)', async () => {
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
     expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => null }), NOW)).toEqual<ApprovalRaiseVerdict>({
       kind: 'version-unverified', trust: 'unread', detail: "this child's live Claude Code build is not trusted: its Claude Code build could not be read",
     });
-    expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.299' }), NOW)).toEqual<ApprovalRaiseVerdict>({
-      kind: 'version-unverified', trust: 'not-captured', detail: "this child's live Claude Code build is not trusted: build 2.1.299 has no capture yet",
-    });
   });
 
-  it('step 10 reads the record (D-8289): a queued or failed capture refuses with its reason; a passed one mints', async () => {
+  it('step 10 reads the record (slug untrusted-build-routes-escalate): no capture, a queued or a failed one mints for the coordinator as escalate, unparked, its brief saying why; a passed one mints as classed', async () => {
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
     f.coord.noteClaudeBuildsSeen(['2.1.320', '2.1.321', '2.1.322'], NOW);
     f.coord.recordClaudeBuildVerdict({ build: '2.1.321', pass: false, cwd: false, output: 'replay: 1 failed' }, NOW);
     f.coord.recordClaudeBuildVerdict({ build: '2.1.322', pass: true, cwd: true, output: 'replay: 40 passed' }, NOW);
-    expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.320' }), NOW)).toMatchObject({ kind: 'version-unverified', trust: 'capture-queued' });
-    expect(await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.321' }), NOW)).toMatchObject({ kind: 'version-unverified', trust: 'capture-failed' });
-    expect((await q.raiseApproval(req(), raiseDeps(f, { liveVersionOf: async () => '2.1.322' }), NOW)).kind).toBe('minted');
-    expect(approvalCount(f.coord)).toBe(1);
+    const rowOf = async (version: string) => {
+      const v = await q.raiseApproval(req(), raiseDeps(f!, { liveVersionOf: async () => version }), NOW);
+      expect(v.kind, version).toBe('minted');
+      const r = f!.coord.approvalById((v as { id: number }).id);
+      return r.ok ? r.row : null;
+    };
+    for (const v of ['2.1.299', '2.1.320', '2.1.321']) expect(await rowOf(v), v).toMatchObject({ class: 'escalate', state: 'held', parkKey: null });
+    expect((await rowOf('2.1.322'))?.class).toBe('ordinary');
+    const bodies = (f.coord.db.prepare("SELECT body FROM mail WHERE subject LIKE 'approval:%' ORDER BY id").all() as { body: string }[]).map((b) => b.body);
+    expect(bodies).toHaveLength(4);
+    expect(bodies[0]).toContain('not trusted yet (build 2.1.299 has no capture yet)');
+    expect(bodies[1]).toContain('not trusted yet (build 2.1.320 is waiting for its capture on the test box)');
+    expect(bodies[2]).toContain('not trusted yet (build 2.1.321 failed its capture on the test box)');
+    for (const b of bodies.slice(0, 3)) expect(b).not.toContain('Allow it once');
+    expect(bodies[3]).not.toContain('not trusted yet');
+    expect(bodies[3]).toContain('Allow it once');
   });
 
   it('step 10: a record that cannot be read refuses record-unreadable, never trusts', async () => {

@@ -2,6 +2,7 @@ import path from 'node:path';
 import { ACCOUNT_DENY_SUBS, isTmpRootId, type ChildMark } from '../../../shared/api.js';
 import { isUserVariable } from './bash-variables.js';
 import { APPROVAL_INPUT_MAX_BYTES } from './redact.js';
+import type { BuildTrust } from '../../../shared/claudeBuildTrust.js';
 
 /**
  * THE APPROVAL CLASSIFIER (D-5299, coordinator-first routing spec 2026-10-17 §6.5): DEFAULT ESCALATE. Pure: no I/O,
@@ -101,6 +102,28 @@ export type ApprovalClass = keyof typeof APPROVAL_CLASS_MAP;
 
 export function isApprovalClass(v: unknown): v is ApprovalClass {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(APPROVAL_CLASS_MAP, v);
+}
+
+/** What a child's Claude Code build means for its permission prompt (the Overlord's "a new Claude Code release needs no
+ *  operator", `docs/superpowers/programs/overlord/claude-release-unattended.md`, slug untrusted-build-routes-escalate).
+ *  - `trusted`: routed as ever; the capture's `cwd` fact decides whether the request's `cwd` is read (`cwd`).
+ *  - `held-escalate`: a build that is a fact the record holds (no capture yet, waiting for one, or failed) is routed to the
+ *    coordinator too, but its class is never better than `escalate` (`classOnBuild`) and it is never parked, so NOTHING is
+ *    allowed through ccrc for it: its coordinator may deny it or hand it over, and the operator answers the rest in the
+ *    session, as before the build was routed. A hook allow on a build whose capture has not passed is what the stop rule
+ *    (coordinator-first spec §6.9) forbids; a deny or no decision leaves the prompt with the operator either way.
+ *  - `refused`: no build or no record to read (`unread`, `record-unreadable`) is refused `version-unverified` at mint. */
+export type ApprovalBuildRoute = { readonly kind: 'trusted'; readonly cwd: boolean } | { readonly kind: 'held-escalate' | 'refused' };
+
+export function approvalBuildRoute(trust: BuildTrust): ApprovalBuildRoute {
+  if (trust.kind === 'trusted') return { kind: 'trusted', cwd: trust.cwd };
+  return trust.reason === 'unread' || trust.reason === 'record-unreadable' ? { kind: 'refused' } : { kind: 'held-escalate' };
+}
+
+/** The class a request is held under on its build's route: the classifier's, except that `ordinary` is `escalate` on a build
+ *  not yet trusted (`forbidden` stays `forbidden`). */
+export function classOnBuild(cls: ApprovalClass, route: ApprovalBuildRoute): ApprovalClass {
+  return route.kind !== 'trusted' && cls === 'ordinary' ? 'escalate' : cls;
 }
 
 /** The child's own roots, and the fleet box's `$HOME` that `~` and `$HOME` expand to. */

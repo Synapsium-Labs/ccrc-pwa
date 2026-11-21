@@ -5,20 +5,28 @@
 // test box transport, and lands the verdict the answer's one reader (`readBuildCaptureResult`) accepts. Every choice is
 // `shared/claudeBuildTrust.ts`'s; this file only acts on it.
 //
+// A FAILURE IS RETRIED BEFORE ANYONE IS TOLD (the Overlord's "a new Claude Code release needs no operator",
+// `docs/superpowers/programs/overlord/claude-release-unattended.md`, slug capture-retry-ceiling). Each pass first puts every
+// failed build whose time has come back in the queue (`capturesToRetry`: an hour after its first failure, two after its
+// second), through the same writer as the operator's Capture again. Only the failed verdict that reaches the ceiling
+// (`captureStandingOf` answers `given-up`) tells the operator: one push, and one Waiting on you item naming the act only they
+// can do (`untrustedBuildItemOf`). Every other open item settles on the next pass (`untrustedBuildItemsToSettle`).
+//
 // NO VERDICT IS NOT A FAILURE. A box that is not there, a runner that is not built, a throw or an answer off its shape keeps
 // the build `queued`, its retry clock stamped, so it is tried again after the spacing. ONLY A JOB THAT WENT OUT IS AN
 // ATTEMPT: a throw, an off-shape answer or `unanswered` counts one; `no-test-box` and `no-runner` sent nothing, so they count
 // none and the row records why (`notSent`), which the console says instead of "sent N times". Only a verdict the reader
-// accepted moves the row, and a `fail` raises ONE push notice opening Settings, keyed by build and attempt (`hasNotice`, read before the
-// write), so a restart never repeats it and an operator's re-capture that fails again raises its own.
+// accepted moves the row, and a `fail` that gives up raises ONE push notice opening Settings, keyed by build and attempt
+// (`hasNotice`, read before the write), so a restart never repeats it and an operator's re-capture that fails again raises its own.
 //
 // `watch.ts` owns one of these and calls `sweep()` from its tick beside the roll, never awaited.
 import {
-  BUILD_CAPTURE_OUTPUT_MAX, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds, type BuildCaptureJob, type BuildCaptureNotSent,
+  BUILD_CAPTURE_OUTPUT_MAX, captureStandingOf, capturesToRetry, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds,
+  type BuildCaptureJob, type BuildCaptureNotSent, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import {
-  openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, UNTRUSTED_BUILD_SETTLED_NOTE, untrustedBuildItemsToSettle,
+  openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemOf, untrustedBuildItemsToSettle,
 } from './coord/untrustedBuildItem.js';
 import { notify, type NoticeDeps } from './notice.js';
 import type { TestboxBlock } from './testbox.js';
@@ -57,7 +65,7 @@ export function testboxCaptureTransport(block: () => TestboxBlock | null): Build
 
 export interface BuildCaptureLaneDeps extends NoticeDeps {
   readonly coord?: Pick<WatcherCoordPort, 'claudeBuilds' | 'noteClaudeBuildsSeen' | 'markClaudeBuildAttempt'
-    | 'recordClaudeBuildVerdict' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem'> | undefined;
+    | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
   /** Absent (a test, a script): rows are recorded and no job is sent. */
   readonly buildCapture?: BuildCaptureTransport | undefined;
 }
@@ -94,7 +102,12 @@ export class BuildCaptureLane {
       coord.noteClaudeBuildsSeen(unrecordedBuilds(records, versions), at);
       records = coord.claudeBuilds();
     }
-    this.settleCapturedItems(coord, records, at);
+    const retry = capturesToRetry(records, at);
+    if (retry.length > 0) {
+      for (const b of retry) coord.requeueClaudeBuild(b);
+      records = coord.claudeBuilds();
+    }
+    this.settleItems(coord, records, at);
     const transport = d.buildCapture;
     const build = transport === undefined ? null : nextCaptureJob(records, at);
     if (transport === undefined || build === null) return;
@@ -110,28 +123,41 @@ export class BuildCaptureLane {
       return;
     }
     if (!coord.recordClaudeBuildVerdict(result, this.now()) || result.pass) return;
-    const attempts = coord.claudeBuilds().find((r) => r.build === build)?.attempts ?? 0;
-    this.raiseFailure(d, build, attempts);
+    // A failure ccrc will capture again tells nobody: only the verdict that gives up does.
+    const row = coord.claudeBuilds().find((r) => r.build === build);
+    if (row === undefined || captureStandingOf(row).kind !== 'given-up') return;
+    this.raiseGivenUp(d, coord, row, at);
   }
 
-  /** Approvals PR 2 (Task 2.2): each pass, the open untrusted-build items whose build the record now trusts settle (L1's
+  /** Each pass, the open untrusted-build items whose build ccrc has not given up on settle, each with its note (L1's
    *  `untrustedBuildItemsToSettle` decides; this acts). A move that is refused (the item moved meanwhile) is left. */
-  private settleCapturedItems(coord: NonNullable<BuildCaptureLaneDeps['coord']>, records: Parameters<typeof untrustedBuildItemsToSettle>[1], at: number): void {
+  private settleItems(coord: NonNullable<BuildCaptureLaneDeps['coord']>, records: readonly ClaudeBuildRecord[], at: number): void {
     const open = openUntrustedBuildItems(coord.itemsFor(UNTRUSTED_BUILD_ITEM_PROGRAMME, at).open);
     for (const item of untrustedBuildItemsToSettle(open, records)) {
-      coord.moveItem(item.id, 'settle', 'ccrc', { note: UNTRUSTED_BUILD_SETTLED_NOTE }, at, { programmeHasOpenRun: false });
+      coord.moveItem(item.id, 'settle', 'ccrc', { note: item.note }, at, { programmeHasOpenRun: false });
     }
   }
 
-  /** The failure's notice: one push opening Settings, keyed by build and attempt. A store that cannot answer the dedupe
-   *  read costs the dedupe only: a repeat beats silence (the disk alarm's rule). */
-  private raiseFailure(d: BuildCaptureLaneDeps, build: string, attempts: number): void {
-    const dedupeKey = `claude-build-capture-failed:${build}:${attempts}`;
-    try { if (d.coord?.hasNotice('coord', '', dedupeKey) === true) return; } catch { /* send it */ }
+  /** ccrc has given up on `row`: its Waiting on you item (L1's `untrustedBuildItemOf`, none while one is open for the build;
+   *  the read and the raise run with no await between), then one push opening Settings, keyed by build and attempt. A store
+   *  that cannot answer the dedupe read costs the dedupe only: a repeat beats silence (the disk alarm's rule). A raise that
+   *  throws is logged and never stops the push. */
+  private raiseGivenUp(d: BuildCaptureLaneDeps, coord: NonNullable<BuildCaptureLaneDeps['coord']>, row: ClaudeBuildRecord, at: number): void {
+    const { build } = row;
+    try {
+      const open = openUntrustedBuildItems(coord.itemsFor(UNTRUSTED_BUILD_ITEM_PROGRAMME, at).open);
+      const input = untrustedBuildItemOf(new Set(open.map((i) => i.build)), row);
+      if (input !== null) coord.raiseItem(input, at, 'ccrc');
+    } catch (err) {
+      console.warn(`ccrc-server: build capture: the item for ${build} was not raised (${err instanceof Error ? err.message : String(err)})`);
+    }
+    const dedupeKey = `claude-build-capture-failed:${build}:${row.attempts}`;
+    try { if (coord.hasNotice('coord', '', dedupeKey)) return; } catch { /* send it */ }
     notify(d, {
-      kind: 'coord', sessionId: '', runId: null, title: `Claude Code ${build} failed its capture`,
-      body: `The replay tests failed on the test box, so ${build} stays untrusted and children on it are refused approvals. `
-        + `Settings › Automation › Test box shows the output (its last ${BUILD_CAPTURE_OUTPUT_MAX} characters) and Capture again.`,
+      kind: 'coord', sessionId: '', runId: null, title: `Claude Code ${build} failed its capture ${row.fails} times`,
+      body: `The replay tests failed on the test box each time, so ccrc has stopped capturing ${build} by itself, and nothing is `
+        + 'allowed through ccrc for a child on it. Settings › Automation › Test box shows the output (its last '
+        + `${BUILD_CAPTURE_OUTPUT_MAX} characters) and Capture again.`,
     }, 'push', { tag: 'claude-build-capture', dedupeKey, url: '/settings', lane: 'build capture', degraded: 'capture verdict recorded, feed archive degraded' });
   }
 }

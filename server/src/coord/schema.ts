@@ -4237,6 +4237,23 @@ export const MIGRATIONS: readonly string[] = [
     OR (endBasis = 'backfill-unmeasured' AND endedAt IS NULL)
   );
   `,
+
+  // ── 119: user_version 118 -> 119 ──────────────────────────────────────────
+  // A new Claude Code build needs no operator (Overlord, `docs/superpowers/programs/overlord/claude-release-unattended.md`,
+  // slug capture-retry-ceiling): `claude_builds.fails` counts a build's failed capture verdicts. Its one writer is
+  // `recordClaudeBuildVerdict`; its reader is `shared/claudeBuildTrust.ts#captureStandingOf`, which captures a failed build
+  // again by itself until the count reaches the ceiling, and only then asks the operator. The UPDATE counts the one
+  // failure every failed row already carries, so a build that failed before this entry is retried like any other.
+  // ONE COLUMN WITH A DEFAULT, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its reads and writes name their columns and never this one. The slot is the next free
+  // one by position on `main` (77a1fefe46 holds 118); whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 118, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claude_builds ADD COLUMN fails INTEGER NOT NULL DEFAULT 0;
+  UPDATE claude_builds SET fails = 1 WHERE capture = 'fail';
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

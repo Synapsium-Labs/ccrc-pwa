@@ -1,6 +1,7 @@
 // D-8289 (plan docs/superpowers/plans/2026-11-11-new-build-capture.md): the capture queue. Each pass records a row for every
 // build a session runs that has none (a new build and the backfill alike), sends at most one job, newest build first,
-// through the test box transport, and lands its verdict. A failure stays untrusted and raises one notice. The transport here
+// through the test box transport, and lands its verdict. A failure is captured again by itself, and only the one that gives
+// up raises a notice (slug capture-retry-ceiling). The transport here
 // is a FAKE: nothing reaches a test box, and no Claude Code runs.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
@@ -11,7 +12,9 @@ import {
   BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, testboxCaptureTransport, type BuildCaptureAnswer, type BuildCaptureTransport,
 } from '../src/buildCaptureLane.js';
 import type { TestboxBlock } from '../src/testbox.js';
-import { BUILD_CAPTURE_RETRY_MS, buildTrustOf, captureBlockedBy, type BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
+import {
+  BUILD_CAPTURE_FAIL_CEILING, BUILD_CAPTURE_RETRY_MS, buildTrustOf, captureBlockedBy, captureRetryAfterMs, type BuildCaptureJob,
+} from '../../shared/claudeBuildTrust.js';
 import type { NotifyEvent } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -81,29 +84,59 @@ describe('the capture queue (D-8289)', () => {
     expect(t.jobs, 'inside the minute of the last pass').toHaveLength(2);
   });
 
-  it('a failure stays untrusted and raises one push notice that opens Settings; a later pass raises none', async () => {
+  it('a failure is captured again by itself, an hour and then two later; only the third raises one push notice that opens Settings (slug capture-retry-ceiling)', async () => {
     const t = fake(fail);
     const s = await setup(t);
     await s.lane.sweep(['2.1.321']);
-    expect(row(s.coord, '2.1.321')).toMatchObject({ capture: 'fail', cwd: false, output: 'replay: 1 failed\nStop: missing field' });
+    expect(row(s.coord, '2.1.321')).toMatchObject({ capture: 'fail', cwd: false, output: 'replay: 1 failed\nStop: missing field', fails: 1 });
     expect(buildTrustOf(s.coord.claudeBuilds(), '2.1.321')).toEqual({ kind: 'untrusted', reason: 'capture-failed' });
-    expect(s.notices).toHaveLength(1);
-    expect(s.notices[0]).toMatchObject({ title: 'Claude Code 2.1.321 failed its capture' });
+    expect(s.notices, 'a failure ccrc will retry tells nobody').toHaveLength(0);
     s.tick(BUILD_CAPTURE_SWEEP_MS);
     await s.lane.sweep(['2.1.321']);
-    expect(t.jobs).toEqual(['2.1.321']);
+    expect(t.jobs, 'inside the spacing').toHaveLength(1);
+    s.tick(captureRetryAfterMs(1) - BUILD_CAPTURE_SWEEP_MS);
+    await s.lane.sweep(['2.1.321']);
+    expect(t.jobs).toEqual(['2.1.321', '2.1.321']);
+    expect(row(s.coord, '2.1.321')).toMatchObject({ capture: 'fail', fails: 2, attempts: 2 });
+    expect(s.notices).toHaveLength(0);
+    s.tick(captureRetryAfterMs(2) - BUILD_CAPTURE_SWEEP_MS);
+    await s.lane.sweep(['2.1.321']);
+    expect(t.jobs, 'the second spacing is two hours').toHaveLength(2);
+    s.tick(BUILD_CAPTURE_SWEEP_MS);
+    await s.lane.sweep(['2.1.321']);
+    expect(t.jobs).toHaveLength(BUILD_CAPTURE_FAIL_CEILING);
+    expect(row(s.coord, '2.1.321')).toMatchObject({ capture: 'fail', fails: 3, attempts: 3 });
+    expect(s.notices).toHaveLength(1);
+    expect(s.notices[0]).toMatchObject({ title: 'Claude Code 2.1.321 failed its capture 3 times' });
+    s.tick(100 * BUILD_CAPTURE_RETRY_MS);
+    await s.lane.sweep(['2.1.321']);
+    expect(t.jobs, 'given up: nothing more by itself').toHaveLength(BUILD_CAPTURE_FAIL_CEILING);
     expect(s.notices).toHaveLength(1);
   });
 
-  it('the operator\'s re-capture sends the build again, and a second failure raises a second notice', async () => {
+  it('a failure the retry turns into a pass is trusted, and nobody was told', async () => {
+    const answers = [fail, pass];
+    const t = fake((job) => answers.shift()!(job));
+    const s = await setup(t);
+    await s.lane.sweep(['2.1.321']);
+    s.tick(captureRetryAfterMs(1));
+    await s.lane.sweep(['2.1.321']);
+    expect(buildTrustOf(s.coord.claudeBuilds(), '2.1.321')).toEqual({ kind: 'trusted', cwd: true });
+    expect(row(s.coord, '2.1.321')).toMatchObject({ fails: 1, attempts: 2 });
+    expect(s.notices).toHaveLength(0);
+  });
+
+  it('the operator\'s re-capture past the ceiling sends the build again, and its failure raises a second notice', async () => {
     const t = fake(fail);
     const s = await setup(t);
     await s.lane.sweep(['2.1.321']);
+    for (let k = 1; k < BUILD_CAPTURE_FAIL_CEILING; k++) { s.tick(captureRetryAfterMs(k)); await s.lane.sweep(['2.1.321']); }
+    expect(s.notices).toHaveLength(1);
     expect(s.coord.requeueClaudeBuild('2.1.321')).toBe('queued');
     s.tick(BUILD_CAPTURE_SWEEP_MS);
     await s.lane.sweep(['2.1.321']);
-    expect(t.jobs).toEqual(['2.1.321', '2.1.321']);
-    expect(row(s.coord, '2.1.321')).toMatchObject({ capture: 'fail', attempts: 2 });
+    expect(t.jobs).toHaveLength(BUILD_CAPTURE_FAIL_CEILING + 1);
+    expect(row(s.coord, '2.1.321')).toMatchObject({ capture: 'fail', fails: 4, attempts: 4 });
     expect(s.notices).toHaveLength(2);
   });
 
