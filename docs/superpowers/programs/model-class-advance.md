@@ -79,21 +79,29 @@ box's lane files, read-only and with no install: all four read PASS on both Code
 no write under the live home. #2943 then merged through the queue, two days before the Codex bridge's check week
 closed (the amendment to D-8689, below). Its sessions-behind check is what Done-when 7's second half reads.
 
+**Done-when 7, read on 2026-11-21.** A read-only doctor run on the fleet box, on v0.0.1370 and more than a day after the
+2026-11-18 moves, read the sessions-behind check PASS on every lane, and the other three model-advance checks PASS too
+(doctor's two FAIL lines that day came from other checks). New sessions on both Codex lanes had replied on
+`gpt-6.2-sol`; none had yet replied on `gpt-6.2-astra`. The `natural-move` ticket stays open: it watches the next real
+release through, with every wave in place.
+
 ## Waves
 
-The programme's plan (`ccrc-api plan show model-class-advance`) holds the same epics, tickets and checkpoints.
+The programme's plan (`ccrc-api plan show model-class-advance`) holds the same epics, tickets and checkpoints. Since
+2026-11-21 it also holds four phases, which cover every ticket: the Codex arm, the Anthropic arm, the review follow-ups
+and acceptance.
 
 | # | Epic | Ticket | Scope | PRs | State |
 |---|---|---|---|---|---|
 | 1 | catalogue-current | client-version-now | Raise the catalogue probe's Codex client version to the current Codex release | #3023 | merged; measured |
 | 2 | catalogue-current | client-version-tracks | Track that version automatically, with the shipped constant as a floor | #3025 | merged |
-| 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | #3118 | accepted at 776e4a9f after four review rounds (run 2455); waits for the bridge handoff and a DevOps approval |
-| - | doctor | doctor-land | Land #2943 | #2943 | merged 2026-11-19 |
+| 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | #3118 | accepted at 71bf2644 after five review rounds (run 2455); waits for a DevOps approval |
+| - | doctor | doctor-land | Land #2943 | #2943 | merged 2026-11-19; the plan's ticket stays open (below) |
 | 4 | models-sheet | models-sheet | `POST /api/models/:lane` hold, release and revert, and the Models sheet; closes #1441 | #3028 | merged |
 | 5 | read-path | retire-grant | Retire the model-file read grant; an unknown advance state reads `invalid` with the classes kept | #3041 | merged |
 | 6 | anthropic-arm | anthropic-plan | Amend the spec's D18 with the measured alias evidence, and plan the arm | #3027 | merged |
 | 7 | anthropic-arm | anthropic-writer | The alias file, holds and doctor causes on Anthropic lanes | #3107 | merged 2026-11-20 |
-| 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | in review, round 2 (run 2910) |
+| 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | accepted at 5f937866 after three review rounds (run 2910); waits for the owner's two items (below) |
 | 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | | planned |
 | 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | planned |
 | - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | merged 2026-11-21 |
@@ -107,6 +115,11 @@ The programme's plan (`ccrc-api plan show model-class-advance`) holds the same e
 | - | doctor | doctor-caps-one-reader | One reader of `ccd caps` in doctor; an unmeasured answer is never a PASS (wave 7's review, F6) | | after wave 8 |
 | - | doctor | effort-fallback-pins | Pin the two terms of the effort-file claim that wave 3's last review found unpinned, with three note corrections | | after wave 8 |
 | - | anthropic-arm | typed-repick | The re-pick measured with a hand-typed `/model`, which wave 8's A3.0 left unmeasured | | after wave 8; the owner types it |
+| - | catalogue-current | effort-level-dropped | A dropped effort level must not stop a lane's hourly refresh (wave 1's review, F2) | #3118 | folded into wave 3 |
+| - | doctor | release-lookup-pins | Pin the release lookup's library read with a stand-in library, and two text corrections (wave 3's fifth review) | | after wave 3 |
+| - | anthropic-arm | no-keys-transitive | Guard passive alias observation against indirect key senders (wave 8's third review) | | after wave 8, before `typed-repick` |
+| - | anthropic-arm | entry-comment-seven | The launcher's comment names its seven libraries, with the launcher's next change of substance | | with that change |
+| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10 |
 
 Order: #2943 merged on 2026-11-19, which opened waves 3 and 7. They share five files: the models op
 (`deploy/models-op.mjs`), the advance rule (`shared/model-advance.mjs`), the registry reader (`shared/models.mjs`),
@@ -117,18 +130,32 @@ lists). The three follow-ups marked "after wave 7" touch wave 7's files too, so 
 
 Wave 7 merged on 2026-11-20 (#3107). Waves 3 and 8 then ran side by side, each built on `main` after #3107. They share
 the advance rule, its declaration file, `ccd/ccrc` and two test files, and each edits only the hunks the other's worker
-consented to in writing, one round at a time; a consent releases no claim. Wave 3 passed its fourth review round and wave 8
-is in its second. The Codex bridge's check week closed on 2026-11-21 and its evidence was handed over, so wave 3 now waits only
-for its DevOps approval, and `usage-user-agent` (#3085) merged within the hour.
+consented to in writing, one round at a time; a consent releases no claim. The Codex bridge's check week closed on
+2026-11-21 and its evidence was handed over, and `usage-user-agent` (#3085) merged within the hour. That merge made wave 3's
+accepted head conflict with `main`, in one comment of the catalogue probe.
+
+Wave 8 passed its third review round at 5f937866 and waits for the owner. Wave 3 was to absorb `main` after wave 8 landed,
+but it no longer waits (below): it merged `main` once, moved its doctor check onto the release record's one reader, and
+passed its fifth review round at 71bf2644. Waves 3 and 8 still conflict with each other in the advance rule and its
+declaration file. Whichever lands second absorbs the other with one merge of `main`, keeps both waves' optional record
+members and checks, and gets a focused review before it lands.
 
 ## Waiting on the owner
 
-Two items are open.
+Four items are open. The review judge marks waves 3 and 8 as infrastructure changes (`devops-approval-needed`), so each
+lands only with such a review on its final head, asked for once that head has passed review.
 
-- Item 519: an approving review of #3118 from the DevOps team, outside its author set, at its accepted head 776e4a9f.
-  The review judge marks waves 3 and 8 as infrastructure changes (`devops-approval-needed`), so each lands only with
-  such a review on its final head, asked for once that head has passed review. Item 517 asked for one on wave 3's
-  round-3 head and was withdrawn when that round sent the head back for a fix.
+- Item 542: an approving review of #3118 from the DevOps team, outside its author set, at its accepted head 71bf2644.
+  Items 517 and 519 asked for one on wave 3's earlier heads; 517 was withdrawn when its round sent the head back for a
+  fix, and 519 when #3085's merge made its head conflict with `main`. The coordinator suggested taking 542 before 523,
+  so that #3122 absorbs wave 3 in one merge and 523's reviews are given once, on #3122's final head.
+- Item 522: wave 8 changes the launcher's installer together with the libraries it installs, and the two must move
+  together. An older installer with the newer tree reports success without the seventh library, and the session start
+  then refuses; a newer installer refuses the older tree. Splitting the PR is unsafe in either order, and the review
+  judge still blocks on `rules-mixed`. The item asks the owner to accept the coupled change where the repository's
+  policy permits it, which the coordinator recommends, or to require a redesign and a fresh review.
+- Item 523: approving reviews of #3122 from the DevOps team and its code owners, outside its author set, at its final
+  head. If #3118 lands first, #3122's head changes with its absorbing merge, and the item then names the new head.
 - Item 505: one typed `/model` line in a prepared throwaway session, so that the re-pick can be measured. Wave 8 took
   the plan's fallback without it, and `typed-repick` waits on it.
 
@@ -196,6 +223,20 @@ is its first live check: if a Codex lane reads as unmanaged there, a new item go
   (the four Anthropic causes in the doctor section, the aliases file in the models section). They become a follow-up
   after that freeze lifts, named by wave 7's report. Wave 8 carries three exact README hunks under the holder's
   written consent; the Anthropic causes in the doctor section stay wave 10's.
+- **A parked thread no longer parks the programme (2026-11-21).** The coordinator skill's clause 21 changed that day.
+  Wave 3 had been held to absorb `main` after wave 8 landed; with wave 8 waiting on the owner for an unknown time, wave 3
+  went ahead alone. Neither wave imports the other's unmerged branch: the second to land absorbs the first from `main`.
+- **Doctor reads the release record through its one owner (wave 3, amending its own deviation).** #3085 gave the
+  Codex client release record one owner, the Codex auth library (D-8781). Wave 3's doctor check now reads the record
+  only through that library's reader, by doctor's existing bounded and isolated Python call, and hands one record to
+  its unchanged decision. A missing interpreter or library reads as unavailable and skips; nothing unmeasured passes.
+  The box-token test's two source scans had run to the end of the file and caught that isolated call as one of their
+  own; they now stop at the end of their section, and the release lookup's isolation has its own assertion.
+- **The plan's phases, and a ticket the plan cannot close (2026-11-21).** The plan gained its four phases so that the
+  programme page's Work card shows what remains. `doctor-land` stays open there: #2943 landed outside a run, so the landing line
+  holds no entry for it and `plan ticket-done` refuses the evidence. One run's evidence closes one ticket, so the three
+  tickets folded into wave 3 (`effort-level-dropped`, `release-lookup-warn` and `revert-writes-before-refusing`) are
+  dropped from the plan, with that reason, once wave 3's run finishes.
 - **Landing without a further review round.** Waves 2, 4 and 6 each ended with a last fix round of minor or
   text-closable findings. The coordinator checked each with two independent Opus readers (one for conformance to the
   rulings, one for correctness) and landed it, rather than spend another review round.
@@ -211,12 +252,15 @@ is its first live check: if a Codex lane reads as unmanaged there, a new item go
 - D-8693's rulings stand: the argv-grammar refusal words stay `unreadable`. Since wave 5, an advance state word the
   server does not know reads `invalid`, with the classes kept.
 - #2943's files were held for it until it merged on 2026-11-19. They are open now. Waves 3 and 8 share several of
-  them (Order, above), and neither edits a shared hunk without the other's written consent.
+  them (Order, above), and neither edits a shared hunk without the other's written consent. The second of the two to
+  land keeps both waves' optional members of the advance record and their parser checks, and reruns the advance file's
+  tests against the combined parser.
 
 ## Next-wave brief (wave 9, after wave 8)
 
 - Ticket `anthropic-pwa` (epic anthropic-arm): the class labels and the Models sheet on Anthropic lanes. It waits for
-  wave 8 to merge, because it reads what wave 8's launch and hold record, and it builds on wave 4's sheet.
+  wave 8 to merge, because it reads what wave 8's launch and hold record, and it builds on wave 4's sheet. It also
+  waits for wave 3, which changes the models op that wave 9 extends.
 - It carries two findings from wave 7's review: the notification's wording, and one push per class move rather than
   one per lane.
 - It states, without adding a gate, the caveat wave 8 documents for a degraded supervisor sweep.
