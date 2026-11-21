@@ -934,6 +934,14 @@ export function registerCoordRoutes(
         `clientKey must be 1 to ${MAIL_CLIENT_KEY_MAX} letters, digits, '_' or '-' when given`);
     }
 
+    // `urgent` (mid-turn mail, plan Task 2.4): optional and additive. Absent, null or false is an ordinary mail, answered
+    // as before; any other value than a boolean is a shape error. Who may mark a mail urgent is check 8.5's.
+    const urgentRaw = body['urgent'];
+    if (urgentRaw !== undefined && urgentRaw !== null && typeof urgentRaw !== 'boolean') {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId }, 'urgent must be a boolean when given');
+    }
+    const urgent = urgentRaw === true;
+
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
     // a sender cannot ask for the we-do-not-know bucket.
     if (!isSendableMailKind(kind)) {
@@ -1045,9 +1053,9 @@ export function registerCoordRoutes(
     // answer to a keyed send echoes `clientKey` (review 2725 F3), so a client can tell a server that ignored the key. No
     // `await` follows this read before the insert below, so no other send can store this key in between; if one ever did,
     // `mail_client_key_once` refuses the insert and the catch around it asks the verdict again (F5), never a 500.
-    const keyedRequest = { toId, runId, kind, subject, body: msgBody, artifacts: artifacts as string[], inReplyTo };
+    const keyedRequest = { toId, runId, kind, subject, body: msgBody, artifacts: artifacts as string[], inReplyTo, urgent };
     const answerKeyed = (v: MailKeyVerdict) => v.verdict === 'same'
-      ? reply.code(202).send({ ok: true, id: v.id, already: true, clientKey })
+      ? reply.code(202).send({ ok: true, id: v.id, already: true, clientKey, ...(v.urgent ? { urgent: true } : {}) })
       : v.verdict === 'conflict'
         ? refuse(reply, 'key-conflict', { fromId, fromUuid, toId, kind, subject, runId }, v.detail)
         : null;
@@ -1122,6 +1130,21 @@ export function registerCoordRoutes(
       return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
     }
 
+    // 8.5: urgent (mid-turn mail, spec §3.1, plan Task 2.4). The rule is `urgentSenderVerdict`'s (L1), over the facts
+    // `CoordStore.urgentVerdict` reads for the RESOLVED recipient: its runs by incarnation, from its registry mark (a
+    // listed row this read could not build is unreadable, so `urgent-unmeasured`), the sender's claims, the designation
+    // and the pair's outstanding urgent mail. A refusal writes no mail. No `await` follows this read before the insert,
+    // so two sends cannot both pass (P4). A keyed retry was answered at 6.5, so it never meets its own outstanding mail.
+    let urgentAs: Extract<ReturnType<CoordStore['urgentVerdict']>, { kind: 'allowed' }>['role'] | null = null;
+    if (urgent) {
+      const row = registry.find((r) => r.id === resolvedToId);
+      const mark = row !== undefined ? row.child
+        : names.includes(`${resolvedToId}.uuid`) ? { kind: 'unreadable' as const } : { kind: 'none' as const };
+      const v = coord.urgentVerdict(fromId, resolvedToId, runId, mark);
+      if (v.kind === 'refused') return refuse(reply, v.code, { fromId, fromUuid, toId, kind, subject, runId }, v.detail);
+      urgentAs = v.role;
+    }
+
     // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole
     // 2). Run mail is bounded by its run's own lifecycle and stays
     // byte-identical (the dark pin in mail-peer-quota.test.ts). Nothing ever
@@ -1177,7 +1200,7 @@ export function registerCoordRoutes(
     try {
       ({ id } = tx(coord.db, () => {
         const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-          artifacts: artifactPaths, answersMail, clientKey, inReplyTo });
+          artifacts: artifactPaths, answersMail, clientKey, inReplyTo, urgentAs });
         const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
         const envelope = renderEnvelope({
           id: delivery.id, fromId, toId: resolvedToId, runId,
@@ -1206,6 +1229,9 @@ export function registerCoordRoutes(
 
     // 202, not 200: the server has ACCEPTED the message, not delivered it —
     // the delivery lane is minutes away by design (MAIL_SWEEP_MS, Task 8). A keyed send echoes its key (F3).
+    // An urgent mail echoes `urgent: true` (mid-turn mail, Task 2.4): absence is "not urgent", and an older server never
+    // echoes it, so a client can tell a server that ignored the field.
+    if (urgentAs !== null) return reply.code(202).send({ ok: true, id, ...(clientKey === null ? {} : { clientKey }), urgent: true });
     return reply.code(202).send(clientKey === null ? { ok: true, id } : { ok: true, id, clientKey });
   });
 
@@ -1294,6 +1320,14 @@ export function registerCoordRoutes(
     const acked = coord.markAcked(id, Date.now());
     // A session's own ack of an operator-message nudge settles that message as the lane's ack does (Overlord W1 private store B).
     if (acked.ok) settleAckedOperatorNudge({ coord, operatorModel: deps.operatorModel, now: Date.now(), warn: (l) => console.warn(l) }, delivery.mailId);
+    // Mid-turn mail (plan Task 4.4): a landed ack kicks the mailhold projection (`index.ts` composes the watcher's
+    // `kick('mailHold')`), so a released hold's marker clears at the next tick. After the commit, never awaited, and a
+    // kick that throws never changes the answer. A refused, parked or repeated ack kicks nothing.
+    if (acked.ok) {
+      try { deps.onMailAcked?.(); } catch (e) {
+        console.warn(`ccrc-server: the ack's mailhold kick threw: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     if (acked.ok) {
       return reply.code(200).send({ ok: true, already: false, parked: false, state: acked.state });
     }
