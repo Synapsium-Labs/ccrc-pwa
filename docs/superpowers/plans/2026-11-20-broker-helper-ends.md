@@ -118,43 +118,83 @@ trap arms on the first boot that ends anything (review 3026); S1-K1 pins which c
 new column is nullable: an older server never names it in a read or a write, so `coord.db` is not what refuses. PIN-2
 pins the refusal shape. The PR body says this plainly.
 
-## Task S2: the one-time pass (later)
+## Task S2: the one-time pass (now: desktop polish wave 163, D-8874)
 
-Spec §7.2, Table 10, Table 13's S2 row. Its own PR, after S1 has booted on the fleet (its first boot moves the open
-counts, spec §7.1).
+Spec §7.2, Table 10, Table 13's S2 row. Its own PR: "feat(coord): the one-time pass closes the broker's unmeasured records,
+dry run first (session helpers S2)". S1 merged as #3142. The real dry run needs S1 and S2 booted on the fleet, so this PR
+carries the method and its dry run against fixtures; the operator's dry-run counts are pasted into the PR as a comment
+before the pass runs, and nothing here runs the pass, the dry run or anything that writes against the live server.
 
-- [ ] **Red first:** a dry run writes nothing; a second run closes nothing; a record that fails the positive check stays
-  open, and a `compact` or `resume` alone never passes it; every row of Table 10 as a test; undo reopens exactly the
-  closed records, byte for byte for untouched ones; records younger than 24 h are untouched.
-- [ ] **The trigger.** A route (session-gated, joins `box-token-census.test.ts`, named in CLAUDE.md's door prose) or a
-  command (refuses inside a session). This plan names it when S2 starts.
-- [ ] **The dry run:** the count it would close, by kind and age; how many a lease or lineage names; how many failed the
-  positive check. Pasted, as counts, into S2's PR before the pass runs.
-- [ ] **The pass:** a `DelegationCheckpointBuilder` method run inside the durability layer's `commitLocked`, as D-6268's
-  zero-delta retire runs. Each qualifying record: `ended`, `endedAt` null, `endBasis = backfill-unmeasured`. It is
-  idempotent. Its decision goes in `delegation-end-basis.ts` (or a sibling L1 module), not in the frozen file.
-- [ ] **The readers of Table 10:** the identity and workflow holds and the retirable set in `delegation-compaction.ts`,
-  and `retireBehindCut`, read the basis.
-- [ ] **`openWorkflowWorkerFromMeta`** (`delegation-checkpoint.ts`, review 3026 F3): a worker opened from its run's row
-  copies the run's `endedAt` and opens ended only when that value is set. A run S2's pass closed has a null `endedAt`,
-  so its worker would open active under a closed run, and the next pass would have to close it again. S2 makes this
-  site read the run's state and basis, not its `endedAt` alone, with a red test first. S1 cannot reach it: nothing
-  writes a backfill yet.
-- [ ] **The dry run counts one order S1 leaves to a restart** (review 3026 F4): an agent record opened only by the meta
-  door after its final notification was journaled while its key was still unmapped. Live, that notification ended
-  nothing, so the record stays open; the next boot's observe pass finds the notification covered and the key mapped,
-  ends the record as a task report, counts it and saves. The end is right, but it waits for a restart, against the
-  rule that replay never differs from the live path. The dry run reports how many records are in this state; S2
-  decides then whether the meta door should apply an already-journaled final notification.
-- [ ] **Two writers to fold, and the arm's silent case** (review 3026 F9, carried; no code change in S1):
-  `delegation-end-basis.ts` restates `foldNotification`'s "final status" rule, and its `later` restates `maxInstant`,
-  so each rule has two writers; S2's L1 work makes each one writer. The CHECK and `endBasisDefect` accept an explicit
-  `observed` and an `endBasis` on a row that is not ended, which nothing writes and an older server would refuse for
-  nothing; S2 decides whether to narrow them. Where the mapping names an ID with no row, `foldTaskReport` ends nothing
-  and says nothing (`mapped-row-missing-ignored`, below), while its two siblings refuse `fold-refused`; it is
-  unreachable today, since the checkpoint's identity assertion refuses such a checkpoint.
-- [ ] **The undo:** a second builder method that reopens every `backfill-unmeasured` record.
-- [ ] **The words,** in `shared/`: "closed by the one-time pass; its real end was not measured".
+**The trigger: a session-gated route** (named when S2 started, 2026-11-21), `GET` and `POST /api/coord/delegation-backfill`,
+registered from a routes file of its own, `server/src/coord/delegationBackfillRoutes.ts`. It is the smaller of the two the
+spec allows: a command would still need a server door to reach the watcher's one applier, plus a client row and a script.
+
+- [x] **Red first** (measured against `origin/main` 137f96672c; the counts are in the task note,
+  `docs/superpowers/programs/desktop-polish/s2.md`). Four files:
+  - `server/test/delegation-backfill.test.ts` (30 cases): the verdict (B-V1 to B-V7: under 24 hours untouched, the bash
+    arm, the positive check's three arms, quiet from `lastEventAt`, a record not open never touched, which parents are
+    read), the plan and the report (B-P1 to B-P6), the rows (B-R1 to B-R4), the builder (B-B1) and the applier (B-D1 to
+    B-D12: the dry run writes nothing, a `compact` or `resume` alone never passes the check, a second run closes nothing
+    and writes nothing, the count refusal, under 24 hours untouched, the undo byte for byte, a touched record keeps its
+    `lastEventAt`, the re-run after a rebuild from the journal alone, a list that does not read, F4's count, the scan's
+    bound and a refused read).
+  - `server/test/delegation-backfill-readers.test.ts` (12 cases): every row of Table 10 by behaviour, six red on their
+    own assertions and six labelled characterization pins, and F3.
+  - `server/test/delegation-backfill-route.test.ts` (11 cases): the trigger.
+  - `server/test/single-definition/delegation-end-rules.test.ts` (3 cases): F9's one writer each.
+- [x] **The trigger: the route** (above). `GET` is the dry run. `POST` takes `{act: 'pass', closes: <the dry run's
+  count>}` or `{act: 'undo'}` and nothing else (400). The pass refuses `sign-in-unarmed` (403) unless sign-in is armed
+  and the caller holds a session; the dry run and the undo stay open dark. The pass refuses `count-changed` (409, a new
+  word in `shared/delegationBackfill.ts`, spread into `REFUSAL_STATUS`) unless `closes` is the count it would close now,
+  and answers the report it would act on, with "the pass would close N, not M: read the dry run again" (RT-5). The route
+  measures the registry (one listing, then each listed parent's incarnation, read twice) for the parents a verdict reads
+  only (`backfillParentsToRead`), and decides nothing. It joins `box-token-census.test.ts` as a lane source of its own
+  (`DELEGATION_BACKFILL_DOORS`), `auth-gate.test.ts`'s route tally (291 to 293), and CLAUDE.md's door prose in one sentence.
+- [x] **The dry run:** the count it would close, by kind and by how long ago each was opened (1 to 7, 7 to 30, 30 days
+  and more); how many of those a lease or lineage row names (released or not, open or closed); how many failed the
+  positive check; how many are under 24 hours; how many the pass already closed; in a re-run, how many qualify but are
+  not on the list; and F4's count. The words ride every report. It writes nothing (B-D1, RT-1). Pasted, as counts, into
+  S2's PR as a comment by the operator before the pass runs.
+- [x] **The pass:** `DelegationCheckpointBuilder.closeByBackfill(ids)`, run inside `commitLocked` by
+  `DelegationDurability.backfillPass`, as D-6268's zero-delta retire runs. The decisions are in a sibling L1 module,
+  `server/src/coord/delegation-backfill.ts` (C5): `backfillVerdict`, `planDelegationBackfill`, `backfillClosed`,
+  `backfillReopened`, `workerUnderRun`, the list's codec, `backfillParentOf` and `parseBackfillRequest`. Each qualifying
+  record: `ended`, `endedAt` null, `endBasis = backfill-unmeasured`, nothing else changed. Idempotent: a second run finds
+  nothing to close and writes nothing (B-D3). Growth of the frozen file, measured with `growthCheck.ts#codeLines`: +2
+  net code lines (limit 10).
+- [x] **The readers of Table 10** read the basis through `delegation-end-basis.ts#hasMeasuredEnd` (the negation of
+  `isEndable`): the identity and workflow holds and the retirable set in `delegation-compaction.ts`, `retireBehindCut`,
+  and lease liveness (`delegation-projection.ts#livenessOf`, review 2900 F1: S2 does not wait for H3, so a lease row on a
+  closed record never draws `end recorded`; the activity rows drop every ended record by its state). Each is a test
+  (R-L1 to R-F3, below).
+- [x] **`openWorkflowWorkerFromMeta`** (review 3026 F3): a worker opened from a run the pass closed opens closed by it
+  (`workerUnderRun`), under any other run as before (R-F3, B-R3).
+- [x] **The dry run counts F4's order:** open, or already closed, agent records whose final task notification the
+  retained journal holds. The meta door is unchanged in S2 (the coordinator's ruling, 2026-11-21): the pass may close such
+  a record, and the next boot's observe pass replaces that close with the task report (`isEndable`). The read of the
+  retained journal runs OUTSIDE the applier's queue (the coordinator's condition: nothing the watcher applies waits for
+  it), bounded at `DELEGATION_BACKFILL_SCAN_MS` (120 s) by the injected clock; past the bound, or on a read that refuses,
+  the count is unmeasured (`reportedScan: cut`), never partial (B-D11, B-D12). Inside the queue the dry run reads only the
+  list and decides the plan: 3.4 ms on 31,189 rows (measured, the task note).
+- [x] **F9:** one writer each. `maxInstant` lives in `delegation-model.ts` (the checkpoint and `delegation-end-basis.ts`
+  import it), and the final-status rule is `delegation-end-basis.ts#isFinalNotification`, which `foldNotification` calls.
+  The CHECK and `endBasisDefect` are NOT narrowed: narrowing the CHECK needs a table-rebuild migration for states nothing
+  writes, and the assertion must keep mirroring the DDL (`column-check-mirrors-rule`). The silent case of
+  `foldTaskReport` stays as S1 left it (unreachable: the identity assertion refuses such a checkpoint).
+- [x] **The undo:** `DelegationCheckpointBuilder.reopenBackfill()`, run by `DelegationDurability.backfillUndo` the same way.
+  It reopens every record whose basis is the backfill's: `active`, the key removed. An untouched record comes back byte
+  for byte (B-D6, RT-7); one an event touched keeps its `lastEventAt` (B-D7). The list stays, so the pass stays one-time.
+- [x] **The words,** in `shared/delegationBackfill.ts`: `DELEGATION_BACKFILL_WORDS`, "closed by the one-time pass; its real
+  end was not measured".
+- [x] **The list (review 2900 F2):** `delegation-backfill.json` in the delegation directory (`~/.ccrc`, beside the journal
+  and the checkpoint), canonical JSON `{v: 1, at, ids}`, written whole and durable (temp file, fsync, rename, directory
+  fsync) before the first pass's commit, and never removed by the undo. A rebuild from the journal alone rewrites the
+  checkpoint and leaves the file, so a re-run closes only its ids (B-D8); a list that does not read refuses the dry run
+  and the pass (`unavailable`, 503) and is never read as empty or absent (B-D9, RT-9). The coordination snapshot copies the
+  journal, the carried file and the checkpoint by name, so a restore leaves the list in place too.
+- [x] **Mutants:** 54 through `mutation-run.py`, 53 killed; the survivor is equivalent (`retirable-basis-equivalent`).
+  The table is in the task note.
+- [ ] **The rollback note and the operator's dry run** (in the PR, after merge and boot).
 
 S1 already gives S2 two things: `endBasisDefect` admits a backfill row (null `endedAt`), and every measured end replaces
 one (`isEndable`), so S2 adds no end rule of its own.
@@ -174,6 +214,23 @@ one (`isEndable`), so S2 adds no end rule of its own.
   (L1, C5), beside the files that row names (review 2900 F8).
 - **Table 10, a missing row** (review 3026 F3): `openWorkflowWorkerFromMeta` in `delegation-checkpoint.ts` reads the
   run's `endedAt` to decide whether a worker opens ended; a backfilled run has none, so S2 must handle this reader too.
+- **Table 10, the first row** (review 2900 F1, the coordinator's ruling; S2): `livenessOf` reads the basis, so a record the
+  pass closed reads as it read before the pass (`live`, `stale`, `asleep` or `unmeasured`), and a lease row on it never
+  draws `end recorded`. The activity rows drop every ended record by its state, so a closed record is still drawn nowhere
+  as an activity row. The row reads: "`livenessOf`: as before the pass (it reads the basis) | Yes", and a new row,
+  "`projectDelegation`'s activity rows: dropped, by the state | No, and that is the point".
+- **Table 10, the F3 row** (S2): `openWorkflowWorkerFromMeta`: a worker of a closed run opens closed by the pass.
+- **Table 10, the retirable set** (S2): its mutant is equivalent, because the identity hold already keeps every record
+  with no measured end from being retired (`retirable-basis-equivalent`); the reading of the basis stays as Table 10 asks.
+- **§7.2, "Who runs it"** (S2): the route, `GET` and `POST /api/coord/delegation-backfill`; the pass also needs a signed-in
+  operator and the dry run's count (`count-changed`).
+- **§7.2, "A rebuild"** (S2, review 2900 F2): the re-run closes only the ids the first pass recorded in
+  `~/.ccrc/delegation-backfill.json`; it does not choose again.
+- **§7.2, condition 4** (S2): the report also counts the records under 24 hours, the records already closed, the records a
+  re-run leaves because the list does not name them, and F4's order, whose read of the journal is bounded at 120 s.
+- **§7.2, "Undo"** (S2): it also reopens a worker the meta door opened under a closed run after the pass (F3); such a
+  worker was closed by the pass's own rule, so "exactly the records the pass closed" reads "the records the pass's
+  basis names".
 
 ## Deviations found
 
@@ -200,3 +257,35 @@ one (`isEndable`), so S2 adds no end rule of its own.
     and labelled.
   - `capture-pin-maps-payload`: PIN-1 maps the capture's payload fields as the hook does, rather than running the hook,
     so the file stays out of the hook-spawning suites.
+- **D-8874** — `broker-one-time-pass`: session helpers S2 (desktop polish wave 163). The broker's old open records are closed
+  once, dry run first: a record open (`active`), quiet for 24 hours and past the positive check becomes `ended`, `endedAt`
+  null, `endBasis = backfill-unmeasured`, through two thin builder methods run inside `commitLocked`; the undo reopens
+  every record that basis names. Each departure from the spec, by slug:
+  - `route-trigger-own-file`: the trigger is a session-gated route pair registered from its own file,
+    `server/src/coord/delegationBackfillRoutes.ts`, not `coord/routes.ts` (held by another programme's claim); the census
+    reads it as a lane source of its own.
+  - `pass-needs-signed-in-operator`: the pass refuses `sign-in-unarmed` while sign-in is dark or the caller holds no
+    session; the dry run and the undo do not.
+  - `pass-carries-dry-run-count`: the pass carries the dry run's count and refuses `count-changed` on any other, answering
+    the count it would close now.
+  - `l1-sibling-module`: the decisions live in `delegation-backfill.ts`, a sibling of `delegation-end-basis.ts`.
+  - `backfill-list-file`: review 2900 F2's list is `~/.ccrc/delegation-backfill.json`, written before the first pass's
+    commit and kept by the undo; once it exists, every pass closes only its ids.
+  - `lease-liveness-reads-basis`: review 2900 F1; Table 10's first row corrected (spec corrections).
+  - `activity-rows-drop-by-state`: the activity rows drop an ended record by its state, since `livenessOf` no longer
+    answers `ended` for a closed one.
+  - `worker-inherits-backfill`: review 3026 F3; a worker the meta door opens under a closed run opens closed by the pass,
+    and the undo reopens it with the rest.
+  - `unknown-state-untouched`: the pass closes `active` records only; `unknown` has no writer and is left alone, so the
+    undo can give back `active`.
+  - `parents-read-only-when-decisive`: the route reads the registry only for the parents of open agent and workflow
+    records quiet for 24 hours and under 7 days; a listing that does not read leaves every such parent unmeasured.
+  - `age-bands-by-opening`: "by kind and age" is by kind and by how long ago the record was opened, in three bands.
+  - `one-writer-instant-max-and-final-status`: review 3026 F9; `maxInstant` in `delegation-model.ts`,
+    `isFinalNotification` in `delegation-end-basis.ts`.
+  - `check-and-assertion-not-narrowed`: review 3026 F9's question, decided no (the plan's F9 item).
+  - `f4-counted-meta-door-unchanged`: review 3026 F4's order is counted by the dry run; the meta door is unchanged.
+  - `f4-scan-outside-queue-bounded`: that count's read of the retained journal runs outside the applier's queue, bounded
+    at 120 s; past the bound or on a refused read the count is unmeasured.
+  - `retirable-basis-equivalent`: the retirable set's reading of the basis is masked by the identity hold, so its mutant
+    is equivalent.
