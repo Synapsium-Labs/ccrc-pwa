@@ -30,6 +30,11 @@ export interface BacklogRead {
   /** The tailer's SECOND output (session helpers H1b, D-8862): the helper facts of every whole line in the window read, not
    *  only the last `lastN` events' (they cost no read). Absent when there is none, so a read with none is what it was. */
   helpers?: HelperFact[];
+  /** Where the window began (session helpers H1c, D-8873): the start scan's seam, so it reads only the bytes before it
+   *  (`workflows/helperScan.ts`). Absent when no window was read. */
+  scanEnd?: number;
+  /** The partial line the window began inside, which the backlog drops and the scan joins to its head; absent at offset 0. */
+  cut?: string;
 }
 
 /**
@@ -54,16 +59,21 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
     return { events: [], offset: st.size, missing: absent, measured: absent };
   }
   let text = res.data;
+  let cut: string | undefined;
   // A non-zero start almost certainly lands mid-line — drop the partial head so
-  // we never hand half a JSON object to the parser.
+  // we never hand half a JSON object to the parser (the start scan parses it, joined to its head).
   if (start > 0) {
     const nl = text.indexOf('\n');
+    cut = nl >= 0 ? text.slice(0, nl) : text;
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
   const lines = text.split('\n').filter((l) => l.trim() !== '');
   const events = lines.flatMap(parseTranscriptLine);
   const helpers = lines.flatMap(helperFactsOf);
-  return { events: events.slice(-lastN), offset: res.size, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}) };
+  return {
+    events: events.slice(-lastN), offset: res.size, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}),
+    scanEnd: start, ...(cut !== undefined ? { cut } : {}),
+  };
 }
 
 const NL = 0x0a;

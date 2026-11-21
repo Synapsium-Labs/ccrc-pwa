@@ -43,6 +43,7 @@ import {
   type WorkflowView,
 } from '../../../shared/workflows.js';
 import type { HelperFact } from '../transcript/parse.js';
+import { stripLine } from '../../../shared/unprintable.js';
 
 /** Claude Code's run id, as measured: `wf_` + 8 hex + `-` + 3 hex. Anything
  *  else in the runs directory is not a run. Defined once in `shared/workflow-ids.mjs`
@@ -571,26 +572,44 @@ type HelperLaunch = NonNullable<HelperIdFacts['launch']>;
 
 /** A tie of two ends at one time is told by outcome, so a backwards scan and a forward tail agree (review 2961 F10). */
 const OUTCOME_RANK = { done: 0, stopped: 1, failed: 2 } as const;
+/** Between two facts that tie on every rule above it, the one whose JSON sorts last: a total order, so the fold is the same
+ *  in any order of arrival (review 2900 F4, session helpers H1c, D-8873). It picks one of the two, never a merge, so a reader
+ *  that keeps the report of the chosen end finds it among the facts. */
+const byContent = <T>(a: T, b: T): T => (JSON.stringify(b) > JSON.stringify(a) ? b : a);
 /** The later of two ends, by their own times; an end with a time beats one with none; a tie goes to the more telling outcome
- *  (failed, then stopped, then done), and between two of one outcome to the newer read. */
+ *  (failed, then stopped, then done), then to the one with a summary, then with a report, then by content (which puts a
+ *  notification's above a launch's: a launch result carries no summary, so the two differ only in `from`). */
 function laterEnd(a: HelperEnd | null, b: HelperEnd): HelperEnd {
   if (a === null) return b;
-  if (a.at === null) return b;
-  if (b.at === null) return a;
-  if (b.at !== a.at) return b.at > a.at ? b : a;
-  return OUTCOME_RANK[b.outcome] >= OUTCOME_RANK[a.outcome] ? b : a;
+  if (a.at !== b.at) {
+    if (a.at === null) return b;
+    if (b.at === null) return a;
+    return b.at > a.at ? b : a;
+  }
+  for (const rank of [(e: HelperEnd) => OUTCOME_RANK[e.outcome], (e: HelperEnd) => Number(e.summary !== null), (e: HelperEnd) => Number(e.hasReport)]) {
+    if (rank(a) !== rank(b)) return rank(b) > rank(a) ? b : a;
+  }
+  return byContent(a, b);
 }
-/** The earlier of two launches, one with a time beating one with none. */
+/** The earlier of two launches, one with a time beating one with none; a tie by content. */
 function earlierLaunch(a: HelperLaunch | null, b: HelperLaunch): HelperLaunch {
   if (a === null) return b;
-  if (a.at === null) return b.at === null ? a : b;
-  return b.at !== null && b.at < a.at ? b : a;
+  if (a.at !== b.at) {
+    if (a.at === null) return b;
+    if (b.at === null) return a;
+    return b.at < a.at ? b : a;
+  }
+  return byContent(a, b);
 }
+/** An id's newest fact time, for the fold's bound: no time is the oldest. */
+const factTime = (f: HelperIdFacts): number => Math.max(f.launch?.at ?? -Infinity, f.end?.at ?? -Infinity);
 
 /**
- * Fold `facts` into a copy of `prev`, per id, in either order of arrival. At most `HELPER_FACTS_MAX` ids are kept, the
- * least recently touched evicted first (a notification for a task that is no Agent helper — a workflow's, a shell's — is a
- * fact too, and nothing here can tell it from one). `prev` is never mutated.
+ * Fold `facts` into a copy of `prev`, per id, in any order of arrival: each rule above is a total order, so the start
+ * scan's, the backlog's and the tail's facts give the same result whichever comes first (review 2900 F4). At most
+ * `HELPER_FACTS_MAX` ids are kept, those with the oldest newest fact evicted first, ties by id (a notification for a task
+ * that is no Agent helper — a workflow's, a shell's — is a fact too, and nothing here can tell it from one). Past that bound
+ * an evicted id's later fact starts it afresh, so the order can matter there (a recorded residual). `prev` is never mutated.
  */
 export function foldHelperFacts(prev: ReadonlyMap<string, HelperIdFacts>, facts: readonly HelperFact[]): Map<string, HelperIdFacts> {
   const out = new Map(prev);
@@ -609,11 +628,11 @@ export function foldHelperFacts(prev: ReadonlyMap<string, HelperIdFacts>, facts:
         from: f.source,
       });
     }
-    out.delete(f.id);
     out.set(f.id, { launch, end });
   }
-  while (out.size > HELPER_FACTS_MAX) out.delete(out.keys().next().value as string);
-  return out;
+  if (out.size <= HELPER_FACTS_MAX) return out;
+  const keep = [...out].sort(([ia, a], [ib, b]) => factTime(b) - factTime(a) || (ia < ib ? -1 : ia > ib ? 1 : 0)).slice(0, HELPER_FACTS_MAX);
+  return new Map(keep);
 }
 
 /** What one Agent helper's meta file and transcript say, as the reader measured them. */
@@ -693,9 +712,12 @@ export function capKeptWorkflow(v: WorkflowView): WorkflowView {
   return { ...v, agents: cut.agents, agentsOmitted: v.agentsOmitted + cut.omitted };
 }
 
-/** Remove controls and unpaired UTF-16 surrogates from display text; valid supplementary characters survive. */
+/** Display text on one line: the shared unprintable set's strip (`shared/unprintable.ts#stripLine`: controls, format and
+ *  bidi characters, the line separators, each run a space, the ends trimmed), after the unpaired UTF-16 surrogates, which
+ *  are no character to show and JSON-escape to six bytes, are removed. One rule with every other one-line string (review
+ *  3033 F5); valid supplementary characters survive. */
 const helperDisplayText = (v: unknown): string | null =>
-  typeof v === 'string' ? v.replace(/[\p{Cc}\p{Cs}]/gu, '') || null : null;
+  typeof v === 'string' ? stripLine(v.replace(/\p{Cs}/gu, '')) || null : null;
 
 const capChars = (s: string | null, max: number): string | null => {
   if (s === null) return null;
@@ -909,9 +931,12 @@ export type HookRosterRead =
 
 export interface HelperHookReading { readonly uuid: string; readonly at: number; readonly raw: HookRosterRead }
 
-/** A lagged roster publication must not fabricate a drop. Apply this to the helper arm only, never the hook ask. */
-export function orderHelperHook(last: HelperHookReading | null, next: HelperHookReading): HelperHookReading {
-  return last !== null && last.uuid === next.uuid && next.at < last.at ? last : next;
+/** A lagged roster publication must not fabricate a drop. Apply this to the helper arm only, never the hook ask. `lagMs` is
+ *  the most a read of the reading can lag the last one (the feed's freshness window, `sessionFeed.ts#PUBLISHED_FRESH_MS`):
+ *  a read older than the last by more than that is not a lag but a clock that stepped back, and is taken. So after a step
+ *  back the roster holds its last reading for at most `lagMs` (review 3033 F4, session helpers H1c, D-8873). */
+export function orderHelperHook(last: HelperHookReading | null, next: HelperHookReading, lagMs: number): HelperHookReading {
+  return last !== null && last.uuid === next.uuid && next.at < last.at && last.at - next.at <= lagMs ? last : next;
 }
 
 /**

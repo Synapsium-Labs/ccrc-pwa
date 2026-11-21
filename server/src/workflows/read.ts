@@ -29,6 +29,7 @@ import { walkBack } from '../backread.js';
 import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 import { WORKFLOW_EVICT_MS, isFinalHelperState, isHelperId, type AgentHelperState, type WorkflowView } from '../../../shared/workflows.js';
 import type { HelperFact } from '../transcript/parse.js';
+import { HelperStartScan, type HelperScanSeam } from './helperScan.js';
 import {
   decideAgentHelpers,
   emptyHelperMemory,
@@ -140,16 +141,21 @@ export class SessionWorkflows {
 
   /** H1b: the session's Agent helpers, read beside its workflows and rebuilt with them when the session dir changes. */
   private readonly helpers: SessionHelpers;
+  /** H1c (D-8873): the start scan of this session's transcript, once per reader (`helperScan.ts`). */
+  private readonly startScan: HelperStartScan;
 
   constructor(private readonly io: FleetIO, readonly sessionDir: string) {
     this.helpers = new SessionHelpers(io, sessionDir);
+    this.startScan = new HelperStartScan(io, `${sessionDir}.jsonl`);
   }
 
   /** One reading of the session's helpers (H1b, D-8862; spec §3.1): the workflow arm, whose missing directory answers
-   *  `absent` at once, and the Agent arm, which runs regardless, each in its own budget. */
-  async readAll(proc: Proc, now: number, agents: { roster: RosterInput; facts: readonly HelperFact[] }): Promise<{ workflows: WorkflowsRead; helpers: HelpersRead }> {
+   *  `absent` at once, and the Agent arm, which runs regardless, each in its own budget. The start scan's facts (H1c,
+   *  D-8873) join the stream's: `step` starts it from `agents.scan`, the stream's seam, and never waits for its reads. */
+  async readAll(proc: Proc, now: number, agents: { roster: RosterInput; facts: readonly HelperFact[]; scan?: HelperScanSeam }): Promise<{ workflows: WorkflowsRead; helpers: HelpersRead }> {
     const workflows = await this.read(proc, now);
-    return { workflows, helpers: await this.helpers.read({ ...agents, proc, now }) };
+    const facts = [...this.startScan.step({ ...agents, now }), ...agents.facts];
+    return { workflows, helpers: await this.helpers.read({ roster: agents.roster, facts, proc, now }) };
   }
 
   private get runsDir(): string { return path.join(this.sessionDir, 'subagents', 'workflows'); }
@@ -623,8 +629,9 @@ export class SessionHelpers {
     c.metaTick = this.tick;
   }
 
+  /** The final last-write attempt failed (its stat or its range): the hold ends. A last write already measured stays, so
+   *  the row ends at it and is kept; only a helper whose last write was never measured ends with no time (review 3033 F1). */
   private markLastWriteUnreadable(c: HelperCache): void {
-    c.lastWriteAt = null;
     c.lastWriteKnown = true;
   }
 
