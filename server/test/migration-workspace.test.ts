@@ -71,7 +71,8 @@ describe('the open read is in the migration\'s workspace', () => {
     const r = await twoWorkspaces();
     const open = await r.mig.readOpen('AAA', WS.b.id);
     expect(open).toMatchObject({ ok: true, workspaceId: WS.b.id });
-    expect(r.asks.filter((a) => a.op === 'teamOpenIssues').map((a) => a.workspaceId)).toEqual([WS.b.id]);
+    expect(r.asks.filter((a) => a.op === 'teamOpenIssues').map((a) => ({ workspaceId: a.workspaceId, slot: a.slot })))
+      .toEqual([{ workspaceId: WS.b.id, slot: { source: 'file', id: WS.b.id } }]);
   });
   it('a workspace that does not hold the team is unreachable', async () => {
     const r = await twoWorkspaces();

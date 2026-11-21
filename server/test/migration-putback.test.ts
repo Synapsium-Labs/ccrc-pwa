@@ -339,10 +339,12 @@ describe('a take that lands while put back reads or waits to write (review 3016 
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);
     const id = await r.applied([entry(1, 'stale'), entry(2, 'stale')]);
+    const flights = vi.spyOn(r.sync, 'withFlight');
     let taken = false;
     r.override.current = (ask) => { if (ask.op === 'issueOwned' && ask.input['id'] === U(101) && !taken) { taken = true; hold(r, 1, 'held1'); } return undefined; };
     await putBack(r, id);
     expect(taken).toBe(true);
+    expect(flights.mock.calls.some(([key]) => key === `migration:${U(101)}`)).toBe(false);
     expect(restores(r, 1)).toEqual([]);
     expect(r.issues.get(U(101))!.stateType).toBe('canceled');      // left as it is
     expect(r.issues.get(U(102))!.stateType).toBe('unstarted');     // the next row is restored
