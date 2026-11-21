@@ -558,8 +558,10 @@ number from `POST /api/ledger/deviations`.
   write on the card, which makes the key `manual`. The door process gains a `link_team` tool row. A call has an address on the
   Waiting on you screen since run 3209: `/waiting?call=<id>`, a query on the list's route as its filter is (`callPath`,
   `callParamOf`), because a call has no page of its own, as an item does, only a place in the list. The card's line for the
-  link opens its call there; a link the wire carries without a readable call id opens the screen, as before. Record: the wave 8
-  note.
+  link opens its call there; a link the wire carries without a readable call id opens the screen, as before. The landing
+  says only what the list draws (review 3217): `callTargetOf` answers open, cleared (inside the trail's own 48-hour window),
+  hidden (the side rail's filter hides it), gone, or not yet heard (only on the device's saved list), and the page scrolls
+  once per address. Record: the wave 8 note.
 
 ## Global Constraints
 
