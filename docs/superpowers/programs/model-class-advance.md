@@ -95,7 +95,7 @@ The programme's plan (`ccrc-api plan show model-class-advance`) holds the same e
 | 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | in review, round 2 (run 2910) |
 | 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | | planned |
 | 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | planned |
-| - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | reviewed and accepted (run 2821); lands after 2026-11-21 |
+| - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | accepted (run 2821); in the merge queue since 2026-11-21 |
 | - | models-sheet | transient-beside-kept-answer | The sheet names a transient answer beside a kept one; a session-screen case and two text corrections | #3086 | merged 2026-11-19 |
 | - | models-sheet | revert-writes-before-refusing | A refused Revert must not leave the class held | #3118 | folded into wave 3 |
 | - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | | after waves 3 and 8 |
@@ -117,8 +117,8 @@ lists). The three follow-ups marked "after wave 7" touch wave 7's files too, so 
 Wave 7 merged on 2026-11-20 (#3107). Waves 3 and 8 then ran side by side, each built on `main` after #3107. They share
 the advance rule, its declaration file, `ccd/ccrc` and two test files, and each edits only the hunks the other's worker
 consented to in writing, one round at a time; a consent releases no claim. Wave 3 passed its fourth review round and wave 8
-is in its second. Wave 3 lands only after the Codex bridge's check week has closed and its evidence is handed over;
-`usage-user-agent` (#3085) waits for the same handoff.
+is in its second. The Codex bridge's check week closed on 2026-11-21 and its evidence was handed over, so wave 3 now waits only
+for its DevOps approval, and `usage-user-agent` (#3085) entered the merge queue the same hour.
 
 ## Waiting on the owner
 
@@ -183,7 +183,11 @@ head back for a fix; item 519 asks for it on wave 3's accepted head, 776e4a9f.
   daily reading counts FAIL lines and `codex` WARN lines only, and the four are WARN-only under their own names; and
   its one refresh change, the reaping of stale catalogue temp files, is smaller than the client-version changes that
   already reached the refresh during the week. So #2943 landed that day. `usage-user-agent` still waits for the week to
-  close, because it changes the usage poll the daily reading reads.
+  close, because it changes the usage poll the daily reading reads. The week closed at the 2026-11-21 00:03Z
+  reading: the bridge's criteria held on all eight readings (both lanes direct with the bridge running and signed in,
+  both usage polls fresh, the refresh 24 runs a day with no failure), and no doctor FAIL came from the bridge. Its
+  evidence went to the bridge programme's reviewer, and #3085 entered the queue. Removing the old runtime waits until the
+  owner has seen that evidence (D-8639).
 - **Wave 7 leaves the README alone.** Another run's freeze holds `README.md`, and its holder declined wave 7's lines
   (the four Anthropic causes in the doctor section, the aliases file in the models section). They become a follow-up
   after that freeze lifts, named by wave 7's report. Wave 8 carries three exact README hunks under the holder's
