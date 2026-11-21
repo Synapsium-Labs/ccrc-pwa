@@ -247,6 +247,17 @@ describe('a call named in the URL (D-8808, D-8809)', () => {
     expect(document.querySelector('li[data-call="6"]')!.hasAttribute('aria-current')).toBe(false);
   });
 
+  it('the live list with the device\'s session rows says gone for a call no longer on it, never "not saved on this device" (review 3217 F2)', () => {
+    history.replaceState(null, '', callPath(99));
+    const store = mk();
+    // The waiting frame first, the fleet frame after: the view is live, the rows are the device's (`saved-rows`).
+    act(() => store.setState({ waiting: view(), sessions: [fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question' })] }));
+    render(<WaitingRoute store={store} />);
+    expect(screen.getAllByRole('status').map((n) => n.textContent)).toContain(SAVED_ROWS_WORD);
+    expect(document.querySelector('[data-call-target="gone"]')).not.toBeNull();
+    expect(document.querySelector('[data-call-target="unheard"]')).toBeNull();
+  });
+
   it('a view that arrives after the mount still opens and marks the call', () => {
     history.replaceState(null, '', callPath(7));
     const store = mk();

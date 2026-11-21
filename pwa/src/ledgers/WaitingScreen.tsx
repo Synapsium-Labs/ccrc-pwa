@@ -74,7 +74,15 @@ export interface WaitingScreenProps {
   /** The call the URL names (`?call=<id>`, D-8808, D-8809), or absent. Once the list is heard the screen opens that call's group
    *  and marks it, or says where the call went (`callTargetOf` decides which). */
   readonly call?: number | null;
+  /** True when the VIEW itself is the device's saved list (the route's `saved-list` source): a call in neither list may then be
+   *  one the device has not heard, which the screen says (`unheard`). Absent, the view is the live list, even when `notCurrent`
+   *  marks the session rows as the device's (`saved-rows`). */
+  readonly listSaved?: boolean;
 }
+
+/** The call id the screen last scrolled to: ONE scroll per address across the group and the trail (review 3217 A1), so a Seen on
+ *  the named call, which moves it from the group to the trail, never scrolls the operator away from where they acted. */
+type ScrolledTo = { current: number | null };
 
 /** The Seen door, as the route hands it in (D-8126). */
 export type CallSeen = (id: number) => Promise<unknown>;
@@ -243,8 +251,8 @@ function useCallActs(onSeen: CallSeen | undefined, onOverturn: OverturnSend | un
  *  (D-8126). Never part of the blocking count, the rail's counts or the summary: a call needs nothing from the operator but a
  *  glance. Each carries Seen and, on a call not yet overturned, Overturn… where they are offered; the row leaves for the
  *  cleared trail on the next frame. It keeps no state: the acts' state is the screen's (`CallActs`). Nothing is drawn for none. */
-export function CallsGroup({ calls, now, acts, targetId = null }: {
-  calls: readonly CallView[]; now: number; acts: CallActs;
+export function CallsGroup({ calls, now, acts, targetId = null, scrolled }: {
+  calls: readonly CallView[]; now: number; acts: CallActs; scrolled?: ScrolledTo;
   /** The call the URL names (D-8808): when this group holds it, the group opens ONCE for that id (the details element's own state,
    *  not a controlled prop, so the group does not fold when the call leaves on Seen) and the call's row is marked and scrolled to. */
   targetId?: number | null;
@@ -256,8 +264,10 @@ export function CallsGroup({ calls, now, acts, targetId = null }: {
     if (!holds || group.current === null || opened.current === targetId) return;
     opened.current = targetId;
     group.current.open = true;
+    if (scrolled !== undefined && scrolled.current === targetId) return;
+    if (scrolled !== undefined) scrolled.current = targetId;
     group.current.querySelector(`li[data-call="${targetId}"]`)?.scrollIntoView?.({ block: 'center' });
-  }, [holds, targetId]);
+  }, [holds, targetId, scrolled]);
   if (calls.length === 0) return null;
   const { seen, overturn, asked, refused } = acts;
   return (
@@ -283,8 +293,8 @@ export function CallsGroup({ calls, now, acts, targetId = null }: {
 
 /** A programme with calls made for the operator and no row of its own (D-8126): its heading and its calls, drawn among the
  *  groups so a call is seen where the programme's rows would be, and never counted. */
-function CallsApart({ program, title, hue, calls, now, acts, targetId }: {
-  program: string; title: string; hue: string | null; calls: readonly CallView[]; now: number; acts: CallActs; targetId: number | null;
+function CallsApart({ program, title, hue, calls, now, acts, targetId, scrolled }: {
+  program: string; title: string; hue: string | null; calls: readonly CallView[]; now: number; acts: CallActs; targetId: number | null; scrolled: ScrolledTo;
 }): ReactNode {
   return (
     <section className="wl-group" data-program={program} data-hue={hue ?? 'none'} data-calls-only="true" aria-label={title}>
@@ -292,7 +302,7 @@ function CallsApart({ program, title, hue, calls, now, acts, targetId }: {
         <span className="wl-swatch" aria-hidden="true" />
         <h2 className="wl-gtitle">{title}</h2>
       </div>
-      <CallsGroup calls={calls} now={now} acts={acts} targetId={targetId} />
+      <CallsGroup calls={calls} now={now} acts={acts} targetId={targetId} scrolled={scrolled} />
     </section>
   );
 }
@@ -300,14 +310,14 @@ function CallsApart({ program, title, hue, calls, now, acts, targetId }: {
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null, asks, calls = NO_CALLS, callActs = NO_CALL_ACTS, targetCall = null }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null, asks, calls = NO_CALLS, callActs = NO_CALL_ACTS, targetCall = null, scrolled }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
   rowActs?: RowActs | null; itemHref?: ItemHref | null; asks?: readonly AskMarkRow[];
   /** The programme's calls made for the operator (D-8126), drawn collapsed below its rows; none draws nothing. */
   calls?: readonly CallView[]; callActs?: CallActs;
   /** The call the URL names (D-8808), for the group that holds it. */
-  targetCall?: number | null;
+  targetCall?: number | null; scrolled?: ScrolledTo;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -326,7 +336,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
       </div>
       <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} itemHref={itemHref}
                 {...(asks === undefined ? {} : { asks })} />
-      <CallsGroup calls={calls} now={now} acts={callActs} targetId={targetCall} />
+      <CallsGroup calls={calls} now={now} acts={callActs} targetId={targetCall} {...(scrolled === undefined ? {} : { scrolled })} />
     </section>
   );
 }
@@ -337,10 +347,10 @@ type Where = (program: string | null) => string;
 
 /** One row of the Recently cleared trail: an item, (answer marks B) an ask the operator has that is not live, or (D-8126) a
  *  big call that left "Calls made for you". */
-function ClearedRow({ entry, where, now, current, targetCall = null }: {
-  entry: ClearedEntry; where?: Where | undefined; now: number; current: boolean; targetCall?: number | null;
+function ClearedRow({ entry, where, now, current, targetCall = null, scrolled }: {
+  entry: ClearedEntry; where?: Where | undefined; now: number; current: boolean; targetCall?: number | null; scrolled?: ScrolledTo;
 }): ReactNode {
-  if (entry.kind === 'call') return <ClearedCallRow call={entry.call} where={where} now={now} targeted={entry.call.id === targetCall} />;
+  if (entry.kind === 'call') return <ClearedCallRow call={entry.call} where={where} now={now} targeted={entry.call.id === targetCall} scrolled={scrolled} />;
   return entry.kind === 'item'
     ? <ClearedItemRow item={entry.item} where={where} now={now} current={current} />
     : <ClearedAskRow ask={entry.ask} where={where} now={now} current={current} />;
@@ -348,10 +358,16 @@ function ClearedRow({ entry, where, now, current, targetCall = null }: {
 
 /** A cleared call (D-8126): its line as the group drew it, where, and how and when it cleared (review 2792 F8: an overturned call
  *  is never a bare tick that reads as accepted). Read only: Seen and Overturn… live in the group. */
-function ClearedCallRow({ call, where, now, targeted }: { call: CallView; where?: Where | undefined; now: number; targeted: boolean }): ReactNode {
+function ClearedCallRow({ call, where, now, targeted, scrolled }: {
+  call: CallView; where?: Where | undefined; now: number; targeted: boolean; scrolled: ScrolledTo | undefined;
+}): ReactNode {
   const row = useRef<HTMLLIElement>(null);
-  // The call the URL names (D-8808): marked, and scrolled to once it is drawn.
-  useEffect(() => { if (targeted) row.current?.scrollIntoView?.({ block: 'center' }); }, [targeted]);
+  // The call the URL names (D-8808): marked, and scrolled to once per address (A1), however often its row is drawn again.
+  useEffect(() => {
+    if (!targeted || (scrolled !== undefined && scrolled.current === call.id)) return;
+    if (scrolled !== undefined) scrolled.current = call.id;
+    row.current?.scrollIntoView?.({ block: 'center' });
+  }, [targeted, call.id, scrolled]);
   const place = where?.(call.program);
   const how = callClearedHow(call);
   const tail = [place, `${CALL_CLEARED_WORD[how]} ${ageWords(callClearedOn(call), now)}`].filter((t) => t !== undefined);
@@ -406,17 +422,7 @@ interface ClearedGrouping { readonly title: (program: string | null) => string; 
  *  order of its newest clear, its name beside its hue's swatch and its count, each COLLAPSED until its heading is pressed. Which
  *  groups are open lives in this component's state alone: Show fewer forgets it, and so does leaving the page (nothing is kept
  *  in storage). The list filtered to one programme has one group, so it draws its share as one plain list. */
-export function ClearedTrail(props: ClearedTrailProps): ReactNode {
-  // Keyed by where the target stands, so a list that gains the call later (a saved copy, then the live list) remounts the trail
-  // with the initial state that shows it (D-8808).
-  const { items, asks = [], calls = NO_CALLS, now, targetCallId = null } = props;
-  const place = targetCallId === null ? null : clearedCallPlace(clearedTrail(items, now, asks, calls), targetCallId);
-  return <ClearedTrailBody key={clearedCallPlaceKey(place)} {...props} />;
-}
-
-type ClearedTrailProps = Parameters<typeof ClearedTrailBody>[0];
-
-function ClearedTrailBody({ items, asks = [], calls = NO_CALLS, where, now, grouping, current = false, targetCallId = null }: {
+export function ClearedTrail({ items, asks = [], calls = NO_CALLS, where, now, grouping, current = false, targetCallId = null, scrolled }: {
   items: readonly ItemView[]; where?: Where; now: number; grouping?: ClearedGrouping;
   /** The asks the operator has that are not live (answer marks B), joined to the trail by their time. */
   asks?: readonly AskMarkRow[];
@@ -426,13 +432,27 @@ function ClearedTrailBody({ items, asks = [], calls = NO_CALLS, where, now, grou
    *  every act on a saved copy is. */
   current?: boolean;
   /** The call the URL names (D-8808): its row is marked, and the trail starts expanded (its programme's group open, when grouped)
-   *  when that row lies beyond the newest `CLEARED_SHOWN`, so the row is on the page. Read at the first draw only. */
+   *  when that row lies beyond the newest `CLEARED_SHOWN`, so the row is on the page. It adjusts when the row's place first needs
+   *  it (and again if the place changes), only ever expanding: what the operator chose stays chosen. */
   targetCallId?: number | null;
+  /** The screen's one record of the call last scrolled to (A1). */
+  scrolled?: ScrolledTo;
 }): ReactNode {
-  const place = targetCallId === null ? null : clearedCallPlace(clearedTrail(items, now, asks, calls), targetCallId);
-  const [all, setAll] = useState(place !== null && place.beyond);
-  const [open, setOpen] = useState<ReadonlySet<string | null>>(() => new Set(place !== null && place.beyond && grouping !== undefined ? [place.program] : []));
   const trail = clearedTrail(items, now, asks, calls);
+  const place = targetCallId === null ? null : clearedCallPlace(trail, targetCallId);
+  const [all, setAll] = useState(false);
+  const [open, setOpen] = useState<ReadonlySet<string | null>>(() => new Set());
+  // Adjusted during the render that sees a new place (the pattern `WaitingRoutes.tsx#useKeptPlace` uses), so the row is never
+  // drawn hidden for a frame: expand when the target lies beyond the shown rows, never collapse.
+  const [applied, setApplied] = useState('none');
+  const placeKey = clearedCallPlaceKey(place);
+  if (applied !== placeKey) {
+    setApplied(placeKey);
+    if (place !== null && place.beyond) {
+      setAll(true);
+      if (grouping !== undefined) setOpen((was) => new Set([...was, place.program]));
+    }
+  }
   if (trail.length === 0) return null;
   const more = trail.length > CLEARED_SHOWN;
   const whole = all || !more;
@@ -460,13 +480,13 @@ function ClearedTrailBody({ items, asks = [], calls = NO_CALLS, where, now, grou
                     <span className="wl-cg-n">{clearedCountWord(g.entries.length)}</span>
                     <span className="wl-cg-chev" aria-hidden="true" />
                   </BareRow>
-                  {shown && <ul id={listId}>{g.entries.map((c) => <ClearedRow key={entryKey(c)} entry={c} now={now} current={current} targetCall={targetCallId} />)}</ul>}
+                  {shown && <ul id={listId}>{g.entries.map((c) => <ClearedRow key={entryKey(c)} entry={c} now={now} current={current} targetCall={targetCallId} scrolled={scrolled} />)}</ul>}
                 </div>
               );
             })}
           </div>
         )
-        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={entryKey(c)} entry={c} where={where} now={now} current={current} targetCall={targetCallId} />)}</ul>}
+        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={entryKey(c)} entry={c} where={where} now={now} current={current} targetCall={targetCallId} scrolled={scrolled} />)}</ul>}
       {more && (
         <Button variant="ghost" size="fit" className="wl-cleared-more" aria-expanded={all}
                 onClick={() => { setAll((v) => !v); setOpen(new Set()); }}>
@@ -489,6 +509,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   // Before any early return: the call acts' state outlives every frame (review 2792 F1, F2). A list from the device's saved copy
   // acts on nothing, like every other act on a saved copy.
   const { acts: callActs, sheet: callSheet } = useCallActs(props.onSeen, props.onOverturn, props.notCurrent === undefined);
+  const scrolled = useRef<number | null>(null);
   const pick = (programme: string | null): void => props.onFilter?.(programme);
   if (view === null || sessions === null) {
     return (
@@ -527,12 +548,15 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const empty = groups.length === 0 && (view.approvals?.length ?? 0) === 0;
   // Calls made for the operator (D-8126) never count and never make a group on the rows' account: a programme with calls and no
   // rows draws them apart, among the groups, under the filter that shows it.
-  const target = props.call === undefined || props.call === null ? null : callTargetOf(view, props.call, props.notCurrent === undefined);
-  const targetId = target === null || target.at === 'gone' || target.at === 'unheard' ? null : target.call.id;
   const callFilter: CallFilter = { noProgramme, programme: list.programme };
+  // What the link's address names, over what is drawn: the clock, the filter, and whether the view is the live list (D-8808).
+  const target = props.call === undefined || props.call === null
+    ? null
+    : callTargetOf(view, props.call, { live: props.listSaved !== true, now, filter: callFilter });
+  const targetId = target?.at === 'open' || target?.at === 'cleared' ? target.call.id : null;
   const callsFor = (p: string | null): readonly CallView[] => (p === null ? NO_CALLS : openCallsOf(view, p));
   const apartBlock = callsApartOf(view, groups.map((g) => g.program), callFilter).map((p) => (
-    <CallsApart key={`calls:${p}`} program={p} title={titleOf(p)} hue={hues.get(p) ?? null} calls={callsFor(p)} now={now} acts={callActs} targetId={target?.at === 'open' ? targetId : null} />
+    <CallsApart key={`calls:${p}`} program={p} title={titleOf(p)} hue={hues.get(p) ?? null} calls={callsFor(p)} now={now} acts={callActs} targetId={target?.at === 'open' ? targetId : null} scrolled={scrolled} />
   ));
   const clearedCalls = clearedCallsOf(view, callFilter);
   return (
@@ -578,7 +602,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
                              hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs} itemHref={props.itemHref ?? null} asks={liveAsks}
-                             calls={callsFor(g.program)} callActs={callActs} targetCall={target?.at === 'open' ? targetId : null}
+                             calls={callsFor(g.program)} callActs={callActs} targetCall={target?.at === 'open' ? targetId : null} scrolled={scrolled}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
                 {apartBlock}
@@ -591,9 +615,9 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
           cleared asks (answer marks B). */}
       {list.programme !== null
         ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} asks={clearedAsks.filter((a) => a.program === list.programme)}
-                        calls={clearedCalls} now={now} current={rowActs.enabled} targetCallId={target?.at === 'cleared' ? targetId : null} />
+                        calls={clearedCalls} now={now} current={rowActs.enabled} targetCallId={target?.at === 'cleared' ? targetId : null} scrolled={scrolled} />
         : <ClearedTrail items={noProgramme ? [] : view.cleared} asks={noProgramme ? clearedAsks.filter((a) => a.program === null) : clearedAsks}
-                        calls={clearedCalls} now={now} where={titleOf} current={rowActs.enabled} targetCallId={target?.at === 'cleared' ? targetId : null}
+                        calls={clearedCalls} now={now} where={titleOf} current={rowActs.enabled} targetCallId={target?.at === 'cleared' ? targetId : null} scrolled={scrolled}
                         grouping={{ title: titleOf, hue: (p) => (p === null ? null : hues.get(p) ?? null) }} />}
       {sheets}
       {callSheet}

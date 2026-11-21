@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { CallView } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import {
-  CALLS_GROUP_WORDS, CALL_REFUSAL_TEXT, CALL_TARGET_WORDS, callTargetOf, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsApartOf, clearedCallsOf, openCallsOf,
+  CALLS_GROUP_WORDS, CALL_REFUSAL_TEXT, CALL_TARGET_WORDS, callFilterShows, callTargetOf, type CallFilter, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsApartOf, clearedCallsOf, openCallsOf,
 } from '../src/ledgers/callWords';
+import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import { MIN, NOW, waitingView } from './ledgersFixture';
 
 const call = (over: Partial<CallView> = {}): CallView => ({
@@ -80,22 +81,52 @@ describe('call refusals', () => {
   });
 });
 
-// D-8808, D-8809: a call has an address on the list, `?call=<id>`; what that address names is decided here.
+// D-8808, D-8809: a call has an address on the list, `?call=<id>`; what that address names is decided here, over what the
+// screen draws (review 3217): the 48-hour window and the filter included.
 describe('callTargetOf', () => {
+  const ALL: CallFilter = { noProgramme: false, programme: null };
+  const at = (over: Partial<{ live: boolean; now: number; filter: CallFilter }> = {}) => ({ live: true, now: NOW, filter: ALL, ...over });
   const view = { ...waitingView(), calls: [call({ id: 1 })], callsCleared: [call({ id: 2, seenAt: NOW - MIN })] };
   it('a call still to see is open, a call on the trail is cleared, any other is gone', () => {
-    expect(callTargetOf(view, 1, true)).toEqual({ at: 'open', call: view.calls[0]! });
-    expect(callTargetOf(view, 2, true)).toEqual({ at: 'cleared', call: view.callsCleared[0]! });
-    expect(callTargetOf(view, 3, true)).toEqual({ at: 'gone' });
-    expect(callTargetOf(view, 3, false)).toEqual({ at: 'unheard' });
-    expect(callTargetOf(view, 1, false)).toEqual({ at: 'open', call: view.calls[0]! });
+    expect(callTargetOf(view, 1, at())).toEqual({ at: 'open', call: view.calls[0]! });
+    expect(callTargetOf(view, 2, at())).toEqual({ at: 'cleared', call: view.callsCleared[0]! });
+    expect(callTargetOf(view, 3, at())).toEqual({ at: 'gone' });
+  });
+  it('a call in neither list on a view that is not the live one is unheard, never gone', () => {
+    expect(callTargetOf(view, 3, at({ live: false }))).toEqual({ at: 'unheard' });
+    expect(callTargetOf(view, 1, at({ live: false }))).toEqual({ at: 'open', call: view.calls[0]! });
   });
   it('an older view with no calls fields is gone', () => {
-    expect(callTargetOf(waitingView(), 1, true)).toEqual({ at: 'gone' });
+    expect(callTargetOf(waitingView(), 1, at())).toEqual({ at: 'gone' });
   });
-  it('the two notices are pinned', () => {
+  it('a call cleared outside the trail\'s 48-hour window is gone, live or not, never cleared (review 3217 F1)', () => {
+    const old = { ...waitingView(), callsCleared: [call({ id: 5, seenAt: NOW - CLEARED_WINDOW_MS - MIN })] };
+    expect(callTargetOf(old, 5, at())).toEqual({ at: 'gone' });
+    expect(callTargetOf(old, 5, at({ live: false }))).toEqual({ at: 'gone' });
+    const edge = { ...waitingView(), callsCleared: [call({ id: 6, seenAt: NOW - CLEARED_WINDOW_MS })] };
+    expect(callTargetOf(edge, 6, at()).at).toBe('cleared');
+  });
+  it('a call the filter hides is hidden, open or cleared (review 3217 F3)', () => {
+    const v = { ...waitingView(), calls: [call({ id: 1, program: 'prog-b' })], callsCleared: [call({ id: 2, program: 'prog-b', seenAt: NOW - MIN })] };
+    const only = at({ filter: { noProgramme: false, programme: 'prog-a' } });
+    expect(callTargetOf(v, 1, only)).toEqual({ at: 'hidden' });
+    expect(callTargetOf(v, 2, only)).toEqual({ at: 'hidden' });
+    expect(callTargetOf(v, 1, at({ filter: { noProgramme: true, programme: null } }))).toEqual({ at: 'hidden' });
+    expect(callTargetOf(v, 2, at({ filter: { noProgramme: false, programme: 'prog-b' } })).at).toBe('cleared');
+  });
+  it('the notices are pinned', () => {
     expect(CALL_TARGET_WORDS.cleared).toBe('That call has cleared. It is marked below, in Recently cleared.');
     expect(CALL_TARGET_WORDS.gone).toBe('That call has cleared and is no longer on this list.');
     expect(CALL_TARGET_WORDS.unheard).toBe('That call is not in the list saved on this device. It shows here once the list is current.');
+    expect(CALL_TARGET_WORDS.hidden).toBe('The filter on this list hides that call. Choose All programmes to see it.');
+  });
+});
+
+describe('callFilterShows', () => {
+  it('is the one predicate: no programme shows none, a programme shows its own, none shows all', () => {
+    expect(callFilterShows({ noProgramme: true, programme: null }, 'prog-a')).toBe(false);
+    expect(callFilterShows({ noProgramme: false, programme: 'prog-a' }, 'prog-a')).toBe(true);
+    expect(callFilterShows({ noProgramme: false, programme: 'prog-a' }, 'prog-b')).toBe(false);
+    expect(callFilterShows({ noProgramme: false, programme: null }, 'prog-b')).toBe(true);
   });
 });

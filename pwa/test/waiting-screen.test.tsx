@@ -1,6 +1,6 @@
 // The Waiting on you list (desktop-polish PL5a, D-7712; spec §2, view 1 of the prototype). `WaitingScreen` is pure over
 // `{view, sessions, runs, now}`: it grows no store and no route of its own, so the cases pass what the shell would.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -1158,7 +1158,7 @@ describe('calls made for you (D-8126)', () => {
       expect(marked()).toEqual([]);
     });
     it('a saved copy without the call says it is not heard, never that it cleared, and marks nothing', () => {
-      open({ view: withItem({ calls: [call({ id: 1 })] }), call: 99, notCurrent: 'Saved on this device.' });
+      open({ view: withItem({ calls: [call({ id: 1 })] }), call: 99, notCurrent: 'Saved on this device.', listSaved: true });
       expect(document.querySelector('[data-call-target="unheard"]')!.textContent).toBe(CALL_TARGET_WORDS.unheard);
       expect(document.querySelector('[data-call-target="gone"]')).toBeNull();
       expect(marked()).toEqual([]);
@@ -1185,6 +1185,77 @@ describe('calls made for you (D-8126)', () => {
         open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - MIN })] }), call: 3 });
         expect(scroll.mock.contexts).toEqual([document.querySelector('.wl-cleared-row[data-call="3"]')]);
       } finally { HTMLElement.prototype.scrollIntoView = was; }
+    });
+    it('a live view with device rows (notCurrent, the list not saved) says gone, never unheard (review 3217 F2)', () => {
+      open({ view: withItem({ calls: [call({ id: 1 })] }), call: 99, notCurrent: 'Rows from this device.' });
+      expect(document.querySelector('[data-call-target="gone"]')!.textContent).toBe(CALL_TARGET_WORDS.gone);
+      expect(document.querySelector('[data-call-target="unheard"]')).toBeNull();
+    });
+    it('a call cleared outside the 48-hour window says gone, and no "marked below" (review 3217 F1)', () => {
+      open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - 49 * 60 * MIN })] }), call: 3 });
+      expect(document.querySelector('[data-call-target="gone"]')).not.toBeNull();
+      expect(document.querySelector('[data-call-target="cleared"]')).toBeNull();
+    });
+    it('an open call the filter hides says so, and marks nothing (review 3217 F3)', () => {
+      open({ view: withItem({ calls: [call({ id: 4, program: 'prog-b' })] }), call: 4, programme: 'prog-a' });
+      expect(document.querySelector('[data-call-target="hidden"]')!.textContent).toBe(CALL_TARGET_WORDS.hidden);
+      expect(document.querySelector('[data-call-target="cleared"]')).toBeNull();
+      expect(marked()).toEqual([]);
+    });
+    it('a cleared call in another programme under the filter says the filter hides it, never "marked below" (review 3217 F3)', () => {
+      open({ view: withItem({ callsCleared: [call({ id: 3, program: 'prog-b', seenAt: NOW - MIN })] }), call: 3, programme: 'prog-a' });
+      expect(document.querySelector('[data-call-target="hidden"]')!.textContent).toBe(CALL_TARGET_WORDS.hidden);
+      expect(document.querySelector('[data-call-target="cleared"]')).toBeNull();
+      expect(marked()).toEqual([]);
+    });
+    describe('scrolling', () => {
+      const scroll = vi.fn();
+      let was: typeof HTMLElement.prototype.scrollIntoView;
+      beforeEach(() => { scroll.mockClear(); was = HTMLElement.prototype.scrollIntoView; HTMLElement.prototype.scrollIntoView = scroll; });
+      afterEach(() => { HTMLElement.prototype.scrollIntoView = was; });
+      const props = { sessions: [], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+      it('a Seen on the named call moves it to the trail and scrolls nothing more (A1)', () => {
+        const { rerender } = render(<WaitingScreen view={withItem({ calls: [call({ id: 1 }), call({ id: 2 })] })} call={2} {...props} />);
+        expect(scroll).toHaveBeenCalledTimes(1);
+        rerender(<WaitingScreen view={withItem({ calls: [call({ id: 1 })], callsCleared: [call({ id: 2, seenAt: NOW })] })} call={2} {...props} />);
+        expect(document.querySelector('.wl-cleared-row[data-call="2"]')).not.toBeNull();
+        expect(scroll).toHaveBeenCalledTimes(1);
+      });
+      it('folding and re-opening the target\'s trail group scrolls nothing more (A1)', () => {
+        const newer = Array.from({ length: 6 }, (_, i) => call({ id: 10 + i, program: 'prog-a', seenAt: NOW - (i + 1) * MIN }));
+        const old = call({ id: 50, program: 'prog-b', seenAt: NOW - 60 * MIN });
+        open({ view: withItem({ callsCleared: [...newer, old] }), call: 50 });
+        expect(scroll).toHaveBeenCalledTimes(1);
+        const head = document.querySelector('.wl-cg-head[data-program="prog-b"]')!;
+        fireEvent.click(head);
+        fireEvent.click(head);
+        expect(document.querySelector('.wl-cleared-row[data-call="50"]')).not.toBeNull();
+        expect(scroll).toHaveBeenCalledTimes(1);
+      });
+    });
+    it('a mounted group that later gains the named call opens and marks it (A3)', () => {
+      const props = { sessions: [], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+      const { rerender } = render(<WaitingScreen view={withItem({ calls: [call({ id: 1 })] })} call={2} {...props} />);
+      expect(document.querySelector('details.wl-calls')!.hasAttribute('open')).toBe(false);
+      rerender(<WaitingScreen view={withItem({ calls: [call({ id: 1 }), call({ id: 2 })] })} call={2} {...props} />);
+      expect(document.querySelector('details.wl-calls')!.hasAttribute('open')).toBe(true);
+      expect(document.querySelector('li.wl-call[data-call="2"]')!.getAttribute('aria-current')).toBe('true');
+    });
+    it('the operator\'s Show all and open groups survive a change of the target\'s place (A2)', () => {
+      const props = { sessions: [], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+      const prog = (ids: number[], at: number) => ids.map((id, i) => call({ id, program: 'prog-a', seenAt: NOW - (at + i) * MIN }));
+      const target = call({ id: 50, program: 'prog-b', seenAt: NOW - 10 * MIN });
+      // Three newer, the target, four older: the target is the 4th, within the shown rows.
+      const view = (extra: number[]) => withItem({ callsCleared: [...prog([...extra, 101, 102, 103], 1), target, ...prog([104, 105, 106, 107], 11)] });
+      const { rerender } = render(<WaitingScreen view={view([])} call={50} {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /Show all/ }));
+      fireEvent.click(document.querySelector('.wl-cg-head[data-program="prog-a"]')!);
+      expect(document.querySelector('.wl-cg-head[data-program="prog-a"]')!.getAttribute('aria-expanded')).toBe('true');
+      // Three more newer clears push the target past the shown rows: its place changes.
+      rerender(<WaitingScreen view={view([201, 202, 203])} call={50} {...props} />);
+      expect(document.querySelector('.wl-cg-head[data-program="prog-a"]')!.getAttribute('aria-expanded')).toBe('true');
+      expect(document.querySelector('.wl-cg-head[data-program="prog-b"]')!.getAttribute('aria-expanded')).toBe('true');
+      expect(document.querySelector('.wl-cleared-row[data-call="50"]')).not.toBeNull();
     });
     it('no call named draws no notice and marks nothing', () => {
       open({ view: withItem({ calls: [call({ id: 1 })] }) });

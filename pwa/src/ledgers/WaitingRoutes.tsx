@@ -127,7 +127,7 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
   const itemHref = useItemHref(listed === null ? [] : listed.items.flatMap(itemTexts), listed, null);
   return (
     <WaitingScreen view={listed} sessions={drawn?.sessions ?? sessions} runs={runs} now={now} unavailable={unavailable}
-                   programme={programme} call={call} {...notCurrent} itemHref={itemHref}
+                   programme={programme} call={call} {...notCurrent} {...(drawn?.kind === 'saved-list' ? { listSaved: true } : {})} itemHref={itemHref}
                    onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
                    onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))}
                    onSeen={(id) => api.markCallSeen(id)} onOverturn={(body) => api.correctDigest(body)} />
