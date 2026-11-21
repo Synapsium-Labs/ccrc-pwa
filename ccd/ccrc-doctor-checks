@@ -12620,34 +12620,36 @@ _check_model-advance-blocked() {
 
 # ── model-release-lookup (programme model-class-advance wave 3, release-lookup-warn) ──
 # Named so that no line it prints starts `WARN codex` (the Codex bridge's own readings count those lines) or `FAIL`.
-# The Codex probe asks for each lane's catalogue as the published Codex CLI release, read from npm's registry at most
-# once an hour into `~/.ccrc/codex-client-release.json` (`version` and `readAt`, the last good read; `triedAt`, the last
-# try; `failingSince`, the first try of the failures since the last good read; `lastError`, the last failure's reason;
-# all stamps whole epoch seconds, `ccd/ccrc-models-probe`'s `_codex_release_lookup_program`). When the lookup fails the
-# probe asks as the last good release, or the built-in floor, so a failure is never an outage, only an ageing client
-# version: WARN, never FAIL. It WARNs when the lookup is still being tried (a try in the last day) and either its last
-# good read is over a day old, or it has no good read at all and has failed for over a day (`failingSince`). Each age
-# it prints is measured from its own stamp: the last good read from `readAt`, the time failing from `failingSince`
-# alone (absent on a record an older probe wrote). It PASSes when nothing was tried for a day: the lookup is not in use
-# here. It SKIPs with no jq, with no file (no Codex lane has been probed here: a server-role box, or a box with no Codex
-# lane), and on a record it cannot read as one JSON object with a numeric `triedAt`; jq is laxer there than the
-# probe's own reader, which also refuses several JSON values in one file and a stamp that is not a whole number, but
-# the probe is the file's only writer and writes neither. jq's `now` is the clock: the doctor suite's PATH holds no
-# `date`.
+# The probe records `version` and `readAt` (last good read), `triedAt` (last try), `failingSince` (first failure
+# since the last good read), and `lastError` (last failure's reason). The auth library owns the record's path and
+# read (D-8781); this check only measures the returned record. On failure the probe has the last good release or
+# its floor: WARN, never FAIL. WARN if a try is recent and the last good read is over a day old, or it has never
+# read a release and has failed for over a day. Measure each age from its own stamp using jq's clock; a stale
+# try is PASS (not in use). Missing dependencies or an unmeasurable record are SKIP, not evidence of lane absence.
+_RL_PY='
+import importlib.util, json, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = lib
+spec.loader.exec_module(lib)
+print(json.dumps(lib.read_client_release(), allow_nan=False))'
 _check_model-release-lookup() {
-  local f="$HOME/.ccrc/codex-client-release.json" v
+  local lib="$HOME/.local/bin/ccgpt-auth.py" record v
   command -v jq >/dev/null 2>&1 || { _dr_skip model-release-lookup "jq is not on PATH, so the Codex release lookup's record could not be read — the 'jq' check above owns that"; return 3; }
-  [ -e "$f" ] || { _dr_skip model-release-lookup "no Codex release lookup has run on this box ($f is absent)"; return 3; }
-  if ! v="$(jq -r 'def t(k): .[k] | if type == "number" then . else null end; def h(s): "\(((now - s) / 3600) | floor) h";
+  command -v python3 >/dev/null 2>&1 || { _dr_skip model-release-lookup "python3 is unavailable; the release lookup record could not be measured"; return 3; }
+  [ -f "$lib" ] || { _dr_skip model-release-lookup "the installed auth library is unavailable; the release lookup record could not be measured"; return 3; }
+  if ! record="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" python3 -I -c "$_RL_PY" "$lib" </dev/null 2>/dev/null 3>&-)" \
+    || ! v="$(jq -rs 'def t(k): .[k] | if type == "number" then . else null end; def h(s): "\(((now - s) / 3600) | floor) h";
+      (if length == 1 then .[0] else null end) |
       if type != "object" or t("triedAt") == null then "skip"
       elif now - t("triedAt") >= 86400 then "pass\u001fthe last lookup was \(h(t("triedAt"))) ago, so it is not being tried"
       elif t("readAt") != null and now - t("readAt") > 86400 then "warn\u001fthe last good read of the Codex release lookup (\(.version // "none")) was \(h(t("readAt"))) ago\(if t("failingSince") == null then "" else ", and it has failed for \(h(t("failingSince")))" end); its last try, \(h(t("triedAt"))) ago, failed (\((.lastError // "no reason recorded") | tostring | .[0:200]))"
       elif t("readAt") == null and t("failingSince") != null and now - t("failingSince") > 86400 then "warn\u001fthe Codex release lookup has never read a release, and has failed for \(h(t("failingSince"))) (\((.lastError // "no reason recorded") | tostring | .[0:200]))"
-      else "pass\u001fthe Codex release lookup read \(.version // "nothing yet") \(if t("readAt") == null then "" else "\(h(t("readAt"))) ago" end)" end' "$f" 2>/dev/null)" || [ "$v" = skip ]; then
-    _dr_skip model-release-lookup "$f is not a release lookup record this check reads; the next lookup rewrites it"; return 3
-  fi
+      else "pass\u001fthe Codex release lookup read \(.version // "nothing yet") \(if t("readAt") == null then "" else "\(h(t("readAt"))) ago" end)" end' <<< "$record" 2>/dev/null)"; then v=; fi
   case "$v" in
-    warn*) _dr_warn model-release-lookup "${v#*$'\x1f'}" "each Codex lane's catalogue is asked as the last good release, or the built-in floor, until a read succeeds; check that this box reaches https://registry.npmjs.org (the reason above is the last try's); the probe tries again at the next hourly refresh" ;;
-    *) _dr_pass model-release-lookup "${v#*$'\x1f'}" ;;
+    "warn"$'\x1f'*) _dr_warn model-release-lookup "${v#*$'\x1f'}" "each Codex lane's catalogue is asked as the last good release, or the built-in floor, until a read succeeds; check that this box reaches https://registry.npmjs.org (the reason above is the last try's); the probe tries again at the next hourly refresh" ;;
+    "pass"$'\x1f'*) _dr_pass model-release-lookup "${v#*$'\x1f'}" ;;
+    *) _dr_skip model-release-lookup "the Codex release lookup record is unavailable or could not be measured"; return 3 ;;
   esac
 }

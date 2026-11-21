@@ -87,9 +87,12 @@ canary, and neither recorded a cause. The other Codex lane (lane-a) did not move
     readings count, or `FAIL`) WARNs while the lookup is still tried (a try in the last day) and either its last good
     read is over a day old, or it has no good read and has failed for over a day. Each age it prints comes from its own
     stamp: the last good read from `readAt`, the time failing from `failingSince` only.
-  - It PASSes when nothing was tried for a day, and SKIPs with no jq, no record, or a record it cannot read as one object
-    with a numeric `triedAt`.
-  - The probe records `failingSince` and drops it on a success.
+  - It PASSes when nothing was tried for a day. After syncing with #3085, the check asks the installed auth library's
+    `read_client_release()` through the doctor's bounded execution helper, then jq decides as before. Missing jq,
+    Python or the library is a dependency SKIP; an absent, unreadable or unmeasurable record is a record SKIP.
+    Neither says the box has no Codex lane. The shared reader owns the path and read (D-8781).
+  - The probe records `failingSince`, keeps it through successive failures and drops it on a success. The base sync
+    preserves both that behavior and the probe's clock seam alongside the shared client-version owner.
 - **The carried nit from wave 7.** On a Codex lane, an unmeasured session's word is the advance file's own,
   `advance-file-unreadable` or `advance-file-invalid` (D-8821's split), with a case for each.
 
@@ -97,7 +100,9 @@ canary, and neither recorded a cause. The other Codex lane (lane-a) did not move
 
 - **An older build reads the new keys.** It reads an advance file carrying `missing` (with `seen`) and `effortFallback`,
   and keeps both through its own writes. A case reads #3107's `shared/model-advance.mjs` out of git history and checks
-  this. This build reads a record of the first shape (no `seen`) and restarts it.
+  this. This build reads a record of the first shape (no `seen`) and restarts it. A combined fixture verifies that
+  it also reads and preserves both wave 3 keys alongside wave 8's `releasedHold`. Wave 8's parser and declaration
+  changes are not part of this sync.
 - **An older rule ignores `missing`.** A box still on the older build retires at once, as today.
 - **No file holds a new word.** The three blocked causes live only in `advance-health`'s answer. The fallback is not a
   history entry, because an older `parseAdvance` refuses an unknown `how` or `cause` and would then read the whole file
@@ -177,3 +182,22 @@ files' times were unchanged afterwards.
   states the exception.
 - **A residual.** A run's record is written only by the refresh's materialise. An hour whose probe failed is no
   sighting, so it neither extends nor ends a run, and a gap past 90 minutes restarts it at the next sighting.
+
+## Base sync after #3085
+
+The merge resolves only the probe comment. Its clock seam and uninterrupted failure timestamp stay beside the shared
+client-version owner. In a separate commit, the doctor switches to the shared reader (D-8843); the single-reader census
+is unchanged. The doctor file grows by 33 net code lines against the merged base (23 before the adapter, of 40 allowed);
+`models-op.mjs` stays at 2,997 lines.
+
+Four release-lookup cases failed on the merged baseline and pass with the adapter. The existing warning cases still
+pin independent ages and the probe case still pins `failingSince` through successive failures and clears it on success.
+The adapter's focused mutations were each measured against the release-lookup fixtures:
+
+| Removed or changed | Red cases |
+|---|---:|
+| Unavailable Python guard | 1 |
+| Unavailable installed library guard | 1 |
+| No bytecode writes on import | 1 |
+| Exactly one returned record | 1 |
+| Require a successful reader exit even with otherwise valid output | 1 |

@@ -127,14 +127,14 @@ interface Run { code: number; out: string; err: string; ms: number }
 /** One check, as `cmd_doctor` runs it. A runner's own knobs never steer a case; `CCRC_MODELS_NOW` fixes the op's
  *  clock. Ended at 30 s, in a process group of its own (`spawnSyncGroup`), so a check that hangs reds its case, never
  *  the suite, and takes its children with it; a timeout comes back as `error` (ETIMEDOUT). */
-function check(h: string, name: Check | 'model-release-lookup', extra: NodeJS.ProcessEnv = {}, o: { pre?: string; noJq?: boolean } = {}): Run {
+function check(h: string, name: Check | 'model-release-lookup', extra: NodeJS.ProcessEnv = {}, o: { pre?: string; without?: 'jq' | 'python3' } = {}): Run {
   const inherited: NodeJS.ProcessEnv = { ...process.env };
   for (const k of ['CCRC_MODELS_NOW', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_MODELS_LOCK_S', 'CCRC_ROLE', 'CCD_TIMEOUT_KILL_AFTER']) {
     delete inherited[k];
   }
   const env: NodeJS.ProcessEnv = { ...ghContainedEnv(h, { ...inherited, HOME: h }, { systemd: true }), CCRC_MODELS_NOW: NOW,
     ...extra };
-  if (o.noJq) env['PATH'] = pathWithoutJq(h, env['PATH'] ?? '');
+  if (o.without !== undefined) env['PATH'] = pathWithout(h, env['PATH'] ?? '', o.without);
   const script = ['umask 022', `. "${join(h, 'ccrc', 'ccd', 'ccrc')}"`, '. "$CCRC_HERE/ccrc-doctor-checks"', SVC_FAKE,
     ...(o.pre === undefined ? [] : [o.pre]), `_check_${name}`].join('\n');
   const t0 = Date.now();
@@ -142,12 +142,11 @@ function check(h: string, name: Check | 'model-release-lookup', extra: NodeJS.Pr
   expect(r.error, `_check_${name} was ended at the suite's 30 s bound`).toBeUndefined();
   return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '', ms: Date.now() - t0 };
 }
-/** PATH as one directory of links to every program `path` finds, first one winning as PATH's own order does, but no
- *  `jq`: the same box with jq absent, and nothing else moved. */
-function pathWithoutJq(h: string, pathVar: string): string {
-  const farm = join(h, 'no-jq-bin');
+/** Simulate one missing dependency without dropping the check's other PATH tools. */
+function pathWithout(h: string, pathVar: string, omit: string): string {
+  const farm = join(h, `no-${omit}-bin`);
   fs.mkdirSync(farm);
-  const seen = new Set<string>(['jq']);
+  const seen = new Set<string>([omit]);
   for (const d of pathVar.split(':').filter(Boolean)) {
     let names: string[];
     try { names = fs.readdirSync(d); } catch { continue; }
@@ -538,7 +537,7 @@ describe('the four checks SKIP when there is nothing to measure', () => {
   it('with no jq on PATH it SKIPs, and names the check that owns jq', () => {
     const h = box();
     plantLane(h);
-    const r = check(h, 'model-advance-blocked', {}, { noJq: true });
+    const r = check(h, 'model-advance-blocked', {}, { without: 'jq' });
     expect(r.out).toBe('SKIP model-advance-blocked: jq is not on PATH, so deploy/models-op.mjs\'s advance-health answer '
       + 'could not be read — the \'jq\' check above owns that\n');
     expect(r.code).toBe(3);
@@ -1195,6 +1194,13 @@ describe('model-release-lookup (programme wave 3, release-lookup-warn)', () => {
   // The check's clock is jq's `now`, the real one (the doctor suite's PATH holds no `date`), so each record is stamped
   // relative to the real time, never to the op's fixed NOW.
   const T = Math.floor(Date.now() / 1000);
+  const releaseBox = (): string => {
+    const h = box();
+    const bin = join(h, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.copyFileSync(join(REPO, 'ccd', 'ccgpt-auth.py'), join(bin, 'ccgpt-auth.py'));
+    return h;
+  };
   const plant = (h: string, v: unknown): void => {
     fs.writeFileSync(join(h, '.ccrc', 'codex-client-release.json'), typeof v === 'string' ? v : JSON.stringify(v));
   };
@@ -1218,25 +1224,59 @@ describe('model-release-lookup (programme wave 3, release-lookup-warn)', () => {
     expect(fns.at(-1)).toBe('model-release-lookup');
   });
 
+  it('SKIPs when jq is unavailable', () => {
+    const h = releaseBox();
+    const r = check(h, 'model-release-lookup', {}, { without: 'jq' });
+    expect(r).toMatchObject({ code: 3, out: expect.stringMatching(/^SKIP model-release-lookup: jq is not on PATH/) });
+  });
+
+  it('SKIPs when the interpreter or the installed library is unavailable, even with a healthy record', () => {
+    const missingPython = releaseBox();
+    const missingLibrary = box();
+    for (const h of [missingPython, missingLibrary]) plant(h, { version: '0.171.0', readAt: T, triedAt: T });
+    const py = check(missingPython, 'model-release-lookup', {}, { without: 'python3' });
+    const lib = check(missingLibrary, 'model-release-lookup');
+    expect(py).toMatchObject({ code: 3, out: expect.stringMatching(/^SKIP model-release-lookup: python3 is unavailable/) });
+    expect(lib).toMatchObject({ code: 3, out: expect.stringMatching(/^SKIP model-release-lookup: the installed auth library is unavailable/) });
+  });
+
+  const RECORD_UNAVAILABLE = /^SKIP model-release-lookup: the Codex release lookup record is unavailable/;
   it('SKIPs with no record, and on a record it cannot read as one object with a numeric triedAt', () => {
-    const h = box();
-    expect(check(h, 'model-release-lookup').code).toBe(3);
+    const h = releaseBox();
+    expect(check(h, 'model-release-lookup')).toMatchObject({ code: 3, out: expect.stringMatching(RECORD_UNAVAILABLE) });
     for (const bad of ['{"version":', '[1]', JSON.stringify({ version: '0.171.0' })]) {
       const r = at(h, bad);
       expect(r.code, bad).toBe(3);
-      expect(r.out, bad).toMatch(/^SKIP model-release-lookup: /);
+      expect(r.out, bad).toMatch(RECORD_UNAVAILABLE);
+    }
+  });
+
+  it("SKIPs a valid JSON record beyond the shared reader's byte limit", () => {
+    const h = releaseBox();
+    const r = at(h, JSON.stringify({ version: '0.171.0', readAt: T, triedAt: T }) + ' '.repeat(1024 * 1024));
+    expect(r).toMatchObject({ code: 3, out: expect.stringMatching(RECORD_UNAVAILABLE) });
+  });
+
+  it('SKIPs when the bounded reader fails or does not return exactly one record', () => {
+    const h = releaseBox();
+    plant(h, { version: '0.171.0', readAt: T, triedAt: T });
+    const valid = JSON.stringify({ version: '0.171.0', readAt: T, triedAt: T });
+    for (const response of ['return 0', `printf '%s\\n' '${valid}'; return 124`, `printf '%s\\n' '${valid}' '${valid}'`]) {
+      const r = check(h, 'model-release-lookup', {}, { pre: `_plat_timeout() { ${response}; }` });
+      expect(r, response).toMatchObject({ code: 3, out: expect.stringMatching(RECORD_UNAVAILABLE) });
     }
   });
 
   it('PASSes a lookup that read a release in the last day', () => {
-    const h = box();
+    const h = releaseBox();
     const r = at(h, { version: '0.171.0', readAt: T - 3600, triedAt: T - 3600 });
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/^PASS model-release-lookup: the Codex release lookup read 0\.171\.0 1 h ago\n$/);
+    expect(fs.readdirSync(join(h, '.local', 'bin'))).not.toContain('__pycache__');
   });
 
   it('WARNs a lookup whose last good read is over a day old while it is still tried: each age from its own stamp', () => {
-    const h = box();
+    const h = releaseBox();
     const r = at(h, { version: '0.171.0', readAt: T - 2 * 86400, triedAt: T - 600, failingSince: T - 2 * 86400 + 3600,
       lastError: 'curl: (6) Could not resolve host' });
     expect(r.code).toBe(2);
@@ -1249,7 +1289,7 @@ describe('model-release-lookup (programme wave 3, release-lookup-warn)', () => {
   });
 
   it('WARNs a lookup that has never read a release after a day of tries, and not before', () => {
-    const h = box();
+    const h = releaseBox();
     const r = at(h, { triedAt: T - 600, failingSince: T - 86400 - 60, lastError: 'no answer' });
     expect(r.code).toBe(2);
     expect(r.out).toBe('WARN model-release-lookup: the Codex release lookup has never read a release, and has failed for '
@@ -1259,7 +1299,7 @@ describe('model-release-lookup (programme wave 3, release-lookup-warn)', () => {
   });
 
   it('PASSes a record nobody has tried for a day: the lookup is not running, which is not this check\'s finding', () => {
-    const h = box();
+    const h = releaseBox();
     expect(at(h, { version: '0.171.0', readAt: T - 5 * 86400, triedAt: T - 2 * 86400 }).code).toBe(0);
   });
 });

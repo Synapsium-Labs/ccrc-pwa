@@ -745,6 +745,15 @@ describe('the advance file\'s wave 3 keys: missing and effortFallback', () => {
     expect(moved.classes.sonnet['effortFallback']).toEqual(FALLBACK);
   });
 
+  it('reads and preserves wave 3 and wave 8 optional members on one class', () => {
+    const a = example();
+    const fields = { missing: MISSING, effortFallback: FALLBACK, releasedHold: { model: MISSING.model, at: AT } };
+    Object.assign(a.classes.opus, fields);
+    const p = parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(p.classes.opus).toMatchObject(fields);
+    expect(JSON.parse(serializeAdvance(p)).classes.opus).toMatchObject(fields);
+  });
+
   it('a missing record of the first shape, with no seen, still reads (the rule restarts it, D-8838)', () => {
     const a = example();
     a.classes.opus.missing = { model: 'model-6.1-gamma', since: AT };
