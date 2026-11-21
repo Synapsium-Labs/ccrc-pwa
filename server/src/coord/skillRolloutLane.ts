@@ -1,3 +1,5 @@
+// Ring: L4 delivery, context Coordination (C5).
+//
 // D-8126 (autonomy plan Task A9-3, spec §9.3; review focus F14): the rollout mail's lane, the L4 executor. On the
 // watcher's tick (`LANE_SCHEDULE`'s `skillRollout` row), over that tick's registry listing, it READS the open runs'
 // claimants, each one's `.child` reading and whether it was already told; `decideRollout` (L1, `skillRollout.ts`) decides;
@@ -18,8 +20,7 @@ import type { FleetReadModel } from '../fleetReadModel.js';
 import type { SessionRecord } from '../registry.js';
 import { MAIL_DISABLED_MARKER } from '../../../shared/switches.js';
 import type { WatcherCoordPort } from './ports.js';
-import { insertSystemMailTx } from './rundefsTx.js';
-import { tx } from './tx.js';
+import { queueRolloutMail } from './skillRolloutTx.js';
 import { decideRollout, rolloutKey, rolloutMailSubject, type RolloutClaimant } from './skillRollout.js';
 
 /** This beat's registry facts, as the lane reads them: `null` when the registry did not list (the pass holds). */
@@ -61,9 +62,8 @@ export function skillRolloutPass(deps: SkillRolloutDeps, listing: RolloutListing
     try {
       // `wake: 'never'` (review 3077 F2): the mail sweep holds it for a sleeping coordinator and asks no `ccd ensure`, as the
       // other record-style system mails do (`untold.ts`, `reviewRelease.ts`); a coordinator that wakes reads the new cards.
-      // `queueSystemMail` takes no wake, so the body runs here in its own transaction; `told` above is the dedupe.
-      tx(coord.db, () => insertSystemMailTx(coord, null, { fromId: 'operator', toId: m.toId, runId: null, kind: 'status',
-        subject: m.subject, body: m.body, wake: 'never' }));
+      // The write and its dedupe are one transaction in `skillRolloutTx.ts`; a `duplicate` was told since `told` was read.
+      if (!queueRolloutMail(coord, m).queued) continue;
       deps.record({ sessionId: m.toId, title: 'Coordinator skill changed', body: m.body }, m.key);
       sent.push(m.toId);
     } catch (err) {

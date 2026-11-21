@@ -47,7 +47,8 @@ whether another run named it as the worker, and ignored `mail-disabled`. Rebuilt
 | `rollout-after-settle-is-quiet` | A coordinator that first claims a run after the pass settled gets no mail: it starts on the new cards. One that claims in the window before the first settled pass is told too, which costs one mail. |
 | `revision-in-l1` | `COORDINATOR_SKILL_REVISION` lives in the L1 file, not in `shared/api.ts` (which sits at its growth cap): only the server reads it. A test pins that clause 21 of the shipped `SKILL.md` is the autonomy clause it names. |
 | `rollout-wired-in-index` | The lane runs only where the composition root sets `deps.skillRolloutRevision` (`index.ts`), as `planSync` and `driftPass` do. The first push ran it on every watcher, and the fast run went red in five watcher test files (asks-mint, questions-pin, questions-sequence-pin, ask-restart, stall-sweep): the lane mailed their fixtures' claimants. A pin reads the gate in `FleetWatcher.tick` and the one assignment in `index.ts`. |
-| `rollout-wake-never` | Fix round 1 (review 3077 F2): the rollout mail is queued with `wake = 'never'`, so the mail sweep holds it for a sleeping coordinator and asks no `ccd ensure`. `queueSystemMail` takes no wake, and its file is held by another run, so the lane calls `insertSystemMailTx` in its own transaction, as `untold.ts` and `reviewRelease.ts` do. Its `told` check is the dedupe. |
+| `rollout-wake-never` | Fix round 1 (review 3077 F2): the rollout mail is queued with `wake = 'never'`, so the mail sweep holds it for a sleeping coordinator and asks no `ccd ensure`. `queueSystemMail` and `queueRunlessNotice` take no wake, and their file is held by another run, so the write is `queueRolloutMail` (`rollout-tx-own-file`). |
+| `rollout-tx-own-file` | Fix round 1's CI: the rollout mail's dedupe (`hasMailWithSubject`) and its `insertSystemMailTx` go in ONE transaction in `server/src/coord/skillRolloutTx.ts` (L3), `queueRunlessNotice`'s shape with `wake = 'never'`. A lane may not hold the database handle (`single-definition/core-vocab`'s handle census went red on the first fix-round push), and `rundefsTx.ts` is held, so the file stands beside it, as `admissionWakeTx.ts` does for the same reason (#3117), and joins the census's `HANDLE_HOLDERS`. The lane's header now declares its ring (L4), which the ring census needs before an L4 file imports an L3 one. |
 | `rollout-record-only` | Fix round 1 (review 3077 F3): `isSkillRolloutMail` (L1) joins `pushNewMail`'s record-only list, so a rollout mail queued on a later tick is recorded and never pushed. |
 | `shared-deps-line-with-3052` | `server/src/deps.ts` and `server/src/index.ts` are held by run 3052's claim. Its worker agreed to the two additive lines and their import, and the coordinator ruled the overlap; whichever PR lands second absorbs `main`. |
 
@@ -73,6 +74,13 @@ Fix round 1, each file alone: `skill-rollout`, `lane-schedule`, `session-hook-ro
 timed out at their 10 s or 20 s bound, and two assertions failed. Both of those cases, and a third that timed out, passed
 alone. No `mail-sweep` watcher sets the revision, so the lane never runs there.
 
+The fix round's first push ran CI's full suite (it carried a merge of `main`), and two guards I had not run went red:
+`single-definition/core-vocab` (the lane named `coord.db`) and `watcher-quiet-census` (the new watcher rig did not
+register `quietAtTestEnd`). After the fix, each alone: `skill-rollout`, the whole `single-definition/` directory,
+`watcher-quiet-census`, `rings/`, `anchors`, `citations`, `mail-hardening`, `feed-writers-pin`, `lane-schedule`,
+`ownership`, `growth-check` armed, and both typechecks (the tests' typecheck: only the agent package's missing `ws`
+types, as before).
+
 ## Guards measured red
 
 Each by an in-place mutation of the source, restored from a saved copy and checked by its sha:
@@ -85,6 +93,9 @@ Each by an in-place mutation of the source, restored from a saved copy and check
 - the watcher's call: removing it reds the tick pin.
 - the decider and the push predicate (`skillRollout.ts`): eleven mutants in `skill-rollout.test.ts`'s `runMutants` set, all killed.
 - fix round 1: the mail's `wake: 'never'` dropped (reds both the delivery's wake and, alone, the no-ensure arm of the watcher case); `isSkillRolloutMail` dropped from the record-only list (the later-tick case pushes); the feed row's `kind: 'coord'` changed (the tick pin); the clamp dropped (the cap -5 case). A first clamp, `[$max, 0] | max`, kept the card at 363 characters for a cap of -5: the parameter `$max` defines a filter `max` that shadows jq's builtin, so the clamp is an `if`.
+- fix round 1's CI fix (`skillRolloutTx.ts`): `wake: 'never'` dropped reds the direct `queueRolloutMail` case and the
+  watcher's never-wake case; the in-transaction dedupe dropped reds the direct case's `duplicate`. The handle census
+  and the quiet census were measured red by CI itself on the first fix-round push.
 
 ## For the operator
 

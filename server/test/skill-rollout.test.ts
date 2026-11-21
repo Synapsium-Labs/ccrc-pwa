@@ -9,6 +9,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import * as rollout from '../src/coord/skillRollout.js';
 import { skillRolloutPass, type RolloutListing } from '../src/coord/skillRolloutLane.js';
+import { queueRolloutMail } from '../src/coord/skillRolloutTx.js';
 import { laneRow } from '../src/laneSchedule.js';
 import type { ChildMark } from '../../shared/api.js';
 import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
@@ -22,6 +23,7 @@ import type { Deps } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { testDeps, withFakeClock } from './helpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 const { COORDINATOR_SKILL_REVISION, decideRollout, rolloutKey, rolloutMailBody, rolloutMailSubject } = rollout;
 type RolloutModule = typeof rollout;
@@ -238,6 +240,16 @@ describe('skillRolloutPass — the lane, against a real coord store', () => {
       .toEqual({ sent: ['coord-u', 'coord-r'], settled: true });
   });
 
+  it('queueRolloutMail: one transaction, a never wake, and a second write under the same subject is a duplicate', () => {
+    const t = build();
+    const m = { toId: 'coord-a', subject: rolloutMailSubject('clause-21'), body: rolloutMailBody('clause-21') };
+    expect(queueRolloutMail(t.coord, m)).toMatchObject({ queued: true });
+    expect(queueRolloutMail(t.coord, m)).toEqual({ queued: false, why: 'duplicate' });
+    expect(t.mails('coord-a')).toHaveLength(1);
+    expect(t.coord.db.prepare('SELECT d.wake FROM mail_deliveries d JOIN mail m ON m.id = d.mailId WHERE m.toId = ?').all('coord-a'))
+      .toEqual([{ wake: 'never' }]);
+  });
+
   it('a claimant with no registry row is not mailed', () => {
     const t = build();
     t.open('prog-a', 'gone-g');
@@ -345,7 +357,7 @@ describe('the rollout mail downstream: no wake, no push (review 3077 F2, F3)', (
       runCcd: async (a) => { ccd.push([...a]); return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
       ...(revision === null ? {} : { skillRolloutRevision: revision }) };
-    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000));
     const row = (id: string): void => {
       for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'project-a', workdir: '/w/project-a', uuid: 'a'.repeat(36), started: '1' })) {
         fs.writeFileSync(path.join(reg, `${id}.${k}`), v);
