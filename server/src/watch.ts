@@ -200,6 +200,8 @@ import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import { skillInstallPass } from './coord/skillInstallLane.js';
+import { COORDINATOR_SKILL_REVISION } from './coord/skillRollout.js';
+import { rolloutListingOf, skillRolloutPass } from './coord/skillRolloutLane.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -1119,6 +1121,8 @@ export class FleetWatcher {
   /** D-8126 (A7-5, review 2807 F6): the accounts whose `skill-ensure` call is still running, kept across the self-install
    *  lane's passes so an overdue call still holds its home (`SkillInstallLaneDeps.inFlight`). */
   private readonly skillInstallInFlight = new Set<string>();
+  /** D-8126 (A9-3): the coordinator-skill revisions whose rollout mail this process has settled (`SkillRolloutDeps.settled`). */
+  private readonly skillRolloutSettled = new Set<string>();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -2910,6 +2914,9 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
       const skillCoord = this.deps.coord;
       if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
+      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing; record-only feed rows, never a push.
+      if (skillCoord !== undefined) void this.runLane('skillRollout', () => skillRolloutPass({ coord: skillCoord, revision: COORDINATOR_SKILL_REVISION, settled: this.skillRolloutSettled, log: (line) => console.warn(line),
+        record: (e, dedupeKey) => this.pushOne({ kind: 'coord', sessionId: e.sessionId, project: '', title: e.title, body: e.body, runId: null, recordAlways: true, recordOnly: true, dedupeKey }, this.activeProjects) }, rolloutListingOf(registryRead)))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
