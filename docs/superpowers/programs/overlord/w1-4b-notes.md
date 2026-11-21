@@ -52,8 +52,8 @@ follow, each under a slug below.
 - F4: `lastRunBySession`'s newest reads skip in-place rows, so a coordinator whose last in-place run closed does not read
   released.
 - F5, F6, F9: the in-place arm of `resolveDoneBranch` names no project, an abandon that composed no fleet act reports
-  `none` (a new `SweepFleetAct` word) rather than `re-held`, and the comments name migration 116. The bind's run events
-  read `in-place`, and `bindInPlace` takes `at`.
+  `none` (a new `SweepFleetAct` word) rather than `re-held`, and the comments name the migration slot (117, since #3123
+  took 116). The bind's run events read `in-place`, and `bindInPlace` takes `at`.
 - F8: one predicate, `actsOnClaimant` (`rundefs.ts`), for the close and the stall watch's worker subjects. The bind's
   refusal ladder, the intent-held test (shared with the dispatch's request step) and the route's body check
   (`inPlaceRequest`) are deciders in `dispatchDecide.ts`. `bindRunInPlace` only reads and writes. The route change is the

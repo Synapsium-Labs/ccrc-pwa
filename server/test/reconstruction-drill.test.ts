@@ -351,7 +351,7 @@ describe('the reconstruction drill', () => {
       lastMoveAt: true,
       hadChild: true,
       runTitle: true, closedBy: true, closeDetail: true,
-      inPlace: true,   // D-6096 (migration 116): a run its coordinator took in place; absent otherwise
+      inPlace: true,   // D-6096 (migration 117): a run its coordinator took in place; absent otherwise
       stuck: true, waitsOn: true, blockedBy: true, coordinatorGone: true,
       workerLastSeen: true, workerLastTurn: true,
     };

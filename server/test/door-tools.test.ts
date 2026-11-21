@@ -4,10 +4,11 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  DOOR_TOOLS, DOOR_TOOL_PREFIX as PROGRAM_PREFIX, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS,
+  DOOR_TOOLS, DOOR_TOOL_PREFIX as PROGRAM_PREFIX, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS, TEAM_KEY_SHAPE,
 } from '../../ccd/door-process.mjs';
 import * as shared from '../../shared/continuity-door.js';
 import { DOOR_TOOL_PREFIX, DOOR_TOOL_NAME_RE } from '../../shared/continuity-reports.js';
+import { LINEAR_TEAM_KEY_SHAPE } from '../../shared/linear.js';
 
 type Row = { name: string; verb: string | null; class: 'view' | 'operate'; fenced: boolean; reader: boolean; input: unknown };
 const ROWS = DOOR_TOOLS as unknown as Row[];
@@ -43,8 +44,9 @@ const keysOf = (v: unknown): string[] => {
 };
 
 describe('DOOR_TOOLS', () => {
-  it('has eleven uniquely named rows, the readers\' `read` last', () => {
-    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'read']);
+  it('has twelve uniquely named rows, the readers\' `read` last', () => {
+    // D-8809: `link_team`, the Overlord's confirm of a team candidate.
+    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team', 'read']);
   });
 
   it('every name is a legal tool name after the hook\'s prefix, and the prefix is the L0 constant', () => {
@@ -75,6 +77,11 @@ describe('DOOR_TOOLS', () => {
       expect(ROWS.map((r) => r.name), n).toContain(n);
       expect(skill, `${n} is now in the skill's table; drop it from DOOR_ONLY_TOOLS`).not.toContain(n);
     }
+  });
+
+  it('the link_team row\'s team grammar is shared/linear.ts\'s LINEAR_TEAM_KEY_SHAPE (D-8809)', () => {
+    expect(TEAM_KEY_SHAPE.source).toBe(LINEAR_TEAM_KEY_SHAPE.source);
+    expect(TEAM_KEY_SHAPE.flags).toBe(LINEAR_TEAM_KEY_SHAPE.flags);
   });
 
   it('reader is true on no row in B1, so the read tool\'s enum is empty', () => {

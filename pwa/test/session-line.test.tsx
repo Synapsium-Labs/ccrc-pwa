@@ -11,6 +11,8 @@ import { childMarkOf, childOfRunLabel, type ChildMarkRead } from '../src/fleet/r
 import { TEST_ROSTER } from './rosterFixture';
 import { SessionDetails } from '../src/session/SessionDetails';
 import { sessionFacts, type FactInput } from '../src/fleet/sessionFacts';
+import { HeaderTitleText } from '../src/session/SessionHeader';
+import { sessionHeaderView } from '../src/session/sessionHeaderView';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself
 // (see test/message-links.test.tsx et al.) — without this, rerender/multi-render
@@ -1492,15 +1494,22 @@ describe('whose code a row works on (D-5527)', () => {
   });
 });
 
-// D-5545: on nearly every operator-made row the badge said the same word, so it moved to the session header's
-// details, where it names the role of the one session being read. D-8142 put the word back on the CARD as one
-// plain cell, first on the context line (`card-header-facts.test.tsx` pins its place); D-8817 draws that cell, and the
-// header's, as the role badge (`RoleBadge`), the word being its accessible name and never visible text.
+// D-5545: on nearly every operator-made row the badge said the same word, so it moved to the session header, where it names
+// the role of the one session being read. D-8142 put the word back on the CARD as one plain cell, first on the context line
+// (`card-header-facts.test.tsx` pins its place); D-8817 draws that cell, and the header's, as the role badge (`RoleBadge`), the
+// word being its accessible name and never visible text; D-8834 (C51) moves the header's from the details row to the title
+// line, right after the name (`coordinator-badge.test.tsx` pins the place, and that the details row no longer carries it).
 describe('the coordinator badge (D-5301)', () => {
-  const role = (): HTMLElement | null =>
-    [...document.querySelectorAll<HTMLElement>('.chat-fact')].find((e) => e.querySelector('[role="img"][aria-label="coordinator"]') !== null) ?? null;
+  /** The title line as the header draws it: the title's own node, from the header's view of the session's facts. */
+  const titleLine = (session: FleetSession) => {
+    const now = Date.now();
+    const view = sessionHeaderView({ session, status: session.status, statusUpdatedAt: null, now, finePointer: true, facts: sessionFacts({ session, now }) });
+    return render(<h1 className="chat-title"><HeaderTitleText view={view} /></h1>);
+  };
+  const role = (): HTMLElement | null => document.querySelector<HTMLElement>('.chat-title [role="img"][aria-label="coordinator"]');
+  const inDetails = (): HTMLElement | null => document.querySelector<HTMLElement>('.chat-fact [role="img"][aria-label="coordinator"]');
 
-  it("is a header fact, and the role badge on the card, never the word (D-8142, D-8817)", () => {
+  it("is on the header's title line, and the role badge on the card, never the word (D-8142, D-8817, D-8834)", () => {
     render(<SessionLine session={s({ role: 'coordinator' })} onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelectorAll('.sess-role')).toHaveLength(1);
     expect(document.querySelector('.sess-role')?.getAttribute('aria-label')).toBe('coordinator');
@@ -1508,25 +1517,29 @@ describe('the coordinator badge (D-5301)', () => {
     expect(document.querySelector('.sess-badge, [data-badge]')).toBeNull();
     expect(screen.getByRole('button', { name: /^quiet-mesa$/ })).toBeInTheDocument();
     cleanup();
-    header(s({ role: 'coordinator' }));
+    titleLine(s({ role: 'coordinator' }));
     expect(role()).not.toBeNull();
+    cleanup();
+    // The details row no longer carries it (D-8834).
+    header(s({ role: 'coordinator' }));
+    expect(inDetails()).toBeNull();
   });
 
   it('shows nothing for a child', () => {
-    header(s({ role: 'child', child: { kind: 'child', runId: 7 } }));
+    titleLine(s({ role: 'child', child: { kind: 'child', runId: 7 } }));
     expect(role()).toBeNull();
   });
 
   it('shows nothing for a row from an older server (null, or the key absent) or an unknown word', () => {
-    header(s({ role: null }));
+    titleLine(s({ role: null }));
     expect(role()).toBeNull();
     cleanup();
     const absent: Record<string, unknown> = { ...s() };
     delete absent['role'];
-    header(absent as unknown as FleetSession);
+    titleLine(absent as unknown as FleetSession);
     expect(role()).toBeNull();
     cleanup();
-    header(s({ role: 'parent' as unknown as FleetSession['role'] }));
+    titleLine(s({ role: 'parent' as unknown as FleetSession['role'] }));
     expect(role()).toBeNull();
   });
 });

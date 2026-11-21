@@ -13,7 +13,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { approvalRulingBytes, canonicalJson, type ApprovalRulingRecord, type ApprovalRulingRecordV1 } from '../../shared/api.js';
-import { canonical, recordBytes, verdictFor, RECORD_KEYS } from '../../ccd/approval-verify.mjs';
+import { canonical, recordBytes, verdictFor, RECORD_KEYS, RECORD_KEYS_V2, AUTHORITIES, FAMILIES } from '../../ccd/approval-verify.mjs';
+import { APPROVAL_RULING_AUTHORITIES, APPROVAL_RULING_FAMILIES } from '../../shared/approval-park.js';
 
 const VERIFY = path.resolve(__dirname, '../../ccd/approval-verify.mjs');
 const NOW = 1_760_000_000_000;
@@ -101,6 +102,81 @@ describe('approval-verify: a forged or misdirected ruling prints nothing', () =>
   it('a key that is not Ed25519 verifies nothing', () => {
     const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
     expect(verdictFor(signed(record()), expected, publicKey.export({ type: 'spki', format: 'pem' }).toString())).toBeNull();
+  });
+});
+
+// Approvals PR 3v (plan 2026-11-18, §3.6 Table 3b; the patch in docs/superpowers/programs/overlord/
+// approvals-pr3-verifier-patch.md, applied as written): a v2 record is v1's ten fields plus `authority`, `denyCurrent` and
+// `family`. Only the operator's authority is issued, family `none`; an operator allow admits `ordinary` or `escalate`,
+// never `forbidden`, at any deny currency.
+describe('approval-verify: record v2 (approvals PR 3v)', () => {
+  type V2 = Omit<ApprovalRulingRecordV1, 'v'> & { v: 2; authority: string; denyCurrent: unknown; family: string };
+  const v2 = (over: Partial<V2> = {}): V2 => ({
+    ...record(), v: 2, authority: 'operator', denyCurrent: false, family: 'none', ...over,
+  });
+  const sv2 = (r: Record<string, unknown>, key: KeyObject = ours.priv) => signed(r as unknown as ApprovalRulingRecord, key);
+
+  it('case 1: v1 rows are unchanged (ordinary allow prints, escalate allow prints nothing, deny prints)', () => {
+    expect(verdictFor(signed(record()), expected, ours.pub)).toBe('allow a cleanup inside your worktree');
+    expect(verdictFor(signed(record({ class: 'escalate' })), expected, ours.pub)).toBeNull();
+    expect(verdictFor(signed(record({ verdict: 'deny', reason: 'no' })), expected, ours.pub)).toBe('deny no');
+  });
+  it.each(['allow', 'deny'] as const)('case 2: a v2 coordinator %s prints nothing', (verdict) => {
+    expect(verdictFor(sv2(v2({ authority: 'coordinator', verdict })), expected, ours.pub)).toBeNull();
+  });
+  it('case 3: a v2 operator allow of escalate, denyCurrent false, prints allow:operator', () => {
+    expect(verdictFor(sv2(v2({ class: 'escalate', denyCurrent: false, reason: 'go ahead' })), expected, ours.pub))
+      .toBe('allow:operator go ahead');
+  });
+  it('case 4: a v2 operator allow of ordinary prints allow:operator', () => {
+    expect(verdictFor(sv2(v2({ denyCurrent: true })), expected, ours.pub)).toBe('allow:operator a cleanup inside your worktree');
+  });
+  it('case 5: a v2 operator allow of forbidden prints nothing', () => {
+    expect(verdictFor(sv2(v2({ class: 'forbidden' })), expected, ours.pub)).toBeNull();
+  });
+  it('case 6: a v2 operator deny prints deny:operator, on one line', () => {
+    expect(verdictFor(sv2(v2({ verdict: 'deny', class: 'forbidden', reason: 'not\nthis' })), expected, ours.pub))
+      .toBe('deny:operator not this');
+  });
+  it.each(['allow', 'deny'] as const)('case 7: a v2 overlord %s prints nothing', (verdict) => {
+    expect(verdictFor(sv2(v2({ authority: 'overlord', verdict })), expected, ours.pub)).toBeNull();
+  });
+  it.each<[string, Partial<V2>]>([
+    ['family read-only', { family: 'read-only' }],
+    ['an unknown family', { family: 'all' }],
+    ['an unknown authority', { authority: 'someone' }],
+    ['denyCurrent not a boolean', { denyCurrent: 'yes' }],
+  ])('case 8: %s prints nothing', (_name, over) => {
+    expect(verdictFor(sv2(v2(over)), expected, ours.pub)).toBeNull();
+  });
+  it('case 9: a fourteenth field, or a missing one of the thirteen, prints nothing', () => {
+    const extra = { ...v2(), extra: 1 };
+    expect(recordBytes(extra)).toBeNull();
+    expect(verdictFor({ record: extra, sig: sign(null, Buffer.from(canonical(extra) as string, 'utf8'), ours.priv).toString('base64') },
+      expected, ours.pub)).toBeNull();
+    const { family: _f, ...twelve } = v2();
+    expect(recordBytes(twelve)).toBeNull();
+    expect(verdictFor({ record: twelve, sig: sign(null, Buffer.from(canonical(twelve) as string, 'utf8'), ours.priv).toString('base64') },
+      expected, ours.pub)).toBeNull();
+  });
+  it('case 9b: a record that says v: 2 with only v1\'s ten fields (the server\'s older-or-forged shape) prints nothing', () => {
+    const ten = { ...record(), v: 2 } as unknown as Record<string, unknown>;
+    expect(recordBytes(ten)).toBeNull();
+    for (const bytes of [canonical(ten), approvalRulingBytes(ten as unknown as ApprovalRulingRecord)]) {
+      expect(verdictFor({ record: ten, sig: sign(null, Buffer.from(bytes as string, 'utf8'), ours.priv).toString('base64') },
+        expected, ours.pub)).toBeNull();
+    }
+  });
+  it('case 10: a v2 record signed by another key prints nothing', () => {
+    expect(verdictFor(sv2(v2(), theirs.priv), expected, ours.pub)).toBeNull();
+  });
+  it('case 11: the second copies equal the shared lists, and v2 bytes equal approvalRulingBytes', () => {
+    expect([...AUTHORITIES]).toEqual([...APPROVAL_RULING_AUTHORITIES]);
+    expect([...FAMILIES]).toEqual([...APPROVAL_RULING_FAMILIES]);
+    expect([...RECORD_KEYS_V2].sort()).toEqual(Object.keys(v2()).sort());
+    for (const r of [v2(), v2({ verdict: 'deny', denyCurrent: true, reason: 'é 😀' })]) {
+      expect(recordBytes(r)).toBe(approvalRulingBytes(r as unknown as ApprovalRulingRecord));
+    }
   });
 });
 

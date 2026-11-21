@@ -77,21 +77,38 @@ export function currentDetails(s: Listed['slots'][number]) {
 }
 
 /**
- * D-8405: every team the routable slots reach, key (uppercased) and name, in slot order: what the automatic team link
+ * D-8405: every team the routable slots reach, key (uppercased), name and workspace id and name, in slot order: what the automatic team link
  * chooses among. The same slots `routableSlots` answers, by the same rules, so a team the router cannot reach is never
- * linked; a key two workspaces share appears once per workspace, and the decider counts it once.
+ * linked; a key two workspaces share appears once per workspace, each as its own (workspace, key) pair (D-8808).
  */
-export function routableTeams(store: Listed): Array<{ key: string; name: string }> {
-  const out = store.slots.flatMap((s) => (currentDetails(s)?.teams ?? []).map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
+export function routableTeams(store: Listed): Array<{ key: string; name: string; workspaceId: string; workspaceName: string | null }> {
+  const out = store.slots.flatMap((s) => {
+    const d = currentDetails(s);
+    return (d?.teams ?? []).map((t) => ({ key: t.key.toUpperCase(), name: t.name, workspaceId: s.id, workspaceName: d?.name ?? null }));
+  });
   const legacy = store.legacy;
   if (legacy !== null && legacy.workspace !== null && !legacy.superseded) {
-    out.push(...legacy.workspace.teams.map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
+    const w = legacy.workspace;
+    out.push(...w.teams.map((t) => ({ key: t.key.toUpperCase(), name: t.name, workspaceId: w.workspaceId, workspaceName: w.name as string | null })));
   }
   return out;
 }
 
 /** Whether a slot holds a team: both sides uppercased, whoever built the slot. */
 const holds = (s: LinearRouteSlot, team: string): boolean => s.teamKeys.some((k) => k.toUpperCase() === team.toUpperCase());
+
+/**
+ * D-8808: where a project row's team key resolves. A row that names no workspace resolves exactly as `routeLinear` does for a
+ * team (a key two workspaces share is `team-ambiguous`). A row that names one resolves in the slots of that workspace only: the
+ * slot if it holds the key, else `team-unknown` (the workspace is gone, or no longer has the team); never `team-ambiguous`, and
+ * `not-configured` only when there are no slots at all. The ONE resolver every project-team caller asks.
+ */
+export function routeProjectTeam(slots: readonly LinearRouteSlot[], row: { teamKey: string; workspaceId: string | null }): LinearRoute {
+  if (row.workspaceId === null) return routeLinear(slots, { kind: 'team', team: row.teamKey, workspace: null });
+  if (slots.length === 0) return { kind: 'refused', word: 'not-configured' };
+  const own = slots.find((s) => s.workspaceId === row.workspaceId && holds(s, row.teamKey));
+  return own === undefined ? { kind: 'refused', word: 'team-unknown' } : { kind: 'slot', slot: own };
+}
 
 /** §4.2's table. Total: every ask answers one slot or one refusal word. */
 export function routeLinear(slots: readonly LinearRouteSlot[], ask: LinearRouteAsk): LinearRoute {

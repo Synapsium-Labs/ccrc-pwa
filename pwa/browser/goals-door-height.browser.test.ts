@@ -8,8 +8,16 @@
 // which breaks across lines where "in" does, with the same title. So "out" draws the same coordination line (D-5527: the programme and wave, and the coordinator, which every
 // run-bound session drew before PL11) and no Goals door.
 //   - EQUAL where the line has slack: the pin's fixtures (names of 8, 13, 26 and 31 characters; a workspace with a PR, one
-//     whose cap reads "Check PR", and a main checkout coordinating its run) at 390, 1200, 1279 and 1280, in both skins. A
+//     whose cap reads "Check PR", and a main checkout coordinating its run) at 360, 390, 1200, 1279 and 1280, in both skins. A
 //     door that always takes a line of its own reds here.
+//     DESKTOP POLISH C51 (review 2963 F5, ruled in fix round 1): a header with nothing to show draws no Details door, so on a
+//     phone a coordinator with no other fact has no door in its rail. Main drew that door there (44 px, the tap floor), and the
+//     Goals door takes the row it held. The pin's claim for such a session is main's own: in a programme the header is no taller
+//     than main drew it, which this file rebuilds as the out-of-programme header with main's Details door (a frozen copy, a
+//     `Door` of the shared primitive at the end of the status row, `drawMainsDoor`), and the door keeps its 44 px floor. Where
+//     the out header still has its door (any session with a fact) "in" and "out" are equal, as they were. The out header of
+//     a session with nothing to show is shorter than main's by the door's row, which is F3 to F6's gain, so "in equals out"
+//     is not asked of it.
 //   - THE BOUND at a desk (900 and up), any width, any content: "in" is never taller than "out" by more than the door's own
 //     row, measured from the page as the door's rendered height plus its container's computed row-gap, and no other row of
 //     the header changes height (the title, and every one of the coordination line and the chip row that does not hold the
@@ -34,7 +42,7 @@
 //   CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/goals-door-height.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { DOOR, DOOR_GLYPH, INSTRUMENT, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
@@ -155,7 +163,7 @@ const FIXTURE: AppFixture = {
 const SKINS = [REFINED, INSTRUMENT] as const;
 type Skin = (typeof SKINS)[number];
 /** Where the line has slack for the pin's fixtures: "in" and "out" are equal. */
-const EQUAL_WIDTHS = [390, 1200, 1279, 1280] as const;
+const EQUAL_WIDTHS = [360, 390, 1200, 1279, 1280] as const;
 /** The desk widths the bound sweeps. */
 const DESK_WIDTHS = [900, 1000, 1050, 1199, 1200, 1280, 1440, 1920] as const;
 const COARSE_WIDTHS = [1000, 1280] as const;
@@ -269,6 +277,27 @@ async function measure(page: Page, id: string, title: string, inProgramme: boole
   });
 }
 
+/** MAIN'S DETAILS DOOR, as a frozen copy (desktop polish C51, review 2963 F5): below 900 main drew a "details" door at the end of
+ *  the status row (`.chat-meta`) of every header, whether or not the row behind it had anything to show; this branch draws it only
+ *  when it has. A header with no door of its own gets it drawn here, a `Door` of the shared primitive (its classes, its 44 px floor),
+ *  and the header's height is measured with it and the copy removed. Returns that height, or `null` when the header already has its
+ *  door (nothing to add: main's header is this one). */
+async function drawMainsDoor(page: Page): Promise<number | null> {
+  return page.evaluate(({ door, glyph }) => {
+    const head = document.querySelector<HTMLElement>('.chat-head')!;
+    if (head.querySelector('.chat-details-toggle') !== null) return null;
+    const meta = head.querySelector<HTMLElement>('.chat-meta')!;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = `${door} chat-details-toggle`;
+    copy.innerHTML = `<span class="${glyph}" aria-hidden="true">▸</span>details`;
+    meta.appendChild(copy);
+    const h = head.getBoundingClientRect().height;
+    copy.remove();
+    return h;
+  }, { door: DOOR, glyph: DOOR_GLYPH });
+}
+
 /** Where `sessionHeaderView`'s `goals.slot` puts the door, as each skin draws it: Refined's desk rail holds it last. */
 const expectedSlot = (skin: Skin, width: number, shape: Shape): Slot => (skin === REFINED
   ? (width < 900 ? 'coordination-line' : 'chip-row')
@@ -286,10 +315,21 @@ async function checkPairs(skin: Skin, width: number, pairs: readonly Pair[], mod
     for (const p of pairs) {
       const at = words(p);
       const out = await measure(page, idOf('po', p), p.name, false);
+      const mainsOut = mode === 'equal' && width < 900 ? await drawMainsDoor(page) : null;
       const inside = await measure(page, idOf('pi', p), p.name, true);
       const grew = inside.h - out.h;
       if (mode === 'equal') {
-        if (Math.abs(grew) > 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h}`);
+        // DESKTOP POLISH C51 (review 2963 F5, ruled in fix round 1): main's own claim. Where the out header has its Details door,
+        // "in" and "out" are equal. Where it has none (nothing to show) the claim is that "in" is no taller than main drew it:
+        // the out header with main's Details door, which the Goals door takes the row of. A door that adds a row of its own, or that
+        // is taller than it was, reds here.
+        const mains = mainsOut;
+        if (mains === null) {
+          if (Math.abs(grew) > 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h}`);
+        } else if (inside.h > mains + 0.5) {
+          wrong.push(`${at}: in a programme the header is ${inside.h}, taller than at main (${mains} with main's Details door, ${out.h} without)`);
+        }
+        if (width < 900 && inside.door.height < 43.5) wrong.push(`${at}: on a phone the Goals door is ${inside.door.height} px tall, under the tap floor`);
       } else {
         const own = inside.door.row ?? 0;
         if (grew > own + 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h} (+${grew}), above the door's own row ${own}`);

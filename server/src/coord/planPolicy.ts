@@ -802,9 +802,11 @@ export function linearOwnerOf(project: string, f: OwnerFacts):
  *  that key (compared upper-case), else the one that set the key first (the lowest `order`), else, when none has an order, the
  *  only holder; null when no project holds the key. The ONE place the rule is written: the hierarchy routes' `ownerNow`, the
  *  triage route and the drift pass all ask it. */
-export function teamOwnerProject(teamKey: string, rows: readonly HierarchyProjectFacts[]): string | null {
+export function teamOwnerProject(teamKey: string, rows: readonly HierarchyProjectFacts[], workspaceId: string | null = null): string | null {
   const key = teamKey.toUpperCase();
-  const holders = rows.filter((r) => r.teamKey !== null && r.teamKey.toUpperCase() === key);
+  // D-8808: with the inbound row's workspace, a holder whose row names a different workspace is skipped; one with none still counts.
+  const holders = rows.filter((r) => r.teamKey !== null && r.teamKey.toUpperCase() === key
+    && (workspaceId === null || (r.workspaceId ?? null) === null || r.workspaceId === workspaceId));
   const marked = holders.find((r) => r.ownsTeam);
   if (marked !== undefined) return marked.project;
   const ordered = holders.filter((r) => r.order !== null).sort((x, y) => (x.order as number) - (y.order as number));
@@ -818,9 +820,9 @@ type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
 /** The Linear owner of a team (`teamOwnerProject`'s project, then `linearOwnerOf` with that project's own named owner), with the
  *  project it was decided for; null when no project holds the key. */
 export function linearOwnerOfTeam(
-  teamKey: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
+  teamKey: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, workspaceId: string | null = null,
 ): (ReturnType<typeof linearOwnerOf> & { project: string }) | null {
-  const project = teamOwnerProject(teamKey, rows);
+  const project = teamOwnerProject(teamKey, rows, workspaceId);
   if (project === null) return null;
   const row = rows.find((r) => r.project === project)!;
   return { ...linearOwnerOf(project, { named: row.linearOwner, ownsTeamProject: null, ...f }), project };
@@ -832,7 +834,8 @@ export function linearOwnerOfProject(
   project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
 ): ReturnType<typeof linearOwnerOf> & { project: string } {
   const row = rows.find((r) => r.project === project);
-  const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f);
+  // D-8808 (final review I1): the team's owner in the project row's own workspace, so a key two workspaces share answers each its own
+  const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f, row.workspaceId ?? null);
   return viaTeam ?? { ...linearOwnerOf(project, { named: row?.linearOwner ?? null, ownsTeamProject: null, ...f }), project };
 }
 

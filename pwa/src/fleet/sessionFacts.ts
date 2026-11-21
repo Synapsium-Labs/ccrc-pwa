@@ -475,6 +475,28 @@ export function cardFacts(f: SessionFactSet): CardFacts {
   };
 }
 
+/** Whether the header's meta row (`SessionMeta`, header mode) draws ANY cell for these facts: one reading of its cells' own
+ *  conditions, so the details row can be decided from the facts (`detailsHaveFacts`, desktop polish C51 review 2963 F3 to F6)
+ *  rather than from a stylesheet's reading of what rendered. The cells, in `SessionMeta`'s order: the hold (unless the context
+ *  is the programme, which the coordination row names), the child marker, the last spawn, the ask-state chip, the cleanup
+ *  facts, the task tally, the graph counter, the current build, the subagent and delegated disclosures, and every marker but
+ *  the spawn and the restart (the header draws those as chips of its own). `header-details-facts.test.tsx` renders
+ *  `SessionMeta` for each cell alone and requires this to agree with whether it drew one. */
+export function headerMetaHasCells(f: SessionFactSet): boolean {
+  const ctx = contextFact(f);
+  return (f.session.held !== null && ctx?.key !== 'programme')
+    || (ctx?.key === 'child-marker' && f.childOf !== null && f.heldRun === null)
+    || f.spawn !== null
+    || f.askState !== null
+    || f.cleanup.length > 0
+    || f.tasks !== null
+    || f.graph !== null
+    || f.build.kind === 'current'
+    || (f.subagents !== null && f.subagents.length > 0)
+    || f.delegated !== null
+    || markers(f).some((m) => m.key !== 'spawn' && m.key !== 'restarted');
+}
+
 /** What the HEADER shows: every fact, in reading order. A superset of `cardFacts`. */
 export function headerFacts(f: SessionFactSet): Fact[] {
   const s = f.session;

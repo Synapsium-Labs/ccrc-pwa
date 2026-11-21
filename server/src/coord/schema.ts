@@ -4176,16 +4176,39 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX approval_parks_by_horizon ON approval_parks(horizon);
   INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
   `,
-  // ── 116: user_version 115 -> 116 ─────────────────────────────────────────────
+
+  // ── 116: user_version 115 -> 116 ──────────────────────────────────────────
+  // The project row names its Linear workspace and carries two linking facts (Linear hierarchy wave 8, D-8808 and D-8809,
+  // plan Tasks 8.1, 8.4 and 8.5), three columns on `project_linking`: `teamWorkspace` is the slot id (a workspace id) the
+  // row's team key resolves in, so a key two connected workspaces share never answers `team-ambiguous` for the project (NULL:
+  // none set, the key resolves as before); `teamSuggestions` holds the coordinators' suggestions; `teamCallId` names the call
+  // that recorded the Overlord's link. THREE NULLABLE COLUMNS, no default, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 and never names them. This is the next free slot by position on `main`: door B1 took 110, the
+  // waiting workers' sleep 111, the cap-counts-working seed 112, the admission wait 113, wave 7's per-team migration 114 and
+  // the approvals park (#3106) 115 first, so this entry moved up to 116; whoever lands second renumbers (the coordinator's
+  // standing license). RE-MEASURE the slot before the PR and before merge (it must print 115, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE project_linking ADD COLUMN teamWorkspace TEXT;
+  -- Task 8.4: the coordinators' suggestions, a JSON array, one element per suggesting session; NULL: none. A candidate
+  -- only: nothing in the pass or the decider reads it, and every writer that sets a key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamSuggestions TEXT;
+  -- Task 8.5 (D-8809): the call that recorded the Overlord's link (a coordinator_calls id); NULL: none. Migration 64's CHECK on
+  -- teamSource cannot widen without a table rebuild, so the Overlord's link is stored as teamSource 'auto' with this id set, and
+  -- ONE reader derives its source (linkingStore.ts's linkSourceOf). Every writer that sets or changes the key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamCallId INTEGER;
+  `,
+  // ── 117: user_version 116 -> 117 ─────────────────────────────────────────────
   // The in-place bind (D-6096, fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave
   // as the run's own worker, in a sibling worktree. `inPlace` is 1 for such a run and NULL for every other; its one writer
   // is `CoordStore.bindInPlace`, and its readers decide what an in-place run does NOT do: it starts no process, so it is
   // charged to neither cap (`dispatchedAt` stays NULL), and its close and abandon compose no `ws-*` verb on the claimant,
   // whose workspace is the coordinator's own (`closeDecide.ts`).
   //
-  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 116` takes
+  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 117` takes
   // rule 3 (it warns, reads as-is and migrates nothing), never names it, and boots. Every earlier entry is frozen.
-  // RE-MEASURE the slot before the PR and before merge (it must print 115 before this entry is counted):
+  // RE-MEASURE the slot before the PR and before merge (it must print 116 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

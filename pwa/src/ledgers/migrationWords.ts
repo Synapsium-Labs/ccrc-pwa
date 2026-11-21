@@ -34,10 +34,11 @@ export const MIGRATION_BODY_TEXT = {
 } as const;
 
 /** The report's lists in the order they read, each only when it holds something (design §11.4): the issues skipped because they
- *  had changed, those still waiting, the replaced levels closed with no ticket placed under them (review 2918 F2), and after a
- *  put back the issues moved since and the milestones left under the canceled project. */
+ *  had changed, those the team's Linear owner took through inbound, which left the migration (review 2955 F2, A1), those still
+ *  waiting, the replaced levels closed with no ticket placed under them (review 2918 F2), and after a put back the issues moved
+ *  since and the milestones left under the canceled project. */
 export const REPORT_LISTS = [
-  { key: 'skipped', title: 'Skipped as changed' }, { key: 'waiting', title: 'Still waiting' },
+  { key: 'skipped', title: 'Skipped as changed' }, { key: 'taken', title: 'Taken by the Linear owner' }, { key: 'waiting', title: 'Still waiting' },
   { key: 'unrelated', title: 'Closed with no ticket placed under them' },
   { key: 'movedSince', title: 'Moved since' }, { key: 'milestonesLeft', title: 'Milestones left' },
 ] as const;
@@ -46,7 +47,7 @@ export const WAITING_WHY_WORDS: Readonly<Record<MigrationWaitingWhy, string>> = 
   'live-programme': 'its programme is mid-wave; it moves at the wave boundary',
   'epic-not-in-linear': 'its epic is not in Linear yet',
   'upkeep-not-in-linear': 'the project\'s Upkeep epic is not in Linear yet',
-  'placed-ticket-not-applied': 'a ticket placed under it is not settled yet; it closes related to that ticket',
+  'placed-ticket-not-applied': 'a ticket under it is still to be placed, or placed and not settled yet; it closes related to the first one placed, or with no relation if none is placed (each skipped, or taken by the Linear owner)',
 };
 export const reportLists = (r: NonNullable<MigrationView['report']> | null | undefined): { key: (typeof REPORT_LISTS)[number]['key']; title: string; items: string[] }[] =>
   r === null || r === undefined ? [] : REPORT_LISTS.map((l) => ({

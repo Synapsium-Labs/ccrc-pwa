@@ -78,6 +78,21 @@ describe('the report body\'s lists', () => {
     expect([...container.querySelectorAll('[data-report-list="waiting"] li')].map((l) => l.textContent)).toContain(`AAA-7: ${WAITING_WHY_WORDS['placed-ticket-not-applied']}`);
   });
 
+  it('lists the issues taken by the Linear owner on their own, after the skipped ones and never under them (review 2955 F2, A1)', () => {
+    const report = { ...REPORT, taken: ['AAA-9'] };
+    const { container } = render(<MigrationBody kind="report" counts={COUNTS} entries={ENTRIES} report={report} />);
+    expect([...container.querySelectorAll('[data-report-list]')].map((l) => l.getAttribute('data-report-list'))).toEqual(['skipped', 'taken', 'waiting', 'milestonesLeft']);
+    expect(container.querySelector('[data-report-list="taken"]')!.textContent).toContain('Taken by the Linear owner');
+    expect(container.querySelector('[data-report-list="taken"]')!.textContent).toContain('AAA-9');
+    expect(container.querySelector('[data-report-list="skipped"]')!.textContent).not.toContain('AAA-9');
+  });
+
+  it('a replaced level\'s wait covers a leaf still to be placed, and says a level with none placed closes with no relation (review 2955 A3)', () => {
+    const words = WAITING_WHY_WORDS['placed-ticket-not-applied'];
+    expect(words).toContain('still to be placed');
+    expect(words).toContain('with no relation if none is placed');
+  });
+
   it('after put back, the issues moved since are listed too', () => {
     const { container } = render(<MigrationBody kind="report" counts={COUNTS} entries={ENTRIES} report={{ ...REPORT, movedSince: ['AAA-9'] }} />);
     expect([...container.querySelectorAll('[data-report-list]')].map((l) => l.getAttribute('data-report-list'))).toEqual(['skipped', 'waiting', 'movedSince', 'milestonesLeft']);
