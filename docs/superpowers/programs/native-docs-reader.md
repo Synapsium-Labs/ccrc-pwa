@@ -33,9 +33,70 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan), #2806 | run 1532, dispatched 2026-11-10; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Tasks 1-9 committed (worker-reported). Task 10 was held at Step 2 from 2026-11-11 and resumed on 2026-11-14 with CI standing in for the local server suite (Decisions, 2026-11-14). The wave-done was verified at `d56b10667`. Review runs 2104, 2116 and 2122 found 3, 2 and 1 important findings, each sent back as a fix round; on 2026-11-15 the review cap was extended from 3 to 6. Review run 2132 (round 4) found no product defect, the wave was accepted at `b7b60ed93`, and #2806 **merged** 2026-11-15 (`f6bdbf153`), its merge-queue run green with `browser (pwa)`. Run 1532 closed done (Decisions, 2026-11-15) |
 | Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **X1's design merged 2026-11-19 (#3048, `8781ef20a`; run 2631, D-8759 to D-8761), accepted at the review cap; its carries were folded in by X4, the library-input text wave (run 2680, wave 27), merged 2026-11-19 (#3055, `da21717b8`), which also set X2's library share. The library programme plans its one wave from X1 §10 and X2 §6 on `main`; ccrc's wave C after the release. Implementation waits for the operator's approval (Decisions, 2026-11-19)**. Approved 2026-11-19. This programme drives the library's waves: L1, the appearance contract, runs as run 2843 in the library's repository, and the library is renamed pinax-lib before the release (Decisions, 2026-11-20). L1 landed as library PR #86 (merge commit `aacae4c56`; run 2843, D-8816 and D-8824 to D-8827), accepted at the review cap, with a release-gate measurement carried (Decisions, 2026-11-20 (evening)) |
-| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)**. Approved and confirmed 2026-11-19. X2's P1 landed in #3102 (`2d544ec50`; run 2743, D-8783 and D-8784), and X5, HTML pages as artifacts, in #3093 (`dd14bc1f2`; run 2837), each accepted at the review cap. X3's R1 is run 2949. X6, reader mode, landed in #3121 (`c58f67743`; run 2847, D-8803 to D-8805 and D-8831), accepted at the review cap (Decisions, 2026-11-20 (evening)) |
+| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)**. Approved and confirmed 2026-11-19. X2's P1 landed in #3102 (`2d544ec50`; run 2743, D-8783 and D-8784), and X5, HTML pages as artifacts, in #3093 (`dd14bc1f2`; run 2837), each accepted at the review cap. X3's R1 is run 2949, wedged since 2026-11-20 20:10Z (Decisions, 2026-11-21 (morning)). X2's library side: the rename landed as library PR #87 (`bee0fd1ec`; run 2987), and L2's landing A is in review as library PR #88 (run 3007, D-8868). X6, reader mode, landed in #3121 (`c58f67743`; run 2847, D-8803 to D-8805 and D-8831), accepted at the review cap (Decisions, 2026-11-20 (evening)) |
 
 ## Decisions & deviations
+- **2026-11-21 (morning): the library rename landed. L2's landing A is in review, with rounds 1 and 2 ruled. R1's worker is wedged.**
+  - **LR, the library renamed pinax-lib (run 2987): landed as library PR #87 (merge commit `bee0fd1ec`).**
+    - It took two review rounds (runs 2992 and 3001).
+    - It landed with `--merge`, the PR's title as subject and its description as the merge body, which carries `Size-Design: none`.
+    - #85 is closed as superseded. D-8863 and D-8864 are unused.
+    - **The owed release steps, firm and in order:**
+      1. rename the repository;
+      2. hand-publish a `0.0.0-reserve` of `@synapsium-labs/pinax-lib`, unless npm then allows attaching the trusted publisher without one;
+      3. attach the trusted publisher;
+      4. push the signed tag.
+
+      A tag pushed before step 3 fails at publish, after its attestation is made.
+    - **Release-gate notes, measured before the library's release:**
+      - RF3's timing ratio failed once in 87 runs on Node 24;
+      - WebKit's B8.2 scroll case failed once;
+      - L1's gated old-cap browser mount (carried).
+
+      Both failures passed on rerun.
+  - **L2, the library's parity additions (run 3007, wave 34, block 8867 to 8869): landing A is in review as library PR #88.**
+    - **The split.**
+      - Landing A is tasks 1 to 8:
+        - the ops: `place`, `push` and `from` on `hash`, `close-overlay`, `goto`;
+        - item values and links;
+        - In short;
+        - the comparison base;
+        - print figures;
+        - print mode.
+      - Landing B is tasks 9 to 14, the four layouts with `frameCsp(layout)`. It is wave 35, once A lands.
+      - The leaf plan rides A.
+    - **The bootstrap stays within its 32 768 bytes, never raised; it stands at 32 740.**
+      - The seed checks became a table.
+      - The deep check of the host's vocabulary list moved host-side, into `frameDocument`. The reader still refuses a forged seed.
+      - The print-figure adapter keeps its range, type and size checks and drops only its integer test, which the reader and the host parser keep. A thin pass-through could not pass the build's free-globals comparison, which reads the minified name an alias gets.
+    - **D-8868 is defined in X2's plan.** Print follows the screen's outline gate. The plan-facts fixture is 6, 7 and 8 steps, and P5.5's pin reads "3 tasks · 21 steps". X2's spec §6 is amended in place.
+    - **Print figures at a reprint.**
+      - A run ends only at the next `printFigures()` call, or at unmount. A run token was declined, as a change beyond §6's ops.
+      - Round 1 found that figures still in flight could close the frame. The host now absorbs them: in a reopened run, the first repeat of an index replaces the earlier copy and is not counted.
+      - Round 2 found that this let a frame hand the host about 80 MiB. A cumulative cap of 2 x 16 MiB per run on bytes handed was added, refused before decode.
+      - Two limits are stated: the oversize edge, which has two triggers, and three runs in flight.
+    - **Also fixed in review:**
+      - a quadratic byline split in render, print and the screen: one linear helper, and the screen's split is built in one pass;
+      - the frame's item-link grammar, now held equal to the host's (hidden characters and `%5c`);
+      - the ratchet's moved-trailers, which now read `none` as naming no case.
+    - **Round 3 is the last.** D-8867 and D-8869 are unspent so far.
+    - **Library follow-ups for its next wave:**
+      - the free-globals comparison is sensitive to alias names;
+      - a race the host causes still counts as a frame refusal;
+      - `changesBase` recording is ambiguous on the wire.
+    - **Process:**
+      - two subagent hook refusals were reported;
+      - one subagent's false claim of an edit was caught by review;
+      - an implementer's claims are now checked against the diff.
+  - **R1, X3's server read side (run 2949), is wedged.**
+    - The worker's turn ended on an API error at 2026-11-20 20:10Z, partway through merging `main`, with two conflicted files.
+    - Its mail has stayed parked since then, because the delivery lane cannot clear its input box.
+    - A live worker is never re-dispatched (coordinator skill clause 16), and waking its pane is the operator's.
+    - Every remaining ccrc-side wave waits on R1 by shared files: X2 from P2, X3 from R2, and X5 from A1.
+  - **The coordinator's calls (clause 21), recorded on the server:**
+    - library landings keep the explicit merge body, so the repository's merge-message setting needs no change;
+    - a local run killed by the test slice's memory cap is recorded as unmeasured, and exact-tip CI arbitrates;
+    - the fleet cap is raised only if it blocks the critical path.
 - **2026-11-20 (evening): X6 and L1 landed, each accepted at the review cap. R1 is building (coordinator rulings).**
   - **X6, reader mode (run 2847): landed in #3121 (`c58f67743`).** It took three review rounds (runs 2933, 2947 and 2953), and round 3 was the cap.
     - **Round 3** found 8 important findings and 8 advisories, all in the spec's and plan's text. The panel judged every one able to carry to XR1 or XR2. They were applied verbatim now instead, and checked mechanically, because XR1 and XR2 are a release away and their workers read the plan as it stands on `main`.
@@ -1226,9 +1287,9 @@ Wave L plans from X1's text on `main` after #3055, not as it was at `89a9ce02a`.
   - R1 waits for the operator's confirmation of asks 595 and 603.
   - R3 waits for the M-X3.16 device item, and names `DocsHead.tsx`, `DocsIndexView.tsx`, the control census, the tap-target floors and the residue A23 to A27.
 
-## Current next-wave brief — R1, run 2949
+## Current next-wave briefs — R1 and L2, runs 2949 and 3007
 
-R1 is building; L1 and X6 landed at the review cap (Decisions, 2026-11-20 (evening)).
+R1 is wedged; L2's landing A is in review; the library rename landed (Decisions, 2026-11-21 (morning)).
 
 ### R1 — run 2949
 
@@ -1297,6 +1358,142 @@ The operator approved X3's design on 2026-11-19 and confirmed asks 595 and 603: 
 - List mail before your push, and push once.
 - Then get the exact-tip required checks, the ledger guard and CodeQL green, with 0 open alerts, and send your wave-done with the fingerprint JSON and the suite and failure lines.
 - Never enqueue or arm auto-merge.
+
+### L2 — run 3007 (the library's repository)
+
+Programme `native-docs-reader` (home project ccrc-pwa), wave 34 = L2: the shared rendering library's parity additions. It is built in the library's own repository (project `docserver`, GitHub `Synapsium-Labs/docserver`, PUBLIC; the package is now `@synapsium-labs/pinax-lib`). Run 3007. Deviation block issued: 8867, 8868 and 8869.
+
+The operator approved X2's design on 2026-11-19. L1 (the appearance contract, #86) and the rename (#87) have landed. Your base is the library's `main`, at `bee0fd1ec` or later. The release and its signed tag come after this wave, and are the operator's.
+
+**Your input is ccrc's design, read from the home repository:**
+- homeRepoRoot `<projects-root>/ccrc-pwa`;
+- planSha `5041cf173339e83100de883a1efb326254e2c57f`;
+- **X2's spec, §6 "Library side", in full, and §2.3:** `git -C <projects-root>/ccrc-pwa show <planSha>:docs/superpowers/specs/2026-11-18-native-docs-parity-design.md`. §6 includes the change table, the size share and its estimate table, and print mode's strip and plan marks.
+- **X2's plan,** for the consumer side your interfaces must serve: wave P5 and its tasks P5.1 to P5.5, and P6.1's print stage 1. `git -C <projects-root>/ccrc-pwa show <planSha>:docs/superpowers/plans/2026-11-18-native-docs-parity.md`.
+- **X1's spec §10,** amended through D-8827: the appearance contract every layout must keep, test 8's rules and test 9's CSP row.
+- **X1's plan,** section "Library input (X4)": the X2 items X4 carried into the library wave.
+- The library's own `CLAUDE.md`, its programme ledger, and L1's plan `docs/superpowers/plans/2026-11-20-docserver-appearance-contract.md`, for the conventions and test 8's tables as they now stand.
+
+**Scope: §6's change table, all of it:**
+- the four layouts beside `default`, with `frameCsp(layout)` and test 9's CSP row re-pinned per layout;
+- every layout on the appearance slots and the pairs' contrast gate, with conformance and contrast run per layout, and each layout's srcdoc held to its own cap;
+- the item values from `render`, and the seed's resolved item links;
+- `place {kind: 'overlay' | 'overlay-closed'}`, `push` and `from` on `hash`, and `close-overlay` and `goto`;
+- `print-figures` and `print-figure`, with every per-op cap enforced by the host parser before any decode;
+- the In short "Headlines / Full" option and the comparison-base seed field;
+- print mode in `render`, with its print stylesheet under one root class, including the strip and plan marks and their conformance fixture.
+
+Not in scope:
+- **Reader mode's library part, LX6** (the `reader` op and screen pages): a later wave of its own.
+- **Any version bump.**
+
+**Size: test 8 holds this design to its shares,** read from the shares table at the first parent: `x2` 1 166 336 characters in total, and 72 704 for the largest frame.
+- Every landing that changes a frame asset carries exactly one `Size-Design: x2` line in its description.
+- Every new layout's assets stay within the default enhance bundle at your landing, which is test 8's layout row.
+- If a measured row would exceed either share, or a layout cannot keep the layout row, stop and send me the numbers.
+
+**One PR, or a planned split.** First write the leaf plan, `docs/superpowers/plans/2026-11-20-docserver-parity-additions.md`, in the library's plan shape: Status, Goal, Architecture, tasks with Files, interfaces, red-first steps, mutation rows and Results. Name ccrc's specs by their public GitHub paths, never by a local path.
+- If the plan is too large to review as one PR, propose a split into two sequential landings in a mail to me before you implement, for example the ops, items, In short and print figures first, then the layouts and print mode.
+- Each landing carries its own `Size-Design: x2` line. I rule on the split.
+
+**Then implement it, task by task, red-first.** Every guard gets a case that reds when it is deleted, measured.
+
+**Departures:** a sentence of §6 or §10 you cannot build as written is a stop-and-ask to me, quoting the sentence and your proposal. Never write a D-number in the library's repository; ccrc's numbers are recorded in ccrc, and the library cites them as "ccrc D-n" only.
+
+**Bridge discipline (§6):**
+- Every addition rides the existing port, the existing host parser and `BRIDGE_LIMITS`, with the per-op caps §6 names, and the bridge's version stays 1.
+- None adds a channel, a window listener, parent-DOM access or a CSP source.
+- New ops are sent only when the seed says the host accepts them, so a 1.1 host never counts them as refused.
+
+**Measure, don't recall.**
+- The library's CI runs Node 22 and 24, with real Chromium and WebKit tests, in about 36 minutes.
+- Run affected files locally in the foreground, through `ccrc test --`, with a timeout of at least 600000 ms, one at a time.
+- The shared test slice's memory cap kills browser workers on this box. A timeout under its kills, with no assertion mismatch, gets one isolated rerun; if it still times out, record it as unmeasured locally and let CI on the exact tip arbitrate.
+- When the harness moves a waiting call to the background, wait for its completion notice and read its full output.
+- Use your workspace's own install and the cached browsers. Make no repository copy and open no extra worktree.
+
+**Public repository:** no private name, host, path, account or tracker in any file, commit message, PR title or body. Run a private-name scan over every file and commit message before your push.
+
+**Asks:** a product choice goes to me as a structured ask with your recommendation. A technical choice is yours: record why in Results.
+
+**Stop and ask:**
+- any widening of the frame's sandbox, CSP or channels beyond §6;
+- a protocol change beyond §6's ops;
+- a size-share or layout-row breach;
+- an edit outside the library repository;
+- a refusal from any tool, hook or route (report it, then wait for my word).
+
+**Routing (clause 13):**
+- Main loop Opus · high.
+- Implementer subagents Sonnet · high for the bridge ops and their parsers, the CSP and `frameCsp(layout)`, `print-figures`' caps and the layouts' contrast gate; Sonnet · medium elsewhere.
+- One Opus · high review subagent over each task's diff before its commit. Give it the diff and the plan inline, and tell it not to invoke any skill.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+
+**Delivery:**
+- Claim every file before its first edit, and commit on your workspace branch only.
+- One PR to `Synapsium-Labs/docserver` `main`, or the first of the planned two, with the trailers in one final paragraph.
+- List mail before your push, and push once.
+- Get the exact-tip test (22) and test (24) green, then send wave-done with the fingerprint JSON and the suite and failure lines.
+- Never merge, enqueue or arm auto-merge.
+
+## Earlier brief — LR, run 2987 (landed as library PR #87)
+
+### LR — run 2987 (the library's repository)
+
+Programme `native-docs-reader` (home project ccrc-pwa), wave 33 = LR: the shared rendering library renamed **pinax-lib**. It is built in the library's own repository (project `docserver`, GitHub `Synapsium-Labs/docserver`, a PUBLIC repository). Run 2987. Deviation block issued: 8863 and 8864.
+
+**The operator's ruling (2026-11-19):**
+- The library's name is pinax-lib, and the package is `@synapsium-labs/pinax-lib`.
+- The rename is its own landing, after L1 and before the release.
+- It changes no frame asset and keeps the wire names, as PR #85 did, and it supersedes #85, which says `@synapsium-labs/pinax`.
+- At the release, the operator renames the GitHub repository to `Synapsium-Labs/pinax-lib` (old URLs redirect), sets up the npm name and its trusted publisher, and pushes the signed tag. None of that is yours.
+
+**Your base is the library's `main`, now at `aacae4c56`, with L1 (the appearance contract, #86) landed.**
+
+**Your reference is PR #85** (`rename/pinax`, 24 files, cut from an older `main`). Read its description and diff in full: its five decisions are the shape of this wave. Apply them to `pinax-lib` on today's `main`:
+1. **The new name.** The package becomes `@synapsium-labs/pinax-lib`. Where a file names the repository from the next release on, it is `Synapsium-Labs/pinax-lib`.
+2. **Old versions.** 1.0.0 and 1.1.0 stay published as `@synapsium-labs/docserver`. That name gets no further version, and is deprecated with a pointer once the first pinax-lib version is out. Say so in the README and CHANGELOG, as #85 does.
+3. **Names that keep the old word:** every name on the wire or in a built asset.
+   - This covers the `docserver:*` placeholders and meta names, `DOCSERVER_FREE_GLOBALS`, `docserverControl`, `docserverAbsent`, the test hook, the frame's own error messages, and every `data-docreader-*` attribute and `--dr-*` property L1 added.
+   - So no golden file and no asset hash moves, and the bridge protocol and seed schema keep their numbers.
+   - Only the parent's messages, in `./host`, change, to `pinax-lib host: …`.
+4. **Records keep their wording.** Plans and the programme ledger record work done under the old name.
+5. **Owed before the first release:** listed in the PR description as the operator's.
+
+L1 added files that name the package, such as the README's appearance sections, test reads of `package.json` and the size tests' environment names. Find every occurrence on today's `main`, not only #85's 24 files, and decide each by rule 3. Record in Results the list of what you kept and why.
+
+**Deliver, in one PR to the library's `main`:**
+- No version bump: the release sets the version.
+- **The size line.** Test 8 reads the landing's `Size-Design:` line. The rename grows nothing, so the description carries exactly one `Size-Design: none`, and `assets/assets.json`'s hashes and the growth table do not move. If a rule forces a size row, stop and ask.
+- **Proof that nothing on the wire moved:**
+  - the frame assets rebuilt with `build-frame --check` green and no hash changed;
+  - the conformance corpus' goldens unchanged;
+  - `npm pack` naming the new package;
+  - the consumer-smoke test importing it by the new name.
+- **Do not touch PR #85 or its branch.** I close it when this lands.
+- Never write a D-number in the library's repository. A departure from the operator's ruling or from #85's decisions is a stop-and-ask to me; ccrc records its number.
+
+**Public repository:** no private name, host, path, account or tracker in any file, commit message, PR title or body. Run a private-name scan over every file and commit message before your push.
+
+**Measure, don't recall.**
+- The library's CI runs Node 22 and 24, with real Chromium and WebKit tests, in about 36 minutes.
+- Run the affected files locally in the foreground, through `ccrc test --`, with a timeout of at least 600000 ms, one at a time.
+- The shared test slice's memory cap has killed browser workers today. A timeout under its kills, with no assertion mismatch, gets one isolated rerun; if it still times out, record it as unmeasured locally and let CI on the exact tip arbitrate.
+- Use your workspace's own install and the cached browsers. Make no repository copy and open no extra worktree.
+
+**Stop and ask:**
+- any change to a built asset, a golden, the bridge, the seed schema or a wire name;
+- a size row;
+- an edit outside the library repository;
+- a refusal from any tool, hook or route (report it, then wait for my word).
+
+**Routing (clause 13):**
+- Main loop Opus · high.
+- Implementer subagents Sonnet · medium for the sweep.
+- One Opus · high review subagent over the whole diff before the push.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+
+**Delivery:** commit on your workspace branch only. One PR to `Synapsium-Labs/docserver` `main`, with the trailers in one final paragraph. List mail before your push, and push once. Get the exact-tip test (22) and test (24) green, then send wave-done with the fingerprint JSON and the suite and failure lines. Never merge, enqueue or arm auto-merge.
 
 ## Earlier briefs — L1 and X6, runs 2843 and 2847 (landed as library PR #86 and in #3121)
 
