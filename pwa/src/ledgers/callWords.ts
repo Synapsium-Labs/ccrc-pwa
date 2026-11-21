@@ -35,6 +35,24 @@ export function clearedCallsOf(view: WaitingView, filter: CallFilter): CallView[
   return (view.callsCleared ?? []).filter((c) => filter.programme === null || c.program === filter.programme);
 }
 
+/** What a call's address (`?call=<id>`, D-8808, D-8809) names on the list: the call still to see (`open`), the call on the
+ *  Recently cleared trail (`cleared`), or neither (`gone`: a call addressed by a link was a real call, so one in neither list has
+ *  left the 48-hour trail). An older view with no `calls` fields reads as `gone`. */
+export type CallTarget = { at: 'open'; call: CallView } | { at: 'cleared'; call: CallView } | { at: 'gone' };
+
+export function callTargetOf(view: WaitingView, id: number): CallTarget {
+  const open = (view.calls ?? []).find((c) => c.id === id);
+  if (open !== undefined) return { at: 'open', call: open };
+  const cleared = (view.callsCleared ?? []).find((c) => c.id === id);
+  return cleared !== undefined ? { at: 'cleared', call: cleared } : { at: 'gone' };
+}
+
+/** The one-line notices over the list for a call whose address is not an open call (D-8808). */
+export const CALL_TARGET_WORDS = {
+  cleared: 'That call has cleared. It is marked below, in Recently cleared.',
+  gone: 'That call has cleared and is no longer on this list.',
+} as const;
+
 /** The line of one call: the question (when it asked one), the option chosen, the reason, and the age. */
 export function callLine(c: CallView, now: number): string {
   const parts: string[] = [];

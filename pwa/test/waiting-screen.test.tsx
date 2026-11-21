@@ -6,7 +6,7 @@ import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { CallView } from '../../shared/api';
 import { WAITS_ON_WORDS, type WaitingView } from '../../shared/ledgers';
-import { CALL_REFUSAL_TEXT } from '../src/ledgers/callWords';
+import { CALL_REFUSAL_TEXT, CALL_TARGET_WORDS } from '../src/ledgers/callWords';
 import type { AskMarkRow } from '../../shared/answerMarks';
 import { fleetHues } from '../src/fleet/programmeBoxes';
 import { ClearedTrail, ItemRows, WaitingScreen } from '../src/ledgers/WaitingScreen';
@@ -1109,6 +1109,67 @@ describe('calls made for you (D-8126)', () => {
     const trail = screen.getByRole('region', { name: 'Recently cleared' });
     expect(trail.querySelector('[data-call="3"]')).not.toBeNull();
     expect(trail.querySelector('[data-call="4"]')).toBeNull();
+  });
+
+  // D-8808, D-8809: `?call=<id>` names a call; the screen opens its group, marks it, or says where it went.
+  describe('a call the URL names', () => {
+    const marked = (): Element[] => [...document.querySelectorAll('[data-target="true"]')];
+    it('an open call: its group opens, its row is marked and no other is', () => {
+      open({ view: withItem({ calls: [call({ id: 1 }), call({ id: 2 })] }), call: 2 });
+      const li = document.querySelector('li.wl-call[data-call="2"]')!;
+      expect(li.getAttribute('aria-current')).toBe('true');
+      expect(li.closest('details')!.hasAttribute('open')).toBe(true);
+      expect(marked()).toEqual([li]);
+      expect(document.querySelector('[data-call-target]')).toBeNull();
+    });
+    it('an open call in a programme drawn apart opens that group', () => {
+      open({ view: withItem({ calls: [call({ id: 4, program: 'prog-b' })] }), call: 4 });
+      const li = document.querySelector('li.wl-call[data-call="4"]')!;
+      expect(li.closest('[data-calls-only="true"]')).not.toBeNull();
+      expect(li.closest('details')!.hasAttribute('open')).toBe(true);
+      expect(li.getAttribute('aria-current')).toBe('true');
+    });
+    it('a group not named stays collapsed', () => {
+      open({ view: withItem({ calls: [call({ id: 1 })] }), call: 99 });
+      expect(document.querySelector('details.wl-calls')!.hasAttribute('open')).toBe(false);
+    });
+    it('a cleared call: the notice, and its trail row marked', () => {
+      open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - MIN })] }), call: 3 });
+      const note = document.querySelector('[data-call-target="cleared"]')!;
+      expect(note.textContent).toBe(CALL_TARGET_WORDS.cleared);
+      expect(note.getAttribute('role')).toBe('status');
+      const row = document.querySelector('.wl-cleared-row[data-call="3"]')!;
+      expect(row.getAttribute('aria-current')).toBe('true');
+      expect(marked()).toEqual([row]);
+    });
+    it('a cleared call beyond the newest few, in a list of several programmes: the trail opens, its group opens, the row shows', () => {
+      const old = call({ id: 50, program: 'prog-b', seenAt: NOW - 60 * MIN });
+      const newer = Array.from({ length: 6 }, (_, i) => call({ id: 10 + i, program: 'prog-a', seenAt: NOW - (i + 1) * MIN }));
+      open({ view: withItem({ callsCleared: [...newer, old] }), call: 50 });
+      const row = document.querySelector('.wl-cleared-row[data-call="50"]')!;
+      expect(row).not.toBeNull();
+      expect(row.getAttribute('aria-current')).toBe('true');
+      expect(document.querySelector('.wl-cg-head[data-program="prog-b"]')!.getAttribute('aria-expanded')).toBe('true');
+      expect(document.querySelector('.wl-cg-head[data-program="prog-a"]')!.getAttribute('aria-expanded')).toBe('false');
+    });
+    it('a call in neither list: the gone notice, nothing marked', () => {
+      open({ view: withItem({ calls: [call({ id: 1 })] }), call: 99 });
+      expect(document.querySelector('[data-call-target="gone"]')!.textContent).toBe(CALL_TARGET_WORDS.gone);
+      expect(marked()).toEqual([]);
+    });
+    it('no call named draws no notice and marks nothing', () => {
+      open({ view: withItem({ calls: [call({ id: 1 })] }) });
+      expect(document.querySelector('[data-call-target]')).toBeNull();
+      expect(marked()).toEqual([]);
+    });
+    it('the group stays open when the named call leaves and others remain', () => {
+      const view = withItem({ calls: [call({ id: 1 }), call({ id: 2 })] });
+      const props = { sessions: [], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+      const { rerender } = render(<WaitingScreen view={view} call={2} {...props} />);
+      expect(document.querySelector('details.wl-calls')!.hasAttribute('open')).toBe(true);
+      rerender(<WaitingScreen view={withItem({ calls: [call({ id: 1 })], callsCleared: [call({ id: 2, seenAt: NOW })] })} call={2} {...props} />);
+      expect(document.querySelector('details.wl-calls')!.hasAttribute('open')).toBe(true);
+    });
   });
 
   it('draws no group with none, on an older view with no calls fields', () => {
