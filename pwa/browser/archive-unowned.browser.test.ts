@@ -200,3 +200,102 @@ describe('Fleet foot: the Archived row is the door to work no session owns, with
     }
   }
 });
+
+// Session helpers HF2 (D-8877; review 2988 F6): the focus when the section's rows leave, in a real Chrome, where jsdom only
+// asserted it. A control holds the focus; one of two rows leaves (a new frame) and the section's heading takes it; the last
+// leaves and the section goes, and the page body takes it: a real box the browser focuses, never `body`.
+const FOCUS_LEASES = DELEGATION.leases;
+const FOCUS_FIXTURE: AppFixture = {
+  ...FIXTURE,
+  fleetFrames: [
+    { type: 'fleet', sessions: SESSIONS },
+    { type: 'delegation', delegation: frame({ leases: FOCUS_LEASES }) },
+  ],
+};
+
+describe('Archive: the focus when the section\'s rows leave, in a real Chrome (HF2, review 2988 F6)', () => {
+  for (const skin of SKINS) {
+    for (const width of WIDTHS) {
+      it(`${skin} at ${width}px: one of two leaves, the heading; the last leaves, the page body`, async () => {
+        const opened = await openApp(browser!, { skin, theme: PHOSPHOR, width }, FOCUS_FIXTURE);
+        try {
+          await opened.page.goto(`${server!.origin}/archive`);
+          await opened.page.waitForSelector('[data-unowned-row]', { timeout: 20_000 });
+          await opened.page.waitForTimeout(300);
+          const [first, second] = FOCUS_LEASES as readonly { leaseId: string; adminRecord: string }[];
+          await opened.page.getByRole('button', { name: `Keep worktree (${first!.adminRecord})` }).focus();
+          expect(await opened.page.evaluate(() => document.activeElement?.closest('[data-unowned-row]') !== null), 'CONTROL: a row\'s control holds it').toBe(true);
+          opened.send('/ws/fleet', { type: 'delegation', delegation: frame({ leases: FOCUS_LEASES.filter((l) => l.leaseId !== first!.leaseId) }) });
+          await opened.page.waitForFunction(() => document.querySelectorAll('[data-unowned-row]').length === 1, null, { timeout: 10_000 });
+          await opened.page.waitForTimeout(200);
+          const one = await opened.page.evaluate(() => {
+            const a = document.activeElement;
+            return { heading: a !== null && a.matches('section h2 > span'), body: a === document.body };
+          });
+          expect(one, 'one of two leaves: the section\'s heading').toEqual({ heading: true, body: false });
+          await opened.page.getByRole('button', { name: `Keep worktree (${second!.adminRecord})` }).focus();
+          opened.send('/ws/fleet', { type: 'delegation', delegation: frame({ leases: [] }) });
+          await opened.page.waitForFunction(() => document.querySelector('[data-unowned-row]') === null, null, { timeout: 10_000 });
+          await opened.page.waitForTimeout(200);
+          const last = await opened.page.evaluate(() => {
+            const a = document.activeElement;
+            const box = a === null ? null : a.getBoundingClientRect();
+            return {
+              pageBody: a !== null && a.matches('[data-page-body]'), body: a === document.body,
+              boxed: box !== null && box.width > 0 && box.height > 0 && getComputedStyle(a!).display !== 'contents',
+            };
+          });
+          expect(last, 'the last leaves: the page body, a real box').toEqual({ pageBody: true, body: false, boxed: true });
+          expect(opened.errors, 'uncaught page errors').toEqual([]);
+        } finally {
+          await opened.ctx.close();
+        }
+      }, 90_000);
+    }
+  }
+});
+
+// Session helpers HF2 (review 2988 F8): with both halves to say, the foot row at a phone's width breaks only between them, so
+// neither half is cut and no word of one is left alone on a line ("owns · 4" alone, before).
+describe('Fleet foot: the both-state Archived row breaks between its halves (HF2, review 2988 F8)', () => {
+  for (const skin of SKINS) {
+    for (const width of [360, 390, 1280] as const) {
+      it(`${skin} at ${width}px: each half whole on its line(s), the break between them`, async () => {
+        const opened = await openApp(browser!, { skin, theme: PHOSPHOR, width }, FIXTURE);
+        try {
+          await opened.page.goto(`${server!.origin}/`);
+          await opened.page.waitForSelector('.fleet-archived-row', { timeout: 20_000 });
+          await opened.page.evaluate(async () => { await document.fonts.ready; });
+          await opened.page.waitForTimeout(400);
+          const m = await opened.page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('.fleet-archived-row')!;
+            // Each drawn character's line (its box's top), and the text of each line.
+            const lines: Array<{ top: number; text: string }> = [];
+            const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+            for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+              const t = n.textContent ?? '';
+              for (let i = 0; i < t.length; i++) {
+                const range = document.createRange();
+                range.setStart(n, i); range.setEnd(n, i + 1);
+                const box = range.getClientRects()[0];
+                if (box === undefined) continue;
+                const line = lines.find((l) => Math.abs(l.top - box.top) < 4);
+                if (line === undefined) lines.push({ top: box.top, text: t[i]! }); else line.text += t[i]!;
+              }
+            }
+            return { text: (row.textContent ?? '').replace(/ /g, ' '), lines: lines.map((l) => l.text.replace(/ /g, ' ').trim()) };
+          });
+          expect(m.text, 'both halves').toMatch(/^Archived on disk · 2 · .+ · Work no session owns · 4$/);
+          if (m.lines.length > 1) {
+            expect(m.lines, 'two lines, broken between the halves').toHaveLength(2);
+            expect(m.lines[0], 'the archived half whole, then its separator').toMatch(/^Archived on disk · 2 · .+ ·$/);
+            expect(m.lines[1], 'the unowned half whole').toBe('Work no session owns · 4');
+          }
+          expect(opened.errors, 'uncaught page errors').toEqual([]);
+        } finally {
+          await opened.ctx.close();
+        }
+      }, 90_000);
+    }
+  }
+});

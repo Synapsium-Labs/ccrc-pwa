@@ -561,6 +561,36 @@ describe('the new header: no subagent and no delegated fact (H3, D-8875)', () =>
       cleanup();
     }
   });
+
+  // Review 3123 F12 (HF2, D-8877): a count drawn in other words (`2 helpers`, a bare `2`) has none of the three the case above
+  // looks for, so the header is also the same markup with and without its subagents (C46's technique, the row's guard above),
+  // in both skins, on a phone with its door opened and at a desk. The same header with `subagents: null` is the control.
+  it('HF2-H3: the rendered header is the same markup with and without subagents, in either skin, phone and desk', () => {
+    // React's ids differ between two roots; nothing else may.
+    const markup = (): string => document.querySelector('.chat-head')!.outerHTML.replace(/«[^»]*»|:r[0-9a-z]+:/g, 'ID');
+    for (const skin of ['instrument', 'refined'] as const) {
+      for (const desk of [false, true]) {
+        vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
+          matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+          addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+        }) as unknown as MediaQueryList);
+        act(() => setSkin(skin));
+        const drawn = (session: FleetSession): string => {
+          const f = sessionFacts({ ...input, session } as unknown as FactInput);
+          render(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: f })} />);
+          const toggle = screen.queryByRole('button', { name: /details/i });
+          if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+          const out = markup();
+          cleanup();
+          return out;
+        };
+        const bare = drawn({ ...busy, subagents: null });
+        expect(bare, `${skin}: the control header is drawn`).toContain(busy.workspace!);
+        expect(drawn(busy), `${skin}, ${desk ? 'desk' : 'phone'}: the same with and without subagents`).toBe(bare);
+        vi.restoreAllMocks();
+      }
+    }
+  });
 });
 
 // The run page's header is a superset of the run row (the runs rebuild, Task 7, D-8072; spec 2026-11-04 §8.4; D-5545): every

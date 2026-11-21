@@ -23,11 +23,12 @@ import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { withRunBinding } from '../test/runBindingFixture';
 import { activity, frame, lease, unowned } from '../test/delegationFixture';
 import { LIVENESS_QUALIFIER } from '../src/fleet/delegationWords';
+import { PANEL_BANNED, SECTION_4_4_WORDS } from '../test/panelCensus';
 
-/** The broker's condition words and their sentences: since H3 (D-8875) no row of the fleet list or the session panel says
- *  one (spec 2026-11-19 §4.4), so they are the words the census below must not find. */
-const CONDITION_WORDS = Object.values(LIVENESS_QUALIFIER).map((q) => q.word);
-const CONDITION_SENTENCES = Object.values(LIVENESS_QUALIFIER).map((q) => q.title);
+/** The broker's condition words: since H3 (D-8875) no row of the fleet list or the session panel says one (spec 2026-11-19
+ *  §4.4), so they are the words the census below must not find. §4.4's five, written out on their own (`panelCensus.ts`,
+ *  HF2), and the table's words, whatever it says; the census below also bans the table's sentences (`PANEL_BANNED`). */
+const CONDITION_WORDS = [...new Set([...SECTION_4_4_WORDS, ...Object.values(LIVENESS_QUALIFIER).map((q) => q.word)])];
 
 const NOW = Date.now();
 
@@ -670,7 +671,7 @@ describe.each(SKINS)('the session header sheds its broker lists in %s (H3)', (sk
         const all = read.texts.join(' \n ');
         expect(all, 'no count or toggle of subagents or entries').not.toMatch(/\bsubagents?\b|\d+ delegated|⑂/i);
         expect(all, 'no subagent or entry name').not.toMatch(/reconcile every reader|read the plan|\bexplore\b|\bverify\b/);
-        expect([...CONDITION_WORDS, ...CONDITION_SENTENCES, 'unmeasured'].filter((w) => all.toLowerCase().includes(w.toLowerCase())),
+        expect(PANEL_BANNED.filter((w) => all.toLowerCase().includes(w.toLowerCase())),
           'no condition word, sentence or unmeasured').toEqual([]);
         expect(read.paths.map((p) => p.text), 'each worktree row says its path').toEqual([
           '/w/project-c/.claude/worktrees/agent-h1', '/w/project-c/.claude/worktrees/agent-h2']);

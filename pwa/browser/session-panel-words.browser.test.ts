@@ -9,12 +9,16 @@
 //   - the Helpers section is drawn once (the strip under the transcript, or the rail's section at 1600 and up in Refined),
 //     and so is the worktrees section, whose rows each start their path on the screen;
 //   - nothing scrolls the page sideways, no page error is thrown, and on a touch screen the details door and the Helpers
-//     head take the tap floor.
+//     head take the tap floor;
+//   - session helpers HF2 (D-8877, review 3123 F3, F4 and F6): below the desk a worktree's path takes its row's full width on a
+//     line of its own, and at every width it breaks only after a `/` unless a segment is wider than its line; a raw
+//     worktree's `inferred` and `Bash call …` chips sit side by side; and no separator of a Helpers line 2 starts a line.
 // With `CCRC_SHOTS=<dir>` it saves one picture per view, before its assertions, so the same file run over `origin/main`
 // gives the matrix's "before" column.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // --maxWorkers=2 browser/session-panel-words.browser.test.ts )`.
+import { appendFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
@@ -22,7 +26,7 @@ import { resolveChrome } from './harness';
 import { backlogFrame, longTranscript, openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { activity, frame, lease } from '../test/delegationFixture';
-import { LIVENESS_QUALIFIER } from '../src/fleet/delegationWords';
+import { PANEL_BANNED } from '../test/panelCensus';
 import type { AgentHelperView, WorkflowView } from '../../shared/workflows';
 
 const NOW = Date.now();
@@ -83,8 +87,6 @@ const FIXTURE: AppFixture = {
     }],
   },
 };
-
-const BANNED = [...new Set(Object.values(LIVENESS_QUALIFIER).flatMap((q) => [q.word, q.title])), 'unmeasured'];
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -153,17 +155,114 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
               door: box('.chat-details-toggle'),
               helpersHead: box('.chat-strips .helpers-strip > * > button[aria-expanded]') || box('.chat-strips .helpers-strip button[aria-expanded]'),
               line2Overflow: [...document.querySelectorAll('.helper-line2')].filter((l) => l.scrollWidth > l.clientWidth + 1).length,
+              // HF2 (review 3123 F3): below the desk a path takes its row's full width, on a line of its own; and it breaks only
+              // after a `/`, unless the segment it breaks in is wider than its line.
+              pathLayout: [...document.querySelectorAll<HTMLElement>('.sess-worktrees .proj-work-name')].map((part) => {
+                const text = part.querySelector<HTMLElement>('.proj-work-name-text')!;
+                const parts = part.closest('.proj-work-parts')!.getBoundingClientRect();
+                const r = part.getBoundingClientRect();
+                const siblings = [...part.parentElement!.children].filter((c) => c !== part).map((c) => c.getBoundingClientRect());
+                const ownLine = siblings.every((b) => b.bottom <= r.top + 1 || b.top >= r.bottom - 1);
+                const full = r.width >= parts.width - 1;
+                // Each character's line, from its box; a line starts where a character's top moves down.
+                const chars: Array<{ c: string; top: number; at: number }> = [];
+                const str = text.textContent ?? '';
+                let offset = 0;
+                for (const n of text.childNodes) {
+                  if (n.nodeType !== Node.TEXT_NODE) continue;
+                  const t = n.textContent ?? '';
+                  for (let i = 0; i < t.length; i++) {
+                    const range = document.createRange();
+                    range.setStart(n, i); range.setEnd(n, i + 1);
+                    const box = range.getClientRects()[0];
+                    if (box !== undefined) chars.push({ c: t[i]!, top: box.top, at: offset + i });
+                  }
+                  offset += t.length;
+                }
+                const probe = document.createElement('span');
+                probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap';
+                text.appendChild(probe);
+                const segWidth = (at: number): number => {
+                  const start = str.lastIndexOf('/', at - 1) + 1;
+                  const end = str.indexOf('/', at);
+                  probe.textContent = str.slice(start, end === -1 ? str.length : end + 1);
+                  return probe.getBoundingClientRect().width;
+                };
+                const badBreaks: string[] = [];
+                for (let i = 1; i < chars.length; i++) {
+                  if (chars[i]!.top - chars[i - 1]!.top < 2) continue;
+                  const at = chars[i]!.at;
+                  if (str[at - 1] !== '/' && segWidth(at) <= text.clientWidth + 1) badBreaks.push(`${str.slice(0, at)} | ${str.slice(at)}`);
+                }
+                probe.remove();
+                return { ownLine, full, badBreaks };
+              }),
+              // HF2 (review 3123 F6; D-6999): a raw worktree's two chips, `inferred` and its `Bash call …`, sit side by side.
+              chipPairs: [...document.querySelectorAll('.sess-worktrees .proj-work')].flatMap((row) => {
+                const chips = [...row.querySelectorAll<HTMLElement>('.proj-work-chip')];
+                const inferred = chips.find((c) => c.textContent === 'inferred');
+                const call = chips.find((c) => (c.textContent ?? '').startsWith('Bash call'));
+                if (inferred === undefined || call === undefined) return [];
+                const a = inferred.getBoundingClientRect();
+                const b = call.getBoundingClientRect();
+                return [Math.abs(a.top - b.top) < 2 && b.left >= a.right - 1];
+              }),
+              // HF2 (review 3123 F4): no separator of a Helpers line 2 starts a line, between its facts or inside a state group.
+              leadingSeparators: [...document.querySelectorAll('.helper-line2')].filter((line) => getComputedStyle(line).display !== 'none').flatMap((line) => {
+                const marks: Array<{ c: string; top: number }> = [];
+                const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+                for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+                  const t = n.textContent ?? '';
+                  for (let i = 0; i < t.length; i++) {
+                    if (/\s/.test(t[i]!)) continue;
+                    const range = document.createRange();
+                    range.setStart(n, i); range.setEnd(n, i + 1);
+                    const box = range.getClientRects()[0];
+                    if (box !== undefined && box.width > 0) marks.push({ c: t[i]!, top: box.top });
+                  }
+                }
+                return marks.some((m, i) => m.c === '·' && (i === 0 || Math.abs(marks[i - 1]!.top - m.top) > 4)) ? [line.textContent ?? ''] : [];
+              }),
             };
           });
+          // HF2's record (review 3123 F5 and F7), measured and written down, never asserted here: where the composer, its key-hint
+          // row and the details end against the viewport and the status bar, with every door open.
+          const measureTo = process.env['CCRC_MEASURE'];
+          if (measureTo !== undefined && measureTo !== '') {
+            const m = await page.evaluate(() => {
+              const rect = (sel: string): { top: number; bottom: number } | null => {
+                const el = document.querySelector(sel);
+                if (el === null) return null;
+                const r = el.getBoundingClientRect();
+                return { top: Math.round(r.top * 10) / 10, bottom: Math.round(r.bottom * 10) / 10 };
+              };
+              return {
+                vh: window.innerHeight, scrollH: document.documentElement.scrollHeight, head: rect('.chat-head'),
+                worktrees: rect('.sess-worktrees'), strips: rect('.chat-strips'), composer: rect('.composer'),
+                hints: rect('.composer-hints'), statusBar: rect('.ins-status'), list: rect('.chat-list'),
+              };
+            });
+            appendFileSync(measureTo, `${JSON.stringify({ skin, theme, width, ...m })}\n`);
+          }
           expect(read.sideScroll, 'sideways scroll').toBe(0);
           const all = read.texts.join(' \n ').toLowerCase();
-          expect(BANNED.filter((w) => all.includes(w.toLowerCase())), 'no condition word, sentence or unmeasured').toEqual([]);
+          expect(PANEL_BANNED.filter((w) => all.includes(w.toLowerCase())), 'no condition word, sentence or unmeasured').toEqual([]);
           expect(all, 'no subagent or entry count or name').not.toMatch(/\b\d+ subagents?\b|\d+ delegated|⑂|reconcile every reader|read the plan|code-reviewer/);
           expect(read.toggles, 'no toggle and no entry list').toBe(0);
           expect(read.helpers, 'the Helpers section, once').toBe(1);
           expect(read.worktrees, 'the worktrees section, once').toBe(1);
           expect(read.paths, 'each worktree path starts on the screen and is drawn whole').toEqual([true, true]);
           expect(read.line2Overflow, 'no Helpers line 2 runs past its row').toBe(0);
+          expect(read.leadingSeparators, 'no separator of a Helpers line 2 starts a line').toEqual([]);
+          expect(read.chipPairs.length, 'the raw worktree draws both chips').toBe(1);
+          expect(read.chipPairs, 'inferred and its Bash call, side by side (D-6999)').toEqual([true]);
+          for (const [i, p] of read.pathLayout.entries()) {
+            if (width < 900) {
+              expect(p.ownLine, `path ${i}: on a line of its own`).toBe(true);
+              expect(p.full, `path ${i}: the row's full width`).toBe(true);
+            }
+            expect(p.badBreaks, `path ${i}: breaks only after a "/" where it can`).toEqual([]);
+          }
           if (read.coarse) {
             if (read.door > 0) expect(read.door, 'the details door takes the tap floor').toBeGreaterThanOrEqual(44);
             if (read.helpersHead > 0) expect(read.helpersHead, 'the Helpers head takes the tap floor').toBeGreaterThanOrEqual(44);

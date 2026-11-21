@@ -12,6 +12,7 @@ import {
   LIVENESS_QUALIFIER, UNRECOGNISED_WORD, WORKTREE_WORD, creatorChip, inferredChip, leasesStartedBy, readDelegation, worktreeLine,
 } from '../src/fleet/delegationWords';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { PANEL_BANNED, SECTION_4_4_WORDS } from './panelCensus';
 import { DELEGATION_CARRIER_STATES, LEASE_DOOR_REFUSALS } from '../../shared/api';
 
 // Review 1624 F7: the wire's `expiresAt` reader, wrapped so a row can see who reads the field. It answers exactly as the
@@ -174,9 +175,10 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
       expect(LIVENESS_QUALIFIER[l].word.length, l).toBeGreaterThan(0);
       expect(LIVENESS_QUALIFIER[l].title.length, l).toBeGreaterThan(20);
     }
-    const banned = [...Object.values(LIVENESS_QUALIFIER).flatMap((q) => [q.word, q.title]), 'unmeasured'];
+    // HF2 (review 3123 F1): the table's words are §4.4's five as the spec spells them (the census's own literal list).
+    expect(Object.values(LIVENESS_QUALIFIER).map((q) => q.word).sort()).toEqual([...SECTION_4_4_WORDS].sort());
     for (const line of lines) {
-      for (const text of [...line.parts, line.title]) expect(banned.filter((b) => text.includes(b)), text).toEqual([]);
+      for (const text of [...line.parts, line.title]) expect(PANEL_BANNED.filter((b) => text.includes(b)), text).toEqual([]);
     }
     // A newer server's liveness word is re-filed unmeasured by the reader, never live.
     const future = readDelegation(frame({ activities: [activity({ liveness: 'future-word' as never })] })).activities[0]!;

@@ -367,6 +367,24 @@ describe('review 3072 F6 and F7: line 2 breaks only between its groups, and the 
       s.unmount();
     }
   });
+  // Review 3123 F4 (HF2, D-8877): the same rule between line 2's facts, so no separator starts a line anywhere in line 2 (the
+  // 1600 px rail drew `· high ·` at a line's start). RED FIRST: at `main` the separators between the facts were plain spaces.
+  it('HF2: every "·" in line 2, between its facts as well as inside a state group, is preceded by a no-break space', () => {
+    for (const [width, frame] of [[1280, { agents: [RUNNING[0]!] }], [1280, { workflows: [wf('wf_00000000-aaa')] }], [360, { agents: [RUNNING[0]!] }],
+      [1280, { agents: [DONE] }]] as const) {
+      const s = screenAt(width, frame);
+      open(s.section()!);
+      for (const b of within(s.section()!).queryAllByRole('button', { name: /Finished/ })) fireEvent.click(b);
+      const lines = [...s.section()!.querySelectorAll('.helper-line2')];
+      expect(lines.length, `${width}: a line 2`).toBeGreaterThan(0);
+      for (const l of lines) {
+        const t = l.textContent!;
+        expect(t, 'a line with a separator').toContain('·');
+        expect(t.match(/(?<! )·/g), `${width}: a "·" not after U+00A0 in "${t}"`).toBeNull();
+      }
+      s.unmount();
+    }
+  });
   it('review 3099 F2: no rule on a state group or its words lets a word split inside', () => {
     expect(css).not.toMatch(/\.helper-state[^{]*\{[^}]*(overflow-wrap:\s*anywhere|word-break:\s*break-all)/);
     expect(rule('.helper-word'), 'today\'s rule: only a word wider than the whole line wraps, by overflow-wrap').not.toMatch(/word-break|break-word/);
