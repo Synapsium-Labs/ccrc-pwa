@@ -1084,11 +1084,17 @@ describe('review 3004 fix round 2 (D-8186, D-8796)', () => {
     r.override.current = (ask) => { if (ask.op === 'issueUpdate' && ask.input['id'] === U(101) && ask.lane === 'migration') hold(r, 1, 'held1'); return undefined; };
     const id = await r.approved([entry(1, 'epic', { programme: SLUG, epic: 'e1' })]);
     // the tick's own report save fails, as a restart before it would
-    vi.spyOn(r.mig as unknown as { saveReport: () => never }, 'saveReport').mockImplementation(() => { throw new Error('crash'); });
+    const crash = vi.spyOn(r.mig as unknown as { saveReport: () => never }, 'saveReport').mockImplementation(() => { throw new Error('crash'); });
     for (let i = 0; i < 6 && r.issues.get(U(101))!.stateType !== 'canceled'; i += 1) { try { await r.tick(); } catch { /* the crash */ } }
     expect(r.issues.get(U(101))!.stateType).toBe('canceled');   // the write went out
-    const row = r.plan.movesOf(id).find((x) => x.identifier === 'AAA-1')!;
-    // the stamp and the listing stand together or not at all
-    if (row.appliedAt !== null) expect(r.plan.migrationById(id)!.report?.taken).toEqual(['AAA-1']);
+    // The stamp and the listing stand together or not at all: the failed save took the stamp with it, so the row is not left
+    // applied with the take forgotten (an applied row is never read again).
+    expect(r.plan.movesOf(id).find((x) => x.identifier === 'AAA-1')!.appliedAt).toBeNull();
+    crash.mockRestore();
+    r.override.current = null;
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-1']);
+    expect(r.mig.view(id)!.counts.closed).toBe(0);
   });
 });
