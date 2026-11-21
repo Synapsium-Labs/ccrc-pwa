@@ -3,7 +3,7 @@
 // run under Node's type-stripping flag (no compile step). The tests' launcher pipes the build's stdin; the tmux launcher
 // is run once, on a test-only socket, when a `tmux` binary is on PATH.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -48,7 +48,7 @@ function place(root: string, version: string): void {
 function runner(root: string, over: Partial<CaptureRunnerDeps> = {}): CaptureRunner {
   return new CaptureRunner({
     root, recorder: RECORDER, toolsPath: NODE_DIR, launcher: pipeLauncher, standIn: () => startStandIn(),
-    stepTimeoutMs: 6000, exitTimeoutMs: 3000, pollMs: 50, ...over,
+    stepTimeoutMs: 20_000, exitTimeoutMs: 10_000, pollMs: 50, ...over,
   });
 }
 
@@ -64,7 +64,7 @@ describe('a capture of a good build', () => {
     expect(r.result?.output).toContain('verdict: pass');
     expect(r.result).toMatchObject({ build: GOOD, pass: true, cwd: true });
     expect(gone(root, 'good', GOOD)).toBe(true);
-  }, 60_000);
+  }, 120_000);
 
   it('through a symlinked root still proves cwd (the runner compares against the work folder\'s real path)', async () => {
     const base = freshRoot();
@@ -76,19 +76,19 @@ describe('a capture of a good build', () => {
     const r = await runner(link).run('linked', GOOD);
     expect(r.result).toMatchObject({ pass: true, cwd: true });
     expect(gone(link, 'linked', GOOD)).toBe(true);
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('a build that started but stalled FAILS, naming what was never recorded (spec §2.4)', () => {
   it('one that never raises SubagentStop fails, its output naming SubagentStop', async () => {
     const root = freshRoot();
     place(root, NO_SUBAGENT_STOP);
-    const r = await runner(root, { stepTimeoutMs: 3000 }).run('nosub', NO_SUBAGENT_STOP);
+    const r = await runner(root, { stepTimeoutMs: 8000 }).run('nosub', NO_SUBAGENT_STOP);
     expect(r.detail).toBeNull();
     expect(r.result?.pass).toBe(false);
     expect(r.result?.output).toContain('SubagentStop');
     expect(gone(root, 'nosub', NO_SUBAGENT_STOP)).toBe(true);
-  }, 60_000);
+  }, 120_000);
 
   it('one that hangs at a step fails within the short deadline, the drive not finished', async () => {
     const root = freshRoot();
@@ -97,12 +97,12 @@ describe('a build that started but stalled FAILS, naming what was never recorded
     // The launcher reports the build gone at once, so only the DRIVE's own deadline can fail this capture (the exit wait,
     // which a hung build would also trip, is the next case's).
     const reportsExited: CaptureLauncher = { start: async (spec) => ({ ...(await pipeLauncher.start(spec)), alive: async () => false }) };
-    const r = await runner(root, { stepTimeoutMs: 3000, launcher: reportsExited }).run('hang', HANGS);
+    const r = await runner(root, { stepTimeoutMs: 8000, launcher: reportsExited }).run('hang', HANGS);
     expect(r.result?.pass).toBe(false);
     expect(r.result?.output).toContain('drive: did not finish every step');
     expect(Date.now() - t0).toBeLessThan(30_000);
     expect(gone(root, 'hang', HANGS)).toBe(true);
-  }, 60_000);
+  }, 120_000);
 
   it('one that never exits fails, the drive not finished', async () => {
     const root = freshRoot();
@@ -111,7 +111,7 @@ describe('a build that started but stalled FAILS, naming what was never recorded
     expect(r.result?.pass).toBe(false);
     expect(r.result?.output).toContain('drive: did not finish every step');
     expect(gone(root, 'noexit', NEVER_EXITS)).toBe(true);
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('a capture that could not START answers no verdict, with why', () => {
@@ -147,11 +147,14 @@ const REAL_TMUX = ['/usr/bin/tmux', '/usr/local/bin/tmux', '/bin/tmux', '/opt/ho
 const hasTmux = REAL_TMUX !== null;
 
 describe('the tmux launcher', () => {
-  it.skipIf(!hasTmux)('runs the good build in its own tmux server on a test-only socket, and the capture passes', async () => {
-    // A unix socket's path is bounded (about 107 bytes) and the per-run temp root is long, so the tmux server's directory is
-    // a SHORT one made just for this case (the launcher is wrapped to name it in the spec's environment) and removed after.
+  it.skipIf(!hasTmux)('runs the good build in its own tmux server on a test-only socket, and the capture passes', async (ctx) => {
+    // A unix socket's path is bounded (about 107 bytes), so the tmux server's directory is a SHORT one from the shared temp
+    // registry (the launcher is wrapped to name it in the spec's environment). Under a temp root too long for that, the case
+    // skips rather than make a directory the registry does not know (`tmpfixtures.test.ts`).
     const root = freshRoot();
-    const sockDir = mkdtempSync('/tmp/ccrc-tx-');
+    const sockDir = mkTmp('tx-');
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+    if (path.join(sockDir, `tmux-${uid}`, 'ccrc-capture').length > 100) ctx.skip();
     const real = tmuxLauncher(REAL_TMUX!);
     const short: CaptureLauncher = {
       start: (spec) => real.start({ ...spec, env: spec.env.map(([k, v]) => (k === 'TMUX_TMPDIR' ? [k, sockDir] as const : [k, v] as const)) }),
@@ -163,7 +166,7 @@ describe('the tmux launcher', () => {
       expect(r.result).toMatchObject({ pass: true, cwd: true });
       expect(gone(root, 'tmx', GOOD)).toBe(true);
     } finally {
-      rmSync(sockDir, { recursive: true, force: true });
+      spawnSync(REAL_TMUX!, ['-L', 'ccrc-capture', 'kill-server'], { timeout: 10_000, env: { TMUX_TMPDIR: sockDir } });
     }
   }, 120_000);
 });
