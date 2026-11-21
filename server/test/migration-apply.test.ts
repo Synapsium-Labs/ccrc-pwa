@@ -846,7 +846,7 @@ describe('review 2955 (D-8186)', () => {
     expect(rep.skipped).toEqual([]);
     expect(rep.waiting).toEqual([]);
     expect(r.db.prepare("SELECT subject FROM mail WHERE toId = ? AND subject LIKE '%follow-up%'").all(OWNER)).toEqual([]);
-    expect(r.mig.awaitsMap('AAA')).toBe(false);
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);
   });
 
   it('A1: a stale closer and a replaced epic naming an issue a live binding holds get no comment, no relation and no close; both go to `taken`', async () => {

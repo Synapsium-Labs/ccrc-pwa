@@ -89,12 +89,12 @@ describe('the Linear owner is the migration workspace\'s', () => {
 });
 
 describe('waitingWorkspaces', () => {
-  it('names every workspace with a migration waiting for a map, and awaitsMap follows it', async () => {
+  it('names every workspace with a migration waiting for a map', async () => {
     const r = await twoWorkspaces();
     expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);
     r.plan.insertMigration({ workspaceId: WS.b.id, teamKey: 'AAA', project: 'project-b', now: r.t.now });
     expect(r.mig.waitingWorkspaces('AAA')).toEqual([WS.b.id]);
-    expect(r.mig.awaitsMap('AAA')).toBe(true);
+    expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);
     expect(r.mig.waitingWorkspaces('BBB')).toEqual([]);
   });
 });

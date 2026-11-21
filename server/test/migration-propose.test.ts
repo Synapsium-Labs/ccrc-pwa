@@ -179,26 +179,26 @@ describe('the migration proposal (D-8186)', () => {
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b'), leaf(2, 'k2')] }, open)).toMatchObject({ ok: false, word: 'map-incomplete', detail: 'not-open:AAA-1' });
   });
 
-  it('awaitsMap answers only while a migration waits', async () => {
+  it('waitingWorkspaces names a workspace only while its migration waits', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);
-    expect(r.mig.awaitsMap('AAA')).toBe(false);              // none
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);              // none
     const { migrationId, itemId } = await (async () => {
       expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id }).ok).toBe(true);
-      expect(r.mig.awaitsMap('AAA')).toBe(true);             // proposing
+      expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);             // proposing
       const open = await r.mig.readOpen('AAA', WS.a.id);
       if (!open.ok) throw new Error('read');
       expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1'), leaf(2, 'k2')] }, open)).toMatchObject({ ok: true });
       const m = r.plan.migrationsOf()[0]!;
       return { migrationId: m.id, itemId: m.itemId! };
     })();
-    expect(r.mig.awaitsMap('AAA')).toBe(false);              // proposed
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);              // proposed
     expect(r.mig.act(itemId, migrationId, 'approve', null)).toEqual({ ok: true });
-    expect(r.mig.awaitsMap('AAA')).toBe(false);              // approved
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);              // approved
     r.issues.get(U(102))!.title = 'Edited by a person after the map';
     await r.until(() => r.stateOf(migrationId) === 'applied');
-    expect(r.mig.awaitsMap('AAA')).toBe(true);               // applied with one skipped: a follow-up
-    expect(r.mig.awaitsMap('ZZZ')).toBe(false);
+    expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);               // applied with one skipped: a follow-up
+    expect(r.mig.waitingWorkspaces('ZZZ')).toEqual([]);
   });
 
   it('a follow-up map is refused while put back is asked', async () => {
@@ -208,9 +208,9 @@ describe('the migration proposal (D-8186)', () => {
     r.issues.get(U(102))!.title = 'Edited by a person after the map';
     await r.until(() => r.stateOf(id) === 'applied');
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.awaitsMap('AAA')).toBe(true);
+    expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);
     expect(r.mig.act(m.reportItemId!, id, 'put-back', null)).toEqual({ ok: true });
-    expect(r.mig.awaitsMap('AAA')).toBe(false);
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);
     const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open)).toMatchObject({ ok: false, word: 'plan-bad-body' });

@@ -234,13 +234,11 @@ export class LinearMigration {
   private waitingRow(team: string, workspaceId: string): MigrationRow | null {
     return this.deps.plan.migrationsOf().find((m) => m.workspaceId === workspaceId && this.waits(m, team)) ?? null;
   }
-  /** D-8808: the distinct workspaces with a migration of the team waiting for a map, any workspace. */
+  /** D-8808: the distinct workspaces with a migration of the team waiting for a map, any workspace. `plan map-propose` asks it
+   *  before its Linear read, so a call with nothing to propose spends no read (the wave's review). */
   waitingWorkspaces(team: string): string[] {
     return [...new Set(this.deps.plan.migrationsOf().filter((m) => this.waits(m, team)).map((m) => m.workspaceId))];
   }
-  /** Whether a team has a migration waiting for a map: `plan map-propose` asks before its Linear read, so a call with nothing to
-   *  propose spends no read (the wave's review). */
-  awaitsMap(team: string): boolean { return this.waitingWorkspaces(team).length > 0; }
 
   /** Outside the mutex: the team's open issues in the migration's workspace, for `storeProposal`. */
   async readOpen(team: string, workspaceId: string): Promise<OpenRead> {
