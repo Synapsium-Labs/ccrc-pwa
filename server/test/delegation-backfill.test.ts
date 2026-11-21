@@ -65,10 +65,11 @@ const row = (activityId: string, over: Partial<Row> = {}): Row => ({
 });
 const rowsOf = (...rows: Row[]): Map<string, Row> => new Map(rows.map((a) => [a.activityId, a] as const));
 const plan = (activities: Row[], nowMs: number, over: { parents?: Map<string, DelegationBackfillParent>; listed?: Set<string> | null;
-  reported?: Set<string> | null; leases?: string[]; lineage?: string[] } = {}) =>
+  reported?: Set<string> | null; complete?: boolean; leases?: string[]; lineage?: string[] } = {}) =>
   planDelegationBackfill({
     checkpoint: { activities, leases: (over.leases ?? []).map((activityId) => ({ activityId })) as never, lineage: (over.lineage ?? []).map((activityId) => ({ activityId })) as never },
-    nowMs, parents: over.parents ?? new Map(), listed: over.listed ?? null, reported: over.reported ?? null,
+    nowMs, parents: over.parents ?? new Map(), listed: over.listed ?? null,
+    reported: over.reported === undefined || over.reported === null ? null : { keys: over.reported, complete: over.complete ?? true },
   });
 
 let serial = 0;
@@ -235,7 +236,7 @@ describe('S2: the plan and the dry run\'s report (spec §7.2, condition 4)', () 
 
   it('B-P2: how many failed the positive check, how many are young, how many the pass already closed', () => {
     const p = plan(fixture(), now, { parents: LIVE_P_GONE_Q });
-    expect(p.report).toMatchObject({ failedCheck: 1, young: 1, closed: 1, unlisted: 0, reportedFirst: null });
+    expect(p.report).toMatchObject({ failedCheck: 1, young: 1, closed: 1, unlisted: 0, reportedFirst: null, reportedScan: 'skipped' });
   });
 
   it('B-P3: how many of those it would close a lease or a lineage row names (released or not, open or closed)', () => {
@@ -254,7 +255,10 @@ describe('S2: the plan and the dry run\'s report (spec §7.2, condition 4)', () 
     const rows = fixture();
     const keyOf = (id: string): string => encodeDelegationNaturalKey(rows.find((a) => a.activityId === id)!);
     const reported = new Set([keyOf('a-live'), keyOf('a-done'), keyOf('a-ended'), keyOf('w-gone')]);
-    expect(plan(rows, now, { parents: LIVE_P_GONE_Q, reported }).report.reportedFirst, 'a-live and a-done; a-ended has a measured end, w-gone is no agent').toBe(2);
+    expect(plan(rows, now, { parents: LIVE_P_GONE_Q, reported }).report, 'a-live and a-done; a-ended has a measured end, w-gone is no agent')
+      .toMatchObject({ reportedFirst: 2, reportedScan: 'complete' });
+    expect(plan(rows, now, { parents: LIVE_P_GONE_Q, reported, complete: false }).report, 'a read cut at its bound is unmeasured, never a partial count')
+      .toMatchObject({ reportedFirst: null, reportedScan: 'cut' });
   });
 
   it('B-P6: nothing open: nothing to close, and the report says so', () => {
@@ -335,7 +339,7 @@ describe('S2: the durable dry run, pass and undo', () => {
     const bytes = checkpointBytes(dir);
     const revision = d.state().checkpoint.revision;
     const report = await d.backfillDryRun(NOW, LIVE_P_GONE_Q);
-    expect(report).toMatchObject({ mode: 'first', closes: 1, failedCheck: 2, reportedFirst: 0 });
+    expect(report).toMatchObject({ mode: 'first', closes: 1, failedCheck: 2, reportedFirst: 0, reportedScan: 'complete' });
     expect(checkpointBytes(dir).equals(bytes), 'the checkpoint is byte for byte as it was').toBe(true);
     expect(d.state().checkpoint.revision).toBe(revision);
     expect(existsSync(path.join(dir, DELEGATION_BACKFILL_FILE)), 'no list').toBe(false);
@@ -371,7 +375,7 @@ describe('S2: the durable dry run, pass and undo', () => {
     const d = await applierOver(dir);
     const bytes = checkpointBytes(dir);
     const out = await d.backfillPass(NOW, LIVE_P_GONE_Q, 2);
-    expect(out).toMatchObject({ ok: false, report: { closes: 1 } });
+    expect(out, 'the report the pass would act on now: its count is what the operator reads the dry run again for').toMatchObject({ ok: false, report: { closes: 1 } });
     expect(checkpointBytes(dir).equals(bytes)).toBe(true);
     expect(existsSync(path.join(dir, DELEGATION_BACKFILL_FILE))).toBe(false);
   });
@@ -456,5 +460,15 @@ describe('S2: the durable dry run, pass and undo', () => {
     expect(opened.kind).toBe('opened');
     expect(agentOf(d.state().checkpoint as DelegationCheckpointV1, 'agent-w')).toMatchObject({ executionState: 'active' });
     expect(await d.backfillDryRun(NOW, new Map([[P, measured(INC)]]))).toMatchObject({ reportedFirst: 1, closes: 0, failedCheck: 1 });
+  });
+
+  it('B-D11: the dry run\'s read of the journal is cut at its time bound, and the count is then unmeasured; the rest of the report stands', async () => {
+    const dir = dirWith(journal());
+    // A clock that moves past the bound between two reads: every read of it is 200 seconds after the last.
+    const clock = { ms: T0 + 40 * DAY };
+    const d = await DelegationDurability.open({ dir, projection: nullProjection, now: () => (clock.ms += 200_000), randomUUID: () => 'unused', port: quickPort });
+    opened.push(d);
+    expect(d.failure()).toBeNull();
+    expect(await d.backfillDryRun(NOW, LIVE_P_GONE_Q)).toMatchObject({ reportedFirst: null, reportedScan: 'cut', closes: 1, failedCheck: 2 });
   });
 });

@@ -10,15 +10,24 @@
 //     `completed`, `failed` or `cancelled`; the hook maps `killed` and `stopped` to `cancelled`) names its agent by its task id, so it
 //     joins the record directly on the natural key (session, incarnation, `agent`, task id) through the mapping, with no launch index.
 //   - `endBasisDefect`: the projectability rule for a row that carries `endBasis` (Table 9), mirrored by the column's CHECK in `schema.ts`.
+//   - `isFinalNotification` (S2, review 3026 F9): what makes a task notification final, read by this arm and by the checkpoint's Workflow
+//     arm (`foldNotification`), so the rule has one writer. The instant maximum has one too: `delegation-model.ts#maxInstant`.
+//   - `hasMeasuredEnd` (S2, D-8874): the negation of `isEndable`, for the readers of Table 10 that hold or retire a record: a record the
+//     one-time pass closed has no measured end, so it is held as an open record is and never retired.
 import type { DelegationActivityNaturalKey, DelegationEventEnvelopeV1 } from '../../../shared/api.js';
-import type { DelegationActivityRow, DelegationEndBasis } from './delegation-model.js';
-
-/** Canonical UTC millisecond instants order as strings. */
-const later = (a: string, b: string): string => (a >= b ? a : b);
+import { maxInstant, type DelegationActivityRow, type DelegationEndBasis } from './delegation-model.js';
 
 /** The widened "not ended": not ended, or ended by the backfill (which has no measured end, so any measured one replaces it). */
 export const isEndable = (a: Pick<DelegationActivityRow, 'executionState' | 'endBasis'>): boolean =>
   a.executionState !== 'ended' || a.endBasis === 'backfill-unmeasured';
+
+/** Ended, and on a measured end (S2): what the compaction's holds, its retirable set and `retireBehindCut` read as "ended". */
+export const hasMeasuredEnd = (a: Pick<DelegationActivityRow, 'executionState' | 'endBasis'>): boolean => !isEndable(a);
+
+/** A task notification's status, as the hook journals it. */
+type NotificationStatus = Extract<DelegationEventEnvelopeV1, { eventKind: 'UserPromptSubmit' }>['notification']['status'];
+/** A task notification is final on `completed`, `failed` or `cancelled`; `unknown` (a paused workflow) is not (review 3026 F9: one writer). */
+export const isFinalNotification = (status: NotificationStatus): boolean => status !== 'unknown';
 
 /**
  * `a` ended by a measured end at `at`: `ended`, `endedAt` never before `openedAt`, `lastEventAt` moved, and the basis written. `observed`
@@ -27,13 +36,13 @@ export const isEndable = (a: Pick<DelegationActivityRow, 'executionState' | 'end
  */
 export function endedBy(a: DelegationActivityRow, at: string, basis: Exclude<DelegationEndBasis, 'backfill-unmeasured'>): DelegationActivityRow {
   const { endBasis: _replaced, ...row } = a;
-  const ended: DelegationActivityRow = { ...row, executionState: 'ended', endedAt: later(at, a.openedAt), lastEventAt: later(a.lastEventAt, at) };
+  const ended: DelegationActivityRow = { ...row, executionState: 'ended', endedAt: maxInstant(at, a.openedAt), lastEventAt: maxInstant(a.lastEventAt, at) };
   return basis === 'observed' ? ended : { ...ended, endBasis: basis };
 }
 
 /** The natural key an Agent's FINAL task notification names, or null: not a notification, or one whose status is `unknown`. */
 export function taskReportKey(e: DelegationEventEnvelopeV1): DelegationActivityNaturalKey | null {
-  if (e.eventKind !== 'UserPromptSubmit' || e.notification.status === 'unknown') return null;
+  if (e.eventKind !== 'UserPromptSubmit' || !isFinalNotification(e.notification.status)) return null;
   return { parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: 'agent', upstreamId: e.notification.taskId };
 }
 

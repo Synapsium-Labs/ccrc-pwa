@@ -129,7 +129,7 @@ describe('GET /api/coord/delegation-backfill: the dry run (spec §7.2, condition
     const r = await get(w);
     expect(r.statusCode).toBe(200);
     expect(r.json()).toMatchObject({ ok: true, words: DELEGATION_BACKFILL_WORDS, mode: 'first', listed: null, closes: 1, failedCheck: 1, young: 0,
-      byKind: { agent: { days1to7: 1, days7to30: 0, days30plus: 0 } }, reportedFirst: 0 });
+      byKind: { agent: { days1to7: 1, days7to30: 0, days30plus: 0 } }, reportedFirst: 0, reportedScan: 'complete' });
     expect(bytes(w).equals(before)).toBe(true);
     expect(existsSync(path.join(w.ccrc, DELEGATION_BACKFILL_FILE))).toBe(false);
   });
@@ -171,7 +171,8 @@ describe('POST /api/coord/delegation-backfill: the pass and the undo', () => {
     const before = bytes(w);
     const r = await post(w, { act: 'pass', closes: 7 });
     expect([r.statusCode, r.json().error]).toEqual([409, 'count-changed']);
-    expect(r.json()).toMatchObject({ report: { closes: 1 } });
+    expect(r.json(), 'the operator sees the count the pass would close now, to read the dry run again')
+      .toMatchObject({ report: { closes: 1 }, detail: 'the pass would close 1, not 7: read the dry run again' });
     expect(REFUSAL_STATUS['count-changed']).toBe(DELEGATION_BACKFILL_REFUSALS['count-changed']);
     expect(bytes(w).equals(before)).toBe(true);
   });
