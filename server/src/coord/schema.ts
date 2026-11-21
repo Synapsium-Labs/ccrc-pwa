@@ -4199,6 +4199,21 @@ export const MIGRATIONS: readonly string[] = [
   -- ONE reader derives its source (linkingStore.ts's linkSourceOf). Every writer that sets or changes the key clears it.
   ALTER TABLE project_linking ADD COLUMN teamCallId INTEGER;
   `,
+  // ── 117: user_version 116 -> 117 ─────────────────────────────────────────────
+  // The in-place bind (D-6096, fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave
+  // as the run's own worker, in a sibling worktree. `inPlace` is 1 for such a run and NULL for every other; its one writer
+  // is `CoordStore.bindInPlace`, and its readers decide what an in-place run does NOT do: it starts no process, so it is
+  // charged to neither cap (`dispatchedAt` stays NULL), and its close and abandon compose no `ws-*` verb on the claimant,
+  // whose workspace is the coordinator's own (`closeDecide.ts`).
+  //
+  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 117` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names it, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 116 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN inPlace INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

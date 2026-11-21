@@ -867,6 +867,11 @@ describe('the rejection table is total, in both directions', () => {
                                   // exactly like its two siblings above — no
                                   // `refused`/`reject.code` ever carries it, nothing
                                   // switches on it over the wire.
+      'in-place',                // D-6096 (W1-4b, review 2993 F9): `IN_PLACE_EVENT`, the
+                                  // `run_events.detail` the in-place bind journals
+                                  // (`CoordStore.bindInPlace`). Forensic history on the
+                                  // run, like `session-rebound` above: no
+                                  // `refused`/`reject.code` ever carries it.
       'reverse-demotion',        // routing slice 5, Task 2 — one of `RouteMode`'s own
                                   // words (`shared/routing-ladder.ts`'s `RungTarget.mode`),
                                   // compared here only against a run_events.detail token

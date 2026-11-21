@@ -55,10 +55,13 @@ import { operatorRetainLease, resolveLease, retainLease, runStampsOfSeries, type
 import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } from './delegation-lease-acts.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { doneRunOf } from './fingerprint.js';   // D-6096: an in-place run's done-claim is measured on its recorded branch
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { bindRunInPlace, type InPlaceOutcome } from './dispatch.js';   // D-6096: the in-place bind
+import { inPlaceRequest } from './dispatchDecide.js';   // D-6096: the in-place body, shaped in L1 (review 2993 F8)
 import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
@@ -333,6 +336,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // type is `number` and must stay so: `by` is the project's NAME.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
         ...(r.by === undefined ? {} : { by: r.by }),
+        ...(r.detail === undefined ? {} : { detail: r.detail }),
         ...(r.key === undefined ? {} : { key: r.key }), ...(r.holder === undefined ? {} : { holder: r.holder }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
@@ -367,6 +371,17 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
     }
   }
+}
+
+/**
+ * `bindRunInPlace`'s result -> HTTP status + body (D-6096). A bind answers `200 {ok, id, sessionId, inPlace, branch}`; the
+ * caller's attribution refusal goes out through `refuseRoute` with the words `requireAttribution` uses; every other refusal
+ * is a member of `DispatchOutcome`'s failures and is answered by `sendDispatchOutcome`, so the two doors share one wire.
+ */
+function sendInPlaceOutcome(reply: FastifyReply, r: InPlaceOutcome) {
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, sessionId: r.sessionId, inPlace: true, branch: r.branch });
+  if (r.kind === 'attribution') return refuseRoute(reply, r.error, { detail: r.detail });
+  return sendDispatchOutcome(reply, r);
 }
 
 /** `closeRun`'s typed result union -> HTTP status + body. Same discipline as
@@ -1765,6 +1780,17 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown };
+    // D-6096: the IN-PLACE bind. A coordinator takes its own refused wave as the run's worker; no process starts and no
+    // fleet act is composed, so none of the dispatch's deps below are built for it, and the skill self-install (which
+    // belongs to a bound WORKER) never runs for it. The body is shaped in L1 (`inPlaceRequest`, review 2993 F8).
+    const inPlace = inPlaceRequest(req.body ?? {});
+    if (inPlace !== null) {
+      if (!inPlace.ok) return refuseRoute(reply, 'bad-request', { detail: inPlace.detail });
+      const { by, byUuid, branch } = inPlace;
+      const inPlaceDeps = { coord, io: deps.io, cfg: deps.cfg,
+        attribute: (who: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, who, uuid, 'claimedByUuid') };
+      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, branch, body.intents)));
+    }
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
       // The one place a wrapper becomes a directory, called from L4 where the
@@ -1988,7 +2014,7 @@ export function registerCoordRoutes(
     if (to === 'awaiting-review' || to === 'merging') {
       const measured = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+        doneRunOf(run),
         claim,
       );
       if (!measured.ok) {
