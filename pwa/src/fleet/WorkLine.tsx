@@ -1,12 +1,12 @@
 // One line of words, each a cell, its detail in `title`: the row the session's own page draws for each worktree (its section);
 // a project card and the fleet list draw none (D-8782).
 // ONE spelling of that markup, so the surfaces cannot drift apart. The words are the caller's, decided by the words module;
-// this file draws them and decides nothing, `nameAt` included: the words module names the one free-text part, the path, and
-// where it may break (`pathBreaks`); this file gives that part its class and draws each piece as a box of its own
-// (`.proj-work-seg`), so the line breaks between pieces and inside one only when it is wider than the line (session helpers
-// HF2, D-8877; review 3123 F3).
+// this file draws them and decides nothing, `nameAt` included: the words module names the one free-text part, the path, the
+// formatters say where it may break (`pathBreaks`, `lib/format.ts`), and this file gives that part its class and draws each
+// piece as a box of its own (`.proj-work-seg`), so the line breaks between pieces and inside one only when it is wider than
+// the line (session helpers HF2, D-8877; review 3123 F3).
 import type { ReactNode } from 'react';
-import { pathBreaks } from './delegationWords';
+import { pathBreaks } from '../lib/format';
 import './fleet.css';
 
 export function WorkLine({ parts, title, nameAt = null, children = null }: {

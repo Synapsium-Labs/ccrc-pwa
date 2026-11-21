@@ -41,14 +41,6 @@ export interface Chip { readonly text: string; readonly title: string }
  *  `pathBreaks` names, and below the desk on a line of its own (session helpers HF2, D-8877; review 3123 F3 and F8). */
 export interface WorkWords { readonly parts: readonly string[]; readonly title: string; readonly nameAt: number | null }
 
-/** A path cut after each `/`: the row draws each piece as a box of its own, so it breaks between pieces, after a `/`, and inside
- *  one only when it is wider than its line (review 3123 F3: a hyphen inside a segment is a break a browser takes first when the
- *  line is filled greedily, so a `<wbr>` alone was not enough, measured). The pieces joined are the path, character for
- *  character. */
-export function pathBreaks(path: string): readonly string[] {
-  return path.split(/(?<=\/)/).filter((p) => p !== '');
-}
-
 export const WORKTREE_WORD: Readonly<Record<DelegationLeaseSourceKind, string>> = {
   agent: 'agent worktree',
   workflow: 'workflow worktree',
