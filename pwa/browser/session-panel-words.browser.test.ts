@@ -11,9 +11,10 @@
 //   - nothing scrolls the page sideways, no page error is thrown, and on a touch screen the details door and the Helpers
 //     head take the tap floor;
 //   - session helpers HF2 (D-8877, review 3123 F3 and F6): below the desk a worktree's path takes its row's full width on a
-//     line of its own, and at every width it breaks only after a `/` unless a segment is wider than its line; and a raw
-//     worktree's `inferred` and `Bash call …` chips sit side by side; and the composer, its key-hint row included, lies
-//     inside the session's pane and the window (F5, F7), the Helpers strip giving way, never past its head.
+//     line of its own, at a desk it shares its row's line (review 3184 F2), and at every width it breaks only after a `/`
+//     unless a segment is wider than its line; and a raw worktree's `inferred` and `Bash call …` chips sit side by side; and
+//     the composer, its key-hint row included, lies inside the session's pane and the window (F5, F7), the Helpers strip
+//     giving way, never past its head.
 // With `CCRC_SHOTS=<dir>` it saves one picture per view, before its assertions, so the same file run over `origin/main`
 // gives the matrix's "before" column.
 //
@@ -266,6 +267,9 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
               expect(p.ownLine, `path ${i}: on a line of its own`).toBe(true);
               expect(p.full, `path ${i}: the row's full width`).toBe(true);
               expect(p.last, `path ${i}: after the row's short words`).toBe(true);
+            } else {
+              // HF2 fix round 1 (review 3184 F2): at a desk the path stays in its row's line, beside the short words.
+              expect(p.ownLine, `path ${i}: shares its row's line at a desk`).toBe(false);
             }
             expect(p.read, `path ${i}: every character measured`).toBe(true);
             expect(p.badBreaks, `path ${i}: breaks only after a "/" where it can`).toEqual([]);
