@@ -4245,7 +4245,8 @@ export const MIGRATIONS: readonly string[] = [
   // again by itself until the count reaches the ceiling, and only then asks the operator. The UPDATE counts the one
   // failure every failed row already carries, so a build that failed before this entry is retried like any other.
   // ONE COLUMN WITH A DEFAULT, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns,
-  // reads as-is and migrates nothing); its reads and writes name their columns and never this one. The slot is the next free
+  // reads as-is and migrates nothing); its reads and writes name their columns and never this one, and the default 0 covers
+  // every row it inserts (a new build's row then reads as never failed, which is what it is). The slot is the next free
   // one by position on `main` (77a1fefe46 holds 118); whoever lands second renumbers. RE-MEASURE the slot before merge (it
   // must print 118, the count before this entry):
   //     git fetch origin main

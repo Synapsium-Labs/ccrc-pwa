@@ -10,7 +10,7 @@ import { TESTBOX_UNANSWERED } from './testboxFailure';
 const T = TESTBOX_BUILDS_TEXT;
 const rec = (build: string, over: Partial<ClaudeBuildRecord> = {}): ClaudeBuildRecord => ({
   build, source: 'fleet', capture: 'queued', cwd: false, seenAt: Date.now() - 3_600_000, attempts: 0, lastAttemptAt: null,
-  notSent: null, verdictAt: null, output: null, ...over,
+  notSent: null, verdictAt: null, output: null, fails: 0, ...over,
 });
 const BUILDS: ClaudeBuildRecord[] = [
   rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, output: 'replay: 1 failed\nStop: the field background is missing' }),
@@ -166,6 +166,17 @@ describe('the build list (D-8289)', () => {
   it('buildVerdict: amber only for a failure', () => {
     expect(BUILDS.map((b) => buildVerdict(b).amber)).toEqual([true, false, false, false]);
     expect(buildVerdict(rec('2.1.330')).text).toBe(T.queued);
+  });
+
+  it('a failure ccrc tries again by itself says so, with its count, and is not amber; at the ceiling it is (slug capture-retry-ceiling)', async () => {
+    expect(buildVerdict(rec('2.1.321', { capture: 'fail', verdictAt: 1, fails: 1 }))).toEqual({ text: 'Capture failed (1 of 3): ccrc tries again by itself', amber: false });
+    expect(buildVerdict(rec('2.1.321', { capture: 'fail', verdictAt: 1, fails: 2 })).amber).toBe(false);
+    expect(buildVerdict(rec('2.1.321', { capture: 'fail', verdictAt: 1, fails: 3 }))).toEqual({ text: T.failed, amber: true });
+    stub(() => json({ ok: true, claudeBuilds: [rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, fails: 1, output: 'x' })] }));
+    render(<TestBoxBuilds band="laptop" />);
+    await settle();
+    expect(rowOf('2.1.321')).toHaveTextContent(T.failedRetrying(1));
+    expect(within(rowOf('2.1.321')).getByRole('button', { name: T.again }), 'Capture again stays as a manual option').toBeInTheDocument();
   });
 
   it('a build the queue could not send says so, never "sent N times", and the card says no build can be captured', async () => {

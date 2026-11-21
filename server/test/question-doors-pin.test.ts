@@ -482,7 +482,18 @@ const RAISE_ROWS: Row[] = [
     f.child(CHILD, f.run(PARENT, CHILD), { deny: null });
     return approvalOutcome(f, await f.request(requestBody(ORDINARY)), doorIns);
   }],
-  ['POST /api/approvals | 10 version-unverified | 2.1.299', async () => {
+  // Slug untrusted-build-routes-escalate: rung 10 refuses only a build that cannot be read; a build the record has not
+  // trusted (2.1.299, no capture) is minted for the coordinator as escalate, never parked (the row below).
+  ['POST /api/approvals | 10 version-unverified | the build cannot be read', async () => {
+    const f = await approvalsFixture();
+    fx = f;
+    const doorIns = spyDoorIns(f.watcher);
+    f.seed(PARENT, 'project-a');
+    f.seed(CHILD, 'project-a', null);
+    f.child(CHILD, f.run(PARENT, CHILD));
+    return approvalOutcome(f, await f.request(requestBody(ORDINARY)), doorIns);
+  }],
+  ['POST /api/approvals | 10 held as escalate | 2.1.299, no capture yet', async () => {
     const f = await approvalsFixture();
     fx = f;
     const doorIns = spyDoorIns(f.watcher);
@@ -491,12 +502,12 @@ const RAISE_ROWS: Row[] = [
     f.child(CHILD, f.run(PARENT, CHILD));
     return approvalOutcome(f, await f.request(requestBody(ORDINARY)), doorIns);
   }],
-  ['POST /api/approvals | pair 10+11 | an unverified version and a digest that does not match', async () => {
+  ['POST /api/approvals | pair 10+11 | an unread build and a digest that does not match', async () => {
     const f = await approvalsFixture();
     fx = f;
     const doorIns = spyDoorIns(f.watcher);
     f.seed(PARENT, 'project-a');
-    f.seed(CHILD, 'project-a', '2.1.299');
+    f.seed(CHILD, 'project-a', null);
     f.child(CHILD, f.run(PARENT, CHILD));
     return approvalOutcome(f, await f.request({ ...requestBody(ORDINARY), digest: 'a'.repeat(64) }), doorIns);
   }],
@@ -1155,10 +1166,12 @@ const EXPECTED: Record<string, Outcome> = {
     {"status": 409, "body": "{\"ok\":false,\"error\":\"deny-not-engaged\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals | pair 9+10 | no deny digest, on an unverified version":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"deny-not-engaged\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
-  "POST /api/approvals | 10 version-unverified | 2.1.299":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code build is not trusted: build 2.1.299 has no capture yet\",\"trust\":\"not-captured\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
-  "POST /api/approvals | pair 10+11 | an unverified version and a digest that does not match":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code build is not trusted: build 2.1.299 has no capture yet\",\"trust\":\"not-captured\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
+  "POST /api/approvals | 10 version-unverified | the build cannot be read":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code build is not trusted: its Claude Code build could not be read\",\"trust\":\"unread\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
+  "POST /api/approvals | 10 held as escalate | 2.1.299, no capture yet":
+    {"status": 201, "body": "{\"id\":1,\"waitS\":60}", "effects": {"minted": 1, "row": {"state": "held", "releaseReason": null, "answeredBy": null}, "doorIns": [], "mailToParent": 1, "journal": null}},
+  "POST /api/approvals | pair 10+11 | an unread build and a digest that does not match":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"version-unverified\",\"detail\":\"this child's live Claude Code build is not trusted: its Claude Code build could not be read\",\"trust\":\"unread\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals | 11 digest-mismatch | the digest does not match, and the journal line":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"digest-mismatch\"}", "effects": {"minted": 0, "row": null, "doorIns": [], "mailToParent": 0, "journal": "<now> digest-mismatch project-a-quiet-basin\n"}},
   "POST /api/approvals | pair 11+12 | a digest mismatch while the runs are unreadable":

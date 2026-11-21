@@ -1,6 +1,7 @@
 // D-8289 (plan docs/superpowers/plans/2026-11-11-new-build-capture.md): Settings › Automation › Test box's list of Claude Code
 // builds and their capture verdicts. A build is trusted only when the test box captured its hook and status-file output and
-// the replay tests passed; children on any other build are refused approvals. The list reads `GET /api/testbox/builds` through
+// the replay tests passed; a child on any other build has nothing allowed through ccrc (its coordinator may deny a prompt or
+// hand it over, slug untrusted-build-routes-escalate). The list reads `GET /api/testbox/builds` through
 // the one wire reader (`readClaudeBuildRecords`) once a minute, and a failed build carries the replay output behind a
 // disclosure and the operator's one act, **Capture again** (`POST /api/testbox/builds/capture`), whose answer is the re-read
 // list.
@@ -15,6 +16,10 @@
 // trusted one. Older trusted builds fold behind one disclosure (`Show N older trusted builds`), closed on every mount and
 // remembered nowhere.
 //
+// A FAILURE CCRC RETRIES IS NOT THE OPERATOR'S (slug capture-retry-ceiling, the Overlord's "a new Claude Code release needs
+// no operator"): a failed build ccrc captures again by itself (`captureStandingOf` answers `retrying`) says so, quietly, with
+// its count; only one ccrc has stopped retrying is amber. Capture again stays on every failed row, as a manual option.
+//
 // A FAILED WRITE has one reader, the card's (`testboxFailure`): the server's refusal in the refusal tone, and no answer at
 // all (the fetch rejected) as `No answer from the server` in the answer tone.
 //
@@ -24,7 +29,9 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, elapsedWords, useNow } from '@ccrc/ui';
-import { captureBlockedBy, readClaudeBuildRecords, type BuildCaptureNotSent, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust';
+import {
+  BUILD_CAPTURE_FAIL_CEILING, captureBlockedBy, captureStandingOf, readClaudeBuildRecords, type BuildCaptureNotSent, type ClaudeBuildRecord,
+} from '../../../shared/claudeBuildTrust';
 import { compareClaudeVersions } from '../../../shared/claudeVersion';
 import { api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
@@ -39,7 +46,8 @@ export const TESTBOX_BUILDS_POLL_MS = 60_000;
 export const TESTBOX_BUILDS_TEXT = {
   title: 'Claude Code builds',
   note: 'A build is trusted once the test box has captured its hooks and status files and the replay tests passed. '
-    + 'Children on any other build are refused approvals. Each new build the fleet runs is queued for its capture.',
+    + 'A child on any other build has its permission prompts sent to its coordinator, who may deny one or hand it to you, '
+    + 'never allow it. Each new build the fleet runs is queued for its capture, and a failed capture is tried again by itself.',
   trusted: 'Trusted',
   trustedNoCwd: 'Trusted, without the working directory check',
   queued: 'Waiting for its capture',
@@ -54,7 +62,8 @@ export const TESTBOX_BUILDS_TEXT = {
     'no-test-box': 'No test box answers, so no build can be captured: the builds waiting here stay untrusted until one does.',
     'no-runner': 'The test box has no capture runner yet, so no build can be captured: the builds waiting here stay untrusted until it has one.',
   } satisfies Record<BuildCaptureNotSent, string>,
-  failed: 'Capture failed, not trusted',
+  failed: 'Capture failed, not trusted: ccrc has stopped retrying',
+  failedRetrying: (n: number) => `Capture failed (${n} of ${BUILD_CAPTURE_FAIL_CEILING}): ccrc tries again by itself`,
   rig: 'From the rig record',
   seen: (ago: string) => `First seen on the fleet ${ago} ago`,
   output: 'Replay output',
@@ -74,7 +83,10 @@ const T = TESTBOX_BUILDS_TEXT;
  *  list (`captureBlockedBy`): a row with that reason does not say it again. */
 export function buildVerdict(r: ClaudeBuildRecord, said: BuildCaptureNotSent | null = null): { readonly text: string; readonly amber: boolean } {
   if (r.capture === 'pass') return { text: r.cwd ? T.trusted : T.trustedNoCwd, amber: false };
-  if (r.capture === 'fail') return { text: T.failed, amber: true };
+  if (r.capture === 'fail') {
+    const s = captureStandingOf(r);
+    return s.kind === 'retrying' ? { text: T.failedRetrying(s.fails), amber: false } : { text: T.failed, amber: true };
+  }
   if (r.notSent !== null) return { text: r.notSent === said ? T.notSentSaid : T.notSent[r.notSent], amber: true };
   return { text: r.attempts === 0 ? T.queued : T.queuedSent(r.attempts), amber: false };
 }

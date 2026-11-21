@@ -29,7 +29,7 @@ const T = TESTBOX_BUILDS_TEXT;
 const TITLE = SETTINGS_CARDS.automation.testbox.title;
 const rec = (build: string, over: Partial<ClaudeBuildRecord> = {}): ClaudeBuildRecord => ({
   build, source: 'fleet', capture: 'queued', cwd: false, seenAt: Date.now() - 7_200_000, attempts: 0, lastAttemptAt: null,
-  notSent: null, verdictAt: null, output: null, ...over,
+  notSent: null, verdictAt: null, output: null, fails: 0, ...over,
 });
 const LONG_LINE = `Stop payload: ${'background_tasks_field_missing_'.repeat(12)}end`;
 const BUILDS: ClaudeBuildRecord[] = [
