@@ -5300,9 +5300,12 @@ F4 and F5; review 2988 (H4) F6, F7 and F8. Spec `docs/superpowers/specs/2026-11-
 - `pwa/src/fleet/sessionFacts.ts` (L1, C1): `headerMetaCells`, the header's meta row cell by cell, the one reading of which
   cells it draws; `headerMetaHasCells` asks it (review 2995 F3).
 - `pwa/src/fleet/SessionMeta.tsx` (L4, C1): the header mode draws exactly the cells `headerMetaCells` names, in its order.
-- `pwa/src/fleet/delegationWords.ts` (L1, C1): `pathBreaks` (a path cut after each `/`), `presenceUnmeasured` (the one count of
-  trees whose presence was not measured, the session panel's and the Archive's), `archiveDoorParts` (the foot row's two halves);
-  the `WorkWords` doc says what a row does with its path now (3123 F8); `archiveDoorWord` had no reader left and goes.
+- `pwa/src/fleet/delegationWords.ts` (L1, C1): `presenceUnmeasured` (the one count of trees whose presence was not measured,
+  the session panel's and the Archive's), `archiveDoorParts` (the foot row's two halves); the `WorkWords` doc says what a row
+  does with its path now (3123 F8); `archiveDoorWord` had no reader left and goes.
+- `pwa/src/lib/format.ts` (L1, a leaf that imports nothing): `pathBreaks`, a path cut after each `/`. It sits with the pure
+  formatters, not in the words module, so `WorkLine.tsx` names no module of the delegation broker (the closed scope census,
+  `delegation-wave3.integration`).
 - `pwa/src/fleet/WorkLine.tsx` (L4, C1): the path drawn as one box per piece.
 - `pwa/src/session/chat.css`: below the desk a path takes a line of its own, after the row's short words; its pieces are inline
   boxes; a raw worktree's two chips are one box; the strips give way before the composer (they shrink, the Helpers strip never

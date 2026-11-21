@@ -34,7 +34,7 @@ commit's tree, whose sources are `main`'s) through `ccrc test`, one file per pro
   all at once, and requires the drawn cells to be the list, in order.
 - **The census's one owner** (3123 F1): `pwa/test/panelCensus.ts` writes §4.4's five words as literals and adds
   `LIVENESS_QUALIFIER`'s words and sentences; the jsdom census, the two real-Chrome censuses and `delegation-words` read it.
-- **A worktree's path** (3123 F3): one inline box per piece (`pathBreaks`, cut after each `/`), so it breaks after a slash and
+- **A worktree's path** (3123 F3): one inline box per piece (`pathBreaks` in `lib/format.ts`, cut after each `/`), so it breaks after a slash and
   inside a piece only when the piece is wider than the line; below 900 px it takes the row's full width after the short words.
   A first build drew a `<wbr>` after each slash instead: Chrome still broke at a hyphen inside the last piece
   (`…/agent-a1b2c3d4e5f6-a-` / `very-long-worktree-name`, **measured**), because a hyphen is a break the greedy line takes first.
@@ -95,11 +95,11 @@ nothing (the sixth survivor); it is written on the key (`.keycap--goals`) below.
 | | `meta-draws-helper-count` | the header draws "2 helpers" from `session.subagents` (review 3123 F12's mutant) | HF2-H3 (pass 2) |
 | `delegationWords.ts` | `census-table-word-and-row` | the table's `live` word changed **and** a row says "not confirmed" (review 3123 F1's mutant) | `session-worktrees` W5-U10; alone, `session-panel-sheds` (the census); `main`'s census file lets it live (measured) |
 | | `table-live-word-changed` | the table's word alone | `delegation-words` VIS-W1 (the table's words are §4.4's) |
-| | `path-unbroken` | the path as one piece | W5-U10 (jsdom); `session-panel-words` breaks (real Chrome, through `seg-not-a-box`) |
 | | `presence-counts-unmeasured-word` | counts `=== 'unmeasured'` | **equivalent**: every caller passes leases through `readDelegation`, which files any word but `present` as `unmeasured` |
 | | `presence-capped-at-one` | the count capped at 1 (review 3123 F12's mutant) | HF2-3 |
 | | `door-halves-swapped` | the foot row's halves swapped | `fleet-screen` "both" |
 | | `archive-presence-unowned-only` | the Archive counts unowned trees only | `archive-unowned-work`'s head count |
+| `lib/format.ts` | `path-unbroken` | the path as one piece | W5-U10 (jsdom); `session-panel-words` breaks (real Chrome, through `seg-not-a-box`). Run first in `delegationWords.ts`, and again by hand after the move in fix round 1: W5-U10 red (measured) |
 | `WorkLine.tsx` | `seg-not-a-box` | the pieces lose their class | W5-U10 |
 | `chat.css` | `path-own-line-dropped` | no own line below the desk | `session-panel-words` (own line, full width) |
 | | `path-not-last` | own line, but where the DOM puts it | `session-panel-words` (after the short words) |
@@ -132,6 +132,22 @@ named below, and no other file needed a second run.
 | Real Chrome, every file that measures the session panel, its header or the Archive: `archive-unowned` (60), `helpers-rail` (4), `delegation-rows` (72), `session-panel-words` (22), `role-fact` (66), `session-header` (76), `lanes-row` (89), `chat-width` (46), `inspector-hide` (8), `session-timers` (17), `goals-door-height` (30), `build-behind` (12), `instrument-desk` (33), `row-fit` (133), `archive-claims-sheet` (32) | 15 | **15 green**, 700 cases. `delegation-rows` was red first in 10 cases, both from this change, fixed in its test (the commit `test(pwa): delegation-rows reads a path …`): a positive control that a path on its own line left with nothing to count, and Refined's phone rail, left scrolled sideways by the tap on the door when a chip is wider than it, on `main` too (the picture of `main` shows its controls cut at the left), so the paths are read at the rail's start. `build-behind`, `instrument-desk` and `row-fit` were killed by the memory cap with no verdict and run again alone; `helpers-rail`'s first 1600 case and one `archive-unowned` focus view each timed out at 20 s once beside the mutation run and were green alone | 8.9 to 13.7 |
 | Compile and build | `pwa`'s production build (its own `tsc --noEmit` over the app and its tests, then `vite build`); `ui`'s `tsc --noEmit` | both exit 0; a standalone `pwa` `tsc` was killed by the memory cap, so the build's is the check | 11.0 |
 | Server guards | the 43 `single-definition` files, `growth-caps`, `growth-check` (`GROWTH_CHECK=1`), `topology-clean`, `deviation-refs` (after `git fetch origin main`), `dtbd`, `ci-ledger-guard` | **49 green**, 1,812 cases (`growth-check` measured its rows, 97; `deviation-refs` 34 after the fetch); and the ledger guard as CI runs it, against `origin/main`: passed by the head commit's `Ledger-Edit` trailer, layout ok | 9.3 to 14.8 |
+
+### Fix round 1: CI's fast run at the first tip
+
+The pull request's fast run at the first tip was red in one server test (**measured**): `delegation-wave3.integration`'s closed
+scope census, which allows the words module's name only in a listed set of PWA files, found `WorkLine.tsx` importing
+`pathBreaks` from `./delegationWords`. The server guards run above did not include that file, so the suite line of the
+wave-done says red. `pathBreaks` moved to `pwa/src/lib/format.ts`, the pure formatters' leaf, which imports nothing; the
+census's list is unchanged. Re-run through `ccrc test`, one file per process (**measured**):
+
+| Run | Result | Load |
+|---|---|---|
+| `delegation-wave3.integration` (the census alone, then the whole file), `fleet-health`, `growth-caps`, `growth-check` (`GROWTH_CHECK=1`), `rings/pwa-rings`, `rings/totality` | all green: 36, 57, 12, 97, 10 and 11 cases | 9.5 to 16.9 |
+| PWA jsdom, every file that imports the words module, `WorkLine` or `lib/format`: `session-worktrees`, `session-details-worktrees`, `delegation-words`, `screens-back-edges`, `archive-unowned-work`, `transcript-work-card`, `session-panel-sheds`, `fleetTree`, `settings-screen` | 9 green, 397 cases | 10.5 to 10.6 |
+| Real Chrome `session-panel-words` | 22 green | 11.3 |
+| `pwa`'s production build | exit 0 on the second run; the first was killed by the slice's memory cap | 10.6 |
+| The mutant `path-unbroken`, at `lib/format.ts` | killed by W5-U10 | 10.6 |
 
 ## 6. The matrix
 
