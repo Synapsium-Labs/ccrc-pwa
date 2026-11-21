@@ -484,7 +484,8 @@ export function headerMetaCells(f: SessionFactSet): readonly HeaderMetaCell[] {
   const ctx = contextFact(f);
   const out: HeaderMetaCell[] = [];
   if (f.session.held !== null && ctx?.key !== 'programme') out.push({ key: 'hold' });
-  if (ctx?.key === 'child-marker' && f.childOf !== null && f.heldRun === null) out.push({ key: 'child' });
+  // A child-marker context is only ever a child with no held run (`contextFact` names a held or active run `programme`).
+  if (ctx?.key === 'child-marker') out.push({ key: 'child' });
   if (f.spawn !== null) out.push({ key: 'spawn' });
   if (f.askState !== null) out.push({ key: 'ask-state' });
   f.cleanup.forEach((text, at) => { out.push({ key: 'cleanup', text, at }); });

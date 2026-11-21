@@ -98,6 +98,18 @@ describe('headerMetaHasCells agrees with what SessionMeta draws', () => {
     expect(headerMetaCells(combined(CELLS)).length, 'every cell is drawn at once').toBeGreaterThanOrEqual(CELLS.length);
   });
 
+  // HF2 (the mutation run's survivor `meta-hold-ignores-programme`): a hold that a run explains is the coordination row's (its
+  // programme and wave), so the meta row draws no hold cell for it; the same hold with no run is a cell (CELLS' "a hold").
+  it('HF2-6: a held programme wave draws no hold cell; the coordination row names it', () => {
+    const run = { program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7, kind: 'work' as const };
+    const session = base({ held: 'wave-brief pending', child: { kind: 'child', runId: 7 } });
+    const f = sessionFacts({ session, now: NOW, childRun: { run, coordinator: 'programme coordinator' } });
+    expect(f.heldRun, 'the control: the hold has its run').not.toBeNull();
+    expect(headerMetaCells(f).map((c) => c.key)).not.toContain('hold');
+    const { container } = render(<SessionMeta facts={f} mode="header" onOpenRun={null} />);
+    expect(container.querySelector('.sess-held'), 'no hold cell').toBeNull();
+  });
+
   it('the spawn chip and the restart marker are drawn by the header itself, so a restart alone is no cell', () => {
     const f = factsOf({ restart: { text: 'restarted', title: 't', cause: 'x' } as unknown as SessionFactSet['restart'] });
     expect(drawn(f)).toBe(false);

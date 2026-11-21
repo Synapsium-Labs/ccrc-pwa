@@ -567,7 +567,7 @@ describe('the new header: no subagent and no delegated fact (H3, D-8875)', () =>
   // in both skins, on a phone with its door opened and at a desk. The same header with `subagents: null` is the control.
   it('HF2-H3: the rendered header is the same markup with and without subagents, in either skin, phone and desk', () => {
     // React's ids differ between two roots; nothing else may.
-    const markup = (): string => document.querySelector('.chat-head')!.outerHTML.replace(/«[^»]*»|:r[0-9a-z]+:/g, 'ID');
+    const markup = (): string => document.querySelector('.chat-head')!.outerHTML.replace(/«[^»]*»|:r[0-9a-z]+:|_r_[0-9a-z]+_/g, 'ID');
     for (const skin of ['instrument', 'refined'] as const) {
       for (const desk of [false, true]) {
         vi.spyOn(window, 'matchMedia').mockImplementation((q: string) => ({
@@ -584,9 +584,13 @@ describe('the new header: no subagent and no delegated fact (H3, D-8875)', () =>
           cleanup();
           return out;
         };
-        const bare = drawn({ ...busy, subagents: null });
+        // A task tally gives the session a details row, so the header draws its meta row: the comparison reads it (the
+        // mutation run's survivor `meta-draws-helper-count` lived while this session had no details row at all).
+        const tallied = { ...busy, tasks: { done: 1, total: 3, running: 1, active: null } };
+        const bare = drawn({ ...tallied, subagents: null });
         expect(bare, `${skin}: the control header is drawn`).toContain(busy.workspace!);
-        expect(drawn(busy), `${skin}, ${desk ? 'desk' : 'phone'}: the same with and without subagents`).toBe(bare);
+        expect(bare, `${skin}, ${desk ? 'desk' : 'phone'}: the control draws the meta row`).toContain('sess-meta');
+        expect(drawn(tallied), `${skin}, ${desk ? 'desk' : 'phone'}: the same with and without subagents`).toBe(bare);
         vi.restoreAllMocks();
       }
     }
