@@ -54,6 +54,7 @@ The same eight statements are pinned as the programme's definition of done (`ccr
 | Wave 5 | The read grant retired: the console reads a lane's models only through the `models` op (D-8757, D-8758) | #3041 | merged 2026-11-18 |
 | Follow-up | `transient-beside-kept-answer`: the picker and the sheet name a transient answer beside a kept one | #3086 | merged 2026-11-19 |
 | Wave 7 | The Anthropic arm's aliases file, holds, refresh and doctor causes (D-8818 to D-8822) | #3107 | merged 2026-11-20 |
+| Follow-up | `usage-user-agent`: the usage poll sends the Codex client version the catalogue probe asks as (D-8781) | #3085 | merged 2026-11-21 |
 
 The hourly advance has moved classes by itself, each move after a passing canary: one class on both Codex lanes on
 2026-10-26, and on one lane an opus class that stepped to an older model on 2026-11-10 and back two hours later (wave 3
@@ -95,7 +96,7 @@ The programme's plan (`ccrc-api plan show model-class-advance`) holds the same e
 | 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | in review, round 2 (run 2910) |
 | 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | | planned |
 | 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | planned |
-| - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | accepted (run 2821); in the merge queue since 2026-11-21 |
+| - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | merged 2026-11-21 |
 | - | models-sheet | transient-beside-kept-answer | The sheet names a transient answer beside a kept one; a session-screen case and two text corrections | #3086 | merged 2026-11-19 |
 | - | models-sheet | revert-writes-before-refusing | A refused Revert must not leave the class held | #3118 | folded into wave 3 |
 | - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | | after waves 3 and 8 |
@@ -118,19 +119,23 @@ Wave 7 merged on 2026-11-20 (#3107). Waves 3 and 8 then ran side by side, each b
 the advance rule, its declaration file, `ccd/ccrc` and two test files, and each edits only the hunks the other's worker
 consented to in writing, one round at a time; a consent releases no claim. Wave 3 passed its fourth review round and wave 8
 is in its second. The Codex bridge's check week closed on 2026-11-21 and its evidence was handed over, so wave 3 now waits only
-for its DevOps approval, and `usage-user-agent` (#3085) entered the merge queue the same hour.
+for its DevOps approval, and `usage-user-agent` (#3085) merged within the hour.
 
 ## Waiting on the owner
 
-Nothing. Items 406 (the server box on v0.0.1259 or later), 407 (both Codex lanes marked as Codex lanes in the server
-box's roster) and 423 (the fleet box on v0.0.1288 or later) were ticked by the owner and confirmed on 2026-11-18. A
-session cannot read the server box's roster, so 407 was confirmed on the owner's tick and the fleet box's copy. Wave
-4's sheet is its first live check: if a Codex lane reads as unmanaged there, a new item goes to the owner.
+Two items are open.
 
-Coming: the review judge marks waves 3 and 8 as infrastructure changes, so each lands only after an approving review
-from the DevOps team, outside its author set, on its final head (`devops-approval-needed`). An item asks for it once
-that head has passed review. Item 517 asked for one on wave 3's round-3 head and was withdrawn when that round sent the
-head back for a fix; item 519 asks for it on wave 3's accepted head, 776e4a9f.
+- Item 519: an approving review of #3118 from the DevOps team, outside its author set, at its accepted head 776e4a9f.
+  The review judge marks waves 3 and 8 as infrastructure changes (`devops-approval-needed`), so each lands only with
+  such a review on its final head, asked for once that head has passed review. Item 517 asked for one on wave 3's
+  round-3 head and was withdrawn when that round sent the head back for a fix.
+- Item 505: one typed `/model` line in a prepared throwaway session, so that the re-pick can be measured. Wave 8 took
+  the plan's fallback without it, and `typed-repick` waits on it.
+
+Items 406 (the server box on v0.0.1259 or later), 407 (both Codex lanes marked as Codex lanes in the server box's
+roster) and 423 (the fleet box on v0.0.1288 or later) were ticked by the owner and confirmed on 2026-11-18. A session
+cannot read the server box's roster, so 407 was confirmed on the owner's tick and the fleet box's copy. Wave 4's sheet
+is its first live check: if a Codex lane reads as unmanaged there, a new item goes to the owner.
 
 ## Decisions & deviations
 
@@ -144,8 +149,7 @@ head back for a fix; item 519 asks for it on wave 3's accepted head, 776e4a9f.
   - D-8757 and D-8758 in the same Deviations found, for wave 5;
   - D-8818 to D-8822 in the Anthropic arm's plan, for wave 7 (#3107).
 
-  One more number was issued on 2026-11-19, for `usage-user-agent`; it is defined in that ticket's PR (#3085) and
-  named here once that PR lands. `transient-beside-kept-answer` departed twice, from no plan of its own, so its two
+  D-8781 was issued on 2026-11-19 for `usage-user-agent`, and #3085 defines it in wave 2's plan. `transient-beside-kept-answer` departed twice, from no plan of its own, so its two
   departures are named by slug in its task note (`model-class-advance/fu-transient-beside-kept-answer.md`):
   `sheet-anthropic-no-transient-line` and `absent-anthropic-key-unreadable`. Waves 3 and 8 were issued numbers of
   their own, defined in their PRs' plan edits (#3118 in the Codex arm's plan, #3122 in the Anthropic arm's plan); they
@@ -186,7 +190,7 @@ head back for a fix; item 519 asks for it on wave 3's accepted head, 776e4a9f.
   close, because it changes the usage poll the daily reading reads. The week closed at the 2026-11-21 00:03Z
   reading: the bridge's criteria held on all eight readings (both lanes direct with the bridge running and signed in,
   both usage polls fresh, the refresh 24 runs a day with no failure), and no doctor FAIL came from the bridge. Its
-  evidence went to the bridge programme's reviewer, and #3085 entered the queue. Removing the old runtime waits until the
+  evidence went to the bridge programme's reviewer, and #3085 merged through the queue at 00:31Z. Removing the old runtime waits until the
   owner has seen that evidence (D-8639).
 - **Wave 7 leaves the README alone.** Another run's freeze holds `README.md`, and its holder declined wave 7's lines
   (the four Anthropic causes in the doctor section, the aliases file in the models section). They become a follow-up
