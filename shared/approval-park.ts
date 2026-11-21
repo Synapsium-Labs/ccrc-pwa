@@ -27,7 +27,7 @@ export interface ParkedApprovalView {
   readonly id: number;
   readonly childId: string;
   readonly parentId: string;
-  readonly runId: number | null;
+  readonly runId: number | null;   // the PARK's run (approvals PR 3c F-D), null when the row's park cannot be read
   readonly agentId: string;
   readonly tool: string;
   readonly input: string | null;

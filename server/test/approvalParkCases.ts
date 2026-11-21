@@ -10,7 +10,7 @@ import type { ApprovalRefusal } from '../../shared/api.js';
 import type { ApprovalParkWord, ParkedApprovalView } from '../../shared/approval-park.js';
 import type { ParkFacts, SigningFacts } from '../src/coord/approvalPark.js';
 import type {
-  ApprovalLapse, ApprovalLapsePark, ApprovalLapseRow, ClearSettleRows, DeferredApprovalPush, DeferredApprovalRows,
+  ApprovalLapse, ApprovalLapsePark, ApprovalLapseRow, ClearSettleRows, DeferredApprovalPush, DeferredApprovalRows, HeldPrompt, PressHookState,
 } from '../src/coord/questionPolicy.js';
 
 export interface ApprovalParkModule {
@@ -30,6 +30,7 @@ export interface ApprovalLapseModule {
   decideApprovalLapse(row: ApprovalLapseRow, now: number, graceMs?: number, park?: ApprovalLapsePark | null): ApprovalLapse;
   decideDeferredApprovalPush(entry: { rowIds: readonly number[] }, rows: DeferredApprovalRows, now: number, painted: boolean, graceMs: number): DeferredApprovalPush;
   clearSettledApprovalIds(rowIds: readonly number[], rows: ClearSettleRows, now: number): number[];
+  pressAnswersHeldPrompt(held: HeldPrompt, hs: PressHookState | null): boolean;
 }
 
 interface Case<M> { readonly name: string; readonly run: (mod: M) => void }
@@ -178,7 +179,8 @@ export const APPROVAL_PARK_CASES: readonly Case<ApprovalParkModule>[] = [
       { ...base, id: 3, park: null },
     ], NOW);
     expect(v.map((x) => [x.id, x.ruled, x.horizon])).toEqual([[1, { verdict: 'allow', authority: 'operator' }, NOW + 1_000], [2, null, NOW + 1_000], [3, null, null]]);
-  } },  { name: 'the view names the park\'s run, never the run the child\'s mark names (approvals PR 3c F-D: a resumed child)', run: (m) => {
+  } },
+  { name: 'the view names the park\'s run, never the run the child\'s mark names (approvals PR 3c F-D: a resumed child)', run: (m) => {
     // The child's mark still names wave 1 (run 7); the park was taken on wave 2's binding run (11). A park that cannot be
     // read names no run: never the mark's.
     const base = { childId: 'project-a-quiet-basin', parentId: 'project-a-calm-mesa', runId: 7, agentId: '', tool: 'Bash', inputRedacted: null,
@@ -249,9 +251,9 @@ export const APPROVAL_LAPSE_PARK_CASES: readonly Case<ApprovalLapseModule>[] = [
   } },
   { name: 'a clear never settles a held live row at or past notifyAt less the slack: the hook\'s park deny cleared it, and the sweep parks it', run: (m) => {
     const at = (notifyAt: number): ClearSettleRows => ({ ok: true, rows: [{ id: 1, state: 'held', notifyAt, parkWord: 'live' }] });
-    expect(m.clearSettledApprovalIds([1], at(NOW + 2_000), NOW)).toEqual([]);
+    expect(m.clearSettledApprovalIds([1], at(NOW + 1_500), NOW)).toEqual([]);
     expect(m.clearSettledApprovalIds([1], at(NOW - 5_000), NOW)).toEqual([]);
-    expect(m.clearSettledApprovalIds([1], at(NOW + 2_001), NOW), 'earlier than the slack, the clear is a press').toEqual([1]);
+    expect(m.clearSettledApprovalIds([1], at(NOW + 1_501), NOW), 'earlier than the slack, the clear is a press').toEqual([1]);
   } },
   { name: 'a clear settles a held shadow, capped or unworded row whatever its window (nothing told its child "parked")', run: (m) => {
     const rows: ClearSettleRows = { ok: true, rows: [
@@ -266,5 +268,29 @@ export const APPROVAL_LAPSE_PARK_CASES: readonly Case<ApprovalLapseModule>[] = [
   } },
   { name: 'an unreadable read settles nothing: the sweep rules each held row by its own clock', run: (m) => {
     expect(m.clearSettledApprovalIds([1, 2], { ok: false }, NOW)).toEqual([]);
+  } },
+  // ── whether a press answers the held entry's own prompt (approvals PR 3c, review 3022 F1) ──
+  { name: 'a press answers the main thread\'s held prompt while hook state keeps its wait\'s stamp and an approval ask', run: (m) => {
+    const ask = { approval: { tool: 'Bash', summary: 'rm -rf build' } };
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask, updatedAt: NOW - 60_000 })).toBe(true);
+  } },
+  { name: 'a press does not answer the main thread\'s held prompt once a later prompt stamped hook state (the same menu, another command)', run: (m) => {
+    const ask = { approval: { tool: 'Bash', summary: 'rm -rf dist' } };
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask, updatedAt: NOW - 1_000 })).toBe(false);
+  } },
+  { name: 'a press does not answer the main thread\'s held prompt when hook state holds no approval ask', run: (m) => {
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask: null, updatedAt: NOW - 60_000 })).toBe(false);
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask: { questions: [] }, updatedAt: NOW - 60_000 })).toBe(false);
+  } },
+  { name: 'a press answers a subagent\'s held prompt only while the hook\'s list keeps that agent\'s entry at its stamp', run: (m) => {
+    const held = { agentId: 'a0000000000000001', at: NOW - 60_000 };
+    const ask = { approval: { tool: 'Bash', summary: 'ls' } };
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW, approvals: [{ agentId: 'a0000000000000001', at: NOW - 60_000 }] })).toBe(true);
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW - 60_000, approvals: [{ agentId: 'a0000000000000002', at: NOW - 60_000 }] })).toBe(false);
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW - 60_000, approvals: [{ agentId: 'a0000000000000001', at: NOW - 1 }] })).toBe(false);
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW - 60_000 }), 'no list: the main thread\'s stamp does not stand in').toBe(false);
+  } },
+  { name: 'no hook state read: a press answers no held prompt', run: (m) => {
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW }, null)).toBe(false);
   } },
 ];

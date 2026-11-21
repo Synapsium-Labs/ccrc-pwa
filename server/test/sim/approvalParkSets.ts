@@ -146,14 +146,29 @@ export const CLEAR_SETTLE_SET: MutantSet<ApprovalLapseModule> = {
   mutants: [
     { id: 'CS-1 no slack: a clear settles a row the hook told "parked" (PR 3c F-A)', old: "(x.state === 'held' && !(x.parkWord === 'live' && now >= x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS))", new: "x.state === 'held'" },
     { id: 'CS-2 the slack exclusive', old: 'now >= x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS', new: 'now > x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS' },
-    { id: 'CS-3 the slack zero', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 2_000;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 0;' },
-    { id: 'CS-4 the slack doubled', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 2_000;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 4_000;' },
+    { id: 'CS-3 the slack zero', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 1_500;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 0;' },
+    { id: 'CS-4 the slack doubled', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 1_500;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 3_000;' },
+    { id: 'CS-11 the slack back at 2 s (review 3022 F4)', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 1_500;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 2_000;' },
     { id: 'CS-5 every word spared near the deadline', old: "x.parkWord === 'live' && now >= x.notifyAt", new: 'now >= x.notifyAt' },
     { id: 'CS-6 a parked row settled by a clear', old: "x.state === 'released' || (x.state === 'held'", new: "x.state === 'released' || x.state === 'parked' || (x.state === 'held'" },
     { id: 'CS-7 a released row spared', old: "x.state === 'released' || (x.state === 'held'", new: "(x.state === 'held'" },
     { id: 'CS-8 an unreadable read settles every covered row', old: 'if (!rows.ok) return [];', new: 'if (!rows.ok) return [...rowIds];' },
     { id: 'CS-9 an uncovered row settled', old: 'return rowIds.filter((id) => rows.rows.some((x) => x.id === id && settles(x)));', new: 'return rows.rows.filter(settles).map((x) => x.id);' },
     { id: 'CS-10 a ruled row settled', old: "x.state === 'released' || (x.state === 'held'", new: "(x.state !== 'held' && x.state !== 'parked') || (x.state === 'held'" },
+  ],
+  suite: lapseSuite,
+};
+
+export const PRESS_PROMPT_SET: MutantSet<ApprovalLapseModule> = {
+  modulePath: POLICY_TS,
+  mutants: [
+    { id: 'PP-1 any press answers (the dialog id alone, review 3022 F1)', old: '  if (hs === null) return false;\n', new: '  return true;\n' },
+    { id: 'PP-2 no hook state answers', old: 'if (hs === null) return false;', new: 'if (hs === null) return true;' },
+    { id: 'PP-3 the main thread\'s stamp not compared', old: "'approval' in hs.ask && hs.updatedAt === held.at;", new: "'approval' in hs.ask;" },
+    { id: 'PP-4 the main thread\'s ask not checked', old: "return hs.ask !== null && 'approval' in hs.ask && hs.updatedAt === held.at;", new: 'return hs.updatedAt === held.at;' },
+    { id: 'PP-5 a subagent\'s agent not compared', old: 'e.agentId === held.agentId && e.at === held.at', new: 'e.at === held.at' },
+    { id: 'PP-6 a subagent\'s stamp not compared', old: 'e.agentId === held.agentId && e.at === held.at', new: 'e.agentId === held.agentId' },
+    { id: 'PP-7 a subagent read as the main thread', old: "  if (held.agentId === '') return hs.ask", new: '  if (true) return hs.ask' },
   ],
   suite: lapseSuite,
 };
@@ -168,4 +183,5 @@ export const APPROVAL_PARK_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/approvalPark.ts#parkedApprovalViewOf': PARKED_VIEW_SET as MutantSet<never>,
   'server/src/coord/questionPolicy.ts#decideApprovalLapse': LAPSE_PARK_SET as MutantSet<never>,
   'server/src/coord/questionPolicy.ts#clearSettledApprovalIds': CLEAR_SETTLE_SET as MutantSet<never>,
+  'server/src/coord/questionPolicy.ts#pressAnswersHeldPrompt': PRESS_PROMPT_SET as MutantSet<never>,
 };

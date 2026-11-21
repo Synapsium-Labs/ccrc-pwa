@@ -50,7 +50,7 @@ import type { NoticeSink } from '../notice.js';
 import type { PushPayload } from '../push.js';
 import type { BoundRowRef, BoundWrite } from './pushOutboxStore.js';
 import { changeLatch } from '../changeLatch.js';
-import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
+import { freshAskAt, freshHookState, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
 import { approvalClass, approvalCommandWords, literalInRoot, rootsForChild } from './approvalguard.js';
 import type { DenyStanding } from './approvalDenyFloor.js';
 import {
@@ -65,7 +65,10 @@ import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
 import type { LiveAskRead, WatcherCoordPort } from './ports.js';
-import { clearSettledApprovalIds, decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, type AskLapse, type QuestionHoldPhase } from './questionPolicy.js';
+import {
+  clearSettledApprovalIds, decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, pressAnswersHeldPrompt, type AskLapse, type HeldPrompt,
+  type QuestionHoldPhase,
+} from './questionPolicy.js';
 import type { ReclaimDeps } from './reclaim.js';
 import { redactCommand, redactedStored } from './redact.js';
 import { approvalNudgeSubject, approvalParkRuledSubject, askNudgeSubject } from './rundefs.js';
@@ -320,6 +323,8 @@ export interface HeldApproval {
   readonly dialogId: string;
   readonly rowIds: number[];
   readonly ev: QuestionPush;
+  /** The painted prompt it was held for (approvals PR 3c, review 3022 F1): what a press must still answer to reach its rows. */
+  readonly prompt: HeldPrompt;
 }
 
 /** One entry of the carrier, keyed by question: `ask-<rowId>` for an ask (held, lapsed or still to be re-seeded), and
@@ -1181,7 +1186,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    * trace) but not sent, and the approval half sends it when the window ends, the claimant hands the prompt over, or
    * the hook has not resolved a ruled prompt. Any failure answers `none`: the prompt raises as today.
    */
-  const holdApproval = (r: SessionRecord, dialog: Dialog, hs: HookState, agentId: string): RaiseVerdict => {
+  const holdApproval = (r: SessionRecord, dialog: Dialog, hs: HookState, agentId: string, at: number): RaiseVerdict => {
     const coord = deps.coord;
     if (!coord) return { kind: 'none' };
     try {
@@ -1196,7 +1201,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const open = read.rows.filter((x) => x.agentId === agentId && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
       const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
-      setHeldApproval(r.id, { until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev });
+      setHeldApproval(r.id, {
+        until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev, prompt: { agentId, at },
+      });
       return { kind: 'held', parent: open[open.length - 1]!.parentId, record: { ...ev, recordAlways: true, recordOnly: true } };
     } catch (err) {
       console.warn(`ccrc-server: approval hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
@@ -1276,7 +1283,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     // D-5298 (plan Task 16): a permission prompt is held when its child's hook already asked and the server minted a
     // row HELD for the claimant (`POST /api/approvals` decided the claimant rule, the kill switches and the gates); the
     // push waits for that row's window. No row, or none still inside its window: the prompt raises as today.
-    if (hs !== null && ask !== null && 'approval' in ask) return holdApproval(r, dialog, hs, painted.entry?.agentId ?? '');
+    if (hs !== null && ask !== null && 'approval' in ask) return holdApproval(r, dialog, hs, painted.entry?.agentId ?? '', painted.entry?.at ?? hs.updatedAt);
     if (actions === null || hs === null || ask === null || !('questions' in ask)) return none;
     const coord = deps.coord;
     if (!coord || asksDisabled) return none;
@@ -1426,7 +1433,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         if (hs.ask !== null && 'approval' in hs.ask) {
           setHeldApproval(r.id, {
             until: Math.max(...rows.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: rows.map((x) => x.id),
-            ev: askHoldPayload(r, hs, dialog, null),
+            ev: askHoldPayload(r, hs, dialog, null), prompt: { agentId: '', at: hs.updatedAt },
           });
           reseeded = true;
         }
@@ -2321,14 +2328,20 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         }
       }
       // Approvals PR 3c (F-A): a press on the dialog a held entry covers reaches that entry's rows, a parked one included,
-      // which becomes `operator` with its park voided (the plan's press in the clear interval; review 2889 F3: these rows only).
+      // which becomes `operator` with its park voided (the plan's press in the clear interval; review 2889 F3: these rows
+      // only). Taken before the press (a tick during it can drop the entry), only while hook state, read fresh, still names
+      // the entry's own prompt (review 3022 F1: the dialog id does not name the command, and the last tick's copy lags a
+      // second prompt as long as it lags the clear), and marked only once the press LANDED (F2).
       const covered = approvalEntry(id, 'held');
-      if (covered !== undefined && covered.dialogId === q.dialogId) {
-        try { d.coord?.markApprovalOperatorRows(covered.rowIds, Date.now()); } catch (err) {
-          console.warn(`ccrc-server: recording the operator on ${id}'s pressed approval rows failed (${err instanceof Error ? err.message : String(err)}) — answering anyway`);
+      const ours = covered !== undefined && covered.dialogId === q.dialogId
+        && pressAnswersHeldPrompt(covered.prompt, await freshHookState(d.io, d.cfg, id));
+      const pressed = covered !== undefined && ours ? covered.rowIds : [];
+      const res = await d.pressDialog(id, q.dialogId, q.optionIndex);
+      if (res.ok && pressed.length > 0) {
+        try { d.coord?.markApprovalOperatorRows(pressed, Date.now()); } catch (err) {
+          console.warn(`ccrc-server: recording the operator on ${id}'s pressed approval rows failed (${err instanceof Error ? err.message : String(err)}) — the press landed`);
         }
       }
-      const res = await d.pressDialog(id, q.dialogId, q.optionIndex);
       d.answered(id, 'dialog', res);
       return res.ok ? sent(200, res) : sent(409, res);
     }

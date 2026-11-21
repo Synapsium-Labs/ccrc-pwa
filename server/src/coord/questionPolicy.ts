@@ -162,11 +162,13 @@ export function decideDeferredApprovalPush(
 }
 
 /** How long before a `held` `live` row's `notifyAt` a cleared dialog is read as the hook's park deny, not as a press
- *  (approvals PR 3c, F-A). Measured from the hook: its deadline is its own clock at the `201` plus the whole seconds of
- *  `waitS` (`floor`, up to 1 s early), and its clock falls back to whole seconds where `EPOCHREALTIME` and `date +%s%3N`
- *  are both missing (up to 1 s more). So the park deny can clear the prompt up to 2 s before `notifyAt`, never earlier; the
- *  watcher's 2 s poll only sees it later. */
-export const APPROVAL_PARK_CLEAR_SLACK_MS = 2_000;
+ *  (approvals PR 3c, F-A; review 3022 F4). Measured from the hook: its deadline is its own clock at the `201` plus
+ *  `waitS * 1000`, and windows are whole seconds with `waitS` taken from the same `now` as `notifyAt`, so the floor loses
+ *  nothing today; the one early source is the hook's whole-second clock fallback (`_hook_epoch_ms`, where `EPOCHREALTIME`
+ *  and `date +%s%3N` both fail), up to 1 s. 1.5 s covers it with half a second of margin against a clock step. Every extra
+ *  second here is a second in which a pane answer is lost (read as the deny), and the settle compares the slack with the
+ *  tick that SEES the clear, so the lost window is this slack plus the poll's lag (the note's residuals). */
+export const APPROVAL_PARK_CLEAR_SLACK_MS = 1_500;
 
 /** The child's rows a cleared-dialog settle reads (`held`, `released`, `parked`), or `unreadable`. */
 export type ClearSettleRows = { readonly ok: true; readonly rows: readonly Pick<ApprovalRow, 'id' | 'state' | 'notifyAt' | 'parkWord'>[] } | { readonly ok: false };
@@ -183,6 +185,30 @@ export function clearSettledApprovalIds(rowIds: readonly number[], rows: ClearSe
   const settles = (x: ClearSettleRow): boolean =>
     x.state === 'released' || (x.state === 'held' && !(x.parkWord === 'live' && now >= x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS));
   return rowIds.filter((id) => rows.rows.some((x) => x.id === id && settles(x)));
+}
+
+/** The painted prompt a held entry was held for (approvals PR 3c, review 3022 F1): the hook envelope's own stamp, and the
+ *  subagent whose entry it is (`''` for hook state's own `ask`). A main-thread wait keeps its `updatedAt` across subagent
+ *  events (the hook's `_hook_keep_stamp`), and a subagent's entry carries its PermissionRequest's stamp as `at`, so the
+ *  stamp names one prompt while it stands. */
+export interface HeldPrompt { readonly agentId: string; readonly at: number }
+
+/** What a press's check reads of hook state now (`hookstate.ts#HookState` has these fields), or null when none was read. */
+export interface PressHookState {
+  readonly ask: object | null;
+  readonly updatedAt: number;
+  readonly approvals?: readonly { readonly agentId: string; readonly at: number }[] | undefined;
+}
+
+/** Whether an operator's press on a held entry's dialog answers THAT entry's prompt (approvals PR 3c, review 3022 F1). The
+ *  dialog id hashes the menu's labels and first title line, not its command, so a second prompt with the same menu can
+ *  paint under the same id before the poll sees the first clear. The press reaches the entry's rows only while hook state
+ *  still names the held prompt: the main thread's wait at the same stamp, with an approval `ask`; a subagent's entry, by
+ *  its agent and stamp, still in the hook's list. No hook state read: it does not. */
+export function pressAnswersHeldPrompt(held: HeldPrompt, hs: PressHookState | null): boolean {
+  if (hs === null) return false;
+  if (held.agentId === '') return hs.ask !== null && 'approval' in hs.ask && hs.updatedAt === held.at;
+  return (hs.approvals ?? []).some((e) => e.agentId === held.agentId && e.at === held.at);
 }
 
 /** The phases of an entry in the hold carrier (`coord/questions.ts#createQuestions`'s `questionHolds`, W3 Q3d, D-7028):

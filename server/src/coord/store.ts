@@ -10219,7 +10219,9 @@ export class CoordStore {
   }
 
   /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`; or a
-   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. */
+   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. The other writers of `stale`
+   *  are `approvalParkStore.ts`'s `meetParkRuling` (a met key's parked rows) and `parkApprovalRow` (a `held` row whose key's
+   *  park is closed at its window's end, approvals PR 3c F-B), each inside its own transaction. */
   staleApproval(id: number): boolean {
     const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released','parked')").run(id);
     return Number(res.changes) > 0;
