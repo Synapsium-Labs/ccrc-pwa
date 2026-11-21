@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { SkinSetProvider } from '../src/skins/frame';
 import { REFINED_SET } from '../src/skins/refined/parts';
@@ -194,7 +194,7 @@ describe('the word census (Table 13, H2): no row says "not confirmed" or "unmeas
     const states: AgentHelperView['state'][] = ['launched', 'running', 'done', 'failed', 'stopped', 'finished', 'unlisted', 'gone', 'unmeasured'];
     const s = screenAt(1280, {
       agents: states.map((state, i) => agent(`s-${state}`, {
-        state, endedAt: ['done', 'failed', 'stopped', 'finished'].includes(state) ? NOW - 1_000 * (i + 1) : null, tokens: null,
+        description: `Helper number ${i}`, state, endedAt: ['done', 'failed', 'stopped', 'finished'].includes(state) ? NOW - 1_000 * (i + 1) : null, tokens: null,
       })),
       workflows: [wf('wf_00000000-aaa', { tokens: null, done: null, failed: null, total: null }), wf('wf_00000000-bbb', { state: 'killed', endedAt: NOW - 9_000, tokens: null })],
       agentsUnmeasured: { why: 'unseen', helpers: 1 },

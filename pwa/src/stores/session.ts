@@ -16,7 +16,9 @@ import {
   type SessionStreamMsg,
   type TaskItem,
 } from '../../../shared/api';
-import type { AgentHelperView, HelperFrameMembers, HelpersUnmeasured, WorkflowView } from '../../../shared/workflows';
+import type {
+  AgentHelperView, HelperFrameMembers, HelperReportAnswer, HelperReportRequest, HelpersUnmeasured, WorkflowView,
+} from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
@@ -160,6 +162,10 @@ export interface SessionState {
   agents: AgentHelperView[];
   agentsUnmeasured: HelpersUnmeasured | null;
   readEvery: NonNullable<HelperFrameMembers['readEvery']> | null;
+  /** H2 (D-8872): the server's answers to `helper-report` requests, by agent id, as stated (`report: null` is an answer that
+   *  it holds none). An id with no entry has had no answer: an older server never gives one. Only ids the frame still
+   *  carries are kept, and every reset site clears them with the rows. */
+  reports: Readonly<Record<string, HelperReport>>;
   /** Outstanding mail for THIS session — queued or delivered, never acked or
    *  rejected (the server filters, `sessionws.ts`'s `checkMail`). Replaced
    *  wholesale like `tasks`, because the frame is a statement about the
@@ -218,7 +224,13 @@ export interface SessionState {
    *  attachments and their preview URLs survive. */
   resolve(key: string, text: string, opts: { replaceDraft: boolean }): void;
   discard(key: string): void;
+  /** H2 (D-8872): ask the server for one finished helper's report over the session socket; nothing is sent while it is
+   *  closed. The answer arrives as a `helper-report` frame. */
+  requestHelperReport(id: string): void;
 }
+
+/** One answer to a `helper-report` request, as the store keeps it. */
+export type HelperReport = Pick<HelperReportAnswer, 'report' | 'cut'>;
 
 export type SessionSnapshot = Pick<
   SessionState,
@@ -241,6 +253,8 @@ export type SessionSnapshot = Pick<
   agents?: AgentHelperView[];
   agentsUnmeasured?: HelpersUnmeasured | null;
   readEvery?: NonNullable<HelperFrameMembers['readEvery']> | null;
+  /** H2. Optional HERE only, as `agents`: `snapshotOf` always carries it, and a snapshot built without it reads as none. */
+  reports?: Readonly<Record<string, HelperReport>>;
   missingFile: string | null;
   strandedAccount: string | null;
   searchComplete: boolean;
@@ -283,7 +297,12 @@ const sameTranscript = (was: string | null | undefined, now: string | null | und
   typeof was === 'string' && was !== '' && was === now;
 
 /** H1b (D-8862): the helper members as none, fresh each time, where every reset site clears them with the workflow rows. */
-const noHelpers = (): Pick<SessionState, 'agents' | 'agentsUnmeasured' | 'readEvery'> => ({ agents: [], agentsUnmeasured: null, readEvery: null });
+const noHelpers = (): Pick<SessionState, 'agents' | 'agentsUnmeasured' | 'readEvery' | 'reports'> =>
+  ({ agents: [], agentsUnmeasured: null, readEvery: null, reports: {} });
+
+/** H2: the answers kept for the ids a frame still carries; a row that left takes its report with it. */
+const reportsFor = (reports: SessionSnapshot['reports'], agents: readonly AgentHelperView[]): Record<string, HelperReport> =>
+  Object.fromEntries(agents.filter((a) => reports?.[a.id] !== undefined).map((a) => [a.id, reports![a.id]!]));
 
 /** Pure reducer over the session stream — one message in, next snapshot out. */
 export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): SessionSnapshot {
@@ -345,7 +364,11 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       return {
         ...s, workflows: msg.workflows, workflowsUnreadable: msg.unreadable === true,
         agents: msg.agents ?? [], agentsUnmeasured: msg.agentsUnmeasured ?? null, readEvery: msg.readEvery ?? null,
+        reports: reportsFor(s.reports, msg.agents ?? []),
       };
+    // H2 (D-8872): the answer to one `helper-report` request, applied as stated, by id.
+    case 'helper-report':
+      return { ...s, reports: { ...s.reports, [msg.id]: { report: msg.report, cut: msg.cut } } };
     // Build 7 Task 6: the session's own outstanding mail, one row above the
     // plan (`@ccrc/ui` mail-strip.tsx). Same replace-wholesale rule as `tasks`
     // just above.
@@ -429,6 +452,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   agents: s.agents,
   agentsUnmeasured: s.agentsUnmeasured,
   readEvery: s.readEvery,
+  reports: s.reports,
   mail: s.mail,
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
@@ -1066,6 +1090,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           revoke(s.pending.find((x) => x.key === key));
           return { pending: s.pending.filter((x) => x.key !== key) };
         });
+      },
+
+      requestHelperReport(id) {
+        socket?.send({ type: 'helper-report', id } satisfies HelperReportRequest);
       },
     };
   });

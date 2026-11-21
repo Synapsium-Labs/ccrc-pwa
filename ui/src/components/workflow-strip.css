@@ -2,17 +2,19 @@
    argument and ../styles/theme.css for the layer declaration. */
 @layer components {
   /* ------------------------------------------------------------------ *
-   *  Workflow strip (D-5560) — the session's dynamic workflows, one     *
-   *  line each, above the plan. Collapsed: the lines. Open: each        *
-   *  workflow's phases and agents.                                      *
+   *  Helpers section (session helpers H2, D-8872; spec §4 and §10) —    *
+   *  the session's subagents and workflows, which replaced the         *
+   *  workflow strip of D-5560 in place. Collapsed: the head and a       *
+   *  glance of two running rows. Open: the rows, then the finished      *
+   *  fold.                                                              *
    * ------------------------------------------------------------------ */
   /* SELF-GROUNDED — it sets its ink beside its ground, as `.mail-strip` does
-     (audit.mjs route 1) — so every `.workflow-strip .foo` below is measured
+     (audit.mjs route 1) — so every `.helpers-strip .foo` below is measured
      through the descendant route against `--bg-surface` and none needs a
-     registry entry. Capped like the mail and task strips: collapsed it is a
-     head and at most three lines; open, the summary steps aside and the rows
-     are the one scroll body under the head, so no fact is ever clipped. */
-  .workflow-strip {
+     registry entry. Collapsed it is a head and at most two lines; open, the
+     summary steps aside and the rows are the one scroll body under the head,
+     at most half the viewport (§10), so no fact is ever clipped. */
+  .helpers-strip {
     flex: none;
     margin: 0 var(--sp-4) var(--sp-2);
     border: 1px solid var(--edge-subtle);
@@ -25,169 +27,267 @@
     max-height: min(40vh, 320px);
     container-type: inline-size;
   }
-  .workflow-strip--open {
+  .helpers-strip--open {
     border-color: var(--edge-strong);
+    max-height: 50vh;
   }
-  /* The head floors at the tap minimum, `CollapsibleStrip`'s default — a new
-     strip clears the floor (tap-targets.test.tsx pins each strip's head). */
-  .workflow-strip .workflow-head {
+  /* In a column of its own (the inspector rail at 1600 px and up) it is always open and grows with its rows; the rail
+     scrolls itself. */
+  .helpers-strip--panel {
+    margin: 0;
+    max-height: none;
+  }
+  /* The head floors at the tap minimum, `CollapsibleStrip`'s default — a real
+     button with `aria-expanded` (§10; tap-targets.test.tsx pins each strip's head). */
+  .helpers-strip .helpers-head {
     color: var(--ink-primary);
   }
-  .workflow-strip .workflow-head:active {
+  .helpers-strip .helpers-head:active {
     background: var(--bg-raised);
   }
-
-  /* The head's mark is neutral: each line's bullet below carries the running
-     ink. It does not breathe as the task strip's asterisk does — a fade is an
-     opacity the contrast gate composites, and its registries (design/audit.mjs)
-     are another change's to extend. */
-  .workflow-strip .workflow-mark {
-    flex: none;
-    font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
-    color: var(--ink-tertiary);
+  .helpers-strip .helpers-mark {
+    display: none;
   }
-  .workflow-strip .workflow-headline {
+  .helpers-strip .helpers-headline {
     flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
-    font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
+    font: var(--weight-regular) var(--fs-sm) / var(--lh-tight) var(--family-ui);
+    color: var(--ink-secondary);
   }
-  .workflow-strip .workflow-chevron {
+  .helpers-strip .helpers-title {
+    font-weight: var(--weight-medium);
+    color: var(--ink-primary);
+  }
+  .helpers-strip .helpers-chevron {
     flex: none;
     font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
     color: var(--ink-tertiary);
   }
+  .helpers-strip .helpers-panel-head {
+    margin: 0;
+    padding: var(--sp-2) var(--sp-3) 0;
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-secondary);
+  }
 
-  /* The lines — Claude Code's row, one per workflow. They WRAP rather than
-     truncate: name and bar on the first line of a phone, the facts under
-     them; one line where the strip is wide enough. */
-  .workflow-strip .workflow-summary {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-1);
-    /* No scroll of its own (an unfocusable scroll region fails axe's
-       scrollable-region-focusable): at most three lines, measured at most
-       217px of the 256px cap at 360x640 with long, wrapping names. */
+  /* The glance: line 1 of the first two running rows, one line each, ellipsised,
+     the state word kept visible at the end (§10). */
+  .helpers-strip .helpers-summary {
     margin: 0;
     padding: 0 var(--sp-3) var(--sp-2) var(--sp-3);
-    font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
-    font-variant-numeric: tabular-nums;
     color: var(--ink-secondary);
   }
-  /* Open, each detail heads itself with this same line. */
-  .workflow-strip--open .workflow-summary {
+  .helpers-strip--open .helpers-summary {
     display: none;
   }
-  .workflow-lines {
+  .helpers-glance {
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
   }
-  .workflow-line {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+  .helper-glance {
+    display: grid;
+    grid-template-columns: 1.25em minmax(0, 1fr) auto;
+    align-items: baseline;
     column-gap: var(--sp-2);
-    row-gap: 2px;
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
   }
-  .workflow-strip .workflow-bullet {
-    flex: none;
-    width: var(--sp-4);
-    text-align: center;
+  .helpers-strip .helper-glance-what {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--ink-primary);
+  }
+  .helpers-strip .helper-glance-state {
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
     color: var(--status-busy-text);
   }
-  .workflow-strip .workflow-line--completed .workflow-bullet {
-    color: var(--status-done-text);
-  }
-  .workflow-strip .workflow-line--failed .workflow-bullet,
-  .workflow-strip .workflow-line--killed .workflow-bullet {
-    color: var(--status-dead-text);
-  }
-  .workflow-strip .workflow-name {
-    flex: 1 1 9rem;
-    min-width: 0;
-    overflow-wrap: anywhere;
-    color: var(--ink-primary);
-    font-family: var(--family-ui);
-    font-size: var(--fs-xs);
-  }
-  /* The bar's box, never the meter's: the meter owns its height, radius and
-     paint (meter.tsx); this only gives it a width to fill. */
-  .workflow-bar {
-    flex: 0 0 clamp(72px, 22%, 160px);
-    display: block;
-  }
-  .workflow-facts {
-    flex: 1 1 auto;
-    padding-left: calc(var(--sp-4) + var(--sp-2));
-  }
-  /* Wide enough for one line each: the lines become one grid, so the bars
-     and the facts line up down the strip — Claude Code's own list does. */
-  /* Each line is a SUBGRID row rather than `display: contents`, which would
-     drop its listitem role from the accessibility tree in some engines. */
-  @container (min-width: 560px) {
-    .workflow-lines {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr) clamp(96px, 18cqw, 220px) auto;
-      align-items: center;
-      column-gap: var(--sp-3);
-      row-gap: var(--sp-1);
-    }
-    .workflow-lines .workflow-line {
-      display: grid;
-      grid-template-columns: subgrid;
-      grid-column: 1 / -1;
-      align-items: center;
-    }
-    .workflow-lines .workflow-bar {
-      flex: none;
-    }
-    .workflow-lines .workflow-facts {
-      padding-left: 0;
-      white-space: nowrap;
-    }
-  }
-  .workflow-strip .workflow-more {
-    color: var(--ink-secondary);
-  }
-  .workflow-strip .workflow-note {
-    color: var(--ink-secondary);
-    font-style: italic;
-  }
 
-  /* The detail. */
-  .workflow-rows {
+  /* The rows: the one scroll body. */
+  .helpers-rows {
     list-style: none;
     margin: 0;
-    padding: 0 0 var(--sp-2);
+    padding: 0;
     flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
     border-top: 1px solid var(--edge-subtle);
   }
-  .workflow-detail {
-    padding: var(--sp-2) var(--sp-3) 0;
+  .helpers-strip--panel .helpers-rows {
+    border-top: 0;
+    overflow-y: visible;
   }
-  .workflow-strip .workflow-detail-line {
-    display: block;
-    font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
+  .helpers-main,
+  .helpers-finished {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  /* A row: glyph | what it is doing | elapsed; under it the meter (a workflow) and line 2, then an opened detail. */
+  .helper-row {
+    display: grid;
+    grid-template-columns: 1.25em minmax(0, 1fr) auto;
+    grid-template-areas:
+      'glyph what elapsed'
+      '. bar bar'
+      '. line2 line2'
+      '. detail detail';
+    align-items: baseline;
+    column-gap: var(--sp-2);
+    row-gap: 2px;
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid var(--edge-subtle);
+  }
+  .helper-row:last-child {
+    border-bottom: 0;
+  }
+  .helpers-strip .helper-glyph {
+    grid-area: glyph;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    text-align: center;
+    color: var(--ink-secondary);
+  }
+  /* The glyph's tone (review 2900 F16): only a running row draws the running ink; a state left out is neutral. */
+  .helpers-strip .helper-glyph[data-tone='busy'] {
+    color: var(--status-busy-text);
+  }
+  .helpers-strip .helper-glyph[data-tone='done'] {
+    color: var(--status-done-text);
+  }
+  .helpers-strip .helper-glyph[data-tone='dead'] {
+    color: var(--status-dead-text);
+  }
+  .helpers-strip .helper-glyph[data-tone='neutral'] {
+    color: var(--ink-secondary);
+  }
+  .helpers-strip .helper-what {
+    grid-area: what;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font: var(--weight-regular) var(--fs-sm) / var(--lh-tight) var(--family-ui);
+    color: var(--ink-primary);
+  }
+  /* A row that opens (a workflow's phases, a finished helper's report): its line 1 is the tap target (§10). */
+  .helpers-strip .helper-open {
+    grid-area: what;
+    min-width: 0;
+    min-height: var(--tap-min);
+    margin: calc(-1 * var(--sp-2)) 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-primary);
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+  }
+  .helpers-strip .helper-elapsed {
+    grid-area: elapsed;
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
     font-variant-numeric: tabular-nums;
     color: var(--ink-secondary);
   }
-  .workflow-strip .workflow-detail-note {
+  .helper-bar {
+    grid-area: bar;
+    display: block;
+  }
+  .helpers-strip .helper-line2 {
+    grid-area: line2;
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: var(--sp-2);
+    font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
+  }
+  .helper-facts {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  /* A fact, in the muted ink: quiet is said, never acted on (Table 5). */
+  .helpers-strip .helper-activity[data-quiet] {
+    color: var(--ink-tertiary);
+  }
+  /* On a phone line 2 leaves the tokens out (§10). */
+  @container (max-width: 479px) {
+    .helper-tokens {
+      display: none;
+    }
+  }
+  .helper-detail {
+    grid-area: detail;
+  }
+  .helpers-strip .helper-note {
     margin: var(--sp-1) 0 0;
     font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
     color: var(--ink-secondary);
   }
-  .workflow-phases {
+
+  /* The finished fold: closed by default, its toggle at the tap floor (review 2900 F18). */
+  .helpers-fold {
+    border-top: 1px solid var(--edge-subtle);
+  }
+  .helpers-strip .helpers-fold-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-3);
+    border: 0;
+    background: none;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-ui);
+    color: var(--ink-secondary);
+    text-align: left;
+    cursor: pointer;
+  }
+  .helpers-finished {
+    border-top: 1px solid var(--edge-subtle);
+  }
+
+  /* The report a finished row opens to (§4.3): its first four lines, Show all and Copy. */
+  .helper-report {
+    grid-area: detail;
+    min-width: 0;
+  }
+  .helpers-strip .helper-report-text {
+    margin: var(--sp-1) 0 0;
+    padding: var(--sp-2);
+    border-radius: var(--r-sm);
+    background: var(--bg-raised);
+    color: var(--ink-primary);
+    font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .helper-report-links {
+    display: flex;
+    gap: var(--sp-3);
+  }
+  .helpers-strip .helper-report-link {
+    min-height: var(--tap-min);
+    padding: 0;
+    border: 0;
+    background: none;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-ui);
+    color: var(--ink-secondary);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  /* A workflow's phases and agents (D-5560's detail). */
+  .helper-phases {
     list-style: none;
     margin: var(--sp-1) 0 0;
     padding: 0;
   }
-  .workflow-phase {
+  .helper-phase {
     padding: 2px 0;
   }
-  .workflow-strip .workflow-phase-title {
+  .helpers-strip .helper-phase-title {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
@@ -195,19 +295,19 @@
     font: var(--weight-medium) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
     color: var(--ink-secondary);
   }
-  .workflow-strip .workflow-phase[data-current] .workflow-phase-title {
+  .helpers-strip .helper-phase[data-current] .helper-phase-title {
     color: var(--ink-primary);
   }
-  .workflow-phase-count {
+  .helper-phase-count {
     font-weight: var(--weight-regular);
     font-variant-numeric: tabular-nums;
   }
-  .workflow-agents {
+  .helper-phase-agents {
     list-style: none;
     margin: 0;
     padding: 0 0 0 var(--sp-3);
   }
-  .workflow-strip .workflow-agent {
+  .helpers-strip .helper-phase-agent {
     display: flex;
     align-items: baseline;
     gap: var(--sp-2);
@@ -215,35 +315,21 @@
     font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
     color: var(--ink-secondary);
   }
-  .workflow-agent-glyph {
+  .helper-phase-agent-glyph {
     flex: none;
     width: 1em;
     font-family: var(--family-mono);
   }
-  .workflow-agent-label {
+  .helper-phase-agent-label {
     flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
   }
-  .workflow-agent-state {
+  .helper-phase-agent-state {
     flex: none;
     font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   }
-  .workflow-strip .workflow-agent--running {
-    color: var(--ink-primary);
-  }
-  .workflow-strip .workflow-agent--running .workflow-agent-glyph {
-    color: var(--status-busy-text);
-  }
-  .workflow-strip .workflow-agent--failed .workflow-agent-glyph,
-  .workflow-strip .workflow-agent--failed .workflow-agent-state {
-    color: var(--status-dead-text);
-  }
-  .workflow-strip .workflow-agent[data-stopped] .workflow-agent-glyph,
-  .workflow-strip .workflow-agent[data-stopped] .workflow-agent-state {
-    color: var(--ink-secondary);
-  }
-  .workflow-strip .workflow-fold {
+  .helpers-strip .helper-phase-fold {
     min-height: var(--tap-min);
     padding: var(--sp-1) 0;
     background: none;
@@ -251,5 +337,15 @@
     font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
     color: var(--ink-secondary);
     cursor: pointer;
+  }
+  .helpers-strip .helper-phase-agent[data-state='running'] {
+    color: var(--ink-primary);
+  }
+  .helpers-strip .helper-phase-agent[data-state='running'] .helper-phase-agent-glyph {
+    color: var(--status-busy-text);
+  }
+  .helpers-strip .helper-phase-agent[data-state='failed'] .helper-phase-agent-glyph,
+  .helpers-strip .helper-phase-agent[data-state='failed'] .helper-phase-agent-state {
+    color: var(--status-dead-text);
   }
 }

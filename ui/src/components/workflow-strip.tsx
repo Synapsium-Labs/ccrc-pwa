@@ -1,29 +1,31 @@
-// Workflow strip — the dynamic workflows Claude Code is running in this session
-// (D-5560), one line each, the facts its own terminal row prints:
-// `○ name ▰▰▰▱ 19/20 · 3h15m · ↓ 2.5m tokens`. Collapsed, the first
-// SUMMARY_LINES_MAX lines are the strip's summary and the head counts the
-// rest, so the glance needs no tap and stays compact on a phone; open, the
-// summary steps aside and each workflow's detail — its facts line, its
-// phases and every agent's label and state — is one scroll body.
+// The Helpers section (session helpers H2, D-8872; spec 2026-11-19-session-helpers-design §4 and §10): the session's
+// subagents and dynamic workflows, one row each, with what each is doing, its kind, model and effort, its measured
+// state, how long it has run and when it last wrote; a finished one kept ten minutes, folded, opening to its report.
+// It replaces the workflow strip of D-5560 in place: a workflow row still carries Claude Code's own facts — name, bar,
+// `7/12 agents`, `↓ 2.5m tokens` — and opens to its phases and agents.
 //
-// Read-only. Nothing here starts, stops or changes a workflow: the only
-// buttons are the head and the folds that reveal rows.
+// WHAT IS DECIDED ELSEWHERE. Which rows exist and their states are the server's (`server/src/workflows/model.ts`); the
+// head's counts and its "not known" sentences, and which rows are in the main list and which in the fold, are the PWA's
+// words module (`pwa/src/session/helpersWords.ts`), handed in as `HelpersView`. This file draws them and formats each
+// row's own facts.
 //
-// EVERY UNMEASURED FACT SAYS SO. A row whose progress could not be read says
-// "progress unreadable", never `0/0`; tokens no agent reported say "tokens
-// unmeasured"; a floor (some agents not read yet) carries a `+`. A finished row
-// stays for Claude Code's 30 s with its own last word — done, failed, stopped —
-// and then the server stops sending it.
+// EVERY FACT IS MEASURED OR LEFT OUT (§4.4). A row never says "not confirmed" or "unmeasured": a fact that is not known
+// is left out of the row and said once in the head. A state left out draws a neutral glyph, never the running one
+// (review 2900 F16). `no longer listed` and `session ended` claim no end and stay in the main list.
 //
-// No rows and nothing unreadable → nothing at all, so an ordinary session
-// never pays a line for it.
+// Read-only. The only buttons are the head, the fold, a row that opens (a workflow's phases, a finished helper's report)
+// and the report's Show all and Copy. Each is at least `--tap-min` high (review 2900 F18).
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { FOCUS_RING } from '../lib/focus';
+import { elapsedShort } from '../lib/elapsed';
 import { useNow } from '../lib/use-now';
 import { CollapsibleStrip } from '../primitives/collapsible-strip';
 import { Meter } from '../primitives/meter';
-import type { WorkflowAgentView, WorkflowView } from '../../../shared/workflows';
+import {
+  AGENT_HELPER_STATE_WORDS, HELPER_REPORT_MAX_BYTES,
+  type AgentHelperState, type AgentHelperView, type WorkflowAgentView, type WorkflowView,
+} from '../../../shared/workflows';
 import './workflow-strip.css';
 
 /** `↓ 2.5m tokens`'s number, the way Claude Code writes it: 980, 12.4k, 2.5m. */
@@ -45,32 +47,95 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(h / 24)}d${h % 24}h`;
 }
 
-const FINAL_WORD: Record<Exclude<WorkflowView['state'], 'running'>, string> = {
-  completed: 'done',
-  failed: 'failed',
-  killed: 'stopped',
-};
+/** One row of the section: an Agent helper or a workflow. */
+export type HelperItem =
+  | { readonly kind: 'agent'; readonly id: string; readonly agent: AgentHelperView }
+  | { readonly kind: 'workflow'; readonly id: string; readonly workflow: WorkflowView };
 
-/** The facts after the bar, in Claude Code's order: count · elapsed · tokens · last word. */
-export function workflowFacts(w: WorkflowView, now: number): string {
-  const parts: string[] = [];
-  parts.push(w.done === null || w.total === null ? 'progress unreadable' : `${w.done}/${w.total}`);
-  if (w.startedAt !== null) parts.push(formatElapsed((w.endedAt ?? now) - w.startedAt));
-  parts.push(w.tokens === null ? 'tokens unmeasured' : `↓ ${formatTokens(w.tokens)}${w.tokensUnmeasured > 0 ? '+' : ''} tokens`);
-  if (w.state !== 'running') parts.push(FINAL_WORD[w.state]);
-  else if (w.failed !== null && w.failed > 0) parts.push(`${w.failed} failed`);
-  return parts.join(' · ');
+/** What `helpersWords.ts` decided for the section: the head's counts and its notes, said once, and the two lists. */
+export interface HelpersView {
+  readonly count: string | null;
+  readonly notes: readonly string[];
+  readonly main: readonly HelperItem[];
+  readonly finished: readonly HelperItem[];
 }
 
-/** The head's sentence: what is running, and what just finished. */
-export function workflowHeadline(workflows: readonly WorkflowView[], unreadable: boolean): string {
-  if (workflows.length === 0) return unreadable ? 'Workflow state unreadable' : 'Workflows';
-  const running = workflows.filter((w) => w.state === 'running').length;
-  const finished = workflows.length - running;
-  const noun = (n: number): string => (n === 1 ? 'workflow' : 'workflows');
-  if (finished === 0) return `${running} ${noun(running)} running`;
-  if (running === 0) return `${finished} ${noun(finished)} finished`;
-  return `${running} running · ${finished} finished`;
+/** The server's answer to one report request, as the store keeps it; absent while none came. */
+export interface HelperReportView { readonly report: string | null; readonly cut: boolean }
+
+/** How long ago a helper last wrote before the row says `quiet` instead of `active … ago` (spec Table 5). */
+export const HELPER_QUIET_MS = 600_000;
+
+/** The glyph each state draws, and its tone (review 2900 F16): only `running` draws the running glyph, in the busy tone; a
+ *  state that claims no running and no end — launched, no longer listed, session ended, left out — is neutral. */
+const AGENT_GLYPH: Record<AgentHelperState, { glyph: string; tone: Tone }> = {
+  running: { glyph: '◆', tone: 'busy' },
+  launched: { glyph: '◇', tone: 'neutral' },
+  unlisted: { glyph: '◇', tone: 'neutral' },
+  gone: { glyph: '◇', tone: 'neutral' },
+  unmeasured: { glyph: '◇', tone: 'neutral' },
+  done: { glyph: '✓', tone: 'done' },
+  failed: { glyph: '✗', tone: 'dead' },
+  stopped: { glyph: '■', tone: 'neutral' },
+  finished: { glyph: '✓', tone: 'neutral' },
+};
+type Tone = 'busy' | 'done' | 'dead' | 'neutral';
+const WORKFLOW_GLYPH: Record<WorkflowView['state'], { glyph: string; tone: Tone }> = {
+  running: { glyph: '▣', tone: 'busy' },
+  completed: { glyph: '✓', tone: 'done' },
+  failed: { glyph: '✗', tone: 'dead' },
+  killed: { glyph: '■', tone: 'neutral' },
+};
+const glyphOf = (it: HelperItem): { glyph: string; tone: Tone } =>
+  it.kind === 'agent' ? AGENT_GLYPH[it.agent.state] : WORKFLOW_GLYPH[it.workflow.state];
+
+const FINAL_WORD: Record<Exclude<WorkflowView['state'], 'running'>, string> = { completed: 'done', failed: 'failed', killed: 'stopped' };
+
+/** `active 20s ago`, `active 3m ago`; past `HELPER_QUIET_MS`, `quiet 14m` (a fact, said in the muted ink, with no state change). */
+export function activityWords(lastActivityAt: number | null | undefined, now: number): { text: string; quiet: boolean } | null {
+  if (lastActivityAt === null || lastActivityAt === undefined) return null;
+  const ms = Math.max(0, now - lastActivityAt);
+  if (ms >= HELPER_QUIET_MS) return { text: `quiet ${elapsedShort(ms) ?? '10m'}`, quiet: true };
+  const s = Math.floor(ms / 1000);
+  return { text: `active ${s < 60 ? `${s}s` : `${Math.floor(s / 60)}m`} ago`, quiet: false };
+}
+
+const duration = (from: number | null, to: number | null): string | null =>
+  from === null || to === null ? null : formatElapsed(to - from);
+const present = (xs: ReadonlyArray<string | null | false>): string[] => xs.filter((x): x is string => typeof x === 'string' && x !== '');
+
+/** Line 1: what it is doing. */
+const whatOf = (it: HelperItem): string =>
+  it.kind === 'agent' ? it.agent.description ?? it.agent.agentType ?? 'subagent' : it.workflow.name ?? 'unnamed workflow';
+
+/** Line 2's facts of a row in the main list (Table 5), each measured or left out; the activity is said after them. */
+export function mainFacts(it: HelperItem): string[] {
+  if (it.kind === 'agent') {
+    const a = it.agent;
+    return present([a.agentType === null ? 'subagent' : `subagent · ${a.agentType}`, a.model, a.effort, AGENT_HELPER_STATE_WORDS[a.state]]);
+  }
+  const w = it.workflow;
+  return present([
+    'workflow', 'running', w.phase !== null && `phase ${w.phase}`,
+    w.done !== null && w.total !== null && `${w.done}/${w.total} agents`, (w.failed ?? 0) > 0 && `${w.failed} failed`,
+  ]);
+}
+
+/** A finished row's one line (Table 6): its outcome, its duration, and for an Agent helper the notification's summary. */
+export function finishedFacts(it: HelperItem): string[] {
+  if (it.kind === 'agent') {
+    const a = it.agent;
+    return present([AGENT_HELPER_STATE_WORDS[a.state], duration(a.startedAt, a.endedAt), a.summary]);
+  }
+  const w = it.workflow;
+  const word = w.state === 'running' ? 'running' : FINAL_WORD[w.state];
+  return present([word, w.done !== null && w.total !== null && `${w.done}/${w.total} agents`, duration(w.startedAt, w.endedAt)]);
+}
+
+function tokensOf(it: HelperItem): string | null {
+  if (it.kind === 'agent') return it.agent.tokens === null ? null : `↓ ${formatTokens(it.agent.tokens)}`;
+  const w = it.workflow;
+  return w.tokens === null ? null : `↓ ${formatTokens(w.tokens)}${w.tokensUnmeasured > 0 ? '+' : ''} tokens`;
 }
 
 function meterOf(w: WorkflowView): { pct: number | null; band: 'ok' | 'warn' | 'crit' } {
@@ -79,166 +144,241 @@ function meterOf(w: WorkflowView): { pct: number | null; band: 'ok' | 'warn' | '
   return { pct: w.total === 0 ? 0 : (w.done / w.total) * 100, band };
 }
 
-/** The collapsed strip's lines: a glance, so a few; the head counts them all
- *  and the open strip lists every one with the same facts. */
-export const SUMMARY_LINES_MAX = 3;
+function Glyph({ it }: { it: HelperItem }): ReactNode {
+  const g = glyphOf(it);
+  return <span className="helper-glyph" data-tone={g.tone} aria-hidden="true">{g.glyph}</span>;
+}
 
-function WorkflowLine({ w, now, item = false }: { w: WorkflowView; now: number; item?: boolean }): ReactNode {
-  const { pct, band } = meterOf(w);
+/** Facts joined by ` · `, the activity last in its own span (muted when quiet). */
+function Facts({ parts, activity }: { parts: string[]; activity?: { text: string; quiet: boolean } | null }): ReactNode {
   return (
-    <span className={`workflow-line workflow-line--${w.state}`} role={item ? 'listitem' : undefined}>
-      <span className="workflow-bullet" aria-hidden="true">{w.state === 'running' ? '○' : '●'}</span>
-      <span className="workflow-name">{w.name ?? 'unnamed workflow'}</span>
-      <span className="workflow-bar">
-        <Meter pct={pct} band={band} />
-      </span>
-      <span className="workflow-facts">
-        {workflowFacts(w, now)}
-        {/* The bullet is hidden from speech; a finished row's facts end in its
-            last word, so a running one needs its own. */}
-        {w.state === 'running' && <span className="sr-only"> · running</span>}
-      </span>
+    <span className="helper-facts">
+      {parts.join(' · ')}
+      {activity != null && (
+        <>
+          {parts.length > 0 ? ' · ' : ''}
+          <span className="helper-activity" data-quiet={activity.quiet ? '' : undefined}>{activity.text}</span>
+        </>
+      )}
     </span>
   );
 }
 
-const AGENT_GLYPH: Record<WorkflowAgentView['state'], string> = { running: '■', done: '✓', failed: '✗' };
+const AGENT_STATE_GLYPH: Record<WorkflowAgentView['state'], string> = { running: '■', done: '✓', failed: '✗' };
 
-/** The agents grouped by phase, in the script's phase order where it is known,
- *  else in the order the phases first appear. */
-function groupByPhase(w: WorkflowView): Array<{ phase: string | null; agents: WorkflowAgentView[] }> {
-  const order: Array<string | null> = [...(w.phases ?? [])];
-  for (const a of w.agents) if (!order.includes(a.phase)) order.push(a.phase);
-  return order.map((phase) => ({ phase, agents: w.agents.filter((a) => a.phase === phase) }));
-}
-
+/** One phase of a workflow's detail: its agents, the done ones folded behind one button that stays put (D-5560). */
 function PhaseGroup({ w, phase, agents }: { w: WorkflowView; phase: string | null; agents: WorkflowAgentView[] }): ReactNode {
   const [showDone, setShowDone] = useState(false);
   const done = agents.filter((a) => a.state === 'done');
   const open = agents.filter((a) => a.state !== 'done');
   const current = w.state === 'running' && phase !== null && phase === w.phase;
   const stopped = w.state !== 'running';
+  const agentRow = (a: WorkflowAgentView, key: string): ReactNode => {
+    const cut = stopped && a.state === 'running';
+    return (
+      <li key={key} className="helper-phase-agent" data-state={cut ? 'stopped' : a.state}>
+        <span className="helper-phase-agent-glyph" aria-hidden="true">{cut ? '◌' : AGENT_STATE_GLYPH[a.state]}</span>
+        <span className="helper-phase-agent-label">{a.label ?? 'unlabelled agent'}</span>
+        <span className="helper-phase-agent-state">{cut ? 'stopped' : a.state}</span>
+      </li>
+    );
+  };
   return (
-    // State rides data attributes, as `Meter`'s `data-band` does: a computed
-    // modifier CLASS is design-system vocabulary (`OWNED`), and these two are
-    // only this strip's own styling hooks.
-    <li className="workflow-phase" data-current={current ? '' : undefined}>
-      <span className="workflow-phase-title">
+    <li className="helper-phase" data-current={current ? '' : undefined}>
+      <span className="helper-phase-title">
         {phase ?? 'Agents'}
-        <span className="workflow-phase-count">
-          {agents.length === 0 ? (w.state === 'running' ? 'not started' : 'none ran') : `${done.length}/${agents.length}`}
-          {current ? ' · now' : ''}
+        <span className="helper-phase-count">
+          {agents.length === 0 ? (w.state === 'running' ? 'not started' : 'none ran') : `${done.length}/${agents.length}`}{current ? ' · now' : ''}
         </span>
       </span>
       {agents.length > 0 && (
-        <ul className="workflow-agents">
-          {open.map((a, i) => (
-            <li key={`o${i}`} className={`workflow-agent workflow-agent--${a.state}`} data-stopped={stopped && a.state === 'running' ? '' : undefined}>
-              <span className="workflow-agent-glyph" aria-hidden="true">{stopped && a.state === 'running' ? '◌' : AGENT_GLYPH[a.state]}</span>
-              <span className="workflow-agent-label">{a.label ?? 'unlabelled agent'}</span>
-              <span className="workflow-agent-state">{stopped && a.state === 'running' ? 'stopped' : a.state}</span>
-            </li>
-          ))}
-          {/* One button that stays put and toggles, so focus stays on it and
-              the done agents fold away again from the same place. */}
+        <ul className="helper-phase-agents">
+          {open.map((a, i) => agentRow(a, `o${i}`))}
           {done.length > 0 && (
-            <li key="fold" className="workflow-agent workflow-agent--fold">
-              <button type="button" className={`workflow-fold ${FOCUS_RING}`} aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
+            <li key="fold" className="helper-phase-agent">
+              <button type="button" className={`helper-phase-fold ${FOCUS_RING}`} aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
                 {showDone ? `fold ${done.length} done` : `… +${done.length} done`}
               </button>
             </li>
           )}
-          {showDone &&
-            done.map((a, i) => (
-              <li key={`d${i}`} className="workflow-agent workflow-agent--done">
-                <span className="workflow-agent-glyph" aria-hidden="true">{AGENT_GLYPH.done}</span>
-                <span className="workflow-agent-label">{a.label ?? 'unlabelled agent'}</span>
-                <span className="workflow-agent-state">done</span>
-              </li>
-            ))}
+          {showDone && done.map((a, i) => agentRow(a, `d${i}`))}
         </ul>
       )}
     </li>
   );
 }
 
-function WorkflowDetail({ w, now }: { w: WorkflowView; now: number }): ReactNode {
-  const groups = groupByPhase(w);
+/** A workflow's phases and agents (D-5560's detail), in the script's phase order where it is known. */
+function WorkflowDetail({ w }: { w: WorkflowView }): ReactNode {
+  const order: Array<string | null> = [...(w.phases ?? [])];
+  for (const a of w.agents) if (!order.includes(a.phase)) order.push(a.phase);
+  if (w.done === null) return <p className="helper-note">Its journal could not be read this pass, so no agent is listed.</p>;
   return (
-    <li className="workflow-detail">
-      {/* The same facts line the collapsed summary shows: open, the summary
-          steps aside (workflow-strip.css) and this is where every workflow's
-          facts are, so the detail stays a superset of the glance. */}
-      <span className="workflow-detail-line">
-        <WorkflowLine w={w} now={now} />
+    <>
+      <ol className="helper-phases">
+        {order.map((phase) => <PhaseGroup key={phase ?? '\u0000'} w={w} phase={phase} agents={w.agents.filter((a) => a.phase === phase)} />)}
+      </ol>
+      {w.state === 'running' && w.phases === null && <p className="helper-note">Phases still to come are not readable for this run.</p>}
+      {w.agentsOmitted > 0 && <p className="helper-note">… +{w.agentsOmitted} more agents not listed</p>}
+    </>
+  );
+}
+
+/** The report a finished helper opens to (§4.3): its first `REPORT_LINES` lines, then Show all and Copy. */
+const REPORT_LINES = 4;
+function Report({ answer }: { answer: HelperReportView | undefined }): ReactNode {
+  const [all, setAll] = useState(false);
+  if (answer === undefined) return <div className="helper-report" />; // asked, and no answer yet (an older server never gives one)
+  if (answer.report === null) return <div className="helper-report"><p className="helper-note">This report is no longer held: its row left the keep.</p></div>;
+  const lines = answer.report.split('\n');
+  const text = all ? answer.report : lines.slice(0, REPORT_LINES).join('\n');
+  const copy = (): void => { void navigator.clipboard?.writeText(answer.report ?? '').catch(() => undefined); };
+  return (
+    <div className="helper-report">
+      <pre className="helper-report-text">{text}</pre>
+      <span className="helper-report-links">
+        {!all && lines.length > REPORT_LINES && (
+          <button type="button" className={`helper-report-link ${FOCUS_RING}`} onClick={() => setAll(true)}>{`Show all (${lines.length} lines)`}</button>
+        )}
+        <button type="button" className={`helper-report-link ${FOCUS_RING}`} onClick={copy}>Copy</button>
       </span>
-      {w.done === null ? (
-        <p className="workflow-detail-note">Its journal could not be read this pass — no agent is listed rather than a guess.</p>
-      ) : (
-        <ol className="workflow-phases">
-          {groups.map((g) => (
-            <PhaseGroup key={g.phase ?? '\u0000'} w={w} phase={g.phase} agents={g.agents} />
-          ))}
-        </ol>
+      {answer.cut && <p className="helper-note">{`The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`}</p>}
+    </div>
+  );
+}
+
+function HelperRow({ it, now, finished, reports, onReport }: {
+  it: HelperItem; now: number; finished: boolean;
+  reports: Readonly<Record<string, HelperReportView>>; onReport: (id: string) => void;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const [asked, setAsked] = useState(false);
+  const hasReport = finished && it.kind === 'agent' && it.agent.hasReport;
+  const opens = hasReport || it.kind === 'workflow';
+  const toggle = (): void => {
+    if (!open && hasReport && !asked && reports[it.id] === undefined) { setAsked(true); onReport(it.id); }
+    setOpen((o) => !o);
+  };
+  const w = it.kind === 'workflow' ? it.workflow : null;
+  const start = it.kind === 'agent' ? it.agent.startedAt : it.workflow.startedAt;
+  const tokens = finished ? null : tokensOf(it);
+  const what = <span className="helper-what">{whatOf(it)}</span>;
+  return (
+    <li className="helper-row" data-helper-row={it.id} data-state={it.kind === 'agent' ? it.agent.state : it.workflow.state}>
+      <Glyph it={it} />
+      {opens ? (
+        <button type="button" className={`helper-open ${FOCUS_RING}`} aria-expanded={open} onClick={toggle}>{what}</button>
+      ) : what}
+      {!finished && start !== null && <span className="helper-elapsed">{formatElapsed(now - start)}</span>}
+      {w !== null && w.state === 'running' && (
+        <span className="helper-bar"><Meter {...meterOf(w)} /></span>
       )}
-      {w.state === 'running' && w.phases === null && w.done !== null && (
-        <p className="workflow-detail-note">Phases still to come are not readable for this run.</p>
-      )}
-      {w.agentsOmitted > 0 && (
-        <p className="workflow-detail-note">… +{w.agentsOmitted} more agents not listed</p>
-      )}
+      <span className="helper-line2">
+        {finished
+          ? <Facts parts={finishedFacts(it)} />
+          : <Facts parts={mainFacts(it)} activity={activityWords(it.kind === 'agent' ? it.agent.lastActivityAt : it.workflow.lastActivityAt, now)} />}
+        {tokens !== null && <span className="helper-tokens">{tokens}</span>}
+      </span>
+      {open && w !== null && <div className="helper-detail"><WorkflowDetail w={w} /></div>}
+      {open && hasReport && <Report answer={reports[it.id]} />}
     </li>
   );
 }
 
-export function WorkflowStrip({
-  workflows,
-  unreadable = false,
-}: {
-  workflows: WorkflowView[];
-  /** The server could not re-read the session's workflow state: `workflows`
-   *  are the rows it last read (or none), and the strip says so. */
-  unreadable?: boolean;
+/** The main list and the finished fold, as list items of the caller's `<ol>`: the strip's rows and the rail's list. */
+export function HelpersList({ view, reports, onReport }: {
+  view: HelpersView;
+  reports: Readonly<Record<string, HelperReportView>>;
+  onReport: (id: string) => void;
 }): ReactNode {
-  const ticking = workflows.some((w) => w.state === 'running' && w.startedAt !== null);
-  // Ticks once a second while a running row has a start to count from.
+  const [foldOpen, setFoldOpen] = useState(false);
+  const ticking = view.main.length > 0;
   const now = useNow(1000, ticking);
-  if (workflows.length === 0 && !unreadable) return null;
-  // Running rows first: a finished one (gone in 30 s) never pushes a running
-  // one behind the "+N more".
-  const glance = [...workflows.filter((w) => w.state === 'running'), ...workflows.filter((w) => w.state !== 'running')]
-    .slice(0, SUMMARY_LINES_MAX);
+  return (
+    <>
+      {view.main.length > 0 && (
+        <li className="helpers-main-item">
+          <ol className="helpers-main">
+            {view.main.map((it) => <HelperRow key={`${it.kind}:${it.id}`} it={it} now={now} finished={false} reports={reports} onReport={onReport} />)}
+          </ol>
+        </li>
+      )}
+      {view.finished.length > 0 && (
+        <li className="helpers-fold">
+          <button type="button" className={`helpers-fold-toggle ${FOCUS_RING}`} aria-expanded={foldOpen} onClick={() => setFoldOpen((o) => !o)}>
+            <span aria-hidden="true">{foldOpen ? '▾' : '▸'}</span> {`Finished · last 10 min (${view.finished.length})`}
+          </button>
+          {foldOpen && (
+            <ol className="helpers-finished">
+              {view.finished.map((it) => <HelperRow key={`${it.kind}:${it.id}`} it={it} now={now} finished reports={reports} onReport={onReport} />)}
+            </ol>
+          )}
+        </li>
+      )}
+    </>
+  );
+}
+
+/** The head's words: the title, the counts, then each "not known" line once. */
+function Headline({ view }: { view: HelpersView }): ReactNode {
+  return (
+    <>
+      <span className="helpers-title">Helpers</span>
+      {view.count !== null && <span className="helpers-count">{` · ${view.count}`}</span>}
+      {view.notes.map((n) => <span key={n} className="helpers-note">{` · ${n}`}</span>)}
+    </>
+  );
+}
+
+/** The collapsed glance (§10): line 1 of the first `GLANCE_MAX` running rows, each with its state word kept visible. */
+export const GLANCE_MAX = 2;
+
+/** The section under the transcript: collapsed to its head and a glance, open to its rows and the finished fold. */
+export function HelpersStrip({ view, reports, onReport }: {
+  view: HelpersView;
+  reports: Readonly<Record<string, HelperReportView>>;
+  onReport: (id: string) => void;
+}): ReactNode {
+  const running = view.main.filter((it) => (it.kind === 'agent' ? it.agent.state : it.workflow.state) === 'running').slice(0, GLANCE_MAX);
   return (
     <CollapsibleStrip
-      root="workflow-strip"
-      part="workflow"
-      label="Workflows"
-      // Neutral: each line's own bullet carries the running ink.
-      mark="○"
-      headline={workflowHeadline(workflows, unreadable)}
-      summary={
-        <>
-          <span className="workflow-lines" role="list">
-            {glance.map((w) => (
-              <WorkflowLine key={w.id} w={w} now={now} item />
-            ))}
-          </span>
-          {workflows.length > SUMMARY_LINES_MAX && (
-            <span className="workflow-more">+{workflows.length - SUMMARY_LINES_MAX} more — open for all</span>
-          )}
-          {unreadable && workflows.length > 0 && (
-            <span className="workflow-note">Could not re-read workflow state — showing the last read.</span>
-          )}
-        </>
-      }
-    >
-      {workflows.length === 0 ? (
-        <li className="workflow-detail">
-          <p className="workflow-detail-note">This box could not read where Claude Code keeps this session&apos;s workflows.</p>
-        </li>
-      ) : (
-        workflows.map((w) => <WorkflowDetail key={w.id} w={w} now={now} />)
+      root="helpers-strip"
+      part="helpers"
+      label="Helpers"
+      mark={null}
+      headline={<Headline view={view} />}
+      summary={running.length === 0 ? undefined : (
+        <span className="helpers-glance" role="list">
+          {running.map((it) => (
+            <span key={`${it.kind}:${it.id}`} className="helper-glance" role="listitem" data-helper-glance="">
+              <Glyph it={it} />
+              <span className="helper-glance-what">{whatOf(it)}</span>
+              <span className="helper-glance-state">running</span>
+            </span>
+          ))}
+        </span>
       )}
+    >
+      <HelpersList view={view} reports={reports} onReport={onReport} />
     </CollapsibleStrip>
+  );
+}
+
+/** The same section in a column of its own (the inspector rail at 1600 px and up): always open, no head of its own (the
+ *  rail's section heading is the title), the counts and notes as one line. */
+export function HelpersPanel({ view, reports, onReport }: {
+  view: HelpersView;
+  reports: Readonly<Record<string, HelperReportView>>;
+  onReport: (id: string) => void;
+}): ReactNode {
+  return (
+    <div className="helpers-strip helpers-strip--panel">
+      {(view.count !== null || view.notes.length > 0) && (
+        <p className="helpers-panel-head">{[view.count, ...view.notes].filter((x) => x !== null).join(' · ')}</p>
+      )}
+      <ol className="helpers-rows">
+        <HelpersList view={view} reports={reports} onReport={onReport} />
+      </ol>
+    </div>
   );
 }
