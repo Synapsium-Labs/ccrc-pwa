@@ -5310,6 +5310,9 @@ F4 and F5; review 2988 (H4) F6, F7 and F8. Spec `docs/superpowers/specs/2026-11-
 - `pwa/src/session/chat.css`: below the desk a path takes a line of its own, after the row's short words; its pieces are inline
   boxes; a raw worktree's two chips are one box; the strips give way before the composer (they shrink, the Helpers strip never
   below its head, and scroll on a screen too short for that).
+- `pwa/src/skins/refined/refined.css` (review 3184 F1, fix round 1): while Refined's phone rail wraps (the details open with
+  worktrees drawn), its items and chips are capped at the row's width and their text wraps inside, so nothing is wider than
+  the rail.
 - `pwa/src/session/SessionWorktrees.tsx`, `SessionDetails.tsx` (L4, C3): the chip box and the shared count; the details' drawn
   answer spelled once.
 - `pwa/src/stores/session.ts` (L4, C3): `resetsHelpers`, the one decision of a helper reset, read by the reducer and the asks.
@@ -5374,6 +5377,14 @@ F8 the foot row's halves.
   - `instrument-phone-goals-equal` (review 2995 F1): where the Goals door stands on Back's row (Instrument below 900) the
     in-programme header equals the one out of it within 0.5 px, for every session; main's frozen Details door bounds only
     Refined's phone rail.
+  - `open-rail-holds-no-overflow` (review 3184 F1, fix round 1): this amends D-8782's wrapping rail (review 2864 F6). On
+    Refined's phone, while the details are open with worktrees drawn, the rail wraps, and now its items and chips take the
+    shared caps back (the row's width, the text wrapping inside, the coordination line wrapping), as at a desk. Before, a chip
+    wider than the closed rail scrolled it to reach the door, and the open rail kept that scroll: the door, every fact and
+    every worktree path started 80 px left of the screen at 390 (measured, a real tap, both themes, and at 360). With nothing
+    wider than the rail the scroll is spent, and every line starts on the screen; the door keeps its focus. The closed rail is
+    the sideways row it was. It costs 20 px of open header at 360 and 390 for a session whose model and branch chips are
+    wider than the rail (measured from the pictures), and nothing where they fit.
 
 Spec corrections for the coordinator to fold: §10 (line 2's separators may start a line; the state group breaks only between
 its words) and Table 5's caption; §4.4 (the presence line's count, one rule); Task C51's section above (its "24 px … 25 px"
@@ -5390,8 +5401,9 @@ in `docs/superpowers/programs/desktop-polish/hf2.md`.
 
 **Looked at in the real app.** The production build in a real Chrome: the whole session panel (`session-panel-words`) and the
 Archive section with the fleet foot (`archive-unowned`), in Refined and Instrument, dark and light, at 360, 390, 1280, 1600 and
-1920 px, before (`origin/main`) and after. The pairs are under `docs/design/2026-11-19-session-helpers-design/hf2/`, and the
-matrix is in the note and the PR.
+1920 px, before (`origin/main`) and after. Fix round 1 (review 3184) adds the header after a real tap on the details door
+(`delegation-rows`), in both skins and themes at 360, 390 and 1280, before (the first tip, `68d70aef12`) and after. The pairs
+are under `docs/design/2026-11-19-session-helpers-design/hf2/`, and the matrix is in the note and the PR.
 
 **Acceptance.** The new cases pass, every suite that imports a changed module passes, every mutant of a new decision branch goes
 red or its disposition is recorded in the note, `tsc` passes for `pwa` and `ui`, the PWA builds, and the PR body carries the

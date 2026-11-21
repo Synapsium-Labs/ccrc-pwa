@@ -81,7 +81,8 @@ code rather than kept unpinned; `presence-counts-unmeasured-word` and `path-wrap
 mutant was first written on the wrong element (`.chat-coord-goals`, which Instrument's Back-row key is not) and changed
 nothing (the sixth survivor); it is written on the key (`.keycap--goals`) below.
 
-**At the tip: 33 mutants, 31 killed, 2 equivalent** (pass 1's 34, less the removed clause's).
+**At the first tip: 33 mutants, 31 killed, 2 equivalent** (pass 1's 34, less the removed clause's). Fix round 1 (review 3184)
+adds two, both killed by hand at its tip (the last two rows): **35 mutants, 33 killed, 2 equivalent**.
 
 | Module | Mutant | What it does | Killed by |
 |---|---|---|---|
@@ -118,6 +119,8 @@ nothing (the sixth survivor); it is written on the key (`.keycap--goals`) below.
 | `FleetScreen.tsx` | `selects-the-frame` | `main`'s selector: the whole frame, the count computed in render | `fleet-screen-frame` |
 | | `halves-not-boxes` | the halves as plain spans | `archive-unowned` (the foot row breaks inside a half) |
 | | `halves-plain-separator` | a plain space before the halves' `·` | `fleet-screen` "both" |
+| `refined.css` (fix round 1) | `open-rail-chips-uncapped` | the open rail's items wrap but its chips keep `max-width: none` | `delegation-rows`' header case after a real tap: Refined 360 and 390, both themes, 4 red ("its path starts on the screen") |
+| `chat.css` (fix round 1) | `path-own-line-everywhere` | the own-line rule at every width (review 3184 F2's mutant) | `session-panel-words` at 1280, 1600 and 1920, 12 red ("shares its row's line at a desk"); `delegation-rows`' section at 1280 and 1920, 8 red ("some separator is measured mid-line"). At the first tip both files let it live (review 3184, measured there) |
 
 ## 5. Runs
 
@@ -129,11 +132,11 @@ named below, and no other file needed a second run.
 |---|---|---|---|
 | PWA jsdom, every test that imports or reads a changed module or stylesheet (`delegationWords`, `WorkLine`, `SessionWorktrees`, `SessionDetails`, `sessionFacts`, `SessionMeta`, `SessionLine`, the session store, `FleetScreen`, `SessionScreen`, the header, the inspector, `@ccrc/ui`, `chat.css`, `fleet.css`), every words scan, `markup-census`, the design-system and ui-package boundary files, the theme and contrast gates | 287 | **287 green**, 8,404 cases; `fleet-screen` and `w7-presence-table` re-run alone after the memory cap killed their workers (121 and 60 green) | 8.7 to 15.1 |
 | PWA jsdom again, after the last edits to `chat.css`, `sessionFacts.ts` and the tests: every file that reads `chat.css` or the strip, and the five changed case files | 48 | **48 green**, 2,336 cases | 10.2 to 14.2 |
-| Real Chrome, every file that measures the session panel, its header or the Archive: `archive-unowned` (60), `helpers-rail` (4), `delegation-rows` (72), `session-panel-words` (22), `role-fact` (66), `session-header` (76), `lanes-row` (89), `chat-width` (46), `inspector-hide` (8), `session-timers` (17), `goals-door-height` (30), `build-behind` (12), `instrument-desk` (33), `row-fit` (133), `archive-claims-sheet` (32) | 15 | **15 green**, 700 cases. `delegation-rows` was red first in 10 cases, both from this change, fixed in its test (the commit `test(pwa): delegation-rows reads a path …`): a positive control that a path on its own line left with nothing to count, and Refined's phone rail, left scrolled sideways by the tap on the door when a chip is wider than it, on `main` too (the picture of `main` shows its controls cut at the left), so the paths are read at the rail's start. `build-behind`, `instrument-desk` and `row-fit` were killed by the memory cap with no verdict and run again alone; `helpers-rail`'s first 1600 case and one `archive-unowned` focus view each timed out at 20 s once beside the mutation run and were green alone | 8.9 to 13.7 |
+| Real Chrome, every file that measures the session panel, its header or the Archive: `archive-unowned` (60), `helpers-rail` (4), `delegation-rows` (72), `session-panel-words` (22), `role-fact` (66), `session-header` (76), `lanes-row` (89), `chat-width` (46), `inspector-hide` (8), `session-timers` (17), `goals-door-height` (30), `build-behind` (12), `instrument-desk` (33), `row-fit` (133), `archive-claims-sheet` (32) | 15 | **15 green**, 700 cases. `delegation-rows` was red first in 10 cases, both from this change, fixed in its test (the commit `test(pwa): delegation-rows reads a path …`): a positive control that a path on its own line left with nothing to count, and Refined's phone rail, left scrolled sideways by the tap on the door when a chip is wider than it, on `main` too (the picture of `main` shows its controls cut at the left), so the paths are read at the rail's start. (Superseded in fix round 1: that reset hid the cut path starts review 3184 F1 measured, and the case now reads them after a real tap with no reset.) `build-behind`, `instrument-desk` and `row-fit` were killed by the memory cap with no verdict and run again alone; `helpers-rail`'s first 1600 case and one `archive-unowned` focus view each timed out at 20 s once beside the mutation run and were green alone | 8.9 to 13.7 |
 | Compile and build | `pwa`'s production build (its own `tsc --noEmit` over the app and its tests, then `vite build`); `ui`'s `tsc --noEmit` | both exit 0; a standalone `pwa` `tsc` was killed by the memory cap, so the build's is the check | 11.0 |
 | Server guards | the 43 `single-definition` files, `growth-caps`, `growth-check` (`GROWTH_CHECK=1`), `topology-clean`, `deviation-refs` (after `git fetch origin main`), `dtbd`, `ci-ledger-guard` | **49 green**, 1,812 cases (`growth-check` measured its rows, 97; `deviation-refs` 34 after the fetch); and the ledger guard as CI runs it, against `origin/main`: passed by the head commit's `Ledger-Edit` trailer, layout ok | 9.3 to 14.8 |
 
-### Fix round 1: CI's fast run at the first tip
+### The CI fix: the fast run at the first tip
 
 The pull request's fast run at the first tip was red in one server test (**measured**): `delegation-wave3.integration`'s closed
 scope census, which allows the words module's name only in a listed set of PWA files, found `WorkLine.tsx` importing
@@ -149,6 +152,47 @@ census's list is unchanged. Re-run through `ccrc test`, one file per process (**
 | `pwa`'s production build | exit 0 on the second run; the first was killed by the slice's memory cap | 10.6 |
 | The mutant `path-unbroken`, at `lib/format.ts` | killed by W5-U10 | 10.6 |
 
+### Fix round 1 (review 3184): the details door opened by a real tap
+
+**F1** (**measured**, a real Chrome over the production build). In Refined below 900 the header's chips are one sideways
+row. This fixture's model and branch chips are wider than it, so the closed door sits past the rail's edge and a tap reaches
+it by scrolling the rail (80 px at 390: scroll width 450, client width 370). Opening the details draws the worktrees, and the
+rail wraps (D-8782), so every line starts at the rail's left again, while the long chips keep it wider than its window and the
+80 px scroll stays: the door sat at x = -72 (still focused), and every fact and worktree path started left of the screen. The
+first tip's `delegation-rows` case read the paths only after setting the rail's `scrollLeft` back to 0, which hid this. The
+fix (`open-rail-holds-no-overflow`, `refined.css`): while the rail wraps, its items and chips take the shared caps back, so
+nothing is wider than it and the scroll is spent. The case now opens the door with a tap on a phone and a click at a desk,
+at 360, 390 and 1280, sets nothing after it, and asks: the paths and the section inside the rail's window; in Refined below
+900 a positive control (the closed door sat past the rail's edge), the open rail no wider than its window, the door inside
+it and focused, and, closed again by a tap, the rail a sideways row that a wheel scrolls.
+
+| Case | At the first tip's code (`68d70aef12`, the new test) | At fix round 1 |
+|---|---|---|
+| `delegation-rows`, the H3 header case (12 views) | **red** in 4: Refined 360 and 390, both themes, "its path starts on the screen" | **green**, 12 of 12; the file 76 of 76 |
+| the same, with the chips' caps dropped (`open-rail-chips-uncapped`) | — | **red** in the same 4 |
+
+What it costs (**measured** from the pictures): the open header is 20 px taller at 360 and 390, both themes, for this fixture
+(the model and branch chips wrap onto a second line); the panel fixture's chips fit the rail and its pictures show no change.
+
+**F2** (**measured**). The separator control in `delegation-rows` is per width again: at 1280 and 1920 some separator must be
+mid-line (main's control), below 900 a separator at a line's start counts too. `session-panel-words` asks that a desk path
+shares its row's line. The mutant `path-own-line-everywhere` (§4) goes red in both; both are green at fix round 1.
+
+**F3**, carried (**record**, measured by review 3184's lens 1, not here): a smaller code fix than §3 says exists. Putting each
+separator inside the inline block before it never started a line at 0 of 361 widths scanned (60 to 420 px); built for line 2's
+facts (about three lines in `Line2`), `helpers-rail` passes 5 of 5 with the dropped "no separator starts a line" check
+restored at 1600 and 1920, and two pins go red (one in `helpers-section`, one in `workflow-strip`); separators inside a state
+group stay exposed (inferred). No separator code changes in this round.
+
+Runs at fix round 1, one file per process through `ccrc test`, `--maxWorkers=2` (**measured**):
+
+| Run | Result | Load |
+|---|---|---|
+| Real Chrome: `delegation-rows` (76), `session-panel-words` (22), and every file that draws Refined's or Instrument's session header or opens the details: `archive-claims-sheet` (32), `instrument-bar` (52), `one-waiting-page` (12), `phone-bar` (34), `goals-door-height` (30), `refined-bar` (20), `refined-phone` (53), `docs-compact-head` (109), `inspector-hide` (8), `model-sheet-labels` (16), `role-fact` (66), `session-header` (76), `update-indicator` (36), `skin-default` (8), `lanes-row` (89), `row-fit` (133), `chat-width` (46), `helpers-rail` (4); `row-fit` and `helpers-rail` were killed by the memory cap with no verdict and run again alone | all green, 20 files, 922 cases | 5.9 to 18.6 |
+| PWA jsdom, every file that reads the stylesheets as text or draws the session header or the worktrees: `css-vars`, `hover-states`, `layer-order`, `focus-ring`, `ink-tiers`, `motion-reduced`, `shape-census`, `role-census`, `control-census`, `markup-census`, `contrast`, `skin-identity`, `skin-boundary`, `skin-axis-census`, `refined-session`, `refined-shell`, `header`, `fleet-css`, `shell-css`, `design-system-boundary`, `ui-package-boundary`, `theme-bridge`, `theme-catalogue`, `hook-class-collision`, `session-panel-sheds`, `session-worktrees`, `session-screen-worktrees`, `session-details-worktrees`, `inspector`, `skin-switch`, `wheel-chain`, `chat-width`, `base-defaults` | 33 green, 1,066 cases | 6.3 to 11.3 |
+| Server: `growth-caps`, `growth-check` (`GROWTH_CHECK=1`) | green, 12 and 97 | 17.9 to 18.1 |
+| `pwa`'s production build (its `tsc --noEmit` over the app, its tests and `browser/`, then `vite build`) | exit 0 on the fifth run; the first four were killed by the slice's memory cap | 9.1 |
+
 ## 6. The matrix
 
 ### The session panel (`session-panel-words`, every door open)
@@ -159,6 +203,19 @@ census's list is unchanged. Re-run through `ccrc test`, one file per process (**
 | Refined, light | [F3, F5 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-refined-light-360.png) | [F3, F5 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-refined-light-390.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-refined-light-1280.png) | [F4 / F4 (recorded)](../../../design/2026-11-19-session-helpers-design/hf2/panel-refined-light-1600.png) | [F4 / F4 (recorded)](../../../design/2026-11-19-session-helpers-design/hf2/panel-refined-light-1920.png) |
 | Instrument, dark | [F3, F5 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-phosphor-360.png) | [F3, F5 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-phosphor-390.png) | [F6, F7 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-phosphor-1280.png) | [F7 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-phosphor-1600.png) | [F7 (1 px) / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-phosphor-1920.png) |
 | Instrument, light | [F3, F5 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-light-360.png) | [F3, F5 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-light-390.png) | [F6, F7 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-light-1280.png) | [F7 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-light-1600.png) | [F7 (1 px) / ✓](../../../design/2026-11-19-session-helpers-design/hf2/panel-instrument-light-1920.png) |
+
+### The header after a real tap on the details door (`delegation-rows`, fix round 1)
+
+| Skin, theme | 360 | 390 | 1280 |
+|---|---|---|---|
+| Refined, dark | [F1 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-refined-phosphor-360.png) | [F1 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-refined-phosphor-390.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-refined-phosphor-1280.png) |
+| Refined, light | [F1 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-refined-light-360.png) | [F1 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-refined-light-390.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-refined-light-1280.png) |
+| Instrument, dark | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-instrument-phosphor-360.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-instrument-phosphor-390.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-instrument-phosphor-1280.png) |
+| Instrument, light | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-instrument-light-360.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-instrument-light-390.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/tap-instrument-light-1280.png) |
+
+The one interactive state of this matrix: each picture is taken after the tap (a click at 1280) and before any assertion, with
+nothing set in between. Before is the first tip's code (`68d70aef12`), not `origin/main`; F1 is review 3184's. 1600 and 1920
+are not taken (**unmeasured**): there the rail wraps and does not scroll sideways (`refined.css`, **inferred** from the rule).
 
 ### The Archive section (`archive-unowned`)
 
@@ -176,15 +233,22 @@ census's list is unchanged. Re-run through `ccrc test`, one file per process (**
 | Refined | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-refined-360.png) | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-refined-390.png) | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-refined-1280.png) | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-refined-1600.png) | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-refined-1920.png) |
 | Instrument | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-instrument-360.png) | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-instrument-390.png) | [F8 / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-instrument-1280.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-instrument-1600.png) | [✓ / ✓](../../../design/2026-11-19-session-helpers-design/hf2/foot-instrument-1920.png) |
 
-Each cell links one picture, `origin/main` on the left and this branch on the right, taken by the file named with `CCRC_SHOTS`
-set, over the same fixture, before its assertions; the 1280, 1600 and 1920 pairs are halved in size. A cell reads "before /
-after": ✓, or the finding the side shows (review 3123's F3 to F7, review 2988's F8).
+Each cell links one picture, `origin/main` on the left (the tap table: the first tip) and this branch on the right, taken by
+the file named with `CCRC_SHOTS` set, over the same fixture, before its assertions; the 1280, 1600 and 1920 pairs are halved in
+size. A cell reads "before / after": ✓, or the finding the side shows (review 3123's F3 to F7, review 2988's F8, review 3184's
+F1). Which evidence is which: the panel's after side and the tap table are **newly measured** at fix round 1; the Archive and
+foot pictures are **reused** from the first tip (fix round 1 changes no rule they draw, and `archive-unowned` is not re-run);
+the panel's before side is `origin/main`'s, as first taken. The panel pictures are a static state: the doors are opened by
+clicks, and the panel fixture's chips fit Refined's phone rail, so its rail is never scrolled; the scrolled state is the tap
+table's. The Refined 390 F5 cell rests on the case's red, not the picture: the viewport picture shows the composer whole.
 
 What each ✓ stands for, and how it was taken:
 
 - **No horizontal page scroll, no page error, each moved readout once, 44 px targets under coarse emulation (the details door,
   the Helpers head), the path drawn whole and starting on the screen**: the files' own assertions, green on this branch in all
   20 panel views and all 20 Archive views (**measured**); `origin/main` passes the same checks except the ones this task added.
+  At the first tip "starting on the screen" held in `delegation-rows`' header case only after the case put Refined's rail back
+  to its start; since fix round 1 it holds after a real tap with nothing set (the tap table).
 - **This task's claims**: below 900 px each path on a line of its own, the row's full width, after the short words; every path
   broken only after a `/` where it can; the two chips side by side; the composer and its key hints inside the pane and the
   window; the foot row broken between its halves (**measured**, the assertions of §1, green on this branch, red at `main` as
@@ -194,7 +258,7 @@ What each ✓ stands for, and how it was taken:
   the panel at Refined 360 and Instrument 1280 (**measured** by looking; the wide pairs are halved, so their smallest words
   are read by position rather than letter by letter).
 
-Seen in the pictures and left as they are (**measured** by looking): at 390 px the after pictures show the Helpers list
+Seen in the pictures and left as they are (**measured** by looking): at 360 and 390 px the after pictures show the Helpers list
 scrolled to its end, its first row's title under the head (the case opens the finished fold, at the list's foot, and the strip
 is shorter now that the strips give way; **inferred** as the click's scroll, not a default state); the Archive's own paths
 break at hyphens at 360 and 390, before and after (its rows are H4's, not the session panel's worktree rows F3 named); in
