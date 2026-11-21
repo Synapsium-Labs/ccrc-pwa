@@ -237,7 +237,8 @@ export function ownerItemInput(project: string, live: readonly string[]): RaiseI
 
 /** D-8808 (review 3048 F5): the item for a team key two connected Linear workspaces hold, whose holding projects name no workspace,
  *  so its inbound issues wait with no owner. The remedy is a setting, the project row's Workspace, so the item takes no act; it
- *  settles itself once the issues route (`SHARED_KEY_SETTLED_NOTE`). The team key and the project names are shape-checked. */
+ *  settles itself once no waiting issue of the key is team-ambiguous or unmeasured (`SHARED_KEY_SETTLED_NOTE`). The team key and the
+ *  project names are shape-checked. */
 export function sharedKeyItemInput(teamKey: string, projects: readonly string[]): RaiseItemInput {
   const holders = projects.length === 1 ? `The project ${projects[0]} holds the key and names no workspace` : `The projects ${projects.join(', ')} hold the key and name no workspace`;
   return {

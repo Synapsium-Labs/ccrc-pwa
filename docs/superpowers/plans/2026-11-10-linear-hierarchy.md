@@ -510,7 +510,12 @@ number from `POST /api/ledger/deviations`.
   stays unmeasured it spends one governed read per such row a beat and makes no progress: accepted as the lane's retry
   pattern (review 3073 F7). Waiting work stays retryable; `plan take` refuses `unreachable` before effects, for Close as well
   as Return, when the handed row's owner cannot be measured (F9), and it reads the store even for a programme that names no
-  project, so a readable store is never left unread there (F10). Drift Hand refuses `unreachable`
+  project, so a readable store is never left unread there (F10).
+  The doors' two other `unreachable` arms are workspace measurements (review 3121 F1, recorded here at review 3144 F5): a take
+  into an epic, and a triage hand to the caller's own programme, refuse when the workspace of the epic cannot be measured
+  (`destinationRefusal`), and a take into an epic or a close of an issue with no handed row refuses when the programme home's
+  workspace cannot be measured (`upkeepLookupOf`), before the issue is looked up: either the Linear store could not be read,
+  where a retry helps, or no slot routes the home's team, where the project's linking needs one. Drift Hand refuses `unreachable`
   when it needs the team owner and cannot measure it. The hierarchy card says both the owner and the migration state are not measured whenever the row's team owner cannot be
   measured (an unpinned row's routing unread, with no listing at all as well, or a pinned row outranked by such a row), and
   offers no Reshape then (F1). A pinned row whose own workspace cannot be measured (its slot unreadable or its listing
