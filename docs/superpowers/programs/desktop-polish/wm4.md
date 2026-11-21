@@ -2,7 +2,8 @@
 
 The note for the programme work map's Task WM4, written by its worker for the coordinator to fold into the ledger. Each
 claim says whether it was **measured** (read on the tree, in a browser or in a test run by this task) or **inferred**. It
-describes the tip after fix round 1 (review 2922); where the first push differed, it says so.
+describes the tip after fix round 1 (review 2922) and the head-icon amendment that came with it; where the first push differed, it says so. Review 2956's carried
+findings, done by Task WM7, are in §11 (they moved the three-column step from 40rem to 43rem, and corrected the places below that say otherwise).
 
 ## 1. What was built
 
@@ -13,8 +14,8 @@ describes the tip after fix round 1 (review 2922); where the first push differed
 | The page's state: reads on arrival and when the key moves, drops an answer, success or failure, that arrives after the key moved again | `pwa/src/ledgers/useWorkRead.ts` (L4) | Measured: the two late-answer cases and their mutants |
 | The card mounted in the left column under Goals, in a `.pv-card`; Waiting on you and Runs in a new right column `.pv-side`, Waiting on you first | `pwa/src/ledgers/ProgrammeScreen.tsx`, `ledgers.css` | Measured: jsdom order cases and the real-Chrome file |
 | The card's third answer arm `{ readFailed, last? }`, `WorkCardAnswer` and `UNREADABLE_WORDS` in the words module | `WorkCard.tsx`, `workMapWords.ts` | Measured |
-| The card's layout steps: two columns from a 26rem card (status beside the title, the facts under it), three from 40rem | `ledgers.css` | Measured in Chrome (§6) |
-| The jsdom cases: 32 new in `programme-screen.test.tsx` (64 to 96), 12 new in `work-card.test.tsx` (60 to 72) | `pwa/test/` | Measured: the counts at the tip |
+| The card's layout steps: two columns from a 26rem card (status beside the title, the facts under it), three from 40rem (43rem since WM7, §11) | `ledgers.css` | Measured in Chrome (§6) |
+| The jsdom cases: 34 new in `programme-screen.test.tsx` (64 to 98: §3 counts 98, and review 2956 M2 found this cell saying 96), 12 new in `work-card.test.tsx` (60 to 72) | `pwa/test/` | Measured: the counts at the tip |
 | The real-Chrome file for the card, 16 cases: the width table at 360, 390, 800, 1280, 1470 and 1920 in both skins and both themes, an unreadable re-read, ordinary titles | `pwa/browser/programme-work-page.browser.test.ts` | Measured |
 
 ## 2. Departures, named by slug (the plan's D-8823 entry carries the same list)
@@ -72,7 +73,7 @@ All in `pwa/test/programme-screen.test.tsx` (jsdom) unless named. The plan's Ste
 | `the Work card sits below Goals` | the card is drawn above Goals, in the other column, or not at all (mutant P19) |
 | `Waiting on you heads the right column` | Runs is drawn first (P18), or the card goes in the right column (P19) |
 | `a run moving re-reads the plan` (and its item twin) | the key ignores `stuck` (P1), another programme's rows (P2, P3), an item's state (P4) or a cleared item (A5); the read does not follow the key (P13) |
-| `an answer with no work draws no card` | a card is drawn for an absent `work` (P7) |
+| `an answer with no work draws no card` | an absent `work` keeps the last view, so a card is drawn for it (P7; the first push's rule, which review 2922 F4 reversed: the held view is dropped for good, §4's F4 row) |
 | `a failed read keeps the last view` | the failed read drops the view (P5), or restamps the time (P6); the word is lost (P14) |
 | `a failed first read says the work could not be read` | the refusal's word or the sentence changes (P14, P11) |
 
@@ -160,7 +161,7 @@ icon's `aria-label`: an `img` with no label takes its name from its `title`, so 
 | H3 | the icon's `title` is "" | the icon case |
 | H4 | the icon is drawn after the title | the icon case |
 | H5 | the icon is drawn outside the title's box | the icon case |
-| C1 | the icon's colour is a faint ink (`--ink-disabled`) | six contrast cases |
+| C1 | the icon's colour is a faint ink (`--ink-disabled`) | five contrast cases (measured by review 2956 M5; this note first said six) |
 | C2 | the icon's rule is renamed (`.pv-icon`), so no row is measured for `.pv-ico` | the icon's per-hue case |
 
 **The browser file, 4 mutants for the layout pins, all red** (`programme-work-page.browser.test.ts`): the first fix's three tracks from 26rem with the
@@ -213,7 +214,7 @@ the slice's memory cap killed several runs; each killed file was re-run alone, a
 
 | Run | Result |
 |---|---|
-| pwa `programme-screen` against the old page (red), then at the tip | 17 of 89 red; then 90 of 90 |
+| pwa `programme-screen` against the old page (red), then at the tip | 18 of 90 red; then 90 of 90 (this note said 17 of 89, one run earlier than the last case added; review 2956 M1) |
 | pwa `work-card` | 72 of 72 |
 | pwa mutants | 14 on the card, 20 on the page: 33 red at the first run, one survivor pinned (§4) |
 | pwa: the importers of `ProgrammeScreen` (5 files), 15 theme, skin, token, focus, hover, motion, tap-target and layer scanners, 23 words, census and css scanners | 537, 360 and 629 cases, all passed; `control-census` could not load before `npm ci` in `server/` |
@@ -239,16 +240,17 @@ Measured, in Chrome over the production build, from the new file (16 cases) with
   epic and phase title, and the folded groups opened as well as closed. Under 900: one column, Goals, Work, Waiting on you, Runs. From 900: Work under Goals at
   the same left edge, Waiting on you level with Goals' top and Runs under it.
 - **A ticket's row follows the card's own width** (`card-width-steps`): one column under 26rem (a phone), two from 26rem (a 451px card at a 1280 window and
-  532px at 1470: a 6.75rem status track beside the title, the facts under it), three from 40rem (the 800 window, a card as wide as the page, and 1920: a
-  7.5rem status track, the title, a 14rem facts column). The title's room (the `.wk-what` of an ordinary ticket) is at least its 360 room at every sampled width,
+  532px at 1470: a 6.75rem status track beside the title, the facts under it), three from 40rem (the 800 window, a card as wide as the page: a 7.5rem status track, the title, a 14rem facts
+  column; **not 1920, whose card is about 550px and keeps two columns: §11 F3 corrects this note, which said 1920**; and WM7 moved the step to 43rem). The title's room (the `.wk-what` of an ordinary ticket) is at least its 360 room at every sampled width,
   and an ordinary epic tag stays on one line at 360, 800 and 1280, so it never breaks inside a word (review 2922 F2).
 - **What the browser found that the jsdom could not:** the card sat flush with the column edge (`work-card-in-pv-card`); the left column is narrower than the
   plan's table assumed (one 34rem step stacked a row at 1280 and 1470); and the first fix for that squeezed the title (about 146px at 1280, review 2922 F2),
   which the facts-under-the-title layout cures.
 - **The head** (the amendment): no "Programme" word; the programme icon, in the programme's hue, stands before the title on its line, as tall as its text, and
-  the head is no taller than before. Seen in the pictures below at 360, 800 and 1280, light and dark.
+  the head is no taller than before. Seen in the pictures below at 360 and 1280, light and dark, and at 800 in light only (review 2956 M4: the 800 dark pictures
+  were viewed, and not committed).
 - **The finished phase's heading**, which no one had seen in a browser (review 2891 F2): it reads "▸ Phase 1 · Foundations finished 2026-11-11" in the same size as
-  an open phase's, with its chevron, at 360, 800 and 1280, light and dark.
+  an open phase's, with its chevron, at 360, 800 and 1280, light and dark (the 800 dark view was seen, not committed: review 2956 M4).
 - **An unreadable re-read** (the fleet's runs frame moves the run, the page reads again, the server's answer is `{ unreadable }`): the alert reads "The work
   could not be read: the runs could not be read" over the last view, which stays drawn, at 360 and 1280.
 - Not done: a touch device, a screen reader, a real programme's long plan on the page (§9 does the numbers, not the look), and pictures at 390, 1470 and 1920 or
@@ -342,3 +344,31 @@ live console itself was not reached, so **what it shows, signed in, is the opera
 - Every commit that changes the plan, and the head, carries `Ledger-Edit: D-8823` in its last paragraph, with the `Co-Authored-By` trailer.
 - One overwrite, caught at once, at the first push: the first draft of the browser file was written to the path the plan names, which already held
   D-8075's file. It was restored from `HEAD` (`git show`) before anything else read it, and the new file has its own name.
+
+## 11. Review 2956's carried findings (Task WM7, D-8845)
+
+Review 2956 (round 2 of three) found no blocker; WM7 took its findings F1 to F5 and the records M1 to M5. Each line says what was measured.
+
+- **F3, the claim about 1920 (measured by review 2956's lens 3 in both skins and both themes, and from the CSS).** §6's "three from 40rem (the 800 window,
+  a card as wide as the page, and 1920 …)" was wrong about 1920. At a 1920 window the page root is capped at 72rem and the left column's card measures
+  about 550px, under the step, so the row there has **two columns, the facts under the title** (the title track measured 413px). A three-column row
+  appears only in a one-column window, which is a window under 900px, and from the step on: since WM7 that is a window of about 730 to 900px, a card of
+  688px up to the page's width. **No desktop width shows the one-row layout.** The browser file's own comment ("no wider window reaches") and
+  `assertRowLayout` said so; the file's header comment listed the widths without 800 and said rows have three columns "from 1280", and is corrected.
+- **F2, a title's room just past the step (measured: lens 2 in real Chrome, then WM7's arithmetic and runs).** The title track at a 640px card is the
+  card's width less 381px (21 of chrome, 16 of gaps, the 120px status track, the 224px facts track): 259px, against the phone's 297px. Windows 690 to
+  719px put the card there (the title track measured 267 at 690, 282 at 705, 292 at 715; 297 at 360). WM7 moved the three-column step to **43rem**,
+  688px, where the title keeps 307px, and the two-column row below it keeps over 500px. The step is pinned in the jsdom file (the regex, and the room
+  at the step as arithmetic) and in the real-Chrome file at windows of 690, 700, 715 and 719px, where a title keeps at least its phone room.
+- **F5, the facts back in the third track (measured by WM7's mutants).** `work-card.test.tsx` pins `grid-column: auto` on `.wk-facts` in the
+  three-column step; the real-Chrome file asserts the facts' left edge lies right of the title's right edge in a three-track row, and below it in a
+  two-track row. The survivor review 2956 named (that declaration deleted) is red now.
+- **F4, the sample data and the pictures.** t-5 ("Stuck on a review") carries `epic: EPIC_B`, as Epic B lists it, so a chip's count and a row's tag agree.
+  The nine committed pictures were re-taken from the new data, with the step at 43rem, and viewed.
+- **F1, the work read's shape check.** `isViewShape` now covers every field the card reads: `end`, `beforePlan` and `runs` are null or a record (`runs`
+  with its `items` a list), beside the six lists and `counts`. The comment says what it checks and no more: the inside of a row is not checked.
+- **M1 to M5, corrected where they stand** (above): the first-push red count (§5), the case count (§1), P7's two descriptions (§3), the mutant C1's
+  five cases (§4), the pictures' light and dark (§6), and the note's tip. M3 (D-8823's "edits under another's claim" omits the contrast gate, claim
+  5825, and the coordinator-badge test, claim 5976, which §10 records) and M1's twin in the plan entry are named in the plan's Task WM7 section, since
+  that entry is the plan's and is not edited here. M6 to M9 are left: M6 is a one-line assertion WM7 added anyway (the 800 sample reaches the step); M7
+  and M8 are test-strength and duplication notes with no ruling; M9 waits for its ruling.

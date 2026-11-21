@@ -25,6 +25,11 @@ export type WorkCardAnswer =
   | { unreadable: WorkUnreadable; last?: WorkMapView | null }
   | { readFailed: string; last?: WorkMapView | null };
 
+/** A server's word looked up in a table of this build's words. A word the table does not hold (a newer server's) reads as itself,
+ *  never as "undefined" (review 2873 F15); `hasOwn`, so a word such as "constructor" is not found on the prototype. One owner of
+ *  the fallback: every lookup of a word the server sent goes through it. */
+const wordIn = (table: Readonly<Record<string, string>>, word: string): string => (Object.hasOwn(table, word) ? table[word]! : word);
+
 /** A ticket's status in the operator's words, one per `WorkStatus` and spelt once (spec Table 6). `done-unverified` is the
  *  front of "marked done, but …": the row's facts carry the reason that finishes the sentence. */
 export const STATUS_WORD: Readonly<Record<WorkStatus, string>> = {
@@ -44,7 +49,7 @@ export const STATUS_WORD: Readonly<Record<WorkStatus, string>> = {
   'not-started': 'not started',
   failed: 'failed',
 };
-export const statusWord = (status: WorkStatus): string => STATUS_WORD[status];
+export const statusWord = (status: WorkStatus): string => wordIn(STATUS_WORD, status);
 
 /** An outstanding group's words in the outstanding line (spec §5 item 1). Keyed by the counted groups less `done`, so a group
  *  the server starts counting is a compile error until it has a word; the line writes them in `WORK_COUNTED_GROUPS` order
@@ -157,7 +162,7 @@ export const carriedWords = {
   status: 'carried',
   to: (n: number): string => `carried to phase ${n}`,
   /** A carried-out row keeps its status now beside the carry (spec Table 6a: "carried to phase N, with its status now"). */
-  now: (status: WorkStatus): string => `now ${STATUS_WORD[status]}`,
+  now: (status: WorkStatus): string => `now ${statusWord(status)}`,
   from: (f: { key: string; number: number | null }): string => (f.number === null ? `from phase ${f.key}, dropped` : `from phase ${f.number}`),
 } as const;
 
@@ -190,7 +195,7 @@ const UNREADABLE_WHY: Readonly<Record<WorkUnreadable, string>> = {
 export const UNREADABLE_WORDS: readonly WorkUnreadable[] = Object.keys(UNREADABLE_WHY) as WorkUnreadable[];
 /** The note over a card whose read failed; the one sentence, spelt once, for the server's `unreadable` and the page's failed read. */
 const couldNotRead = (why: string): string => `The work could not be read: ${why}`;
-export const unreadableNote = (why: WorkUnreadable): string => couldNotRead(UNREADABLE_WHY[why]);
+export const unreadableNote = (why: WorkUnreadable): string => couldNotRead(wordIn(UNREADABLE_WHY, why));
 /** The page's failed read, in the refusal's own word ("The work could not be read: not-found"). */
 export const readFailedNote = (word: string): string => couldNotRead(word);
 /** The card's section name, and the strip's. */
@@ -223,6 +228,6 @@ export const CHECKPOINT_KIND_WORD: Readonly<Record<CheckpointKind, string>> = {
 export function checkpointFacts(cp: { kind: CheckpointKind; state: string; metAt: number | null; evidence: CheckpointEvidence | null }): string {
   const evidence = cp.evidence === null ? null : 'pr' in cp.evidence ? `PR #${cp.evidence.pr}` : 'itemId' in cp.evidence ? itemLinkWord(cp.evidence.itemId) : cp.evidence.path;
   const state = cp.state === 'met' ? (cp.metAt === null ? 'met' : `met ${releaseDate(cp.metAt)}`) : cp.state;
-  return [CHECKPOINT_KIND_WORD[cp.kind], state, ...(evidence === null ? [] : [evidence])].join(' · ');
+  return [wordIn(CHECKPOINT_KIND_WORD, cp.kind), state, ...(evidence === null ? [] : [evidence])].join(' · ');
 }
 export const checkpointsLabel = (epicTitle: string): string => `Checkpoints of ${epicTitle}`;

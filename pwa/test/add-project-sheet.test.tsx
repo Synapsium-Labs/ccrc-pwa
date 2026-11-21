@@ -405,6 +405,21 @@ describe('Linear team key and the template PR (D-8147)', () => {
     expect(await screen.findByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeInTheDocument();
   });
 
+  it('a second opening draws no hierarchy controls while its read is pending (D-8186 A3)', async () => {
+    const answers: HierarchyAnswer = { ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] };
+    const read = vi.spyOn(api, 'hierarchy').mockResolvedValueOnce(answers);
+    const p = props();
+    const r = mount(p);
+    expect(await screen.findByLabelText(LINKING_ADD_TEXT.owner)).toBeInTheDocument();
+    rerenderWith(r, { ...p, open: false });
+    read.mockImplementation(() => new Promise<HierarchyAnswer>(() => undefined));
+    rerenderWith(r, { ...p, open: true });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await screen.findByLabelText(LINKING_ADD_TEXT.teamKey);
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeNull();
+  });
+
   it('coordinators that cannot be read are said, not a silently missing owner select', async () => {
     vi.spyOn(api, 'hierarchy').mockRejectedValue(new Error('offline'));
     mount(props());

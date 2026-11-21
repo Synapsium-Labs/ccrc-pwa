@@ -178,14 +178,14 @@ describe('decideClose, the close step (the work close’s hold)', () => {
   it('a non-final close holds for the next wave with the wave+1 reason', async () => {
     const c = store(); const id = working(c);
     const d = await act(c, id, { final: false });
-    expect(d.kind === 'go' ? [d.plan.fleet.verb, d.plan.released] : null).toEqual(['wsHold', false]);
+    expect(d.kind === 'go' ? [d.plan.fleet?.verb, d.plan.released] : null).toEqual(['wsHold', false]);
   });
   it('a failed close with archive archives, unless the workspace is a finished child (the release wins)', async () => {
     const c = store(); const id = working(c);
     const a = await act(c, id, { state: 'failed', archive: true, final: false });
-    expect(a.kind === 'go' ? a.plan.fleet.verb : null).toBe('wsArchive');
+    expect(a.kind === 'go' ? a.plan.fleet?.verb : null).toBe('wsArchive');
     const r = await act(c, id, { state: 'failed', archive: true, final: false, gate: async () => RECLAIM_GATE });
-    expect(r.kind === 'go' ? [r.plan.fleet.verb, r.plan.released] : null).toEqual(['wsRelease', true]);
+    expect(r.kind === 'go' ? [r.plan.fleet?.verb, r.plan.released] : null).toEqual(['wsRelease', true]);
   });
   it('a sibling hands the claim over with its own reason, never an archive or a release', async () => {
     const c = store(); const id = working(c);
@@ -194,7 +194,7 @@ describe('decideClose, the close step (the work close’s hold)', () => {
     c.markDispatched(s.id, 'demo-w', 'w', 'ws/w', false);
     for (const to of ['dispatched', 'working'] as const) c.advance(s.id, to, 'coordinator');
     const d = await act(c, id, { state: 'failed', archive: true });
-    expect(d.kind === 'go' ? [d.plan.fleet.verb, d.plan.released] : null).toEqual(['wsHold', false]);
+    expect(d.kind === 'go' ? [d.plan.fleet?.verb, d.plan.released] : null).toEqual(['wsHold', false]);
   });
   it('gate order: the sibling read, then the child gate (not called on an unreadable list)', async () => {
     const c = store(); const id = working(c); const trace: string[] = [];
@@ -228,7 +228,7 @@ describe('decideClose, the abandon step', () => {
     c.markDispatched(s.id, 'demo-w', 'w', 'ws/w', false);
     for (const to of ['dispatched', 'working'] as const) c.advance(s.id, to, 'coordinator');
     const d = await act(c, id);
-    expect(d.kind === 'go' ? [d.plan.fleet.verb, d.plan.released] : null).toEqual(['wsHold', false]);
+    expect(d.kind === 'go' ? [d.plan.fleet?.verb, d.plan.released] : null).toEqual(['wsHold', false]);
   });
   it('gate order: the sibling read, then the child gate', async () => {
     const c = store(); const id = working(c); const trace: string[] = [];
@@ -257,11 +257,14 @@ describe('decideClose, the sweep, ledger, verb, fleet and re-measure steps', () 
     expect(decideClose({ step: 'sweep', stop: null, fresh: () => ({ ok: true, run: { claimedBy: 'x' } }) as never, claimedBy: 'x' }).kind).toBe('go');
   });
   it('recheck: a stop after the act is STALE and names which fleet act ran', () => {
-    expect(decideClose({ step: 'recheck', stop, release: true }))
+    expect(decideClose({ step: 'recheck', stop, release: true, acted: true }))
       .toEqual({ kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop, fleetAct: 'released' } });
-    expect(decideClose({ step: 'recheck', stop, release: false }))
+    expect(decideClose({ step: 'recheck', stop, release: false, acted: true }))
       .toEqual({ kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop, fleetAct: 're-held' } });
-    expect(decideClose({ step: 'recheck', stop: null, release: true }).kind).toBe('go');
+    expect(decideClose({ step: 'recheck', stop: null, release: true, acted: true }).kind).toBe('go');
+    // D-6096 (review 2993 F6): no fleet act ran (an in-place run's abandon), so the stop names none, never re-held
+    expect(decideClose({ step: 'recheck', stop, release: false, acted: false }))
+      .toEqual({ kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop, fleetAct: 'none' } });
   });
   it('ledger: an unreadable ledger refuses, a read one goes with its entries', () => {
     expect(outcomeOf(decideClose({ step: 'ledger', history: { ok: false, error: 'unreadable' }, branch: 'ws/a' })))

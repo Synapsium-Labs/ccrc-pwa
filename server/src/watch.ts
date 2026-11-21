@@ -49,7 +49,7 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_SETTLE_TICKS } from './askwindow.js';
+import { APPROVAL_RULED_GRACE_MS, ASK_SETTLE_TICKS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -200,6 +200,8 @@ import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import { skillInstallPass } from './coord/skillInstallLane.js';
+import { rolloutListingOf, skillRolloutPass } from './coord/skillRolloutLane.js';
+import { isSkillRolloutMail } from './coord/skillRollout.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -617,10 +619,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
  *  resume. */
 // `ASKS_DISABLED_MARKER` is imported from its `shared/switches.ts` row as well (D-5855).
 
-/** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
- *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
- *  a sweep's slack. */
-const APPROVAL_RULED_GRACE_MS = 10_000;
+// `APPROVAL_RULED_GRACE_MS` (D-5298) lives in `askwindow.ts` since approvals PR 3: the ruling read uses it too.
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
@@ -1122,6 +1121,8 @@ export class FleetWatcher {
   /** D-8126 (A7-5, review 2807 F6): the accounts whose `skill-ensure` call is still running, kept across the self-install
    *  lane's passes so an overdue call still holds its home (`SkillInstallLaneDeps.inFlight`). */
   private readonly skillInstallInFlight = new Set<string>();
+  /** D-8126 (A9-3): the coordinator-skill revisions whose rollout mail this process has settled (`SkillRolloutDeps.settled`). */
+  private readonly skillRolloutSettled = new Set<string>();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -2576,7 +2577,7 @@ export class FleetWatcher {
     if (!this.primed || !coord) return;
     const turnReads = turnReadDeps(this.deps, this);
     await this.runLane('admissionWake', () => admissionWakePass({ coord, names, serial: this.stopDoneSerial,
-      workerFacts: (sid) => workerFactsFor(turnReads, sid), memory: this.admissionWakeMemory,
+      workerFacts: (sid) => workerFactsFor(turnReads, sid), freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
       push: (n) => this.pushOne(n, this.activeProjects), warn: (line) => console.warn(line) }));
   }
 
@@ -2908,9 +2909,17 @@ export class FleetWatcher {
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
       void this.runLane('linearDrift', () => this.deps.driftPass?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
+      // NEVER awaited, the same reasons: the LINEAR MIGRATION (D-8186): a team's map mails, its apply and its put back.
+      void this.runLane('linearMigration', () => this.deps.linearMigration?.tick())?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
       const skillCoord = this.deps.coord;
       if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
+      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing. Its own `coord` feed row is record-only, and
+      // the mail it queues is record-only in `pushNewMail` (`isSkillRolloutMail`) and never asks a wake. Only where
+      // `index.ts` set the revision (`deps.skillRolloutRevision`): a test's or a script's watcher never mails its claimants.
+      const rolloutRevision = this.deps.skillRolloutRevision;
+      if (skillCoord !== undefined && rolloutRevision !== undefined) void this.runLane('skillRollout', () => skillRolloutPass({ coord: skillCoord, revision: rolloutRevision, settled: this.skillRolloutSettled, log: (line) => console.warn(line),
+        record: (e, dedupeKey) => this.pushOne({ kind: 'coord', sessionId: e.sessionId, project: '', title: e.title, body: e.body, runId: null, recordAlways: true, recordOnly: true, dedupeKey }, this.activeProjects) }, rolloutListingOf(registryRead)))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -3420,7 +3429,7 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }

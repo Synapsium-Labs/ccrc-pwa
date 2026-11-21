@@ -7,7 +7,8 @@ import type { ReactNode } from 'react';
 import { BareRow, EmptyState, PageScaffold, Section } from '@ccrc/ui';
 import { backToFleet } from '../command/door';
 import { humanBytes } from '../lib/format';
-import { isArchivedRow, type FleetSession } from '../../../shared/api';
+import { isArchivedRow, type DelegationProjectionWire, type FleetSession } from '../../../shared/api';
+import { ArchiveUnownedWork } from '../fleet/ArchiveUnownedWork';
 import '../fleet/fleet.css';
 
 /** What the fleet has archived: how many rows, how many bytes of them were
@@ -57,8 +58,15 @@ export function archivedSizeText(sum: ArchivedSummary): string {
 }
 
 export function ArchiveScreen({
-  sessions, onOpen,
-}: { sessions: readonly FleetSession[]; onOpen: (id: string) => void }): ReactNode {
+  sessions, onOpen, delegation = null, nowMs,
+}: {
+  sessions: readonly FleetSession[]; onOpen: (id: string) => void;
+  /** The delegation frame (null: none on this connection). It feeds the one section above the archived rows, "Work no session
+   *  owns" (desktop polish H4); the section draws nothing for a frame with no unowned tree and no lease of two unlisted sessions. */
+  delegation?: DelegationProjectionWire | null;
+  /** The clock for the section's ages; now by default. */
+  nowMs?: number;
+}): ReactNode {
   const rows = sessions.filter(isArchivedRow)
     .slice().sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
   const summary = archivedSummary(sessions);
@@ -69,12 +77,14 @@ export function ArchiveScreen({
   if (count === 0) {
     return (
       <PageScaffold title="Archive" back={back}>
+        <ArchiveUnownedWork delegation={delegation} sessions={sessions} nowMs={nowMs} />
         <EmptyState data-state="ok">Nothing is archived.</EmptyState>
       </PageScaffold>
     );
   }
   return (
     <PageScaffold title="Archive" back={back}>
+      <ArchiveUnownedWork delegation={delegation} sessions={sessions} nowMs={nowMs} />
       {/* The byte figure lives in its own text node, not folded into the
           template literal above it: DEVIATION from the plan's given markup —
           `getByText('2.3 GB')` (Step 5's test) needs an element whose OWN

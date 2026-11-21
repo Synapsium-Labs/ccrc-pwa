@@ -466,6 +466,8 @@ const sectionFocusAt = (): string => {
   if (a.matches('.sess-worktrees > .sess-entries-note')) return 'section heading';
   // The details region, or in Refined (where it is `display: contents`) the rail that holds it.
   if (a.classList.contains('chat-facts') || a.classList.contains('ref-chip-rail')) return 'details region';
+  // The header's title, which takes the focus when the details row itself goes with the last worktree (desktop polish C51, review 2963 F3).
+  if (a.matches('.chat-head .chat-title')) return 'header title';
   return a.getAttribute('aria-label') ?? a.className;
 };
 const keptAnswer = (): string => JSON.stringify({ ok: true, lease: 'l-lone', generation: 2, disposition: 'retained',
@@ -544,6 +546,41 @@ describe.each(SKINS)('the focus around a worktree control\'s real sheet in %s (r
           await page.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5_000 });
           await page.waitForTimeout(300);
           expect(await page.evaluate(sectionFocusAt), variant).toBe(lands);
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+
+    // Desktop polish C51, review 2963 F3 (the reviewer's probe): a session whose details are worktrees ALONE, with no recorded
+    // entry, PR, hold or other fact. When its last worktree leaves, the details row goes with it (`detailsHaveFacts`), so the
+    // region that held the focus is gone: the header's title takes it, never `body`. Before the code decided the row, a
+    // stylesheet hid it and the focus fell to `body` in Instrument.
+    it(`at ${width} (${theme}): a session whose details are worktrees alone hands the focus to the header's title when its last worktree leaves`, async () => {
+      const noEntry = { ...DELEGATION, activities: DELEGATION.activities.filter((a: { activityId: string }) => a.activityId !== 'a-lone') };
+      const only = (leases: readonly { leaseId: string }[]): object => ({ type: 'delegation', delegation: { ...noEntry, leases } });
+      const { ctx, page, errors, send } = await openSession(skin, theme, width);
+      try {
+        const attach = page.getByRole('button', { name: `Attach to… (${FOCUS_ROW})`, exact: true });
+        // The lone session's row carries a context marker (`ctxPct: 40`), a fact of its own: with it the row would stay. Cleared, its
+        // details hold its worktrees alone.
+        send('/ws/fleet', { type: 'fleet', sessions: SESSIONS.map((x) => ((x as { id: string }).id === SESSION_ID ? { ...x, ctxPct: null } : x)) });
+        for (const key of [null, 'Tab'] as const) {
+          send('/ws/fleet', only(DELEGATION.leases));
+          await page.waitForTimeout(300);
+          const door = page.getByRole('button', { name: 'Session details' });
+          if (await door.count() > 0 && await door.getAttribute('aria-expanded') === 'false') await door.click();
+          await attach.scrollIntoViewIfNeeded();
+          await attach.click();
+          await page.waitForSelector('[role="dialog"]');
+          if (key !== null) await page.keyboard.press(key);
+          send('/ws/fleet', only(DELEGATION.leases.filter((l: { parentId: string }) => l.parentId !== 'lone-tidy-pass')));
+          await attach.waitFor({ state: 'detached' });
+          await page.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5_000 });
+          await page.waitForTimeout(300);
+          expect(await page.evaluate(sectionFocusAt), `the last worktree dropped${key === null ? '' : ', after a Tab inside the confirm'}`).toBe('header title');
+          expect(await page.locator('.chat-facts').count(), 'the details row went with it').toBe(0);
         }
         expect(errors).toEqual([]);
       } finally {

@@ -37,6 +37,7 @@ import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
 import { PROJECT_ADD_TEXT } from '../fleet/projectAddWords';
 import { openSession } from '../fleet/openers';
+import { archiveDoorWord, unownedTotal } from '../fleet/delegationWords';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
@@ -122,6 +123,7 @@ export function FleetScreen({
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
+  const delegation = useStore((s) => s.delegation);
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -167,6 +169,12 @@ export function FleetScreen({
   // Once, not three times in one interpolation: the footer's count and its
   // size must describe the same pass over the same list.
   const archived = archivedSummary(sessions);
+  // The same foot row is also the door to the Archive's "Work no session owns" (H4, review 2966 F5): the words say what is
+  // there, and the row draws when either half has something. `archiveDoorWord` is L1's; this draws what it says.
+  const archiveDoor = archiveDoorWord(
+    archived.count > 0 ? `Archived on disk · ${archived.count} · ${archivedSizeText(archived)}` : null,
+    unownedTotal(delegation, sessions),
+  );
   // Build 7's run board footer (fix, review findings 11/23): `state`, never
   // `closedAt` — `isRunClosed` is the same split `RunsScreen` itself now uses
   // (its own docstring explains why `closedAt` alone is wrong: a
@@ -341,7 +349,7 @@ export function FleetScreen({
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared
               project cards (`FleetCards`), which that table also places in its project mode. */}
           {FleetList === null ? <FleetCards selectedId={selectedId} onOpen={open} /> : <FleetList />}
-          {archived.count > 0 && (
+          {archiveDoor !== null && (
             /* Folded, never hidden — and never a place that DELETES anything:
                this routes to a list, and every removal still goes through the
                audit and the fingerprint.
@@ -361,7 +369,7 @@ export function FleetScreen({
                fold were already using for a strictly smaller set. Same set as
                `/archive`, which is where this goes. */
             <BareRow className="fleet-archived-row" onClick={() => navigate('/archive')}>
-              {`Archived on disk · ${archived.count} · ${archivedSizeText(archived)}`}
+              {archiveDoor}
             </BareRow>
           )}
         </>

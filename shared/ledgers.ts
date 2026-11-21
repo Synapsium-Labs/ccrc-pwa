@@ -11,6 +11,7 @@
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
 import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
+import { type ParkedApprovalView } from './approval-park.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
@@ -435,6 +436,9 @@ export interface WaitingView {
    *  server cannot mark an ask (an older one, or its read of the asks failed), so the console draws no ask box. */
   asks?: AskMarkRow[];
   asksCleared?: AskMarkRow[];
+  /** Approvals PR 3 (§3.3.2): the parked permission prompts, oldest first, each "with your coordinator", which the operator
+   *  may rule. OPTIONAL and ADDITIVE: absent means an older server, or a read that failed (never an empty list then). */
+  approvals?: ParkedApprovalView[];
 }
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };

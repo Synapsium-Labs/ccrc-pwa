@@ -27,6 +27,10 @@ export const LAUNCH_PROFILE_LANE = 'launch-profile';
  *  anchor, which the hook prints in its first slot at every start of a session that is not a child, a fork's one refusal
  *  line, and the anchor once after an automatic compaction that brought no start. */
 export const ANCHOR_SLOT_LANE = 'anchor-slot';
+/** The park's row (approvals plan 2026-11-18, §3.3.3 F10): a child's permission prompt whose window ends unruled is parked
+ *  (the hook prints a deny that says so, and the row reaches Waiting on you) instead of left to its pane's menu. In shadow
+ *  the request route stores `shadow` at mint and a lapse records `wouldPark`; live, it stores `live` while sign-in is armed. */
+export const APPROVAL_PARK_LANE = 'approval-park';
 /** The waiting workers' row (D-8790; waiting workers spec 2026-11-19, Part 2): the run-done sleep's
  *  case for a dispatched worker on a `working` run whose turn marker has been quiet 30 minutes. In shadow the sleep lane
  *  logs the worker it would put to sleep; live, it puts it to sleep and mails the run's coordinator once. */
@@ -39,7 +43,7 @@ export const WORKING_IDLE_SLEEP_LANE = 'working-idle-sleep';
 export const CAP_COUNTS_WORKING_LANE = 'cap-counts-working';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
 export const LANE_ARM_LANES = [
-  ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, WORKING_IDLE_SLEEP_LANE, CAP_COUNTS_WORKING_LANE,
+  ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE, WORKING_IDLE_SLEEP_LANE, CAP_COUNTS_WORKING_LANE,
 ] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
@@ -225,6 +229,17 @@ export const LANE_ARM_TEXT = {
         + 'prompt after an automatic compaction carries the anchor once.',
       gate: null,
     },
+    [APPROVAL_PARK_LANE]: {
+      legend: 'Park permission prompts',
+      shadowNote: 'A child\'s permission prompt whose coordinator does not rule it in time stays in the child\'s pane as '
+        + 'today; each one that would have been parked is recorded on its approval row.',
+      liveNote: 'A child\'s permission prompt whose coordinator does not rule it in time is parked: the child is told the '
+        + 'command did not run and to wait, the prompt is listed on Waiting on you, and a later ruling (its coordinator\'s, '
+        + 'or yours) is met by the child\'s retry of the same command.',
+      // INERT UNTIL PR 3v (the coordinator's rulings of 2026-11-19): the route hunks are in this build (item 486's
+      // packet), but the fleet box's verifier does not yet read the operator's signed ruling, so Live is refused here.
+      gate: 'This lane goes live once the fleet box\'s verifier reads a ruling signed for you; until then nothing parks.',
+    },
     [WORKING_IDLE_SLEEP_LANE]: {
       legend: 'Sleep waiting workers',
       shadowNote: 'A worker on a working run whose last turn ended 30 minutes ago, with nothing running, scheduled, unread '
@@ -234,7 +249,8 @@ export const LANE_ARM_TEXT = {
         + 'or open on a screen, is put to sleep, and its coordinator is mailed once for that sleep. Its session ends; its '
         + 'workspace, branch and transcript are kept, and mail or a send-back starts it again. A worker holding a live '
         + 'claim, or named by a second active run, keeps running. While mail is switched off (mail-disabled), no waiting '
-        + 'worker is put to sleep, because its coordinator could not be told.',
+        + 'worker is put to sleep, because its coordinator could not be told. Every waiting worker is measured on the '
+        + 'first pass after this is set Live, including one the shadow log named minutes before.',
       gate: null,
     },
     [CAP_COUNTS_WORKING_LANE]: {
@@ -246,7 +262,8 @@ export const LANE_ARM_TEXT = {
       liveNote: 'A run whose worker is waiting or asleep holds no slot under the workers cap; the slots this frees are handed '
         + 'out a few at a time, and a send-back to a live or sleeping worker, or a resume of a live one, is never refused at '
         + 'the cap. A worker '
-        + 'that wakes counts again at once.',
+        + 'that wakes counts again at once. A coordinator the cap refused is told of a freed slot only when one can be handed '
+        + 'out, so it is not told again every minute.',
       gate: null,
     },
   },

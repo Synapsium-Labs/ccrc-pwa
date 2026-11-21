@@ -47,7 +47,7 @@ export function LinearItemControls({ item, handWords, enabled = true, onActed }:
         setSaid({ refusal: false, text: answer.queued === true ? T.queued : T.sent });
         onActed?.();
       },
-      (err: unknown) => { setBusy(false); setSaid({ refusal: true, text: linearItemErrorText(err) }); },
+      (err: unknown) => { setBusy(false); setSaid({ refusal: true, text: linearItemErrorText(err, body.act) }); },
     );
   };
   const off = busy || !enabled;

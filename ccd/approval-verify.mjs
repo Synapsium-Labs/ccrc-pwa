@@ -15,12 +15,23 @@
 //   - for an `allow`, its class is `ordinary` (an `escalate` or `forbidden` request is never allowed, D-5299).
 // Anything else prints NOTHING and exits 0: the hook then treats it as no ruling and the prompt stays with the
 // operator. Exit 2 is a usage error, which prints nothing on stdout too. Plain node, `node:*` imports only.
+//
+// Record v2 (approvals plan 2026-11-18, §3.6 Table 3b; approvals PR 3v) prints `allow:<authority> <reason>` or
+// `deny:<authority> <reason>`. v2 is v1's ten fields plus `authority`, `denyCurrent` and `family`. Only the `operator`
+// authority is issued in PR 3, family `none`, checked against the main key (the one pinned key). An operator allow admits
+// class `ordinary` or `escalate` at any deny currency, never `forbidden`.
 import { readFileSync, realpathSync } from 'node:fs';
 import { createPublicKey, verify } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 /** The record's ten fields, in no particular order (the canonical form sorts them). */
 export const RECORD_KEYS = Object.freeze(['v', 'rowId', 'sessionId', 'agentId', 'digest', 'nonce', 'class', 'verdict', 'reason', 'expiresAt']);
+/** A v2 record's thirteen (approvals PR 3). */
+export const RECORD_KEYS_V2 = Object.freeze([...RECORD_KEYS, 'authority', 'denyCurrent', 'family']);
+/** THE DOCUMENTED SECOND COPIES of `APPROVAL_RULING_AUTHORITIES` and `APPROVAL_RULING_FAMILIES` (shared/api.ts), held equal
+ *  by the verifier's suite. */
+export const AUTHORITIES = Object.freeze(['coordinator', 'operator', 'overlord']);
+export const FAMILIES = Object.freeze(['none', 'read-only']);
 
 // THE DOCUMENTED SECOND COPY of `canonicalJson` (shared/api.ts): code-point key order, every UTF-16 code unit
 // outside printable ASCII (U+007F included) as lowercase `\uXXXX` except `\b \f \n \r \t`, `\"` and `\\`, `/` never
@@ -64,8 +75,9 @@ export function canonical(v) {
 /** The record's canonical bytes, or null for a record that is not exactly the ten fields. */
 export function recordBytes(r) {
   if (r === null || typeof r !== 'object' || Array.isArray(r)) return null;
+  const want = r.v === 2 ? RECORD_KEYS_V2 : RECORD_KEYS;
   const keys = Object.keys(r);
-  if (keys.length !== RECORD_KEYS.length || !RECORD_KEYS.every((k) => Object.prototype.hasOwnProperty.call(r, k))) return null;
+  if (keys.length !== want.length || !want.every((k) => Object.prototype.hasOwnProperty.call(r, k))) return null;
   return canonical(r);
 }
 
@@ -86,13 +98,21 @@ export function verdictFor(ruling, expected, pem) {
   let good = false;
   try { good = verify(null, Buffer.from(bytes, 'utf8'), key, Buffer.from(sig, 'base64')); } catch { return null; }
   if (!good) return null;
-  if (r.v !== 1) return null;
+  if (r.v !== 1 && r.v !== 2) return null;
   if (r.sessionId !== expected.sessionId || r.agentId !== expected.agentId || r.digest !== expected.digest
       || r.nonce !== expected.nonce || r.rowId !== expected.rowId) return null;
   if (!Number.isInteger(r.expiresAt) || r.expiresAt <= expected.now) return null;
   if (typeof r.reason !== 'string') return null;
-  if (r.verdict === 'allow') return r.class === 'ordinary' ? `allow ${oneLine(r.reason)}` : null;
-  if (r.verdict === 'deny') return `deny ${oneLine(r.reason)}`;
+  if (r.v === 1) {
+    if (r.verdict === 'allow') return r.class === 'ordinary' ? `allow ${oneLine(r.reason)}` : null;
+    if (r.verdict === 'deny') return `deny ${oneLine(r.reason)}`;
+    return null;
+  }
+  // v2 (Table 3b): only the operator's authority is issued in PR 3, family `none`, and the main key (the one pinned here).
+  if (!AUTHORITIES.includes(r.authority) || !FAMILIES.includes(r.family) || typeof r.denyCurrent !== 'boolean') return null;
+  if (r.authority !== 'operator' || r.family !== 'none') return null;
+  if (r.verdict === 'allow') return r.class === 'ordinary' || r.class === 'escalate' ? `allow:operator ${oneLine(r.reason)}` : null;
+  if (r.verdict === 'deny') return `deny:operator ${oneLine(r.reason)}`;
   return null;
 }
 

@@ -1,10 +1,13 @@
 // The programme page with its Work card (programme work map WM4, D-8823; plan Task WM4's width table; spec 2026-11-16 §5), in a
-// real Chrome over the production build, at 360, 390, 1280, 1470 and 1920, in both skins and both themes. `test/programme-screen.test.tsx`
+// real Chrome over the production build, at 360, 390, 800, 1280, 1470 and 1920, in both skins and both themes. `test/programme-screen.test.tsx`
 // holds the page's behaviour in jsdom (what it reads, keeps and links); this file holds what only an engine can say:
 //   * the order: at 360 and 390 one column, Goals, Work, Waiting on you, Runs; from 1280 two columns, Goals then Work on the
 //     left and Waiting on you then Runs on the right, Waiting on you level with the top of Goals;
 //   * the card's own layout follows ITS width, not the viewport's (D-8806 `layout-by-the-cards-width`): a row is one column at
-//     360 and 390 and three (status, title with its tag, facts) from 1280, measured as the row's computed grid tracks;
+//     360 and 390, two (status | title, the facts under the title) from a 26rem card, which is 1280, 1470 and 1920, and three (status,
+//     title with its tag, facts) from a 43rem card, which only an 800 window reaches (the page is one column under 900 and its card is
+//     as wide as the page); measured as the row's computed grid tracks and the facts' place. No desktop width draws the one-row layout:
+//     the left column's card is about 450px at 1280 and about 550px at 1920 (review 2956 F3);
 //   * nothing scrolls sideways, and nothing is clipped or cut short: no phase title, ticket title or epic tag wider than its box,
 //     no ellipsis, with a title of 130 unbroken characters and a long epic and phase title that have to wrap, the folded groups
 //     opened as well as closed.
@@ -23,9 +26,12 @@ import { itemView, waitingView } from '../test/ledgersFixture';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
-// 800 is the one sampled width between 690 and 900: the page is one column there and the card as wide as the page, so the card's 40rem step
-// applies, which no wider window reaches the left column of (review 2922 A7).
+// 800 is the one sampled width between 690 and 900: the page is one column there and the card as wide as the page, so the card's 43rem step
+// applies, which no wider window reaches the left column of (review 2922 A7). The windows just under the step are sampled on their own
+// below (`NEAR_THE_STEP`), where the title's room was short before the step moved from 40rem (review 2956 F2).
 const WIDTHS = [360, 390, 800, 1280, 1470, 1920];
+/** The one-column windows that put the card just under, and just past, the 43rem three-column step (a card is the window less 42px here). */
+const NEAR_THE_STEP = [690, 700, 715, 719, 725, 731, 740];
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
 
 const NOW = Date.now();
@@ -46,7 +52,7 @@ const ITEMS = [
   ticket('t-3', 'Carried to the third phase', 'not-started', 'not-started', { epic: EPIC_B, phases: [
     { key: 'p2', number: 2, carriedTo: { key: 'p3', number: 3 }, carriedFrom: [] }, { key: 'p3', number: 3, carriedTo: null, carriedFrom: [{ key: 'p2', number: 2 }] }] }),
   ticket('t-4', 'Needs the operator', 'waiting-on-you', 'waiting-on-you', { epic: EPIC_B, itemIds: [7], phases: [{ key: 'p3', number: 3, carriedTo: null, carriedFrom: [] }] }),
-  ticket('t-5', 'Stuck on a review', 'stuck', 'held', { runId: 13, phases: [{ key: 'p3', number: 3, carriedTo: null, carriedFrom: [] }] }),
+  ticket('t-5', 'Stuck on a review', 'stuck', 'held', { epic: EPIC_B, runId: 13, phases: [{ key: 'p3', number: 3, carriedTo: null, carriedFrom: [] }] }),
 ];
 const WORK: WorkMapView = {
   source: 'plan', end: null, verdicts: 'read', counts: { ...ZERO, done: 1, 'in-progress': 1, 'waiting-on-you': 1, held: 1, 'not-started': 1 }, items: ITEMS,
@@ -126,6 +132,8 @@ interface Measured {
   /** The first ticket row's computed grid tracks, in px: one on a phone, two (status | title, the facts under the title) from a 26rem card,
    *  three (status | title | facts) from a 40rem card. */
   tracks: number[];
+  /** A row with facts (t-2): its title and its facts, as boxes, to say where the facts stand against the title (review 2956 F5). */
+  placed: { what: Box; facts: Box };
   rem: number;
   /** The width of the plain ticket's `.wk-what` (its title with its tag): the room a title has (review 2922 F2). */
   titleTrack: number;
@@ -162,6 +170,7 @@ const measure = (root: Element): Measured => {
     root: { scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, box: box(root) },
     goals: box(one('.pv-main > .pv-card')), work: box(card.closest('.pv-card')!), cardWidth: cardBox.width, waiting: box(one('section[aria-label="Waiting on you"]')), runs: box(one('[data-testid="programme-runs"]')),
     tracks: getComputedStyle(row).gridTemplateColumns.split(' ').map(parseFloat),
+    placed: { what: box(one('.wk-row[data-ticket="t-2"] .wk-what')), facts: box(one('.wk-row[data-ticket="t-2"] .wk-facts')) },
     rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
     titleTrack: box(one('.wk-row[data-ticket="t-4"] .wk-what')).width,
     head: {
@@ -192,13 +201,24 @@ const open = async (view: AppView) => {
 };
 
 /** The card's row layout by the card's own width, as the stylesheet's two container steps say it (`card-width-steps`): one track below 26rem, two
- *  from 26rem (status | title, the facts under it), three from 40rem (status | title | facts); the status track is 6.75rem and then 7.5rem. */
+ *  from 26rem (status | title, the facts under it), three from 43rem (status | title | facts); the status track is 6.75rem and then 7.5rem. */
+const STEP_THREE = 43;
+const STEP_TWO = 26;
 const assertRowLayout = (m: Measured, at: string, width: number): void => {
-  const want: readonly [number | null, number] = m.cardWidth >= 40 * m.rem ? [7.5, 3] : m.cardWidth >= 26 * m.rem ? [6.75, 2] : [null, 1];
+  const want: readonly [number | null, number] = m.cardWidth >= STEP_THREE * m.rem ? [7.5, 3] : m.cardWidth >= STEP_TWO * m.rem ? [6.75, 2] : [null, 1];
   expect(m.tracks.length, `${at}: a ${Math.round(m.cardWidth)}px card draws ${m.tracks.length} row tracks, not ${want[1]}`).toBe(want[1]);
   if (want[0] !== null) expect(m.tracks[0], `${at}: the status track`).toBeCloseTo(want[0] * m.rem, 0);
-  // From 800 up a row is never stacked in one column; the 800 case is the one that reaches the second step on a window under 900.
+  // Where the facts stand (review 2956 F5): in the third track, right of the title, from the three-column step; under the title, level with its
+  // left edge, in a two-track row. Deleting the facts' `grid-column: auto` leaves them under the title with the third track empty: red here.
+  if (want[1] === 3) expect(m.placed.facts.left, `${at}: the facts are not right of the title in a three-track row`).toBeGreaterThanOrEqual(m.placed.what.right - 0.5);
+  if (want[1] === 2) {
+    expect(m.placed.facts.top, `${at}: the facts are not under the title in a two-track row`).toBeGreaterThanOrEqual(m.placed.what.bottom - 0.5);
+    expect(Math.abs(m.placed.facts.left - m.placed.what.left), `${at}: the facts are not under the title's left edge`).toBeLessThan(1);
+  }
+  // From 800 up a row is never stacked in one column; the 800 case is the one that reaches the second step on a window under 900, and it has to
+  // reach it: a sample whose card fell under the step would pass the track count above on the wrong layout (review 2956 M6).
   if (width >= 800) expect(m.tracks.length, `${at}: a row is stacked on a wide window`).toBeGreaterThanOrEqual(2);
+  if (width === 800) expect(m.cardWidth, `${at}: the 800 sample no longer reaches the three-column step`).toBeGreaterThanOrEqual(STEP_THREE * m.rem);
 };
 
 let phoneTrack: Promise<number> | undefined;
@@ -210,6 +230,18 @@ const phoneTitleTrack = (): Promise<number> => {
   })();
   return phoneTrack;
 };
+
+// The sample data agrees with itself (review 2956 F4): a row's tag names the epic that lists it, so a chip's count and the rows under it, and every
+// picture taken from this data, read the way a real server's data does (it builds a row's tag and an epic's items from the same epic key).
+describe('the sample data is consistent (WM7)', () => {
+  it('every epic lists the tickets whose tag names it, and only those', () => {
+    for (const e of WORK.epics) {
+      expect(ITEMS.filter((i) => i.epic?.key === e.key).map((i) => i.key), `epic ${e.key}`).toEqual(e.items);
+      expect(e.total, `epic ${e.key}'s total`).toBe(e.items.length);
+    }
+    expect(WORK.epics.flatMap((e) => e.items).sort(), 'every ticket is listed by one epic').toEqual(ITEMS.map((i) => i.key).sort());
+  });
+});
 
 describe('the programme page with its Work card, per width, skin and theme (WM4)', () => {
   for (const width of WIDTHS) {
@@ -272,6 +304,28 @@ describe('the programme page with its Work card, per width, skin and theme (WM4)
         }
       }
     }, 300_000);
+  }
+});
+
+// Review 2956 F2: just under the three-column step a one-column window's card is 640 to 688px, where the three tracks (the first form of
+// the step, 40rem) left the title 259 to 307px against the phone's 297. From 43rem it keeps 307px or more, and below it the two-track row
+// keeps over 500px, so the title's room at every window near the step is at least the phone's.
+describe('a ticket\'s title keeps its phone room just under and just past the three-column step (WM7)', () => {
+  for (const width of NEAR_THE_STEP) {
+    it(`at ${width}px, ${REFINED}, light`, async () => {
+      const view: AppView = { skin: REFINED, theme: 'light', width };
+      const { ctx, errors, root } = await open(view);
+      try {
+        const m = await root.evaluate(measure);
+        const ref = await phoneTitleTrack();
+        expect(m.titleTrack, `${width}px: a ticket's title has less room (${Math.round(m.titleTrack)}px) than on a phone (${Math.round(ref)}px)`).toBeGreaterThanOrEqual(ref - 1);
+        assertRowLayout(m, `${width}px`, width);
+        expect(m.pageScrollWidth, `${width}px: the page scrolls sideways`).toBeLessThanOrEqual(m.pageClientWidth);
+        expect(errors, 'page errors').toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 120_000);
   }
 });
 

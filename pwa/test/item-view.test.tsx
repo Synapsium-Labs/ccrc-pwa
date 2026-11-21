@@ -21,6 +21,24 @@ const show = (item = itemView(), over: Partial<React.ComponentProps<typeof ItemV
   return { onTick, onDismiss };
 };
 
+describe('the item view\'s migration body', () => {
+  it('is handed the structure and the report, and draws both', () => {
+    show(itemView({ action: { verb: 'linear-report', migrationId: 3 } }), { migration: {
+      counts: { created: 1, moved: 1, closed: 0, left: 0, skipped: 1 }, entries: [],
+      structure: [{ programme: 'prog-a', title: null, backlog: false, declared: false, epics: [] }],
+      report: { skipped: ['AAA-5'], waiting: ['AAA-6'], movedSince: [], milestonesLeft: [] },
+    } });
+    expect([...document.querySelectorAll('[data-report-list]')].map((l) => l.getAttribute('data-report-list'))).toEqual(['skipped', 'waiting']);
+  });
+  it('a map item draws the structure it is handed', () => {
+    show(itemView({ action: { verb: 'linear-map', migrationId: 3 } }), { migration: {
+      counts: { created: 1, moved: 1, closed: 0, left: 0, skipped: 0 }, entries: [],
+      structure: [{ programme: 'prog-a', title: 'Programme A', backlog: true, declared: false, epics: [] }], report: null,
+    } });
+    expect(document.querySelector('[data-structure-programme="prog-a"]')).not.toBeNull();
+  });
+});
+
 describe('the item view', () => {
   it('shows what, why and the how as numbered steps', () => {
     show(itemView({ title: 'Flip the lane', why: 'Old workspaces pile up.', how: ['Open Settings.', 'Set it to Live.'] }));

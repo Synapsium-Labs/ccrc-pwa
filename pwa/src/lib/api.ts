@@ -43,7 +43,7 @@ import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { EpicView, HierarchyAnswer, HierarchyProjectRow, PlanView, WorkAnswer } from '../../../shared/plan';
+import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
@@ -576,6 +576,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     linearItemAct: (id: number, body: { act: LinearItemAct; note?: string; owner?: string }) =>
       postJson<{ ok: true; queued?: boolean }>(`/api/items/${id}/linear`, body),
     ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: number }>('/api/hierarchy/owner', { linearOwner }),
+    /** The migration (D-8186): `POST /api/projects/:project/hierarchy/migrate` (no body; asks the team's Linear owner for the map) and
+     *  `GET /api/migrations/:id` (a map's or report's body). */
+    migrate: (project: string) =>
+      postJson<{ ok: true; migrationId: number }>(`/api/projects/${encodeURIComponent(project)}/hierarchy/migrate`),
+    migration: (id: number) => getJson<MigrationView>(`/api/migrations/${id}`),
     /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
      *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
     openTemplatePr: (project: string) =>
@@ -1116,6 +1121,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
+    /** The operator's ruling on a parked permission prompt (approvals PR 3), posted to the questions answer door as
+     *  `{kind: 'approval', verdict}`. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`,
+     *  `park-ruled`, `hook-gone`, `coordinator-denied`, `auth-off`, or a guard's word from the door's approval arm) rejects with an
+     *  `ApiError` like every non-2xx. */
+    ruleParkedApproval: async (id: number, verdict: 'allow' | 'deny'): Promise<unknown> =>
+      (await request(`/api/questions/approval-${id}/answer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ kind: 'approval', verdict }),
+      })).json().catch(() => ({})),
     /** `POST /api/continuity/quiz-runs/:id/rule` (Overlord W1a, the replay quiz record): the operator confirms or discards one pending
      *  quiz run. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`, `bad-request` with
      *  `already <state>`, …) rejects with an `ApiError` like every non-2xx. */

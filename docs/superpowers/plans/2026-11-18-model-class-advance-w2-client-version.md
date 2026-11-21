@@ -281,6 +281,19 @@ floor. In the wave's first round, M3 survived until a good answer padded past th
   nothing but the version string is read from the answer. This reverses the registry spec's "bumped deliberately"
   rule (§5) under the owner's rule of 2026-10-07. Its cost if wrong: a newer client version can list a model the
   bridge serves badly; each class move still waits on a passing canary, and a hold stops a class.
+- **D-8781 — the floor's home is the Codex auth library (usage-user-agent follow-up, PR #3085; the coordinator's
+  ruling on review 2825, 2026-11-19).** Where: `ccd/ccgpt-auth.py`'s client-version section, `ccd/ccrc-models-probe`
+  and `ccd/ccgpt-usage.py`. What departs: this plan keeps the probe's shipped constant as the floor and has the probe
+  hand its request program the cache's path; instead the floor (`CLIENT_VERSION_FLOOR`), the cache's name, path and
+  reading, the floor's application and the user-agent's form move into the auth library, which the probe and the usage
+  poll both load by path, and the probe's constant and its cache-path variable are gone. With HOME unset the probe
+  still stops at its first `$HOME` read under `set -u`, before the arm; the usage poll's read then takes the account's
+  home, as Python's `expanduser` reads it. Why: the usage poll must say the version the probe asks as, from one owner;
+  a new lane file for it would need the installer gate, the uninstall list, the deploy fallback and the doctor's lane
+  list (a #2943 file), while both programs already load the library everywhere either runs, and its growth cap
+  (1737 code lines) has room. Its cost if wrong: the library carries two reasons to change, credentials and the Codex
+  client identity, kept apart by one labelled section; the next growth of that section meets the cap, and the clean
+  end state, once #2943 frees the doctor's list, is its own lane file.
 
 ## Follow-ups (not this wave)
 

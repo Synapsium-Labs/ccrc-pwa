@@ -30,6 +30,7 @@ import type { AskMarkRow } from '../../../shared/answerMarks';
 import { apiErrorText } from '../lib/refusalWords';
 import { CALLS_GROUP_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsApartOf, clearedCallsOf, openCallsOf, type CallFilter } from './callWords';
 import { OverturnSheet, type OverturnSend } from './OverturnSheet';
+import { ParkedApprovals } from './ParkedApprovals';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -484,7 +485,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const pressed = (program: string | null): boolean => (program === null ? noProgramme : list.programme === program);
   // The pills count what is drawn (`shownSummary`, review 1537 F4): under a filter, that filter's share alone.
   const words = summaryWords(shownSummary(shown));
-  const empty = groups.length === 0;
+  // A parked approval waits on the operator too (approvals PR 3, review 2889 F7): a screen holding only those is not empty.
+  const empty = groups.length === 0 && (view.approvals?.length ?? 0) === 0;
   // Calls made for the operator (D-8126) never count and never make a group on the rows' account: a programme with calls and no
   // rows draws them apart, among the groups, under the filter that shows it.
   const callFilter: CallFilter = { noProgramme, programme: list.programme };
@@ -497,6 +499,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
       {props.notCurrent !== undefined && <NotCurrentLine words={props.notCurrent} />}
+      <ParkedApprovals approvals={view.approvals} />
       {/* A saved source never says "Nothing needs you." (review 1561 F4): an empty list from the device's copy, or a
           list drawn with the device's rows, is not a fact, so it says it is waiting, under the not-current line. */}
       {empty

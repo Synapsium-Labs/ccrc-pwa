@@ -55,6 +55,13 @@ export function wakeAdmitMany(recent: readonly number[], now: number, wanted: nu
   return { admitted, recent: list };
 }
 
+/** Capacity follow-ups (T4 review 2907 F5): how many automatic admissions a window would take at `now`, recording nothing
+ *  (the list `wakeAdmitMany` hands back is dropped). The `admissionWake` lane reads the freed-slot window through it, so a
+ *  slot the worker readings free is room only when the dispatch door's window would hand it out. */
+export function wakeRoom(recent: readonly number[], now: number): number {
+  return wakeAdmitMany(recent, now, WAKE_BURST).admitted;
+}
+
 // ── the memory gate (D-8122) ────────────────────────────────────────────────────────────────────────────────────────
 
 /** `CCRC_WAKE_PRESSURE_GATE`: the pressure level at or above which an automatic wake waits. `warn` is PSI full at or

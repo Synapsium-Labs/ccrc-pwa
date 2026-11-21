@@ -317,6 +317,8 @@ type GateOut = { kind: string; word?: string; step?: string; record?: string | n
 export const GATE_DOOR_KEYS = Object.keys(OVERLORD_DOORS).filter((k) => OVERLORD_DOORS[k]!.group === 'overlord');
 const doorOf = (key: string, over: Partial<OverlordDoorRow> = {}): OverlordDoorRow => ({ ...(OVERLORD_DOORS[key] as OverlordDoorRow), ...over });
 export const isStart = (d: OverlordDoorRow) => d.ladderClass === 'card-probe-note';
+/** The acts written out, not read from the cells the cases judge: allowed at `full` only (D-8809). */
+const FULL_ONLY_ACTS: readonly string[] = ['link-team'];
 const FULL = { rung: 'full', operatorRung: 'full', binding: [], readBy: [] };
 const ladderRead = (over: Record<string, unknown> = {}) => ({ kind: 'read' as const, rung: { ...FULL, ...over } });
 
@@ -407,10 +409,11 @@ export const ORACLE_STEPS: ReadonlyArray<(f: Gf) => Res | null> = [
     if (f.generation.kind === 'none') return refuseOf('renewing', '9');
     return RENEWING.includes(f.generation.state) ? refuseOf('renewing', '9') : null;
   },
-  // 10: the effective rung; every W1 act is allowed at every rung above off
+  // 10: the effective rung; every W1 act is allowed at every rung above off, and the Overlord's team link (D-8809) at full only
   (f) => {
     if (isStart(f.door) || f.ladder === 'start-door' || f.ladder.kind !== 'read') return null;
-    return f.ladder.rung.rung === 'off' ? refuseOf('rung-below', '10') : null;
+    if (f.ladder.rung.rung === 'off') return refuseOf('rung-below', '10');
+    return FULL_ONLY_ACTS.includes(f.door.act) && f.ladder.rung.rung !== 'full' ? refuseOf('rung-below', '10') : null;
   },
 ];
 export const oracle = (f: Gf): Res => {

@@ -16,21 +16,31 @@ import {
 export const NOTE_CLASS = 'chat-fact sess-entries-note';
 
 /** The session's worktrees, one row each, under a heading the controls hand the focus back to. Nothing when it holds none. */
-export function SessionWorktrees({ worktrees, project, nowMs }: {
+export function SessionWorktrees({ worktrees, project, nowMs, rowEndsWithThem = false }: {
   worktrees: readonly SessionWorktree[];
+  /** The details row has nothing but these worktrees (`detailsEndWithWorktrees`): it goes with the last one, so the focus the controls
+   *  hand back rests on the header's title, not on a region that is leaving. */
+  rowEndsWithThem?: boolean;
   /** This session's project: a worktree of another project's code says so, as the fleet row did. */
   project: string;
   nowMs?: number;
 }): ReactNode {
   const heading = useRef<HTMLSpanElement>(null);
+  // Read through a ref, never a closure: a control registers its leave-time hand-off once, at mount, so a prop read there would be
+  // the first render's. The live value is the one decided from the facts of the last render that drew a section.
+  const rowEnds = useRef(rowEndsWithThem);
+  rowEnds.current = rowEndsWithThem;
   // Where the focus goes when the last row leaves while a control holds it: the section goes with its heading, so the details
-  // region that held it (`tabIndex=-1`, `SessionDetails`) takes it. Kept from the last render that had a section. Refined
+  // region that held it (`tabIndex=-1`, `SessionDetails`) takes it, or the header's title when that region goes too. Kept from the last render that had a section. Refined
   // draws that region as `display: contents`, which has no box and so cannot hold the focus (measured in a real Chrome,
   // review 2864 F4): the focus then goes to the nearest ancestor that has one, made a script-focus target if it is not.
   const host = useRef<HTMLElement | null>(null);
   const keepHost = (el: HTMLElement | null): void => { if (el !== null) host.current = el.closest<HTMLElement>('.chat-facts'); };
   const restFocusAt = (): HTMLElement | null => {
     let el = host.current;
+    // When the last worktree was the details row's only fact, the row goes with it (`detailsHaveFacts`, desktop polish C51 review
+    // 2963 F3) and the region that held the focus is gone: the header's own title takes it, never `body`.
+    if (rowEnds.current || el === null || !el.isConnected) el = document.querySelector<HTMLElement>('.chat-head .chat-title');
     while (el !== null && getComputedStyle(el).display === 'contents') el = el.parentElement;
     if (el !== null && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
     return el;

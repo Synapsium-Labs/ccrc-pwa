@@ -267,8 +267,8 @@ One probe per lane, selected by the registry file's `probe`:
 **Amendment, 2026-11-18 (D-8743, model-class-advance wave 2):** the Codex
 client version is no longer bumped by hand. The probe asks as the greater of
 the published Codex CLI release (npm's `@openai/codex` at its `latest`
-dist-tag, a plain `X.Y.Z` only) and its shipped constant `CODEX_CLIENT_VERSION`,
-which stays as a floor and is never undercut. The release is looked up at most
+dist-tag, a plain `X.Y.Z` only) and the Codex auth library's `CLIENT_VERSION_FLOOR`
+(`ccd/ccgpt-auth.py`, D-8781), which stays as a floor and is never undercut. The release is looked up at most
 once an hour for the whole box and cached in
 `~/.ccrc/codex-client-release.json`. The lookup itself is bounded at 10 s by
 curl, and its whole worst case, the lock wait included, is about 30 s; a

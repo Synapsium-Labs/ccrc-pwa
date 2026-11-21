@@ -53,6 +53,7 @@ the HTTP status, every response header in the order Linear sent it, the parsed `
 | `error-graphql-validation-milestone-creator` | FX2: `changedMilestones` as merged before D-8407, selecting a milestone `creator` | the document before D-8407 |
 | `error-project-name-too-long` | FX2: a project name of 85 characters | `LINEAR_HIERARCHY_DOCUMENTS.projectCreate` |
 | `read-{changed-projects,changed-milestones,changed-issues,team-open-issues}-constructed`, `mutation-{initiative-to-project-delete,project-update}-constructed` | **constructed, not recorded**: the six hierarchy documents FX2 did not record (D-8180), see below | `LINEAR_HIERARCHY_DOCUMENTS.<name>` |
+| `read-attachments-for-url-constructed` | **constructed, not recorded** (D-8808): awaits the operator's one live capture. Its `attachmentsForURL(url)` answer shape (a connection of attachments, each with `issue { id identifier team { key } }`) is an accepted schema assumption, never measured | `LINEAR_HIERARCHY_DOCUMENTS.attachmentsForUrl` |
 
 ## What the fixtures show
 
@@ -174,6 +175,8 @@ replaced by a recorded `mutation-attachment-link-url.json` against a throwaway i
 `linear-fixtures.test.ts` goes. The file's `constructed` field says the same.
 
 ## The constructed hierarchy answers
+
+`read-attachments-for-url-constructed.json` (D-8808, the team link's attached-issues read) is a seventh: it was written when no session may call Linear, and the read is not called until the operator gives the go for one live capture of its answer. Its answer shape is an assumption about Linear's `attachmentsForURL` query that no capture has measured, so its `AWAITING_RECAPTURE` row stays until a recording replaces it.
 
 Six hierarchy `*-constructed.json` files (D-8180) are **not recorded**: the documents FX2 did not record (above). The
 22 constructed files D-8180 landed, one for each of the 21 `LINEAR_HIERARCHY_DOCUMENTS` and the directory's page of

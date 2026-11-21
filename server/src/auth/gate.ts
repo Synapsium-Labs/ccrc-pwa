@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 283 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 288 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,8 +72,8 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The ninety box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
- *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the hook's start report and its
+ *  2. The ninety-three box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the linking standard's read, suggestion and confirm, the hook's start report and its
  *     loads report, the door process's act-key claim, the hook's reports, the card door, the note door's lanes, the timer doors, the probe door's lanes and the replay quiz's record
  *     door) plus
  *     `/api/notify`, `/api/pools/epoch`
@@ -81,7 +81,7 @@ import type { SessionStore } from './sessions.js';
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084), from update-management W4,
  *     `ccd-update-sync.timer`, and the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`);
- *     none of them has a cookie jar and never will. All ninety-three CHECK the box token (`checkMailToken`), and the mail pair
+ *     none of them has a cookie jar and never will. All ninety-six CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -518,6 +518,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'box-token machine lane, box token and attribution checked. The team\'s Linear owner decides an issue filed in Linear outside ' +
     'ccrc: hand it to a programme, place it in the team\'s Upkeep epic, close it with a reason, or raise it to the operator ' +
     '(`plan triage`); the write runs under the coordination mutex and calls no Linear (D-8183)'],
+  ['POST /api/teams/:team/plan/map',
+    'box-token machine lane, box token and attribution checked. The team\'s Linear owner sends its migration map (`plan map-propose`); ' +
+    'only that owner causes the read of the team\'s open issues, made before the coordination mutex, and the map is checked and ' +
+    'stored inside it, where the owner is judged again (D-8186)'],
   ['POST /api/programmes/:slug/spec',
     'box-token machine lane, box token and attribution checked. The coordinator pins the operator-approved spec and the copy of ' +
     'its In short to its own programme (`isSpecPath` bounds the path)'],
@@ -582,6 +586,17 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'a session reads its own project\'s linking row (Linear team key, override, measured repository visibility and the ' +
     'mode they give) — box-token gated in its own onRequest whatever the flag, no cookie accepted, attribution checked ' +
     "against the registry, the project the caller's own registry record names and never one the caller chooses"],
+  // D-8808: a session suggests a Linear team for a project that has no key (a candidate shown in the console; never a link).
+  ['POST /api/linking/suggest',
+    'a session suggests a Linear team, with a reason, for a project with no key — box-token gated in its own onRequest whatever ' +
+    'the flag, no cookie accepted, attribution checked against the registry, then the caller\'s standing as a coordinator (a ' +
+    'session that claims an open run; any other is refused not-a-coordinator, and runs that cannot be read refuse, never pass), ' +
+    'the reason held to the public-text rules before it is stored; it records a candidate only and never links'],
+  // D-8809: the Overlord confirms one team candidate for a project with no key, as a call made in the operator's name.
+  ['POST /api/linking/confirm',
+    'the Overlord confirms one current team candidate for a project with no key — box-token gated in its own onRequest whatever ' +
+    'the flag, no cookie accepted, then the Overlord gate (the designated session alone, its act key and generation, at the full ' +
+    'rung); the link is recorded as a big call in the operator\'s name, which the operator sees and overturns in the console'],
 
   // The continuity routes (Overlord §3.3.11, W1a): the hook reports every SessionStart of a session that is not a child.
   ['POST /api/sessions/:id/start',
@@ -1081,8 +1096,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the ninety box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — ninety-three in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the ninety-three box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — ninety-six in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

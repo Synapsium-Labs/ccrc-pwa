@@ -36,6 +36,7 @@ import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operat
 import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
+import { MAIL_HOLD_LANE_ROW } from './coord/mailHoldLane.js';
 import { createLandingJournal } from './coord/landingJournal.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
@@ -49,6 +50,7 @@ import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
 import { planStorePort } from './coord/planStore.js';
+import { COORDINATOR_SKILL_REVISION } from './coord/skillRollout.js';
 import { quizLanePortOf } from './continuity/quizStore.js';
 import { QUIZ_RECORD_READY } from './continuity/quiz.js';
 import { canonicalJson } from '../../shared/api.js';
@@ -62,6 +64,7 @@ import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { planSyncFor } from './linear/planSync.js';
 import { driftPassFor } from './linear/driftPass.js';
+import { linearMigrationFor } from './linear/migration.js';
 import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
@@ -329,6 +332,8 @@ await notifyLog.load();
 
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
+// Mid-turn mail (plan Task 4.4): a landed ack kicks the mailhold projection, so a released hold clears at the next tick.
+deps.onMailAcked = () => watcher.kick(MAIL_HOLD_LANE_ROW);
 
 // Design 2026-09-20 §8: a `ready` frame measures the fleet node at once. The
 // handshake is when an agent that just restarted — a self-update among the
@@ -435,6 +440,7 @@ try {
   console.warn(`ccrc-server: decision model: the boot release of stale reservations failed: ${err instanceof Error ? err.message : String(err)}`);
 }
 deps.linearPolicy = allowAll;
+deps.skillRolloutRevision = COORDINATOR_SKILL_REVISION;   // D-8126 (A9-3): the watcher's `skillRollout` lane runs only where this is set
 // The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
 deps.planSync = planSyncFor({
   coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,
@@ -446,6 +452,12 @@ deps.driftPass = driftPassFor({
   coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
   readLinearStore: () => readLinearStore(cfg.ccrcDir), currentFleet: () => watcher.currentFleet(), viaFleet: (ids) => linearJournal.viaFleet(ids),
   presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), directory: linearRefresher.directory,
+});
+// The per-team migration (D-8186): ticked by the watcher's `linearMigration` lane; `plan map-propose` and the hierarchy doors reach it.
+deps.linearMigration = linearMigrationFor({
+  coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
+  readLinearStore: () => readLinearStore(cfg.ccrcDir), directory: linearRefresher.directory,
+  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), privateTrackerKeys: cfg.privateTrackerKeys,
 });
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown

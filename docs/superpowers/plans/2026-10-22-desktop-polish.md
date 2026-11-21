@@ -4428,6 +4428,124 @@ an offline coordinator's own page, opened as the real `SessionScreen`, lists the
 
 **Rollback.** A plain revert.
 
+### Task C51: the coordinator badge sits on the title line (D-8834) — now
+
+**Why.** The operator handed the coordinator a look to rule on (2026-11-20), weighing compactness and usability. C50 (#3111) put the
+coordinator badge where the word "coordinator" had stood, in the session header's details row. In the Instrument skin that leaves
+the badge alone on a line of its own under the details, at 360 and 1280 px (the C50 screenshots, `after-header-instrument-*.png`
+under `docs/design/2026-10-22-desktop-polish/c50/`): a whole line of header for one glyph, and a glyph that far from the name does
+not read as belonging to it.
+
+**The ruling (the coordinator's, 2026-11-20).** In both skins the badge sits on the title line, right after the session's name
+("project-a › billing-coord" then the badge), sized to the name's text and on its baseline. The details row no longer carries it, and
+the header loses the line the badge stood on alone. Everything else about the badge stays as C50 shipped it: `RoleBadge`, the
+network icon, the accessible name "coordinator", the role title on hover, and the ink of the line it sits on. The fleet row's role
+cell is unchanged. On a phone there is no hover, so the ruling asked whether `@ccrc/ui` already has a primitive that shows a title
+on tap, to be used for the badge if it does.
+
+**Fix round 1 (review 2963, the coordinator's rulings).** The first version drew the badge as a plain inline box after the name, which
+can wrap alone onto a line of its own (F1), and hid an empty details row with a stylesheet rule that read what had rendered (F3 to F6).
+The rulings: glue the badge to the name's last word and pin it with a sweep over name lengths; decide the empty details row in code,
+as a fact beside the header's others; correct every general claim to what the sweep measures.
+
+**Files.** `pwa/src/session/SessionHeader.tsx` (`HeaderTitleText`, the title's own node in both skins: a coordinator's name is drawn as
+plain text whose last character and the badge share one `white-space: nowrap` box, `.chat-title-glue`),
+`pwa/src/session/sessionHeaderView.ts` (the view gains `coordinatorRole`, the facts' own reading; `detailRows`, `detailsHaveFacts` and
+`detailsEndWithWorktrees` decide the details row), `pwa/src/fleet/sessionFacts.ts` (`headerMetaHasCells`, the one reading of the meta
+row's cells), `pwa/src/session/SessionDetails.tsx` (the row and its phone door are drawn only when the row has something to show; the
+role detail and the `Detail` class prop are gone), `pwa/src/session/SessionWorktrees.tsx` (when the worktrees are the row's only
+facts, the focus a control hands back goes to the header's title), `pwa/src/session/chat.css` (C50's `.chat-fact-role` rules and
+their `min-height` are removed; `.chat-title-glue` and `.chat-title-role` are added; no rule reads the details row's emptiness).
+Tests: `pwa/test/coordinator-badge.test.tsx`, `pwa/test/header-details-facts.test.tsx` (new), `pwa/browser/role-fact.browser.test.ts`
+(the placement cases and the name-length sweep), `pwa/browser/delegation-rows.browser.test.ts` (the worktrees-only focus case), and C50's
+pins re-pointed at the new place, none weakened: `pwa/test/build-and-spend.test.ts`, `pwa/test/session-line.test.tsx` and
+`pwa/test/role-census.test.ts`. No server, wire, ccd or `@ccrc/ui` change.
+
+**The badge is glued to the name's last character.** A browser may break a line before an atomic inline such as the badge. **Measured**
+on a probe page in Chrome (482 widths, a name in words and a name as one token): with nothing glued, 34 widths left the badge alone on a
+line of its own; a word joiner (U+2060) before it left the same 34, a no-break space left 31, and an inline (non-flex) badge left 34.
+Only a box that spans the last piece of the name and the badge and does not break glued it: 0 of 482, for the last word and for the last
+character. The last **character** is boxed, not the last word, so a single token wider than the column keeps `overflow-wrap:
+break-word`'s emergency break inside it, as the ruling asks, and the badge follows its last fragment.
+
+**The cost, and what the sweep can and cannot say.** A coordinator's title is plain text, never a `TypedLabel`: the label's one text
+node and its `role="img"` root cannot hold a box that spans its last character and a sibling, so a rename of a coordinator's name no
+longer types in; it changes at once, as a main checkout's title does. **The rule, as the coordinator ruled it (2026-11-20, fix round 1): the badge never sits alone on a line, and a coordinator's header is taller than a worker's only where the name's last line has no room for the glyph.** When the name's last line leaves less than the glyph's width and its 4 px gap before the column's edge, the glyph needs a line the worker's name did not, and the badge wraps with the name's last character. **Measured** (real Chrome, both skins, both themes, 360, 390 and 1280 px, names of 1 to 130 characters in words and as one token, 260 names a view): at every length the badge's centre is inside the name's last line box; the header is taller than the same header with the badge hidden (a worker's header of that name, the badge being the only difference on the title line) at 4 to 36 of the 260 names a view, and at each of those the last line left no room for the glyph to within a pixel; with room, never. The sweep asserts both halves.
+
+**The details row is decided in code (F3 to F6).** `detailsHaveFacts` says whether the row has anything to show: one of its own facts
+(`detailRows`: a main checkout's name, the run, a programme hold, the PR, an away lane, the question), a cell of its meta row
+(`headerMetaHasCells`), or a worktree. With none, the header draws no row and no Details door: a door that opens nothing goes.
+`header-details-facts.test.tsx` renders `SessionMeta` for each cell alone and requires `headerMetaHasCells` to agree with whether it drew
+one. When the last worktree leaves and the row goes with it, the focus a control hands back rests on the header's title (it takes
+`tabindex=-1`), not on `body`; `detailsEndWithWorktrees` tells `SessionWorktrees`, which reads it through a ref because a control
+registers its leave-time hand-off once, at mount. **This reaches every header, workers' too** (F6). **Measured** (layout heights,
+real Chrome, a session with nothing to show, `main` against the tip; the picture sizes in the screenshots are these rounded up):
+
+| Header | 360 and 390 px, closed | 360 and 390 px, open | 1280 px |
+|---|---|---|---|
+| Instrument, coordinator | 159.75 to 138.25 | 181.25 to 138.25 | 84.25 to 65 |
+| Instrument, worker | 159.75 to 138.25 | not measured | 67.75 to 65 |
+| Refined, coordinator | 109 to 87.5 | 109 to 87.5 | 85 to 85 |
+| Refined, worker | 109 to 87.5 | not measured | 85 to 85 |
+
+**One earlier pin is restated as main's own claim (fix round 1, the coordinator's ruling of 2026-11-20).** `goals-door-height.browser.test.ts`
+pins that the Goals door costs a phone header no height (PL11: "on a phone nothing"). The first version of this round re-pointed its
+expectation, because in Refined an out-of-programme coordinator with no other fact is 24 px shorter than the same session in one
+(**measured**: 85 against 109, Refined, 390 px). **That was the same session out of a programme against in it, not main against this
+branch**, and the round's wave-done wording "85 to 109" read as the latter; it is corrected here. **Measured against main** (a `main` copy
+at `f95ac048a4` and this branch, real Chrome, coarse pointer, light theme, a main-checkout coordinator with no other fact, header height in
+px, closed / details open):
+
+| Header | Main, in a programme | This branch, in a programme | Main, out of a programme | This branch, out of a programme |
+|---|---|---|---|---|
+| Refined, 360 and 390 px | 109 / 109 | 109 (no door, nothing to open) | 109 / 109 | 85 |
+| Instrument, 360 and 390 px | 159.75 / 181.25 | 134.75 (no door, nothing to open) | 159.75 / 181.25 | 134.75 |
+
+A workspace coordinator with a PR cap keeps its door and is equal to main at 390 px in both skins (Refined 109 against 109; Instrument
+159.75 / 181.25 against 159.75 / 181.25); at 360 px Refined is 116.8 against 109, which is the first rule's accepted case (the name's last
+line has no room for the glyph, so the title takes a second line), not the Goals door. So a coordinator in a programme with no facts is
+**no taller than at main in every layout measured**: equal in Refined, 25 px shorter in Instrument. The Goals door keeps its 44 px floor, and
+it adds no row: in Refined the rail row it stands in is 44 px in main (the Details door's) and here (its own). What cannot be asked of
+the pin is that "in" equals "out" for such a session, because its out header lost the Details door that opened nothing (F3 to F6's gain).
+The pin now says main's own claim: where the out header still has its Details door, "in" and "out" are equal; where it has none, "in" is no
+taller than the out header with main's Details door, rebuilt in the page as a frozen copy (a `Door` of the shared primitive at the end of
+the status row; calibrated: 109 in Refined and 159.75 in Instrument, the heights main measured), and on a phone the Goals door is at least
+the 44 px tap floor. It runs at 360, 390, 1200, 1279 and 1280 px in both skins. **Measured under three mutants** (CSS appended, restored
+from a saved copy): the Goals door's floor dropped reds 10 cases; a Refined rail that gives the Goals door a row of its own reds the
+main-checkout cases ("in a programme the header is 150, taller than at main"); an Instrument Back row made taller reds them likewise
+("194.75, taller than at main (159.75 with main's Details door)"). The coordinator ruled not to move the Goals door into the title row.
+
+A phone header with nothing to show loses the Details door's line (21.5 px); at 1280 px Instrument's loses 2.75 px for a worker and
+19.25 px for the coordinator (its badge's old line), and Refined's is unchanged. The measured heights are for these fixtures
+(a coordinator and a worker with no other fact, a 10-character name); a header with other facts keeps its row and its door.
+
+**Phone: no primitive shows a title on tap, so none is used and none is added.** `@ccrc/ui` has `Popover` (a Radix panel that a
+trigger button opens, with a 12 rem minimum width and its own focus scope; it is a menu container), `Sheet` and `Confirm`, and no
+tooltip, hint or title-on-tap primitive (a search of `ui/src` for tooltip, hint and long-press finds none). Making the badge a
+`Popover` trigger would turn a mark into a 44 px control with a panel, which is a design decision the ruling did not make. The role
+title therefore shows on hover only, as C50 left it; the badge's accessible name is unchanged, and the heading's accessible name now
+ends with "coordinator" (the badge is inside the `h1`; review 2963 found no test or source that reads the session heading by name).
+
+**Measured.** Which cases were red at `origin/main` and why, the sweep, the mutants, the files run and what a real Chrome showed
+(before and after screenshots at 360 and 1280 px, both skins, both themes, and one long name that wraps) are in
+`docs/superpowers/programs/desktop-polish/c51.md`.
+
+**Acceptance.** A coordinator's header draws one badge inside its title line, after the name and glued to its last character, and none
+in a details row; its glyph is the name's font size, rests on the baseline, and at every name length of the sweep shares the name's
+last line; the header is as tall as the same header with the badge hidden wherever the glyph has room; a header whose details row has
+nothing to show draws no row and no door; a worker's header draws no badge.
+
+- **D-8834** — `coordinator-badge-on-the-title-line`: Task C51, issued on 2026-11-20. A coordinator's role badge sits on the session
+  header's title line, right after the name and glued to its last character, in both skins, sized to the name's text and on its
+  baseline, and not in the details row, by the coordinator's ruling of 2026-11-20 on the operator's look at C50; and a header whose
+  details row has nothing to show draws no row and no Details door, for every session (review 2963). It amends D-8817's placement
+  only (the badge, its name, its title and its ink are D-8817's); nothing leaves the wire or the server.
+
+This section was added between Task C48's and Task C49's sections with the consent of the worker that holds the plan's claim for the
+helpers task (its mails of 2026-11-20), for this one section only.
+
+**Rollback.** A plain revert.
+
 ### Task C49: the session's helpers, designed (D-8794) — now
 
 **What.** A design task, and no product code. The operator, 2026-11-19: "inside the session in the right hand panel I still
@@ -4454,6 +4572,76 @@ This section was added beside Task C48 with that task's consent (its worker's ma
 section only. Its revision after review 2861 has C48's consent too (its worker's mail of 2026-11-20), for this section
 only. Its revision after review 2888 has the consent of Task C50's worker, who holds the plan's claim now (its mail of
 2026-11-20), for this section only.
+
+### Task H4: the Archive holds work no session owns (D-8828) — now
+
+**What.** The first build task of C49's session-helpers design (`docs/superpowers/specs/2026-11-19-session-helpers-design.md`, §6, Table 8,
+Figure 6 and Table 13's H4 row). C48 took the unowned rows and the leases of two unlisted sessions off the fleet list and gave them no
+home. The Archive screen now has a section, **Work no session owns**, above the archived workspaces, under two subheads: **No single owner**
+(a tree the broker could not give one owner) and **Neither session listed** (a worktree whose parent and worker are both unlisted).
+An unowned row says the project, the path (the admin record when no path is known), the verdict (`no owner found` or `two owners claimed
+it`) and the attempt's age (`tried 3 days ago`), and offers Not delegated only where a lease is hidden (`leaseId`), through the existing
+resolve door. A worktree row says the project, the path and its disposition word, and offers what `worktreeControls` gives (Keep
+worktree and Not delegated in the states that offer them; never Attach to…, which needs a listed parent). No row carries a liveness word,
+a `title` or the bare word `unmeasured`: where presence on disk was not measured the head says it once (`presence on disk not measured for
+1 tree`). The note under the title says what the section holds, in the subhead's words (worktrees neither of whose sessions is listed). With
+nothing of either kind the section draws nothing, and the fleet list gains nothing but one thing, added in review's fix round 1: the
+fleet foot's existing Archived row is also the door to this section, so it draws when there is work no session owns even with nothing
+archived, and its words say what is there (`foot-row-is-the-door`).
+
+**Files.** New: `pwa/src/fleet/ArchiveUnownedWork.tsx` (L4, C4: the section, one row view and one group view), `pwa/src/fleet/archiveUnownedWork.css`
+(a new stylesheet: `fleet.css` is capped), `pwa/test/archive-unowned-work.test.tsx`, `pwa/browser/archive-unowned.browser.test.ts`. Edited:
+`pwa/src/fleet/delegationWords.ts` (L1: `VERDICT_WORD`, `hiddenLeaseOf`, `unownedControls` re-added as Table 8 says; `unlistedLeases`,
+`presenceWord`, `triedWord` and `unownedWork`, which decides every row, count and word), `pwa/src/screens/ArchiveScreen.tsx` (takes the frame
+and a clock), `pwa/src/app.tsx` (the `/archive` route reads the frame from the store), `pwa/design/audit.mjs` (four grounds),
+`pwa/test/contrast.test.ts` (one line in the app's stylesheet list, with the consent of the worker holding that file's claim, 2026-11-20),
+`pwa/test/app.test.tsx` (one route case), `pwa/src/screens/FleetScreen.tsx` (the foot row, fix round 1) and `pwa/test/fleet-screen.test.tsx` (its
+cases), and the two census lists that name the files allowed to name the broker
+(`server/test/delegation-wave3.integration.test.ts` and its mirror in `server/test/fleet-health.test.ts`). Nothing on the wire or the
+server changes.
+
+**Measured.** The red-first run, the mutation table, the real-Chrome measures and the screenshots are in
+`docs/superpowers/programs/desktop-polish/h4.md`.
+
+**Acceptance.** An Archive screen over a frame with an unowned tree, a hidden lease and a worktree of two unlisted sessions draws the
+section with each row's words and acts as above; an archived session and a stopped main checkout count as unlisted (the fleet list's own
+Archived fold) and a cleanup session as listed; one listed session, or a session whose working directory is the lease's path, gives a lease
+a page and takes it out of the section; the last row leaving while its control holds the focus hands it to the page's body; the fleet
+foot's Archived row also draws for work no session owns (alone, or beside the archived half); no row draws a liveness word, a title or `unmeasured`; the presence sentence is in the head once; a frame with
+none of either kind, or no frame, draws no section; each act posts to its existing door (Not delegated to `POST /api/leases/:lease/resolve`
+with `{action:'foreign'}` after a confirm, Keep worktree to `operator-retain`).
+
+- **D-8828** — `archive-holds-unowned-work`: Task H4, issued on 2026-11-20. The Archive screen holds the delegated work no session
+  owns, as spec §6 and Table 8 say, with these departures from the spec, each named by slug and each a spec correction for the
+  coordinator to fold:
+  - `neither-session-listed`: the second subhead reads "Neither session listed", not "Both sessions gone" (spec §6, Table 8, Figure 6 and
+    its mockup), and the note under the title follows it: "Delegated worktrees the broker could not give one owner, and worktrees neither
+    of whose sessions is listed." (review 2966 F1). An archived session is unlisted, not gone (review 2900's minor).
+  - `unlisted-means-in-the-archived-fold` (was `unlisted-means-not-listed-live`; corrected in fix round 1, review 2966 F2): "neither
+    session is listed" is decided by the fleet list's own fold rule, `inArchivedFold` (`listedOnFleet`, which calls it and never copies
+    it): a session is listed unless the fleet list folds it into Archived. So a lease whose coordinator is an archived workspace or a
+    stopped main checkout is drawn here as well as on that row's own page (C48's SW-S2), and a lease whose session is a cleanup row, which
+    the fleet list keeps at its top level, is not. The spec's "row of the fleet list" read as "present in the store" would have left
+    such a lease with its archived page as its only home. And the session pages' own workdir rule (`atASessionWorkdir`, one reader
+    beside `leasesStartedBy`) applies here too: a lease whose path is a fleet session's working directory is that session's own row and
+    is not drawn (review 2966 F4).
+  - `foot-row-is-the-door` (fix round 1, review 2966 F5, the coordinator's ruling): the spec gives the fleet list nothing and names the
+    foot's Archived row as the section's door, but that row drew only when something was archived. It now draws when either half has
+    something (`archiveDoorWord`, L1): `Archived on disk · 2 · 2.3 GB`, `Work no session owns · 2`, or both joined by ` · `. The same row,
+    the same door (`/archive`), no new row or control.
+  - `disposition-word-with-its-date`: the worktree row's disposition is `worktreeStateParts`' words, the one owner of them, which carry the
+    held-until date for an adopted or retained tree (`worktree kept until 17 Nov`); spec §4.4 lists `worktree kept` without it.
+  - `age-in-whole-words`: the attempt's age is `elapsedShort`'s ladder (the one shared ladder) in whole words: `tried 5 minutes ago`,
+    `tried 2 hours ago`, `tried 3 days ago`, `tried just now` under a minute; a time that cannot be read leaves the age out of the row.
+  - `section-above-archived-and-alone`: the section sits above the archived workspaces and draws when nothing is archived, with the
+    "Nothing is archived." line kept below it (the spec is silent on an empty archive). Unowned trees list the newest attempt first.
+  - `words-in-delegation-words`: the words and the selection live in `delegationWords.ts`, the existing L1 owner of every delegation
+    label, not in a new file (spec Table 12 names only the component): the section's title, its note and its two subheads
+    (`UNOWNED_WORDS`) too, and the foot row's sentence (`archiveDoorWord`).
+  - `no-title-attributes`: no row carries a `title`, so no word hides in a tooltip a phone never shows (the spec's §4.4 says no liveness word;
+    it does not mention titles).
+  - `presence-in-the-head-title`: the head's title carries the count of both kinds and the presence sentence, as the mockup draws it, so
+    the section's accessible name includes them.
 
 ### Task C50: the operator's tidying notes (D-8817) — now
 
@@ -4513,6 +4701,477 @@ title, and no visible "coordinator" text; a worker draws no badge; the command p
   card says the word; it adds one vendored icon and one design-system primitive, and nothing leaves the wire or the server.
 
 **Rollback.** A plain revert.
+
+### Task H1a: the helpers decision, pure (D-8829) — now
+
+**What.** The pure pieces of C49's Helpers section (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.2,
+Figure 2, and §11's H1a row), and nothing that reads, sends or draws: no read, no frame and no UI, which H1b and H2 wire.
+Built on this task's branch, red first: the branch's first commit held 136 cases (30 for the fact parser, 106 for the decision), every
+one failing on `main`; 26 cases were added after the first mutation round, and fix round 1 (review 2961) added 47 more, most of them in a
+commit of their own before its code and the rest after its mutation round (at the tip: 57 and 152 cases, all of them failing on an
+extraction of `main`, where the symbols do not exist; measured):
+
+- `shared/workflows.ts` (L0, K): `AgentHelperView`, `AgentHelperState` (its runtime list, its final states and its words
+  derived from one record), `HelpersUnmeasured`, `HELPER_FINISHED_KEEP_MS` (ten minutes) and `HELPER_KEPT_MAX` (20), the bounds
+  of the Agent arm below, `WORKFLOW_AGENT_TYPE` and `isHelperId`. Nothing in `shared/api.ts`, which stays at its cap.
+- `server/src/transcript/parse.ts` (L1, C3): `helperFactsOf(line)` reads an Agent launch result (`async_launched`, or a
+  foreground `completed` with its report and duration) and a task notification (`completed`, `failed`, `killed`, `stopped`) in
+  BOTH shapes it is written in: a user record whose content is the envelope (the notification reached an idle main thread), and an
+  `attachment` record, a queued command of mode `task-notification` whose `prompt` is the envelope (it reached a busy one; review
+  2961 F1). A notification seen in both folds to one fact.
+  A report and a summary are masked, then cut (review 2900 F15), a report to 16 KiB and a summary to one line of 200 bytes.
+- `server/src/workflows/model.ts` (L1, C3): `decideAgentHelpers` (Figure 2, strongest fact first), `foldHelperFacts`,
+  `isFinishedKept` (the keep's one owner, review 2900 F5), `seenDrops` (the witness of a drop, which the decision itself uses,
+  review 2961 F13), `capKeptWorkflow`, `frameDue` and `isWorkflowAgentName`. `frameDue` is the gate H1b MOVES here: nothing
+  calls it yet and `checkWorkflows` still decides the gate inline, so until H1b deletes that copy there are two, and H1b pins in
+  a characterization case that they agree on today's inputs (review 2961 F9). The id rule is not a new copy: `isHelperId` reads
+  the one `AGENT_ID_RE` of `shared/continuity-reports.ts` (review 2961 F6).
+
+**The witness of a drop (review 2900 F13, review 2961 F2 and F11).** The process start time alone is not sound: a `/clear` or an
+in-session `resume` runs a SessionStart and empties the roster without a new process, and the dispatcher `/clear`s a worker
+between waves. The witness is the roster's own CONTINUITY, vetoed by a measured change of the process start: an id listed in the
+previous roster, absent now, is a seen drop when an id that sat BEFORE it in the previous roster's order is still listed (a reset
+empties the roster whole, and the hook's cap evicts the OLDEST entries first, so an older survivor proves neither happened),
+with fewer than 32 ENTRIES in both readings (the hook counts entries with no id toward its cap) and no change in
+`Proc.live.startedAt` between two readings that measured it; the last measured start is carried across a reading that does not.
+RESIDUALS: the oldest entry's real Stop looks exactly like the cap's eviction, and the last listed id's looks exactly like a
+reset, so those helpers' states are left out (`agentsUnmeasured: { why: 'unseen' }`) rather than called a drop. Such a helper is
+usually final by its notification or its meta's marker a moment later.
+
+**A helper continued after its end (review 2961 F3).** Measured on this box's delegation spool: a continued agent fires a NEW
+`SubagentStart` (116 of 3,323 started agent ids had a start after a stop and a notification, and 87 ids were notified twice), and
+the hook lists it again with the later start; its meta's `finished` marker stays true meanwhile (110 of 122 continued agents'
+metas). So a usable roster that lists the id with a start LATER than the end fact's own time is positive evidence that it runs
+again, and ranks above the end and the marker: the row reads `running`, with no end time, summary or report. Nothing is inferred.
+RESIDUALS: a roster read from a process that is gone, or an end with no readable time, or a start no later than the end's, leaves
+the end where it was; and a helper whose only end evidence is the meta's marker (no notification read) stays `finished` beside a
+listing, because the marker carries no time to compare a start with.
+
+**The roster's read time (review 2900 F6).** `launched` compares the launch result's time with `RosterInput.at`, an input
+H1b fills from `HookReading.at`; `now` decides nothing there (a test moves `now` an hour).
+
+**The bounds (review 2900 F9), each an exported constant.** The Agent arm is at most `HELPER_LISTED_MAX` (32) running rows +
+`HELPER_NONFINAL_MAX` (32) launched, no-longer-listed, session-ended and left-out rows together + `HELPER_KEPT_MAX` (20)
+finished rows = 84 rows; the eviction keeps the newest and `omitted` counts what it evicted. The text fields are capped by
+character, not by byte (the description at 200 characters, three labels at 64 each; only the summary has a byte cap, 200), so a
+row's size depends on its text. MEASURED on a row with every field at its cap, serialised as JSON: ASCII text 895 bytes a row
+(73 KiB for 84 rows); 3-byte characters 1,677 bytes (138 KiB); supplementary-plane characters 1,287 bytes (106 KiB). No byte
+cap is added and none is found on the path; pinning a worst-case row's serialised size belongs where the frame is built (H1b).
+The fold of launch results and notifications keeps `HELPER_FACTS_MAX` (256) ids, and the memory it hands the next reading is
+bounded by the same constant. The workflow arm: a finished (kept) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` (40)
+agents, running and failed first, and says how many it left out; at most 20 finished workflows are kept (H2 applies it). A
+running workflow keeps today's `WORKFLOW_AGENTS_MAX` (120). Not bounded by this task, and said: the count of RUNNING workflows
+(the reader's budget, H1b) and the length of a workflow agent's label and phase (an existing reader's).
+
+**Measured and inferred.** MEASURED on this box's own session transcripts: the launch result's shape (`async_launched` with
+`agentId` and `resolvedModel`); the notification's (`task-id`, `status`, `summary`, `result`) in BOTH record shapes (a user record,
+and an `attachment` record with `queued_command` and `task-notification`; review 2961 F1 counted the second as the only record
+of 27% to 56% of background helpers' notifications); and the foreground `completed` result (39 results, every one a user record
+with a list `content`, a numeric `totalDurationMs` and a `resolvedModel`). MEASURED on the delegation spool: a continued agent
+fires a new `SubagentStart` (above). INFERRED: that the hook's roster lists a continued agent with that later start, from the
+hook's own rule that a start for an unlisted id adds an entry (not read from a live roster).
+
+**Carried to H1b, H2 and the spec, each by name.** To H1b: the roster's read time is stamped by the reader and its readings reach
+the decision in nondecreasing `at`, one memory per feed (review 2961 F7; the fallback read has no time yet); `hookstate.ts`'s
+private `AGENT_ID_RE` folds onto the shared one, with a single-definition holder test (F6); a worst-case row's serialised size
+pinned where the frame is built (F5); `checkWorkflows`' inline gate is deleted and pinned equal to `frameDue` (F9); a `finished`
+row whose last write is read one reading late is held while the tail read is pending (F10c, with the read budget). To H2: a
+finished workflow with no readable end time is drawn once, as §4.3 says, by applying `noEndShown`'s rule where it moves the
+workflow keep onto `isFinishedKept` (F8).
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter that holds each TypeScript file as
+the module text and runs the two new test files against a copy of the tree with that one file replaced): the first round ran 172
+mutants, 172 killed (the decision 106, the fact parser 36, the shared types 30); it left 26 alive, which added a case for each, and
+six mutants were removed rather than killed. Fix round 1 re-ran every branch at the new tip, 249 mutants (the decision 161, the fact
+parser 52, the shared types 30, the id rule 6): 244 killed and 5 equivalent, each named in the note; seven mutants survived once
+(a tie of two ends of one outcome, a previous reading with no measured process start, the new process start held after a restart,
+two edges of the surrogate range, a hyphen and a dot in an id) and each got a case. The tables are in
+`docs/superpowers/programs/desktop-polish/h1a.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8829** — `helpers-decision-pure`: Task H1a, issued on 2026-11-20. The Agent arm's decision is a pure function of its
+  inputs, and it departs from the spec in these places:
+  - `drop-witness-is-continuity` (F13): the witness of a seen drop is the roster's continuity, vetoed by a measured change of
+    the process start, not "no SessionStart between them", which nothing the reader receives states; continuity needs an OLDER
+    survivor (F2). The residuals above are accepted.
+  - `seen-drop-persists`: a seen drop stays `no longer listed` on later readings while the roster stays usable, held in the
+    memory the decision hands back and forgotten when the roster cannot be used. The spec's "listed in one reading, absent in the
+    next" would otherwise flip the row back to a state left out one reading later.
+  - `foreground-start-is-end-less-duration`: a foreground helper's launch result is written when it ENDS, so its start is
+    that time less `totalDurationMs`, else the roster's `startedAt`, else unknown; the spec's "elapsed from the launch result's
+    timestamp" is right for a background launch only.
+  - `agents-unmeasured-for-left-out-states`: `agentsUnmeasured` is sent only while a known helper's state was left out, which
+    is a subset of "a known helper is not final" (a session-ended row needs no word about the roster).
+  - `launch-result-is-positive-evidence`: an id a launch result names is an Agent row even if its roster name or meta would
+    exclude it; the exclusion by name, type and meta path applies to ids no launch named.
+  - `kept-per-arm`: `HELPER_KEPT_MAX` is the cap of each arm (20 Agent rows and 20 workflow rows), not of both together.
+  - `omitted-and-known-leave-the-arm`: the decision returns `omitted` (rows the bounds evicted) and `known` (the frame gate's
+    count of known ids); neither is on the wire yet, and H1b decides whether the first is.
+  - `listing-after-the-end-is-running` (F3): a usable roster that lists the id with a start later than the final notification's
+    time ranks above that notification, where Figure 2 puts the final notification first; the spec says nothing of a helper
+    continued after its end.
+  - `helperfact-type-lives-in-parse`: `HelperFact` is defined in `parse.ts` and imported by `model.ts` as a type only; the
+    spec's table puts the tailer's `HelperFact[]` in `tail.ts`, which only carries it (H1b).
+
+Spec corrections for the coordinator to fold: §3.2's `no longer listed` paragraph (the witness and the residuals above) and its
+Figure 2 (a listing later than the end ranks above it); §4.2's elapsed for a foreground helper; §5's frame bound (the Agent arm is
+84 rows, about 73 KiB for ASCII text and about 138 KiB for 3-byte characters, not 52 KiB's 32 and 20) and the workflow arm's
+bound; and §8's `agentsUnmeasured` condition.
+
+**Acceptance.** The two new suites pass (57 and 152 cases), every suite that imports one of the three modules passes, and
+every mutant of every decision branch goes red. `tsc` passes for `server` and `pwa`.
+
+**Rollback.** A plain revert: nothing reads these pieces yet.
+
+### Task H1c: the bounded start scan (D-8873) — now
+
+**What.** The start scan that H1b split out (D-8862's `start-scan-and-report-request-split`; spec
+`docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1 "The start scan", §5, Table 13's scan tests), and the
+carries of review 3033 (H1b's round 2). At stream start, each reader scans the session transcript backwards from the
+stream's own seam for helper facts only, so a reload and a reconnect draw the same rows within the scan's bound. Nothing is
+drawn by this task. Built red first: the branch's first commit holds the tests, and the note records which failed on `main`.
+
+- `server/src/workflows/helperScan.ts` (new, L3, C3; its header says L3): `HelperStartScan`, `scanCutoff`, `HelperScanSeam`,
+  `HELPER_SCAN_BYTES` (8 MiB), `HELPER_SCAN_CHUNKS` (32) and `HELPER_SCAN_CHUNKS_PER_READING` (4). It walks back with the
+  shared back-reader (`backread.ts#walkBack`) and parses with the tailer's parser (`transcript/parse.ts#helperFactsOf`).
+- `server/src/workflows/read.ts` (L3, C3): the one call site, in `SessionWorkflows.readAll`: the scan's facts join the
+  stream's before the Agent arm reads. The reader owns the scan, so a new session dir rebuilds both. Review 3033 F1 in
+  `markLastWriteUnreadable`. Both by co-edit with the holder of claim 6169, the H2 worker (consent of 2026-11-21: the
+  call site in `readAll`, the field and constructor line, the import, and F1's method).
+- `server/src/transcript/tail.ts` (L3, C3): `BacklogRead.scanEnd` (the window's first byte) and `BacklogRead.cut` (the
+  partial line the window starts in, which the backlog drops).
+- `server/src/sessionws.ts` (L4, C3): the stream's seam, from the backlog or the client's offset on a resume, carried to
+  `readAll`. Four net code lines of its 40 (measured: six code lines in, two out). Review 3033 F8's comment. By co-edit (the H2 worker's consent of 2026-11-21).
+- `server/src/workflows/model.ts` (L1, C3): the fold's ties and bound (review 2900 F4), `orderHelperHook`'s bound (review
+  3033 F4) and the display strip (review 3033 F5). By co-edit (the H2 worker's consent of 2026-11-21).
+- `server/src/sessionFeed.ts` (L4, C3): `PUBLISHED_FRESH_MS` exported and handed to `orderHelperHook`.
+
+**The seam, so no byte is read twice (review 2900 F4).** The scan ends where the stream's forward reading begins: the
+backlog window's first byte on a backlog stream, the client's offset on a resumed one. The backlog drops the partial line its
+window starts in and hands it over as `cut`; the scan's newest read ends in that line's head, and the two are joined, so the
+line is parsed once. A character the seam splits reads as U+FFFD in that one line's text. A resume offset inside a line
+loses that line, for the scan as for the chat (a residual). The scan starts once per reader: a later backlog on the same
+transcript (a re-point) does not restart it.
+
+**Legitimately different from the tailer (review 2900 F4).** The tailer is the other reader of the session transcript. It
+reads forward from the seam, for the chat and its helper facts, for the stream's life. The scan reads backward from the same
+seam, once, for helper facts only, bounded by time and bytes. The two read disjoint bytes and share the parser and the
+back-reader. The record is in `helperScan.ts`' header.
+
+**The pace and the cost (review 2900 F10).** The scan reads in `READ_FROM_MAX_BYTES` (256 KiB) reads, the agent link's own
+cap, not the spec's 64 KiB: 32 reads at most, at most 4 a reading (1 MiB, the spec's pace), so it ends within 8 readings,
+about 16 s at the 2 s tick. It runs OUTSIDE the feed's polling gate: `step` grants the reads and returns the facts found so
+far, and never awaits a read. So a reading never waits for the scan, and the feed's next reading is not held back for any
+socket on the session. A read still in flight counts against the next grant, so at most one read per scan is in flight. A scan
+nobody steps stops after its last grant. Each open socket has its own reader, so two sockets on one session run two scans:
+at most 16 MiB, 2 MiB a reading over the same 8 readings, two reads in flight. **Measured** on this box (local reads, load
+about 9, 2026-11-21), at stream start on four real transcripts of 2.0 MB, 2.8 MB, 11.5 MB and 1.05 GB: each scan stopped on
+time after one 256 KiB read (each window's oldest lines were older than ten minutes), in at most 3 ms. With a listed helper
+that started long ago (the worst case), the two large files read 8 MiB in 32 reads over 8 readings, with 32 and 46 ms of read
+time in all for two sockets. The two small files read their whole prefix below the seam, 0.98 MB and 1.8 MB, in 4 and 7
+reads. A `step` took at most 0.21 ms. **Inferred:** in remote mode each read is one agent round trip, which this local
+measurement does not cover.
+
+**The same rows, only within the bound (review 2900 F11).** A reload and a reconnect draw the same rows once their scans
+end, when every fact a row needs lies within the bound. Until a scan ends, rows fill in. Beyond the bound:
+
+- a helper the roster lists draws `running`, its start from the roster;
+- a listed helper whose meta says finished draws `finished`, ending at its last write, with no summary or report;
+- a helper neither listed nor named by any fact the stream read is unknown to the reader and draws no row, while a socket
+  that was open when it ran may still show it in the keep.
+
+A drop is a second difference. A socket that saw a helper drop off the roster draws it `no longer listed`. A new reader
+has no earlier roster to compare with, so that helper's state is left out (`agentsUnmeasured: unseen`) until a final fact or
+its meta's marker decides it. Likewise, a row already drawn once with no end time leaves an old socket on the next
+reading, and a new reader draws it once again.
+
+**The carries of review 3033.**
+
+- F1 taken: a failed final stat or range read keeps a last write already measured, so the row ends at it and is kept.
+  Only a helper whose last write was never measured ends with no time.
+- F2, F3 and F6 taken as cases: the early reserve against a burst of twelve new ids, the 12-call bound with every range
+  read failing (open and final helpers), and a held helper stat'ed once.
+- F4 taken: `orderHelperHook(last, next, lagMs)` holds an older read only within `lagMs`, the feed's freshness window
+  (`PUBLISHED_FRESH_MS`, 10 s). A read older by more is a clock step and is taken, so the helper roster freezes for at most
+  10 s after the clock steps back. **Inferred** bound: a published copy older than the window is not the reading, and the
+  fallback read is stamped when it returns, so a lag cannot be longer under a monotonic clock.
+- F5 taken: display text is `shared/unprintable.ts#stripLine` after lone surrogates are removed. A run of the set is now a
+  space, where it was nothing, and format, bidi, line-separator and U+2060-U+206F characters are removed too. The frame's
+  byte bound is unchanged or lower: the strip never lengthens a string.
+- F7 and F8 corrected. F9 (this plan's H1b slug) and F10 (`h1b.md`'s `model.ts` row) are records for the coordinator to
+  fold: the memory is one per feed, and `model.ts` also exports `workflowLastActivity`, `orderHelperHook` and the strip. F11:
+  this branch's commits carry their trailer as a trailer. F12 to F14 are H1b's records.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1b's kind of adapter, one test file per
+process in a scratch copy of the tree): round 1 killed 45 of 52 mutants. Seven survived: a seam line longer than one read,
+the summary and report ranks, the tie of evicted ids, the stream's cut, and the stream's seam offset each got a case. The
+`from` rank was equivalent and was removed. Round 2 killed 42 of 42. The tables are in
+`docs/superpowers/programs/desktop-polish/h1c.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8873** — `bounded-start-scan`: Task H1c, issued on 2026-11-21. The bounded start scan, and the carries of review
+  3033. It departs from the spec in these places:
+  - `scan-in-its-own-file`: the scan is `server/src/workflows/helperScan.ts`, not part of `read.ts` as Table 12 says. It is
+    called from `read.ts` once (`SessionWorkflows.readAll`), so the helper reads and the scan change for their own reasons.
+  - `scan-reads-at-the-link-cap` (review 2900 F10): reads of `READ_FROM_MAX_BYTES` (256 KiB), at most 4 a reading, not 64
+    KiB chunks, at most 16 a reading. The bytes per reading are the spec's.
+  - `scan-outside-the-polling-gate` (review 2900 F10): a reading starts the scan's reads and never awaits them. Their facts
+    reach the next reading.
+  - `scan-ends-at-the-seam` (review 2900 F4): the scan reads only below the stream's own reading (the backlog window's first
+    byte, or the client's offset), and parses the line the window cut, from the backlog's `cut`. The spec says only
+    "backwards".
+  - `scan-once-per-reader`: a second backlog on the same transcript does not restart the scan. A new session dir rebuilds
+    the reader, and its scan with it.
+  - `scan-cutoff-is-listed-agent-helpers`: the time bound counts only roster entries with a helper id that are not a
+    workflow's agent.
+  - `fold-is-order-independent` (review 2900 F4): ties are broken by one rule (the more telling outcome, then a summary,
+    then a report, then content) and the fold keeps the ids with the newest facts. This replaces H1a's "the newer read" and
+    "the least recently touched". Past `HELPER_FACTS_MAX` ids, an evicted id's later fact starts it afresh (a residual).
+  - `measured-last-write-survives` (review 3033 F1): both arms of a failed final read keep a measured last write. This
+    reverses D-8862's `finished-held-until-its-last-write-attempt` "with no last write or end time" for a helper whose last
+    write was already measured.
+  - `helper-roster-freeze-bounded` (review 3033 F4): `orderHelperHook` takes the feed's freshness window as its bound.
+  - `display-text-is-the-shared-strip` (review 3033 F5): one rule with every other one-line string.
+  - `same-rows-within-the-bound` (review 2900 F11): the spec's equality holds only within the bound, as said above.
+
+Spec corrections for the coordinator to fold:
+
+- §3.1, "The start scan": the seam; the reads of 256 KiB; outside the polling gate; and, where it says "So a reload and a
+  reconnect get the same rows within that bound", what a helper beyond the bound and an unseen drop draw (above).
+- §5, Table 7's "A reload or a reconnect" row: "The same rows once the scan ends, within its bound; a drop the new reader
+  did not see is left out".
+- §5's start-scan paragraph: 256 KiB reads, 4 a reading, the two-socket cost, and the measurement above, which replaces
+  "Measured cost of a typical case is unknown until H1b builds it".
+- Table 12: a `helperScan.ts` row (L3, C3), and the scan leaves the `read.ts` row.
+- Table 13: the scan's tests move from H1b's row to an H1c row.
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or is recorded as equivalent, and `tsc` passes for `server`, its tests and `pwa`.
+
+**Rollback.** A plain revert. The scan only adds facts the fold already accepts. The fold's new tie rule and bound, the
+bounded order and the strip go back to H1b's.
+
+### Task H1b: the helpers reach the frame and the store (D-8862) — now
+
+**What.** C49's H1b row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1, §5, §8, Table 12 and Table
+13's H1b row), less two pieces the coordinator moved out (the first departure below): H1a's pure decision is wired to the
+session's reads, the helpers go on the session's `workflows` frame, and the PWA's store accepts them. Nothing is drawn yet:
+H2 draws. Built red first: the branch's first commit holds the tests, each failing on `main` except those labelled
+characterization pins in the note.
+
+- `shared/continuity-reports.ts` (L0, K): `isAgentId`, the one guard over the one `AGENT_ID_RE`; `shared/workflows.ts`'s
+  `isHelperId` is it, `server/src/hookstate.ts`'s private copy of the rule is gone, and `continuity/hookReports.ts`'s private
+  guard is gone (review 2961 F6, review 2978 F5). A single-definition case pins both holders.
+- `server/src/hookstate.ts` (L3, C1): the roster keeps its optional `id`; one that fails the rule reads as absent, never as a
+  malformed state. `server/src/fleet.ts` (L3, C1) strips it, so `FleetSession.subagents` and the state cache are unchanged.
+- `server/src/sessionFeed.ts` (L4, C3): `FeedReading.helperHook` pairs the roster with its read time (the published copy's
+  `at`, else the moment the fallback read returned). The helper roster alone is ordered per identity; every other hook
+  consumer gets the latest read, as before (reviews 2900 F6, 2961 F7 and 3014 F3).
+- `server/src/transcript/tail.ts` (L3, C3): the tailer's second output, `HelperFact[]`, emitted as `helpers` beside the
+  chunk's events, and the backlog's facts from its whole window (`BacklogRead.helpers`, absent when none).
+- `server/src/workflows/read.ts` (L3, C3; its header now says L3): `SessionHelpers`, the reads BY ID with the helper tier
+  (`HELPER_READS_PER_TICK` = 12) in the spec's order and its rotation, owned by `SessionWorkflows` (`readAll`); and
+  `lastActivityAt` on every workflow row, the newest write the reader measured (its journal's or a running agent's
+  transcript's).
+- `server/src/workflows/model.ts` (L1, C3): `rosterInputOf` (the raw hook read and its time into the decision's roster, each
+  `HelpersUnmeasured` reason told apart), `orderHelperHook`, `parseHelperMeta`, `lastLineTime`, `workflowLastActivity`,
+  `isAgentHelper` (the agent rule the decision and reader share), and `helpersFrame` (the frame, gated by `frameDue`).
+- `server/src/sessionws.ts` (L4, C3): `checkWorkflows` carries the ordered roster read, the tailer's facts and the session
+  dir to the reader, and sends what `helpersFrame` decides. The characterization table compares the old inline gate with
+  `frameDue` on all 16 inputs before deleting it (review 2961 F9). It copies the old gate and needs the new frame builder,
+  so it is not a suite that loads on main (review 3014 F8). Seven net code lines of its 40.
+- `shared/api.ts` (L0, K): the `workflows` member is the intersection with `HelperFrameMembers` (`agents?`, `agentsUnmeasured?`,
+  `readEvery?`, defined in `shared/workflows.ts`), two existing lines edited, zero net code lines, by co-edit with the holder
+  of its claim (the holder's consent of 2026-11-20).
+- `pwa/src/stores/session.ts` (L4, C3): `agents`, `agentsUnmeasured` and `readEvery` in `SessionState`, `SessionSnapshot` and
+  `snapshotOf`, replaced with every frame (absent is none), and cleared with the workflow rows at the three client reset
+  sites (a backlog onto another transcript, the initial state, `disconnect()`). On the server, `sendBacklogAndTail` restates
+  the frame (its gate resets, as before) and restarts the facts from the backlog's, and a new session dir rebuilds the reader,
+  which forgets the old dir's helpers with its workflows. **H2:** Table 11's absence draws nothing; it cannot distinguish
+  an older server from a current server with no helper rows (review 3014 F13). There is no new protocol marker.
+
+**The carries, each taken or left.** Review 2900: F6 taken (the helper roster's read stamp, its test); F14 taken as the split
+below. Review 2961: F7 taken (only the helper roster is ordered per identity, one memory per feed); F6 taken; F5 taken (the
+serialized Agent arm bound below); F9 taken; F10c taken (the hold below).
+Review 2978: F1 taken (two characterization pins: an unmeasured process with a later listing reads running; an unlisted helper
+whose meta was written after its end keeps its end); F2 taken (a pin for a sibling-first envelope, and the H1a note's rows
+corrected: that mutant is not equivalent); F3 taken as a comment and a residual (below), the memory's shape kept; F5 taken; F4
+and F6 left, records the coordinator folds. Review 3014: F1–F5 taken; F6 and F7 corrected in the records; F8 clarified, not
+moved (the gate is unchanged this round); F9 and F10 taken; F11 left (rotation cursor unchanged; churn can defer a row);
+F12 gains a behavioral clock-step test, while the historical reds and the PWA fallback test are unchanged; F13 noted for H2.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1a's kind of adapter: each TypeScript file held
+as a module's text, each mutant run in a scratch copy of the tree): the initial round measured 94, with 92 killed, one
+accepted non-equivalent survivor (the prefilter on JSON-escaped input the writer does not emit) and one equivalent survivor
+(the reducer's snapshot members). The review fix adds 15 killed mutants, including the five review 3014 F5 cases; the
+initial and fix-round tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8862** — `helpers-reach-the-frame`: Task H1b, issued on 2026-11-20. The helpers reach the session frame and the store,
+  and it departs from the spec in these places:
+  - `start-scan-and-report-request-split` (review 2900 F14, the coordinator's call): the start scan of the transcript moves to
+    a task H1c after this one, with its own measurement, and the `helper-report` request moves to H2, its first user. Until H1c,
+    a stream that starts mid-session knows the facts of the backlog's window (the last 1 MiB) and what it tails after.
+  - `agent-arm-beside-the-workflow-read`: the spec moves `SessionWorkflows.read`'s early return "inside the workflow arm"; H1b
+    leaves `read` as the workflow arm, unchanged, and adds the Agent arm as a sibling reader (`SessionHelpers`) that
+    `SessionWorkflows.readAll` runs regardless of it.
+  - `finished-held-until-its-last-write-attempt` (reviews 2961 F10c and 3014 F1): a meta that says `finished` is held until
+    the reader attempts the last-write measurement. Meanwhile the row reads what else is measured (running when listed).
+    A failed stat or range read releases the hold on that reading, with no last write or end time; the final row can be
+    drawn once and the final read is not retried.
+  - `tier-costs-as-built` (review 3014 F2): step 4 re-stats open helper metas and listed ids whose meta was missing. The
+    first re-stat also wants a read (the first meta read stored no stat). A changed stat whose read does not fit is saved;
+    the read leads step 4 next time. Step 5 attempts any final helper's unread last write or one whose meta says `finished`,
+    not only those first seen final. Reserve one call for due step 4 and two for due step 5 (stat and a nonempty range),
+    inside the same 12-call budget.
+  - `hook-order-applies-only-to-the-helper-roster` (reviews 2961 F7 and 3014 F3): the feed holds one ordered helper roster
+    per active identity via `model.ts#orderHelperHook`. The fallback is stamped on return. The hook ask and other readers
+    keep the latest raw read even after the wall clock steps back.
+  - `helper-display-text-json-bound` (review 3014 F4): strip controls and lone surrogates from display text, including
+    transcript-derived model labels and summaries, not reports. A final row is at most 1,905 serialized bytes; the frame
+    with no legacy workflow rows is below 134,000 bytes even with Agent qualifiers and JSON escaping.
+  - `no-hook-read-is-unreadable`: a reading that carries no hook read (only a direct call, today) gives the roster
+    `unreadable`, never an empty listing.
+  - `omitted-stays-off-the-wire` (H1a's `omitted-and-known-leave-the-arm`): `AgentArm.omitted` is not put on the frame; it has
+    no reader until H2, which decides.
+  - `workflow-last-activity-is-the-newest-mtime`: `WorkflowView.lastActivityAt` is the newest mtime the reader measured, the
+    journal's or a running agent's transcript's, for running and finished rows alike.
+  - `helper-facts-prefilter`: `helperFactsOf` returns at once for a line that names neither `"toolUseResult"` nor
+    `<task-notification>`, because the tailer now asks it of every line.
+  - `continued-older-id-still-a-survivor` (review 2978 F3, a residual): the drop witness's memory keeps ids, not their starts,
+    so an older id stopped and re-added between two readings that also reset the roster still counts as a survivor, and the
+    newer ids read `unlisted` (no end claimed) rather than left out. The comment in `seenDrops` says so; the memory's shape is
+    kept, because the case needs a reset and a continued helper's new start inside one 2 s reading.
+
+Spec corrections for the coordinator to fold: §3.1 (the split; the Agent arm as a sibling reader; `frameDue` from
+`helpersFrame`, not `workflowsFrame`); Table 7 and §5 (the start-scan guarantee waits for H1c); §5's helper tier (hold,
+listed meta retry, final attempts and reservations above) and its frame-size sentence (the serialized Agent arm bound);
+Table 12 (`sessionFeed.ts` carries the ordered roster read; the Agent rule stays in `model.ts`); Table 13's H1b row (less the
+start scan and the report request) and an H1c row.
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or its disposition is recorded in the note, `tsc` passes for `server`, its tests and `pwa`.
+
+**Rollback.** A plain revert: the frame's new members are additive (an older PWA ignores them), and the roster's `id` never
+leaves the server.
+
+### Task H2: the Helpers section in the session panel (D-8872) — now
+
+**What.** C49's H2 row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4, §5, §8 Table 11, §10 and
+Table 13's H2 row), plus the helper report moved here from H1b (the coordinator's split on review 2900 F14). The operator's
+words of 2026-11-19: "inside the session in the right hand panel I still want to see actual information about any running
+workflows and subagents, for the session i'm inside of, in a useful way though please". H2 draws the Helpers section from
+what H1a and H1b put on the frame. Built red first: the branch's first commit holds the tests, each failing on `main`
+except five labelled characterization pins.
+
+- `ui/src/components/workflow-strip.tsx` (the design system), extended in place: the workflow strip of D-5560 becomes the
+  Helpers section. `HelpersStrip` under the transcript (a head, a glance of two running rows, then the rows and the
+  finished fold) and `HelpersPanel` in a column of its own; a row's facts per Tables 5 and 6, each measured or left out;
+  each state's glyph (review 2900 F16); a finished row with a report opens to its first four lines, Show all and Copy.
+  `workflow-strip.css` holds the styles (the fold toggle, the opening row and the report's links at `--tap-min`, review
+  2900 F18; tokens left out of a section under 480 px wide).
+- `pwa/src/session/helpersWords.ts` (L1, C3, new): the head's counts and its "not known" lines (Table 4), said once and only
+  while a row they concern is drawn, and the main list and the finished fold. Absence draws nothing (review 3014 F13).
+- `pwa/src/inspector/HelpersSection.tsx` (L4, C3, new): the rail's section at 1600 px and up, and the column's strip, which
+  `SessionScreen` draws only while the rail does not hold it (the mail and task strips' rule, so a hidden rail brings it
+  back). `InspectorSections` and Refined's `InspectorRail` place it after Mail.
+- `pwa/src/stores/session.ts` (L4, C3): `requestHelperReport(id)` sends the request; the reducer applies the answer into
+  `reports`, keeps only the ids the frame still carries, and the three reset sites clear it.
+- `server/src/workflows/model.ts` (L1, C3): `keepWorkflows` replaces `selectRows` and asks `isFinishedKept`, the keep's one
+  clock (review 2900 F5); `holdReports`, `boundReports` and `reportAnswer`. `shared/workflows.ts`: `HelperReportRequest`,
+  `HelperReportAnswer`; `WORKFLOW_EVICT_MS` retired with its pins.
+- `server/src/workflows/read.ts` (L3, C3): `finishedView` asks `isFinishedKept`; a kept finished run is held as read and
+  left quiet (no stat per reading); `SessionHelpers` holds the reports and answers `reportOf`.
+- `server/src/sessionws.ts` (L4, C3): `helperReport(id)` sends the answer, one method. `server/src/server.ts`:
+  `asSessionClientMsg` reads the request (an agent id by `isHelperId`, else null) and the socket handler routes it, by
+  co-edit with the holder of its claim (consents of 2026-11-21, below).
+- `shared/api.ts`: the import line, `SessionClientMsg` and the frame's union edited in place, zero net code lines (it
+  stands at 5110 of its 5140 cap here; #3134 takes it to 5140), by co-edit with the holder of its claim.
+
+**The carries, each taken.** Review 2900: F5 (the keep's one owner, and a kept finished run costs no stat per reading), F7
+and F15 (a report masked, then cut at 16 KiB with `cutAt`'s back-off, at parse time since H1a; held and answered here, with
+its `cut`), F14 (the report request, on all three layers), F16 (each state's glyph: only `running` draws the filled diamond
+in the running ink; `launched`, `no longer listed`, `session ended` and a state left out draw the hollow diamond in a
+neutral ink; `done` ✓ done ink, `failed` ✗ dead ink, `stopped` ■ and `finished` ✓ neutral; a workflow ▣ running, ✓, ✗, ■;
+the mockup's two stale rows redrawn and its figure re-rendered), F18 (the fold toggle, the opening row and Show all and
+Copy floor at `--tap-min`). Review 2961 F8 (a finished workflow with no readable end time is drawn once: `keepWorkflows`
+applies `noEndShown`'s rule). Review 3014 F13 (the words module says why absence draws nothing).
+
+**Consents.** `shared/api.ts` (claim 6133, run 2958): yes, 2026-11-21, for the import line, `SessionClientMsg` and the
+frame's member with its comment. `server/src/server.ts` (claim 6166, run 3027): yes, 2026-11-21, for the parser and the
+socket handler, and then for the one `isHelperId` import line; the hierarchy route registration is untouched. H1c (run
+3044): its call site is in `SessionWorkflows.readAll`, not inside `SessionHelpers.read`; I said yes, 2026-11-21, to its
+lines in `read.ts`, `model.ts` and `sessionws.ts` and named mine, which do not overlap.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8872** — `helpers-section-drawn`: Task H2, issued on 2026-11-21. The Helpers section is drawn from the frame, the
+  workflow keep is the helpers' ten minutes, and a finished helper's report travels on request. It departs from the spec in
+  these places:
+  - `reports-held-for-drawn-rows`: the reader holds the reports of the fold's own end facts: every report of a row drawn
+    with `hasReport`, and the newest `HELPER_KEPT_MAX` of the rest by end time (so at most 40 of at most 16 KiB each), and
+    answers a report only for a row the last reading drew with `hasReport`; §8 says only that a report is at most 16 KiB.
+  - `report-answer-null`: an unknown or evicted id is answered `report: null`, which the row says as "This report is no
+    longer held"; an older server never answers, and the row then shows nothing, never that there is none.
+  - `keep-workflows-replaces-select-rows`: `selectRows` retires; `keepWorkflows` is the workflow arm's keep, which also
+    applies the 20-row cap and the 40-agent cut that H1a named for H2. A finished workflow with no readable end time cannot
+    arise from today's reader (`summaryView` always gives the summary's file time), so its draw-once rule guards the type's
+    null.
+  - `finished-view-gates-on-the-summary-time`: `finishedView` asks `isFinishedKept` of the summary's mtime, which is never
+    earlier than the end it records, before it reads the summary; `keepWorkflows` rules on the row's own end time.
+  - `kept-run-quiet-from-first-read`: a kept finished run is re-stat'ed every `RESTAT_EVERY` readings (about 30 s), like a
+    dropped one, so a resume in place of a run inside its keep shows up to 30 s later than before.
+  - `head-counts`: the head counts `N running` (Agent helpers and workflows), else `N helpers` for the main list, then
+    `M finished`; a `no longer listed` or `session ended` row is in the main list and not counted as running.
+  - `workflow-unreadable-in-the-head`: the old strip's two unreadable sentences move to the head, as `workflow state could
+    not be read` and `workflow state not re-read: showing the last read`; Table 4 does not list them.
+  - `rail-panel-always-open`: in the rail the section is always open, with its counts and notes as one line under the
+    rail's own heading; the rail places it after Mail.
+  - `tokens-follow-the-section-width`: line 2 leaves the tokens out whenever the section is under 480 px wide (a container
+    query), so in the 320 px rail too, not only on a phone.
+  - `workflow-row-opens-its-phases`: a workflow row, running or finished, opens by its line 1 to the phases and agents the
+    old strip showed, with its done-agents fold; Table 6 names only finished workflows.
+  - `glance-at-every-width`: the collapsed glance (line 1 of the first two running rows) is the same at every width; §10
+    describes it for the phone.
+  - `finished-time-is-the-duration`: a finished row's time is its duration (end less start) in the shared formatter, so
+    Table 6's `finished · 6m` reads `finished · 6m0s`.
+
+Spec corrections for the coordinator to fold: §4.3 and §8 (the held reports, their bound, and the null answer); §4.1's
+Table 4 (the workflow-unreadable lines); §4.2's Table 5 and §10 (tokens by the section's width); §4.3's Table 6 (a running
+workflow opens too); Table 12 (`HelpersSection.tsx` also exports the column's strip; the design system's `HelpersPanel`).
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H1a's and H1b's: each
+TypeScript file held as a Python module's text, each mutant written into a scratch copy of the tree outside the work tree,
+removed after the run, its test files run once through `ccrc test`): 77 mutants at the tip, 73 killed and 4 accepted (two change only what the stream holds in memory, never an
+answer; one is a branch the reader cannot reach; the fourth, `bound-shown-without-report`, does change an answer and became
+the code in fix round 1, review 3072 F5). The first pass found one defect, fixed here (a notification that is no row's could
+evict a drawn row's report: `boundReports`), and seven missing cases, each added. Fix round 1 ran 44 mutants of the branches
+it changed: 44 killed. The tables are in `docs/superpowers/programs/desktop-polish/h2.md`.
+
+**Looked at in the real app.** The production build, through the browser harness, at 360, 1280 and 1600 px, in Refined and
+Instrument, dark (Phosphor) and light, the strip collapsed and open, the fold open and a report expanded: the screenshots are
+in the note and under `docs/design/2026-11-19-session-helpers-design/h2/`. The first look found a defect, fixed in this
+task: at 360 px the glance cut line 1 to one letter (the row glyph's grid area leaked into the glance's grid); the
+real-Chrome test now checks the glance's order, room and line. Fix round 1 retook every image, and its look found the narrow
+rail clipping a too-long state group, fixed there.
+
+**Fix round 1 (review 3072).** F1 (the meter-ring block of `lanes-row.browser.test.ts` selects the Helpers row's meter), F2
+(an answer is kept with its row's end), F3 (a state outside the vocabulary draws the neutral glyph), F4 (no answer before the
+stream's first reading; the store owns the ask and asks again after a stream's first frame; no wire change), F5, F6 (spec §10
+followed: at the phone width elapsed is in line 2), F7, F8, F11, F12, F13 and F14's separators, each with its case; F9, F10
+and the rest of F14 are records in the note. **The matrix that binds H2 is its brief's** (360, 1280 and 1600 px, both skins,
+light and dark, the fold open and closed, a report expanded); the "Acceptance (the matrix, per PR)" section below, with 390
+and 1920, is the programme's final gate, not this task's.
+
+**Acceptance.** The new suites pass (server 2 files, PWA 4 files and the real-Chrome file), every suite that imports a
+changed module passes, every mutant of a new decision branch goes red or its disposition is recorded in the note, `tsc`
+passes for `server`, `pwa` and `ui`, and the PWA builds.
+
+**Rollback.** A plain revert: the request is additive (an older server ignores it) and the answer is a new frame an older
+PWA's reducer ignores; the keep reverts to 30 s with the old constant.
 
 ## Acceptance (the matrix, per PR)
 

@@ -228,8 +228,9 @@ export function questionDoorIns(root: string = REPO): DoorInSite[] {
 
 /** The `CoordStore` question methods, a CLOSED list (slug question-census): every public `CoordStore` method whose
  *  name says ask, approval or question is on it, or on `NOT_QUESTION_STORE_METHODS`, and the census test reds on a
- *  method on neither (`coordStoreQuestionShapedMethods`). 35 (answer marks B added `askMarkTargets` and `askMarkRead`;
- *  approvals PR 1 `approvalRowsForCensus`, which the census read reaches through `questions.ts#censusSources`). */
+ *  method on neither (`coordStoreQuestionShapedMethods`). 43 (answer marks B added `askMarkTargets` and `askMarkRead`;
+ *  approvals PR 1 `approvalRowsForCensus`, which the census read reaches through `questions.ts#censusSources`; approvals PR 3
+ *  the park's eight). */
 export const QUESTION_STORE_METHODS: readonly string[] = [
   'askById', 'insertAsk', 'asksForParent', 'heldAskFor', 'currentAskFor', 'currentAsksFor', 'takeAskForAnswer', 'untakeAsk',
   'settleAsk', 'releaseAsk', 'declineAsk', 'staleAsk', 'restampAsk', 'heldQuestionRows', 'heldApprovalRowsByChild',
@@ -241,6 +242,11 @@ export const QUESTION_STORE_METHODS: readonly string[] = [
   'askMarkTargets', 'askMarkRead',
   // Approvals PR 1: the census read's minted rows, reached through `questions.ts#censusSources`.
   'approvalRowsForCensus',
+  // Approvals PR 3, the park (each reached only from the questions owner, over `approvalParkStore.ts`): the mint with its
+  // park step, the one write of `parked`, the last-poll move's read, the ruling read's `fetchedAt`, the park's read, its
+  // ruling's record and spend, and its prune.
+  'insertApprovalAt', 'parkApprovalRow', 'approvalsUnfetchedLive', 'markApprovalFetched', 'approvalPark',
+  'recordApprovalParkRuling', 'meetApprovalParkRuling', 'pruneApprovalParks',
 ];
 
 /** Public `CoordStore` methods whose names look like a question method and are not one, each with why. */

@@ -308,8 +308,9 @@ function requestShapeOf(raw) {
 }
 
 /** D-8743: a plain `X.Y.Z` of decimal numbers, no leading zero, each at most six digits: the one shape a catalogue's
- *  `clientVersion` takes. The probe's Codex arm applies the same bound in its own language (`_codex_release_lookup_program`,
- *  the request program and the normaliser, ccd/ccrc-models-probe). */
+ *  `clientVersion` takes. This is the server's reader, in its own language; on the box the version's grammar is the
+ *  Codex auth library's `CLIENT_VERSION_RE` (ccd/ccgpt-auth.py, which the probe's release lookup and request program
+ *  load), and the probe's normaliser, which loads no library, checks the value it is handed with the same bound. */
 const PLAIN_VERSION_RE = /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/;
 const isPlainVersion = (v) => typeof v === 'string' && PLAIN_VERSION_RE.test(v);
 

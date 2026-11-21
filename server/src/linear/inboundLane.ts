@@ -18,7 +18,7 @@ import type { CoordStore } from '../coord/store.js';
 import type { InboundRow, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam, teamOwnerProject } from '../coord/planPolicy.js';
+import { ccrcIssueIds, linearOwnerOfTeam, ownerItemReady, teamOwnerProject } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
 import {
@@ -31,6 +31,7 @@ import { textFactOfTeam, textRefusalOf, uuidOf } from './planSyncPolicy.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
 import type { DriftPassDeps } from './driftPass.js';
 import type { LinearStoreRead } from './store.js';
+import { measuredTeamRoutes, type TeamRoutes } from './route.js';
 
 type Deps = Pick<DriftPassDeps, 'coord' | 'plan' | 'planSync' | 'readLinearStore' | 'call' | 'now' | 'presenceOf' | 'viaFleet' | 'directory'>;
 type Node = Record<string, unknown>;
@@ -180,10 +181,12 @@ export class InboundLane {
 
   /** Route, then act. Never throws: a failure of one is a warning, and the other still runs. */
   async tick(now: number): Promise<void> {
-    for (const [name, step] of [['route', () => this.route(now)], ['answers', () => this.answered(now)]] as const) {
+    const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
+    const routes = measuredTeamRoutes(store);
+    for (const [name, step] of [['route', () => this.route(now, routes)], ['answers', () => this.answered(now, routes)]] as const) {
       try { step(); } catch (err) { console.warn(`ccrc-server: linear inbound ${name} failed: ${err instanceof Error ? err.message : String(err)}`); }
     }
-    try { await this.act(); } catch (err) { console.warn(`ccrc-server: linear inbound act failed: ${err instanceof Error ? err.message : String(err)}`); }
+    try { await this.act(store, routes); } catch (err) { console.warn(`ccrc-server: linear inbound act failed: ${err instanceof Error ? err.message : String(err)}`); }
   }
 
   private ownerFacts() {
@@ -192,20 +195,24 @@ export class InboundLane {
   }
 
   /** A `waiting` issue goes to its team's owner when it is live or unmeasured; otherwise it waits and its project raises the item.
-   *  An open item settles when its project's owner reads live. A team no project holds has no owner row: its issues wait quietly. */
-  private route(now: number): void {
+   *  An open item settles when the workspace's owner reads live and none of its team's issues still wait. */
+  private route(now: number, routes: TeamRoutes | null): void {
     const { plan, coord } = this.deps;
     const { rows, facts } = this.ownerFacts();
     const noOwner = new Set<string>();
+    const waiting: InboundRow[] = [];
     for (const row of plan.inboundByState(null, ['waiting'])) {
-      const owner = linearOwnerOfTeam(row.teamKey, rows, facts);
-      if (owner === null) continue;
-      if (owner.id !== null && !owner.gone) this.mailOwner(row, owner.id, now); else noOwner.add(owner.project);
+      const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId, routes);
+      if (owner.kind === 'owner' && owner.id !== null && !owner.gone) this.mailOwner(row, owner.id, now);
+      else {
+        waiting.push(row);
+        if (owner.kind === 'owner') noOwner.add(owner.project);
+      }
     }
     const open = coord.itemsFor(LINEAR_SYNC_PROGRAMME, now).open.flatMap((i) => (i.action?.verb === 'linear-owner' ? [{ id: i.id, project: i.action.project }] : []));
     for (const project of noOwner) if (!open.some((i) => i.project === project)) this.raiseOwnerItem(project, now);
     for (const item of open) {
-      if (!linearOwnerOfProject(item.project, rows, facts).live) continue;
+      if (!ownerItemReady(item.project, rows, facts, routes, waiting)) continue;
       coord.moveItem(item.id, 'settle', 'ccrc', { note: 'A Linear owner is live: the waiting issues were mailed to it.' }, now, { programmeHasOpenRun: false });
     }
   }
@@ -235,14 +242,14 @@ export class InboundLane {
   /** A `raised` issue whose operator item is answered or closed (any state but `open`) goes back to its team's owner, as a mail
    *  carrying the operator's answer, and the row is `mailed` again; an item still `checking` settles in the same transaction. With
    *  no usable owner the row stays `raised` until there is one. */
-  private answered(now: number): void {
+  private answered(now: number, routes: TeamRoutes | null): void {
     const { coord, plan } = this.deps;
     const { rows, facts } = this.ownerFacts();
     for (const row of plan.inboundByState(null, ['raised'])) {
       const item = row.itemId === null ? null : coord.itemById(row.itemId);
       if (item !== null && item.state === 'open') continue;
-      const owner = linearOwnerOfTeam(row.teamKey, rows, facts);
-      if (owner === null || owner.id === null || owner.gone) continue;
+      const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId, routes);
+      if (owner.kind !== 'owner' || owner.id === null || owner.gone) continue;
       const ownerId = owner.id;
       const m = answeredMail(row, { state: item === null ? 'gone' : item.state, text: item === null ? null : item.answer }, row.itemId);
       const queue = (): void => {
@@ -264,11 +271,11 @@ export class InboundLane {
   /** For each `closed` issue not yet acted: one comment (the reason, or a fallback with no text when the reason fails the public-text check now), then the cancel, inside the issue's own flight; the row
    *  is `actedAt` only after both are ok (a comment answered `conflict` is one made already). A directory not yet read waits
    *  without a word; a team with no `canceled` status mails the owner once and leaves the row. */
-  private async act(): Promise<void> {
+  private async act(store: LinearStoreRead, routing: TeamRoutes | null): Promise<void> {
     const { plan, directory, planSync } = this.deps;
     const rows = plan.inboundByState(null, ['closed']).filter((r) => r.actedAt === null);
     if (rows.length === 0 || directory === undefined) return;
-    const slots = slotsOf(await this.deps.readLinearStore());
+    const slots = slotsOf(store);
     for (const row of rows) {
       const slot = slots.get(row.workspaceId);
       const entries = slot === undefined ? null : directory.get(slot.ref, slot.digest);
@@ -276,7 +283,7 @@ export class InboundLane {
       const now = this.deps.now();
       if (inboundHeld(this.holds.get(row.workspaceId), now) || planSync.keyBlockedUntil(row.workspaceId) > now) continue;   // held: nothing is sent
       const canceled = statusOfType(entries, 'issue', 'canceled', row.teamKey);
-      if (canceled === null) { this.mailNoCancel(row); continue; }
+      if (canceled === null) { this.mailNoCancel(row, routing); continue; }
       await planSync.withFlight(`inbound:${row.linearId}`, async () => {
         const fresh = plan.inboundOf(row.linearId);
         if (fresh === null || fresh.state !== 'closed' || fresh.actedAt !== null) return;
@@ -284,8 +291,13 @@ export class InboundLane {
         // Linear; a read that cannot be made is a refused step of the close (the same words, holds and mails), and writes nothing
         const seen = await this.readById(fresh, slot);
         if (seen.kind === 'retire') { this.retire(fresh, seen.why, this.deps.now()); return; }
-        if (seen.kind === 'unmeasured') { if (seen.word !== null) this.refused(fresh, { word: seen.word }, slot); return; }
-        const refusal = this.textRefusal(fresh);
+        const project = teamOwnerProject(fresh.teamKey, plan.hierarchyProjectsOf(), fresh.workspaceId, routing);
+        if (seen.kind === 'unmeasured') {
+          if (seen.word !== null) this.refused(fresh, { word: seen.word }, slot, routing, project.kind !== 'unmeasured');
+          return;
+        }
+        if (project.kind === 'unmeasured') return;
+        const refusal = this.textRefusal(fresh, project.kind === 'owner' ? project.row.project : null);
         const closeId = closeIdOf(fresh);
         const kind = refusal === null ? 'reason' : 'fallback';
         const base = { pass: 'inbound', lane: 'sync', slot: slot.ref, workspaceId: row.workspaceId, teamKey: row.teamKey, target: row.identifier } as const;
@@ -294,14 +306,14 @@ export class InboundLane {
           input: { requestId: uuidOf(closeCommentSeedOf(row.linearId, kind, fresh)), issueId: row.linearId, body: refusal === null ? closeCommentBody(fresh.reason ?? '') : closeRefusedCommentBody() },
         });
         const conflict = !comment.ok && comment.word === 'linear-invalid' && comment.detail === 'conflict';
-        if (!comment.ok && !conflict) { this.refused(fresh, comment, slot); return; }
+        if (!comment.ok && !conflict) { this.refused(fresh, comment, slot, routing); return; }
         // the owner is told once per close (the subject is keyed per close) whenever the fallback comment landed, made now or by an
         // earlier attempt, so a lost answer never loses the mail, and an owner whose session is gone is still mailed; before the
         // cancel. A team with no Linear owner at all has no addressee: no mail, and the close and cancel go on (review 2874 F3,
         // the coordinator's ruling: as for the no-cancel and give-up mails; the fallback comment is already on the issue)
-        if (refusal !== null) this.mailOwnerOnce(fresh, closeTextRefusedMail(fresh, refusal, closeId));
+        if (refusal !== null) this.mailOwnerOnce(fresh, closeTextRefusedMail(fresh, refusal, closeId), routing);
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
-        if (!update.ok) { this.refused(fresh, update, slot); return; }
+        if (!update.ok) { this.refused(fresh, update, slot, routing); return; }
         plan.setInboundState(row.linearId, { actedAt: this.deps.now() });
         this.holds.delete(row.workspaceId);                 // the whole close landed, never only its comment (N1)
         this.malformed.delete(row.linearId);
@@ -311,18 +323,20 @@ export class InboundLane {
 
   /** Spec §6.1, re-run before the close comment is sent: the facts (the project that owns the team, its linking mode, the installer's
    *  private tracker keys) may have changed since the close was decided. `textRefusalOf` is the one check; a team no project claims is
-   *  judged as `unknown`, public, with the row's team key. The class that refused it, or null. */
-  private textRefusal(row: InboundRow): string | null {
-    const { coord, plan, planSync } = this.deps;
-    const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf());
+   *  judged as `unknown`, public, with the row's team key. The project is decided in the row's own workspace, as the lane's other
+   *  owner lookups are (review 2971 F1): a key two workspaces hold never takes its mode from the other workspace's project. The class
+   *  that refused it, or null. */
+  private textRefusal(row: InboundRow, project: string | null): string | null {
+    const { coord, planSync } = this.deps;
     const fact = textFactOfTeam(project === null ? null : coord.linkingOf(project), row.teamKey);
     return textRefusalOf([row.reason ?? ''], [fact], planSync.privateKeys());
   }
 
   /** A refused close write, as `inboundActVerdict` rules. A retry word holds the workspace on the plan sync's failure-hold
    *  schedule (and, for a key word, mails the owner once). Any other word gives the close up: the row is written FIRST (`actedAt`
-   *  set, so `act` skips it for good, across restarts; the reason carries the refusal), and only then is the owner mailed once. */
-  private refused(row: InboundRow, out: { word: string; retryAfterS?: number }, slot: SlotInfo): void {
+   *  set, so `act` skips it for good, across restarts; the reason carries the refusal), and only then is the owner mailed once.
+   *  When the close's read cannot measure the owner, keep retry holds but defer that permanent step. */
+  private refused(row: InboundRow, out: { word: string; retryAfterS?: number }, slot: SlotInfo, routes: TeamRoutes | null, mayGiveUp = true): void {
     const now = this.deps.now();
     const { word } = out;
     const malformedSeen = word === 'malformed' ? (this.malformed.get(row.linearId) ?? 0) + 1 : 0;
@@ -333,21 +347,22 @@ export class InboundLane {
     if (v.kind === 'retry') {
       if (v.hold !== null) this.holds.set(row.workspaceId, v.hold);
       if (v.keyRefused && v.hold !== null) this.deps.planSync.keyRefused(row.workspaceId, slot, v.hold.until);   // a 401 holds both lanes (A-3)
-      if (v.mailsOwner) this.mailOwnerOnce(row, keyWaitMail(row, word));
+      if (v.mailsOwner) this.mailOwnerOnce(row, keyWaitMail(row, word), routes);
       return;
     }
+    if (!mayGiveUp) return;
     this.malformed.delete(row.linearId);
     this.deps.plan.setInboundState(row.linearId, { actedAt: now, reason: givenUpReason(row.reason, word) });
-    this.mailOwnerOnce(row, closeRefusedMail(row, word));
+    this.mailOwnerOnce(row, closeRefusedMail(row, word), routes);
   }
 
-  private mailNoCancel(row: InboundRow): void { this.mailOwnerOnce(row, noCancelMail(row)); }
+  private mailNoCancel(row: InboundRow, routes: TeamRoutes | null): void { this.mailOwnerOnce(row, noCancelMail(row), routes); }
 
-  private mailOwnerOnce(row: InboundRow, m: { subject: string; body: string }): void {
+  private mailOwnerOnce(row: InboundRow, m: { subject: string; body: string }, routes: TeamRoutes | null): void {
     const { coord } = this.deps;
     const { rows, facts } = this.ownerFacts();
-    const owner = linearOwnerOfTeam(row.teamKey, rows, facts);
-    if (owner === null || owner.id === null) return;
+    const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId, routes);
+    if (owner.kind !== 'owner' || owner.id === null) return;
     const ownerId = owner.id;
     if (coord.hasMailWithSubject('operator', null, ownerId, m.subject)) return;
     tx(coord.db, () => { insertSystemMailTx(coord, null, { fromId: 'operator', toId: ownerId, runId: null, kind: 'status', subject: m.subject, body: m.body }); });
