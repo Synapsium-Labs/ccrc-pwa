@@ -36,7 +36,7 @@ export interface HierarchyRouteOpts {
   driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' | HierarchyItemRefusal };
   /** The per-team migration (D-8186, wave 7): its start, the map's and the report's acts, the item body's read and each team's
    *  state; undefined (a test, a script): those doors answer `unavailable` and every row reads "Not migrated". */
-  migration?: Pick<LinearMigration, 'start' | 'workspaceOfTeam' | 'act' | 'view' | 'stateOfTeam'>;
+  migration?: Pick<LinearMigration, 'start' | 'workspaceOfProject' | 'act' | 'view' | 'stateOfProject'>;
   now?: () => number;
 }
 
@@ -101,10 +101,10 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     if (!PROJECT_RE.test(project)) return refuseRoute(reply, 'bad-request', { detail: 'project' });
     const migration = opts.migration;
     if (migration === undefined) return refuseRoute(reply, 'unavailable');
-    const workspaceId = await migration.workspaceOfTeam(project).catch(() => null);
+    const where = await migration.workspaceOfProject(project).catch((): { ok: false; word: string; detail: string } => ({ ok: false, word: 'unreachable', detail: 'the Linear workspaces could not be read' }));
     try {
       return await opts.serial(async () => {
-        const out = migration.start(project, workspaceId);
+        const out = migration.start(project, where);
         return out.ok ? out : refuseRoute(reply, out.word as RouteRefusal, { detail: out.detail });
       });
     } catch (err) {
@@ -252,7 +252,7 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
         ok: true,
         // The team's newest migration names the state and its item (D-8186); the waiting count is the inbound path's (D-8183).
         projects: await Promise.all(rows.map(async (r) => {
-          const st = (await opts.migration?.stateOfTeam(r.teamKey)) ?? { state: 'not-migrated' as const, at: null, itemId: null };
+          const st = (await opts.migration?.stateOfProject({ teamKey: r.teamKey, workspaceId: r.workspaceId ?? null })) ?? { state: 'not-migrated' as const, at: null, itemId: null };
           return {
             project: r.project, teamKey: r.teamKey, initiatives: r.initiatives, linearOwner: r.linearOwner,
             ownerNow: ownerNow(plan, rows, r), ownsTeam: r.ownsTeam, state: st.state, stateAt: st.at, itemId: st.itemId, inboundWaiting: plan.inboundWaiting(r.project),

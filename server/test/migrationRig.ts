@@ -178,9 +178,9 @@ export async function migRig(o: { synced?: boolean } = {}): Promise<MigRig> {
     "INSERT INTO runs (program, wave, project, state, kind, openedAt) VALUES (?, 1, 'project-a', ?, 'work', ?)",
   ).run(slug, state, T).lastInsertRowid);
   r.propose = async (entries, extra = {}, caller = OWNER) => {
-    const started = r.mig.start('project-a', WS.a.id);
+    const started = r.mig.start('project-a', { ok: true, workspaceId: WS.a.id });
     if (!started.ok) throw new Error(`start refused: ${started.word}`);
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error(`readOpen refused: ${open.detail}`);
     const stored = r.mig.storeProposal('AAA', caller, { entries, ...extra }, open);
     if (!stored.ok) throw new Error(`storeProposal refused: ${stored.word} ${stored.detail}`);

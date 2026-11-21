@@ -38,13 +38,14 @@ import { withCcrcProvenance } from './hierarchyOps.js';
 import { ownerItemInput } from './inboundPolicy.js';
 import { linearEgressText, statusOfType } from './ops.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type SlotInfo } from './planSync.js';
+import { routableSlots, routeProjectTeam, type LinearRouteSlot } from './route.js';
 import { egress, uuidOf } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
 import {
   applySteps, checkMap, closerRelation, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOf, mapItemInput, migrationSettled, parseMapProposal,
   programmeOfEntry, proposeMail, putBackSteps, putBackVerdict, reconcileMove, replacementComment, reportCounts,
   reportItemInput, returnMail, shedTaken, startVerdict, ticketKeyOf, ticketKindOf,
-  snapshotHolds, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
+  snapshotHolds, mapProposerVerdict, migrationOfProject, projectOnTeam, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from './migrationPolicy.js';
 
 /** How long one apply tick lets a key's pass run when it waits for it (the sync's own budget is its own). */
@@ -88,7 +89,10 @@ export interface LinearMigrationDeps {
 }
 
 type Refusal = { ok: false; word: string; detail: string };
-export type OpenRead = { ok: true; workspaceId: string; rows: IssueSnapshotRow[] } | Refusal;
+/** `slots`: the routable slots of the read that served it, for the programme matches of `checkMap` (D-8808). */
+export type OpenRead = { ok: true; workspaceId: string; rows: IssueSnapshotRow[]; slots: LinearRouteSlot[] | null } | Refusal;
+/** Where a project's team resolves (D-8808): its workspace, or the refusal start answers. */
+export type ProjectWorkspace = { ok: true; workspaceId: string } | Refusal;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 /** An issue node of the hierarchy reads (`issueRecord`) as a snapshot row; null for a node that lacks a field. */
@@ -158,20 +162,20 @@ export class LinearMigration {
       return { declared: plan.planBy !== null, live: live.has(slug), plan };
     };
   }
-  private ownerOf(team: string): { id: string | null; live: boolean; project: string } | null {
+  /** The Linear owner of a team in one workspace (D-8808: a key two workspaces hold has one owner project each). */
+  private ownerOf(team: string, workspaceId: string): { id: string | null; live: boolean; project: string } | null {
     const { plan, presenceOf } = this.deps;
-    const o = linearOwnerOfTeam(team, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf });
+    const o = linearOwnerOfTeam(team, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf }, workspaceId);
     return o === null ? null : { id: o.id, live: o.live, project: o.project };
   }
-  /** The workspace a team routes to, and its slot. */
-  private async slotOfTeam(team: string): Promise<{ workspaceId: string; slot: SlotInfo } | null> {
+  /** The store read once: its routable slots when listed, else null (unreadable, absent: nothing is routed). */
+  private async routable(): Promise<{ store: LinearStoreRead; slots: LinearRouteSlot[] | null }> {
     const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
-    for (const [workspaceId, slot] of slotsOf(store)) if (slot.teams.some((t) => t.key.toUpperCase() === team.toUpperCase())) return { workspaceId, slot };
-    return null;
+    return { store, slots: store.kind === 'listed' ? routableSlots(store) : null };
   }
 
   /** The team's open issues, every page up to `MIGRATION_OPEN_PAGES` (lane `migration`). */
-  private async readOpenIn(workspaceId: string, slot: SlotInfo, team: string): Promise<OpenRead> {
+  private async readOpenIn(workspaceId: string, slot: SlotInfo, team: string, slots: LinearRouteSlot[] | null): Promise<OpenRead> {
     const rows: IssueSnapshotRow[] = [];
     let after: string | null = null;
     for (let page = 0; page < MIGRATION_OPEN_PAGES; page += 1) {
@@ -182,7 +186,7 @@ export class LinearMigration {
       const nodes = Array.isArray(out.value['nodes']) ? out.value['nodes'] : [];
       for (const n of nodes) { const r = rowOf(n); if (r !== null) rows.push(r); }
       const next = out.value['next'];
-      if (typeof next !== 'string') return { ok: true, workspaceId, rows };
+      if (typeof next !== 'string') return { ok: true, workspaceId, rows, slots };
       after = next;
     }
     return { ok: false, word: 'unreachable', detail: `team ${team} has more open issues than ${MIGRATION_OPEN_PAGES} pages` };
@@ -190,38 +194,60 @@ export class LinearMigration {
 
   // ── Start (Task 7.2) ──
 
-  /** The operator's "Reshape in Linear" (inside the mutex; `workspaceId` read before it by `workspaceOfTeam`). */
-  start(project: string, workspaceId: string | null): { ok: true; migrationId: number } | Refusal {
+  /** The operator's "Reshape in Linear" (inside the mutex; `where` read before it by `workspaceOfProject`). */
+  start(project: string, where: ProjectWorkspace): { ok: true; migrationId: number } | Refusal {
     const { plan, coord } = this.deps;
     const team = coord.linkingOf(project).teamKey?.toUpperCase() ?? null;
-    const v = startVerdict(plan.migrationsOf(), team, workspaceId);
+    const v = startVerdict(plan.migrationsOf(), team, where.ok ? where.workspaceId : null);
     if (!v.ok) return v;
-    if (workspaceId === null) return { ok: false, word: 'unreachable', detail: `no Linear key serves team ${team}` };
-    const owning = teamOwnerProject(team!, plan.hierarchyProjectsOf()) ?? project;
-    return { ok: true, migrationId: plan.insertMigration({ workspaceId, teamKey: team!, project: owning, now: this.deps.now() }) };
+    if (!where.ok) return where;
+    const owning = teamOwnerProject(team!, plan.hierarchyProjectsOf(), where.workspaceId) ?? project;
+    return { ok: true, migrationId: plan.insertMigration({ workspaceId: where.workspaceId, teamKey: team!, project: owning, now: this.deps.now() }) };
   }
-  async workspaceOfTeam(project: string): Promise<string | null> {
-    const team = this.deps.coord.linkingOf(project).teamKey;
-    return team === null ? null : (await this.slotOfTeam(team))?.workspaceId ?? null;
+  /** Where a project's team resolves (D-8808): through `routeProjectTeam` with the row's own workspace, never the first workspace
+   *  holding the key. A key two workspaces hold with none on the row is `team-ambiguous`. */
+  async workspaceOfProject(project: string): Promise<ProjectWorkspace> {
+    const linking = this.deps.coord.linkingOf(project);
+    const team = linking.teamKey;
+    const unreachable = (t: string | null): ProjectWorkspace => ({ ok: false, word: 'unreachable', detail: `no Linear key serves team ${t}` });
+    if (team === null) return unreachable(team);
+    const { slots } = await this.routable();
+    if (slots === null) return unreachable(team);
+    const route = routeProjectTeam(slots, { teamKey: team, workspaceId: linking.teamWorkspace ?? null });
+    if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId };
+    if (route.word === 'team-ambiguous') {
+      const names = route.candidates.length === 0 ? '' : ` (${route.candidates.join(', ')})`;
+      return { ok: false, word: 'team-ambiguous', detail: `team ${team.toUpperCase()} is in more than one Linear workspace${names}; pick the project's workspace on its row first` };
+    }
+    return unreachable(team);
   }
 
   // ── Propose (Task 7.2) ──
 
-  /** The migration of a team that waits for a map: `proposing`, or `applied` with skipped issues, its report open and no put back
-   *  asked (a follow-up). Null: none. */
-  private waitingRow(team: string, workspaceId: string | null): MigrationRow | null {
-    return this.deps.plan.migrationsOf().find((m) => m.teamKey.toUpperCase() === team.toUpperCase() && (workspaceId === null || m.workspaceId === workspaceId)
-      && (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0))) ?? null;
+  /** Whether a migration waits for a map: `proposing`, or `applied` with skipped issues, its report open and no put back asked (a
+   *  follow-up). The one predicate of `waitingRow` and `waitingWorkspaces`. */
+  private waits(m: MigrationRow, team: string): boolean {
+    return m.teamKey.toUpperCase() === team.toUpperCase()
+      && (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0));
+  }
+  /** The migration of a team in one workspace that waits for a map. Null: none. */
+  private waitingRow(team: string, workspaceId: string): MigrationRow | null {
+    return this.deps.plan.migrationsOf().find((m) => m.workspaceId === workspaceId && this.waits(m, team)) ?? null;
+  }
+  /** D-8808: the distinct workspaces with a migration of the team waiting for a map, any workspace. */
+  waitingWorkspaces(team: string): string[] {
+    return [...new Set(this.deps.plan.migrationsOf().filter((m) => this.waits(m, team)).map((m) => m.workspaceId))];
   }
   /** Whether a team has a migration waiting for a map: `plan map-propose` asks before its Linear read, so a call with nothing to
    *  propose spends no read (the wave's review). */
-  awaitsMap(team: string): boolean { return this.waitingRow(team, null) !== null; }
+  awaitsMap(team: string): boolean { return this.waitingWorkspaces(team).length > 0; }
 
-  /** Outside the mutex: the team's open issues, for `storeProposal`. */
-  async readOpen(team: string): Promise<OpenRead> {
-    const at = await this.slotOfTeam(team);
-    if (at === null) return { ok: false, word: 'unreachable', detail: `no Linear key serves team ${team}` };
-    return this.readOpenIn(at.workspaceId, at.slot, team);
+  /** Outside the mutex: the team's open issues in the migration's workspace, for `storeProposal`. */
+  async readOpen(team: string, workspaceId: string): Promise<OpenRead> {
+    const { store, slots } = await this.routable();
+    const slot = slotsOf(store).get(workspaceId);
+    if (slot === undefined || !slot.teams.some((t) => t.key.toUpperCase() === team.toUpperCase())) return { ok: false, word: 'unreachable', detail: `no Linear key serves team ${team}` };
+    return this.readOpenIn(workspaceId, slot, team, slots);
   }
 
   /** Inside the mutex: the Linear owner's map, checked (`checkMap`) and stored with its snapshots, and its `decide` item raised.
@@ -232,7 +258,7 @@ export class LinearMigration {
     const row = this.waitingRow(team, open.workspaceId);
     const followUp = row?.state === 'applied' ? row.report?.skipped ?? [] : null;
     if (row === null) return { ok: false, word: 'plan-bad-body', detail: `no migration of team ${team} is waiting for a map` };
-    const owner = this.ownerOf(team);
+    const owner = this.ownerOf(team, open.workspaceId);
     if (owner === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner', detail: `only the Linear owner of team ${team} proposes its map` };
     const parsed = parseMapProposal(body, team);
     if (!parsed.ok) return parsed;
@@ -249,6 +275,7 @@ export class LinearMigration {
     const project = row.project ?? owner.project;
     const ctx: MapContext = {
       home: project, teamOf: (p) => coord.linkingOf(p).teamKey,
+      sameWorkspace: (p) => this.onTeam(p, team, open.workspaceId, open.slots),
       upkeepKeys: new Set(plan.upkeepPlanOf(project).epics.flatMap((e) => e.tickets.map((t) => t.key))), heldIssues,
     };
     const map: MapBody = { ...parsed.map, snapshot: Object.fromEntries(rows.map((r) => [r.linearId, snapshotOf(r)])) };
@@ -296,7 +323,7 @@ export class LinearMigration {
       }
       case 'return': {
         if (m.state !== 'proposed' || m.itemId !== itemId) return { ok: false, word: 'not-open', detail: `the migration is ${m.state}` };
-        const owner = this.ownerOf(m.teamKey);
+        const owner = this.ownerOf(m.teamKey, m.workspaceId);
         const back = m.appliedAt === null ? 'proposing' as const : 'applied' as const;
         const mail = returnMail(m.id, m.teamKey, note ?? '', now);
         // A returned follow-up's issues go back to the skipped list, and the map it would have joined comes back: no move row writes
@@ -354,14 +381,15 @@ export class LinearMigration {
     }
     return { ok: true, id: m.id, team: m.teamKey, state: m.state, counts, entries: map.entries, structure, report: m.report };
   }
-  /** The project row's hierarchy state (§11.1): its team's newest migration in the workspace its key routes to (review 2892 A4);
-   *  a team no key serves is matched by its key alone. */
-  async stateOfTeam(team: string | null): Promise<ReturnType<typeof hierarchyStateOf>> {
-    if (team === null) return hierarchyStateOf(null);
-    const ws = (await this.slotOfTeam(team))?.workspaceId ?? null;
-    const m = this.deps.plan.migrationsOf().filter((r) => r.teamKey.toUpperCase() === team.toUpperCase() && (ws === null || r.workspaceId === ws))
-      .sort((a, b) => b.id - a.id)[0] ?? null;
-    return hierarchyStateOf(m);
+  /** The project row's hierarchy state (§11.1): the newest migration of its team in ITS workspace (`migrationOfProject`, D-8808). */
+  async stateOfProject(row: { teamKey: string | null; workspaceId: string | null }): Promise<ReturnType<typeof hierarchyStateOf>> {
+    const { slots } = row.teamKey !== null && row.workspaceId === null ? await this.routable() : { slots: null };
+    return hierarchyStateOf(migrationOfProject(row, this.deps.plan.migrationsOf(), slots));
+  }
+  /** Whether a project's team is `team` in `workspaceId` (`projectOnTeam` over the project's row). */
+  private onTeam(project: string, team: string, workspaceId: string, slots: readonly LinearRouteSlot[] | null): boolean {
+    const l = this.deps.coord.linkingOf(project);
+    return projectOnTeam({ teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null }, team, workspaceId, slots);
   }
 
   // ── The lane (Tasks 7.2 to 7.4) ──
@@ -370,6 +398,7 @@ export class LinearMigration {
     if (this.running) return;
     this.running = true;
     try {
+      const { slots } = await this.routable();
       for (let m of this.deps.plan.migrationsOf()) {
         // An open report's skipped issue the owner has since taken leaves the list before the follow-up is mailed (review 2955 F2).
         if (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0) {
@@ -379,7 +408,7 @@ export class LinearMigration {
             if (this.deps.plan.setMigration(m.id, ['applied'], { report }, this.deps.now())) m = { ...m, report };
           }
         }
-        if (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && (m.report?.skipped.length ?? 0) > 0 && m.putBackAskedAt === null)) this.mailForMap(m);
+        if (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && (m.report?.skipped.length ?? 0) > 0 && m.putBackAskedAt === null)) this.mailForMap(m, slots);
         if (m.state === 'approved' || m.state === 'applying') await this.applyTick(m);
         if (m.state === 'applied' && m.putBackAskedAt !== null) await this.putBackTick(m);
       }
@@ -398,10 +427,10 @@ export class LinearMigration {
   /** A `proposing` row: the owner is mailed for the map (or *Name a Linear owner* is raised, by the inbound lane's own item, once),
    *  and each live programme of the team with no declared plan has its coordinator mailed to declare it first (§10.1). Each mail
    *  is sent once, by its subject. A follow-up's mail names the skipped issues. */
-  private mailForMap(m: MigrationRow): void {
+  private mailForMap(m: MigrationRow, slots: readonly LinearRouteSlot[] | null): void {
     const { coord, plan } = this.deps;
     const now = this.deps.now();
-    const owner = this.ownerOf(m.teamKey);
+    const owner = this.ownerOf(m.teamKey, m.workspaceId);
     const project = m.project ?? owner?.project ?? null;
     if (project === null) return;
     const mail = proposeMail(m.id, m.teamKey, project, m.state === 'applied' ? m.report?.skipped ?? [] : []);
@@ -416,7 +445,7 @@ export class LinearMigration {
       if (runs === null) return;
       for (const p of coord.programs()) {
         const home = coord.programHome(p.slug);
-        if (home === null || !runs.live.has(p.slug) || coord.linkingOf(home).teamKey?.toUpperCase() !== m.teamKey.toUpperCase()) continue;
+        if (home === null || !runs.live.has(p.slug) || !this.onTeam(home, m.teamKey, m.workspaceId, slots)) continue;
         if (plan.planOf(p.slug).planBy !== null) continue;
         const to = plan.planOwnerOf(p.slug);
         const d = declareMail(m.id, m.teamKey, p.slug);
@@ -572,7 +601,7 @@ export class LinearMigration {
     const unwritten = map.entries.some((e) => e.class !== 'unclear' && !skipped.has(e.identifier) && !taken.has(e.identifier) && !all.some((x) => x.subject === `issue:${e.issue}`));
     const pending = all.some((x) => x.appliedAt === null && !(x.identifier !== null && (skipped.has(x.identifier) || taken.has(x.identifier))));
     if (waiting.length > 0 || !structureBound || unwritten || pending) return;
-    this.finishApply(m, map, nextReport, all, now);
+    this.finishApply(m, map, nextReport, all, now, store.kind === 'listed' ? routableSlots(store) : null);
   }
 
   /** The tick's lists written back (the row stays `applying`): `skipped` always, `unrelated` and `taken` only when they hold
@@ -796,15 +825,14 @@ export class LinearMigration {
   /** The apply is done: the report item is raised, and `planRequired` is set for the programmes the map names and the team's
    *  programmes that have declared a plan, never an unnamed one with no plan, whose coordinator's next run open it would refuse
    *  `plan-missing` mid-work with no word to it (D-8798, review 2892 F8). */
-  private finishApply(m: MigrationRow, map: MapBody, report: NonNullable<MigrationRow['report']>, moves: readonly MoveRowStored[], now: number): void {
+  private finishApply(m: MigrationRow, map: MapBody, report: NonNullable<MigrationRow['report']>, moves: readonly MoveRowStored[], now: number, slots: readonly LinearRouteSlot[] | null): void {
     const { plan, coord } = this.deps;
     const counts = reportCounts(moves, map, report.skipped.length, report.taken ?? []);
     const named = [...new Set([...map.entries.flatMap((e) => (programmeOfEntry(e) === null || e.class === 'unclear' ? [] : [programmeOfEntry(e)!])),
       ...(map.epics ?? []).map((g) => g.programme), ...(map.backlog ?? []).map((g) => g.slug)])];
-    const team = m.teamKey.toUpperCase();
     const declared = coord.programs().filter((p) => {
       const home = coord.programHome(p.slug);
-      return home !== null && coord.linkingOf(home).teamKey?.toUpperCase() === team && plan.planOf(p.slug).planBy !== null;
+      return home !== null && this.onTeam(home, m.teamKey, m.workspaceId, slots) && plan.planOf(p.slug).planBy !== null;
     }).map((p) => p.slug);
     // A done programme the map placed open tickets into keeps its initiative active while they are open (D-8796, point 6).
     const placedInto = new Set(map.entries.flatMap((e) => (e.class === 'leaf' && programmeOfEntry(e) !== null && moves.some((x) => x.subject === `issue:${e.issue}` && x.appliedAt !== null) ? [programmeOfEntry(e)!] : [])));

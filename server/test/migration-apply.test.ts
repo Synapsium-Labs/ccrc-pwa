@@ -411,7 +411,7 @@ describe('the migration apply reads each issue by id (D-8796, review round)', ()
     expect(updates(r, U(101))).toHaveLength(refused);
     expect(r.issues.get(U(101))!.title).toBe('A person renamed it between the adoption and the write');
     // a follow-up map can move it again
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: true, migrationId: id });
     const m = r.plan.migrationById(id)!;
@@ -638,7 +638,7 @@ describe('review 2918 fix round 2 (D-8186)', () => {
     expect(rep.taken).toEqual(['AAA-1']);
     expect(rep.skipped).toEqual([]);
     expect(r.db.prepare("SELECT subject FROM mail WHERE toId = ? AND subject LIKE '%follow-up%'").all(OWNER)).toEqual([]);
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: false, word: 'plan-bad-body' });
     expect(liveTicketBindings(r, U(101))).toHaveLength(1);
@@ -984,7 +984,7 @@ describe('review 2998 fix round 1 (D-8186, D-8796)', () => {
     await r.until(() => r.stateOf(id) === 'applied', 20);
     expect([...r.plan.migrationById(id)!.report!.skipped].sort()).toEqual(['AAA-1', 'AAA-3']);
     hold(r, 1, 'held1');                                    // no tick has run: the applied row's report still lists it as skipped
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b'), leaf(3, 'k3b')] }, open)).toMatchObject({ ok: false });
     const stored = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(3, 'k3b')] }, open);

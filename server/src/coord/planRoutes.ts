@@ -19,6 +19,7 @@ import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import { routableSlots, routeProjectTeam } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
 import type { LinearMigration } from '../linear/migration.js';
+import { mapProposerVerdict } from '../linear/migrationPolicy.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
 import { refuseOtherLane, refuseRoute, refuseRun } from '../refuse.js';
 import type { OtherLane, OtherLaneReads } from './otherLanes.js';
@@ -83,7 +84,7 @@ export interface PlanRouteOpts {
    *  issue only (a take into an epic, an Upkeep placement, a hand; `inboundDoorVerdict`): a close, a raise or a return goes on. */
   inboundRecheck?: (row: InboundRow) => Promise<InboundRecheck>;
   /** The per-team migration's propose (D-8186, Task 7.2); absent (a test, a script): `plan map-propose` answers `unavailable`. */
-  migration?: Pick<LinearMigration, 'awaitsMap' | 'readOpen' | 'storeProposal'>;
+  migration?: Pick<LinearMigration, 'waitingWorkspaces' | 'readOpen' | 'storeProposal'>;
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -823,10 +824,16 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!(await refuseOtherLane(reply, 'planMap', who.id, opts.otherLaneReads))) return reply;
     const migration = opts.migration;
     if (migration === undefined) return refuseRoute(reply, 'unavailable');
-    const owner = linearOwnerOfTeam(team, who.plan.hierarchyProjectsOf(), ownerFacts(who.plan));
-    if (owner === null || owner.id !== who.id) return refuse(reply, 'not-linear-owner', `only the Linear owner of team ${team} proposes its map`);
-    if (!migration.awaitsMap(team)) return refuse(reply, 'plan-bad-body', `no migration of team ${team} is waiting for a map`);
-    const open = await migration.readOpen(team);
+    // D-8808: a key two workspaces hold has one owner and one waiting migration each; the caller is judged in the workspaces that wait.
+    const rows = who.plan.hierarchyProjectsOf();
+    const holders = [...new Set(rows.filter((r) => r.teamKey?.toUpperCase() === team).map((r) => r.workspaceId ?? null))];
+    const verdict = mapProposerVerdict(who.id, migration.waitingWorkspaces(team), holders.length === 0 ? [null] : holders,
+      (ws) => linearOwnerOfTeam(team, rows, ownerFacts(who.plan), ws)?.id ?? null);
+    if (!verdict.ok) {
+      if (verdict.word === 'team-ambiguous') return refuseRoute(reply, 'team-ambiguous', { detail: `you own team ${team} in more than one workspace with a map waiting; name the workspace` });
+      return refuse(reply, verdict.word, verdict.word === 'plan-bad-body' ? `no migration of team ${team} is waiting for a map` : `only the Linear owner of team ${team} proposes its map`);
+    }
+    const open = await migration.readOpen(team, verdict.workspaceId);
     if (!open.ok) return refuseRoute(reply, open.word as RouteRefusal, { detail: open.detail });
     try {
       return await opts.serial(async () => {
