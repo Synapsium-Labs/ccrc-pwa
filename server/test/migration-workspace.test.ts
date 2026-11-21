@@ -41,6 +41,24 @@ describe('start resolves the project by its workspace', () => {
     expect(r.plan.migrationsOf()).toEqual([]);
   });
 
+  it.each(['proposing', 'applied'])('an ambiguous project is refused before another workspace’s %s migration', async (state) => {
+    const r = await twoWorkspaces();
+    pin(r, 'project-a', null);
+    r.plan.insertMigration({ workspaceId: WS.b.id, teamKey: 'AAA', project: 'project-b', now: r.t.now });
+    r.db.prepare('UPDATE linear_migrations SET state = ?').run(state);
+    const where = await r.mig.workspaceOfProject('project-a');
+    expect(r.mig.start('project-a', where)).toMatchObject({ ok: false, word: 'team-ambiguous' });
+    expect(r.plan.migrationsOf()).toHaveLength(1);
+  });
+
+  it('a project without a team key keeps the no-team-key refusal', async () => {
+    const r = await twoWorkspaces();
+    r.db.prepare("UPDATE project_linking SET teamKey = NULL WHERE project = 'project-a'").run();
+    const where = await r.mig.workspaceOfProject('project-a');
+    expect(where).toMatchObject({ ok: false, word: 'no-team-key' });
+    expect(r.mig.start('project-a', where)).toMatchObject({ ok: false, word: 'no-team-key' });
+  });
+
   it('a key no slot holds stays unreachable', async () => {
     const r = await twoWorkspaces();
     r.db.prepare("UPDATE project_linking SET teamKey = 'QQQ', teamWorkspace = NULL WHERE project = 'project-a'").run();

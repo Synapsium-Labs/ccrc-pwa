@@ -198,9 +198,9 @@ export class LinearMigration {
   start(project: string, where: ProjectWorkspace): { ok: true; migrationId: number } | Refusal {
     const { plan, coord } = this.deps;
     const team = coord.linkingOf(project).teamKey?.toUpperCase() ?? null;
-    const v = startVerdict(plan.migrationsOf(), team, where.ok ? where.workspaceId : null);
-    if (!v.ok) return v;
     if (!where.ok) return where;
+    const v = startVerdict(plan.migrationsOf(), team, where.workspaceId);
+    if (!v.ok) return v;
     const owning = teamOwnerProject(team!, plan.hierarchyProjectsOf(), where.workspaceId) ?? project;
     return { ok: true, migrationId: plan.insertMigration({ workspaceId: where.workspaceId, teamKey: team!, project: owning, now: this.deps.now() }) };
   }
@@ -210,7 +210,7 @@ export class LinearMigration {
     const linking = this.deps.coord.linkingOf(project);
     const team = linking.teamKey;
     const unreachable = (t: string | null): ProjectWorkspace => ({ ok: false, word: 'unreachable', detail: `no Linear key serves team ${t}` });
-    if (team === null) return unreachable(team);
+    if (team === null) return { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' };
     const { slots } = await this.routable();
     if (slots === null) return unreachable(team);
     const route = routeProjectTeam(slots, { teamKey: team, workspaceId: linking.teamWorkspace ?? null });
