@@ -59,7 +59,7 @@ interface Rig {
     /** A by-id read of one stored row's issue refused with this word (review 2524 F2): an answer about that one row. */
     byIdWord: Record<string, string>;
     /** What the drift pass's and the doors' read of the Linear store answers (review 2524 A2): the store, a rejection or an unreadable one. */
-    store: 'ok' | 'reject' | 'unreadable' | 'partial-a' | 'partial-b';
+    store: 'ok' | 'reject' | 'unreadable' | 'partial-a' | 'partial-b' | 'legacy-unreadable';
     /** The comments Linear accepted (review 2834 A2): a repeated requestId answers `conflict`, as Linear does, and posts nothing. */
     comments: { requestId: string; body: string }[] };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
@@ -152,6 +152,10 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
     if (r.lin.store === 'reject') throw new Error('store');
     if (r.lin.store === 'unreadable') return { kind: 'unreadable', code: 'EIO' };
     const store = await readLinearStore(ccrcDir);
+    // a legacy key whose record cannot be read: the pin that names no file slot may be that legacy workspace
+    if (r.lin.store === 'legacy-unreadable' && store.kind === 'listed') {
+      return { ...store, legacy: { source: 'legacy', key: { kind: 'unreadable', code: 'EIO' }, workspace: null, superseded: false } as never };
+    }
     const partialId = r.lin.store === 'partial-a' ? WS.a.id : r.lin.store === 'partial-b' ? WS.b.id : null;
     if (partialId === null || store.kind !== 'listed') return store;
     return { ...store, slots: store.slots.map((slot) => slot.id === partialId ? { ...slot, record: { kind: 'unreadable', code: 'EIO' } } : slot) };
@@ -186,6 +190,7 @@ const items = (r: Rig) => r.db.prepare('SELECT id, kind, title, why, how, option
   { id: number; kind: string; title: string; why: string; how: string; options: string | null; state: string; action: string | null; program: string; raisedBy: string; recommended: number | null; answer: string | null }[];
 const rowOf = (r: Rig, n: number) => r.plan.inboundOf(U(n));
 const writes = (r: Rig) => r.asks.filter((a) => a.op === 'issueComment' || a.op === 'issueUpdate');
+const reads = (r: Rig) => r.asks.filter((a) => a.op === 'issueOwned');
 
 const send = (r: Rig, url: string, body: unknown, who = OWNER, token: string | null = TOKEN) =>
   r.app.inject({ method: 'POST', url: `${url}?byId=${who}&byUuid=u-${who}`, payload: body as never, headers: token === null ? {} : { 'x-ccrc-mail-token': token } });
@@ -231,11 +236,27 @@ describe('mixed owner routing unreadable regressions', () => {
     expect.soft(writes(r)).toEqual([]);
   });
 
-  it('refuses triage of an unreadable workspace even while another holder resolves', async () => {
+  it("a pinned top holder of an unreadable workspace is the owner: its raise is taken, with no Linear call (F8)", async () => {
     const r = await rig({ twoWs: true });
     await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
     r.db.prepare('UPDATE project_linking SET teamKey = ?, teamWorkspace = ? WHERE project = ?').run('AAA', WS.a.id, 'project-a');
     r.db.prepare('UPDATE project_linking SET teamKey = ?, teamWorkspace = ? WHERE project = ?').run('AAA', WS.b.id, 'project-b');
+    r.plan.upsertInbound({ linearId: U(12), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-12', title: 'Issue', body: null, seenAt: T });
+    r.plan.setInboundState(U(12), { state: 'mailed', mailedTo: OWNER, mailedAt: T });
+    r.lin.store = 'partial-a';
+    const res = await triage(r, { issue: 'AAA-12', decision: 'raise', note: 'scope' });
+    expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+    expect(res.json()).toEqual({ ok: true, state: 'raised' });
+    expect(rowOf(r, 12)).toMatchObject({ state: 'raised', itemId: 1, actedAt: null });
+    expect(items(r)).toHaveLength(1);
+    // A raise reads and writes ccrc's own store only: no Linear call of any kind, a write least of all.
+    expect(r.asks).toEqual([]);
+    expect(writes(r)).toEqual([]);
+  });
+
+  it('finds the row in a workspace whose record is unreadable: an unpinned top holder, the key held in the readable workspace (F4 term a)', async () => {
+    const r = await rig({ twoWs: true });
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
     r.plan.upsertInbound({ linearId: U(12), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-12', title: 'Issue', body: null, seenAt: T });
     r.plan.setInboundState(U(12), { state: 'mailed', mailedTo: OWNER, mailedAt: T });
     const before = rowOf(r, 12);
@@ -243,8 +264,23 @@ describe('mixed owner routing unreadable regressions', () => {
     const res = await triage(r, { issue: 'AAA-12', decision: 'raise', note: 'scope' });
     expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
     expect(rowOf(r, 12)).toEqual(before);
-    expect(r.asks).toEqual([]);
     expect(items(r)).toEqual([]);
+    expect(writes(r)).toEqual([]);
+  });
+
+  it('finds the row in a legacy workspace the pin names while the legacy slot is unreadable (F4 term b)', async () => {
+    const r = await rig({ twoWs: true });
+    const LEGACY_WS = 'cccccccc-0000-4000-8000-00000000000c';
+    r.db.prepare('UPDATE project_linking SET teamKey = ?, teamWorkspace = ? WHERE project = ?').run('AAA', WS.a.id, 'project-a');
+    r.db.prepare('UPDATE project_linking SET teamKey = ?, teamWorkspace = ? WHERE project = ?').run('AAA', LEGACY_WS, 'project-b');
+    r.plan.setHierarchySettings('project-b', { initiatives: 'on', linearOwner: OTHER, ownsTeam: true }, 'test', T);
+    r.plan.upsertInbound({ linearId: U(12), workspaceId: LEGACY_WS, teamKey: 'AAA', identifier: 'AAA-12', title: 'Issue', body: null, seenAt: T });
+    r.plan.setInboundState(U(12), { state: 'mailed', mailedTo: OTHER, mailedAt: T });
+    r.lin.store = 'legacy-unreadable';
+    const res = await triage(r, { issue: 'AAA-12', decision: 'raise', note: 'scope' }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'raised' });
+    expect(writes(r)).toEqual([]);
   });
 
   it('finds an inbound row in the readable workspace without treating an unpinned holder as measured', async () => {
@@ -853,6 +889,18 @@ describe('plan triage (D-8183)', () => {
     expect(writes(r)).toEqual([]);
   });
 
+  it('a close whose owner is unmeasured is not acted: no comment, no cancel, the row stays unacted (F2)', async () => {
+    const r = await mixedOwnerRig();
+    r.plan.upsertInbound({ linearId: U(12), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-12', title: 'Issue', body: null, seenAt: T });
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'noise' });
+    r.lin.store = 'partial-b';   // the by-id read below answers (open in AAA); the unpinned top holder's routing cannot be read
+    await detect(r, [node(12)], T + 1);
+    expect(reads(r).length).toBeGreaterThan(0);          // the guard sits after a measured by-id read
+    expect(writes(r)).toEqual([]);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+    expect(mails(r)).toEqual([]);
+  });
+
   // Review 2408 F1, A-3's other direction: a 401 on the plan sync's own call holds the workspace's inbound closes too, through
   // keyBlockedUntil, so no close write goes out into a workspace whose key Linear refused until the block ends.
   it('a 401 on the plan sync holds the inbound closes of that workspace until the block ends (review 2408 F1)', async () => {
@@ -1042,6 +1090,18 @@ describe('plan take (D-8183)', () => {
     r.asks.length = 0;
     await passAt(r, r.t.now + 1);
     expect(writes(r).map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);         // the drift lane cancels it
+  });
+
+  it('a take of a programme with no home and no epic project reads the store anyway: a readable store never refuses unreachable (F10)', async () => {
+    const r = await rig();
+    r.db.prepare("UPDATE programs SET homeProject = NULL WHERE slug = 'prog-b'").run();
+    r.db.prepare("DELETE FROM plan_checkpoints WHERE epicId IN (SELECT id FROM plan_epics WHERE program = 'prog-b')").run();
+    r.db.prepare("DELETE FROM plan_epics WHERE program = 'prog-b'").run();
+    r.plan.upsertInbound({ linearId: U(13), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-13', title: 'Handed', body: null, seenAt: T });
+    r.plan.setInboundState(U(13), { state: 'handed', handedTo: 'prog-b', mailedTo: OWNER, mailedAt: T });
+    const res = await take(r, 'prog-b', { issue: 'AAA-13', close: { why: 'out of scope' } }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+    expect(rowOf(r, 13)).toMatchObject({ state: 'closed', reason: 'out of scope' });
   });
 
   it('return mails the owner and the issue waits again', async () => {
@@ -1670,7 +1730,6 @@ const HOUR = 3_600_000;
 const moveOut = (r: Rig, n: number, over: Record<string, unknown> = {}): void => {
   r.lin.byId[U(n)] = node(n, { teamKey: 'ZZZ', identifier: `ZZZ-${n}`, title: 'Moved elsewhere title', description: 'Moved elsewhere body', ...over });
 };
-const reads = (r: Rig) => r.asks.filter((a) => a.op === 'issueOwned');
 const bindingsOf12 = (r: Rig): number => (r.db.prepare('SELECT COUNT(*) AS n FROM linear_bindings WHERE linearId = ?').get(U(12)) as { n: number }).n;
 
 describe('every retire writes its cause, and a reopen clears it (review 2457 F4, D-8735)', () => {

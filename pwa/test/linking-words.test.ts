@@ -146,3 +146,13 @@ describe("the legacy workspace on the wire and in the picker (review 2971 A1)", 
     expect(pickerWorkspacesOf(null, row())).toBeNull();
   });
 });
+
+// F1 (D-8186, D-8808): a row whose team routing cannot be measured says so, and offers no Reshape.
+import { reshapeOffered, stateWords } from '../src/fleet/hierarchyWords';
+describe('the unmeasured hierarchy state', () => {
+  it('reads Not measured, and Reshape is not offered for it', () => {
+    expect(stateWords({ state: 'unmeasured', stateAt: null })).toBe('Not measured');
+    expect(reshapeOffered({ state: 'unmeasured', teamKey: 'AAA' })).toBe(false);
+    expect(reshapeOffered({ state: 'not-migrated', teamKey: 'AAA' })).toBe(true);
+  });
+});

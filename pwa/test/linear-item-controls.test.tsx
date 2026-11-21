@@ -141,6 +141,30 @@ describe('the hierarchy items\' controls', () => {
     }
   });
 
+  it('a map Return refused for its owner says the Return sentence and keeps the note; Hand keeps its own (F5, F6)', async () => {
+    const sayings: [string, 'map' | 'drift', string, RegExp][] = [
+      ['no-linear-owner', 'map', 'Return', /no Linear owner to return the map to.*map and your note are kept.*return it again/s],
+      ['team-ambiguous', 'map', 'Return', /More than one connected Linear workspace has this team key.*kept.*Settings.*return it again/s],
+      ['unreachable', 'map', 'Return', /^The Linear owner could not be measured, so nothing was changed\. Try again\.$/],
+      ['unreachable', 'drift', 'Hand to a coordinator', /^The Linear owner could not be measured, so nothing was changed\. Try again\.$/],
+      ['no-linear-owner', 'drift', 'Hand to a coordinator', /Name a Linear owner for the project, or keep the plan/],
+    ];
+    for (const [error, kind, button, pattern] of sayings) {
+      vi.spyOn(api, 'linearItemAct').mockRejectedValue(new ApiError(409, { ok: false, error, detail: 'box text that must not show' }));
+      if (kind === 'map') {
+        controls({ verb: 'linear-map', migrationId: 3 });
+        fireEvent.change(screen.getByRole('textbox', { name: /note/i }), { target: { value: 'Leave it.' } });
+      } else controls({ verb: 'linear-drift', bindingId: 8 });
+      click(button);
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent, `${kind} ${error}`).toMatch(pattern);
+      expect(document.body.textContent).not.toContain('box text');
+      if (kind === 'map') expect((screen.getByRole('textbox', { name: /note/i }) as HTMLInputElement).value).toBe('Leave it.');
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('Name offers the live coordinators and sends {act:"name", owner} after its confirm', async () => {
     vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }, { id: 'coord-b', live: false }] });
     const call = sent();
@@ -199,7 +223,7 @@ describe('the hierarchy items\' controls', () => {
     ['not-found', LINEAR_ITEM_REFUSAL_TEXT['not-found']],
     ['not-open', LEDGER_REFUSAL_TEXT['not-open']],
   ])('the %s refusal says its fixed sentence (not-open is the ledger doors\' own)', (word, sentence) => {
-    expect(linearItemErrorText(new ApiError(409, { ok: false, error: word }))).toBe(sentence);
+    expect(linearItemErrorText(new ApiError(409, { ok: false, error: word }), 'done')).toBe(sentence);
   });
 
   it('an act the server refuses shows its fixed sentence, never the box\'s text', async () => {

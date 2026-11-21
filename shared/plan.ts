@@ -39,8 +39,11 @@ export type InboundState = (typeof INBOUND_STATES)[number];
  *  team's Upkeep epic, close it with a reason, or raise it to the operator. */
 export const TRIAGE_DECISIONS = ['hand', 'upkeep', 'close', 'raise'] as const;
 export type TriageDecision = (typeof TRIAGE_DECISIONS)[number];
-/** A project's place in the per-team migration, as its row in the console says it. */
-export const HIERARCHY_STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back'] as const;
+/** A project's place in the per-team migration, as its row in the console says it. `unmeasured` is a row that cannot be measured
+ *  (D-8808): an unpinned row whose routing cannot be read (no listing, or an unreadable slot that could hold its key), a pinned
+ *  row outranked by such a row, or a pinned row whose own workspace cannot be measured (its slot unreadable, or no listing).
+ *  Never "not-migrated", and no Reshape for it. */
+export const HIERARCHY_STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back', 'unmeasured'] as const;
 export type HierarchyState = (typeof HIERARCHY_STATES)[number];
 /** What a phase reference names: a whole epic or one ticket (programme work map, WM0, D14). */
 export const PHASE_REF_KINDS = ['epic', 'ticket'] as const;
