@@ -5173,6 +5173,19 @@ passes for `server`, `pwa` and `ui`, and the PWA builds.
 **Rollback.** A plain revert: the request is additive (an older server ignores it) and the answer is a new frame an older
 PWA's reducer ignores; the keep reverts to 30 s with the old constant.
 
+### Task H3: SessionDetails sheds its lists and its words (D-8875) — now
+
+**What.** C49's H3 row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4.4, §4.5, Table 13's H3 row):
+SessionDetails sheds the subagent button and list, the `N delegated` chip, its title and its activity rows, and a worktree
+row loses its liveness words; with the carries of reviews 3099 and 2995. Built red first; this entry is completed as the task
+lands.
+
+**Deviations found.**
+
+- **D-8875** — `session-panel-sheds-broker-words`: Task H3, issued on 2026-11-21. The session panel draws no subagent or
+  recorded-entry count, toggle or list, and no word of the broker's liveness; its departures from the spec are named by slug
+  in this section as the task completes them.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

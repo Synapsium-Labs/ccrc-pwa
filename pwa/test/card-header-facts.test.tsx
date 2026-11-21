@@ -596,6 +596,45 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
   });
 });
 
+// Session helpers H3 (D-8875; spec 2026-11-19 §4.5): the Helpers section is the one list and the one count of a session's
+// helpers, so the header's facts carry neither the subagent count nor the recorded entries' count, and the card still sits
+// within the header. RED FIRST: at `main` the header draws both.
+describe('the new header: no subagent and no delegated fact (H3, D-8875)', () => {
+  const busy = s({ role: 'child', child: { kind: 'child', runId: 40 }, status: 'busy', bucket: 'working',
+    subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] });
+  const entries = [activity({ activityId: 'a1', parentId: busy.id }), activity({ activityId: 'a2', parentId: busy.id, liveness: 'stale' })];
+  // Handed on as it is, so a field the model no longer takes is simply not read.
+  const input: Record<string, unknown> = { session: busy, now: NOW, childRun: child(RUN), delegated: entries };
+
+  it('H3-H1: headerFacts holds no `subagents` and no `delegated` key, and the card is within it', () => {
+    const f = sessionFacts(input as unknown as FactInput);
+    const head = headerFacts(f);
+    expect(head.map((h) => h.key)).not.toContain('subagents');
+    expect(head.map((h) => h.key)).not.toContain('delegated');
+    expect(head.filter((h) => /subagent|delegated|⑂/i.test(`${h.text} ${h.title ?? ''}`))).toEqual([]);
+    // The rest of the header is as before: the name, the status with its words, the programme and the coordinator.
+    expect(head.map((h) => h.key)).toEqual(expect.arrayContaining(['name', 'status', 'lane', 'programme', 'coordinator']));
+    expect(cardWithinHeader(cardFacts(f), head)).toEqual([]);
+  });
+
+  it('H3-H2: the rendered header draws neither disclosure, in either skin', () => {
+    for (const skin of ['instrument', 'refined'] as const) {
+      act(() => setSkin(skin));
+      const f = sessionFacts(input as unknown as FactInput);
+      render(<SessionHeaderHost {...headerProps({ session: busy, status: busy.status, facts: f })} />);
+      const toggle = screen.queryByRole('button', { name: /details/i });
+      if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+      const head = document.querySelector('.chat-head')!;
+      expect(head, `${skin}: the header is drawn`).not.toBeNull();
+      expect(visible(head), `${skin}: its name is drawn`).toContain(busy.workspace!);
+      const named = [...head.querySelectorAll('*')].flatMap((el) => [el.getAttribute('aria-label'), el.getAttribute('title')])
+        .filter((x): x is string => x !== null);
+      expect(`${head.textContent} ${named.join(' ')}`, skin).not.toMatch(/subagent|delegated|⑂/i);
+      cleanup();
+    }
+  });
+});
+
 // The run page's header is a superset of the run row (the runs rebuild, Task 7, D-8072; spec 2026-11-04 §8.4; D-5545): every
 // element the row draws is drawn again, word for word, from the same readers.
 describe('a run row and its page header', () => {
