@@ -21,9 +21,10 @@ import { incarnationOf } from './delegationLeaseDoor.js';
  *    nothing, the other only gives back what the pass closed.
  *  - THE DRY RUN FIRST: the pass carries the dry run's count and refuses `count-changed` (with the report it would act on) unless it is the
  *    count it would close now, so the pass never runs on a number nobody read.
- *  - THE REGISTRY IS MEASURED HERE, decided in L1: one listing, then each listed parent's incarnation, read twice, for the parents whose
- *    records a verdict reads (`backfillParentsToRead`). A listing that does not read makes every parent unmeasured, so no agent or workflow
- *    record passes the positive check by its parent; the applier decides under its own lock on its own checkpoint.
+ *  - THE REGISTRY IS MEASURED HERE, decided in L1: the watcher's listed ids (`currentRegistryIds()`, derived once from the listing in
+ *    `registry.ts`, the one reader of `*.uuid` names), then each listed parent's incarnation, read twice, for the parents whose records a
+ *    verdict reads (`backfillParentsToRead`). No listing yet (null) makes every parent unmeasured, so no agent or workflow record passes the
+ *    positive check by its parent; the applier decides under its own lock on its own checkpoint.
  *
  * L4: it measures, calls the ONE `DelegationDurability` the watcher's lane opened (`watcher.delegationApplier()`; a second instance on the
  * directory would race its journal), and answers. Every decision is `delegation-backfill.ts` (L1). Not registered here: `server.ts` calls
@@ -32,7 +33,9 @@ import { incarnationOf } from './delegationLeaseDoor.js';
 export interface DelegationBackfillRouteDeps {
   /** The watcher's one applier; null while the lane has none open. */
   readonly applier: () => Promise<DelegationDurability | null>;
-  readonly io: Pick<FleetIO, 'readdirMeasured' | 'readFileMeasured'>;
+  /** The registry listing's ids (`watcher.currentRegistryIds()`); null while no listing has landed. */
+  readonly listedIds: () => ReadonlySet<string> | null;
+  readonly io: Pick<FleetIO, 'readFileMeasured'>;
   readonly registryDir: string;
   readonly now: () => number;
   /** Sign-in is armed and the caller holds a session (`server.ts` measures it: `authEnabled` and the gate's `session` reason). */
@@ -52,8 +55,7 @@ export function registerDelegationBackfillRoutes(app: FastifyInstance, deps: Del
   /** The registry facts of the parents a verdict reads, measured now. */
   const parentsOf = async (durable: DelegationDurability, nowMs: number): Promise<Map<string, DelegationBackfillParent>> => {
     const ids = backfillParentsToRead(durable.state().checkpoint.activities, nowMs);
-    const listing = await deps.io.readdirMeasured(deps.registryDir);
-    const listed = listing.ok ? new Set(listing.entries.filter((e) => e.endsWith('.uuid')).map((e) => e.slice(0, -'.uuid'.length))) : null;
+    const listed = deps.listedIds();
     const out = new Map<string, DelegationBackfillParent>();
     await Promise.all(ids.map(async (id) => {
       const inc = listed?.has(id) === true ? await incarnationOf(deps, id) : null;

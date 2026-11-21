@@ -30,6 +30,7 @@ import type { DelegationProjectionPort } from '../src/coord/delegation-db-projec
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import { DELEGATION_BACKFILL_FILE } from '../src/coord/delegation-backfill.js';
 import { registerDelegationBackfillRoutes } from '../src/coord/delegationBackfillRoutes.js';
+import type { FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -87,7 +88,7 @@ const storePort = (coord: CoordStore): DelegationProjectionPort => ({
 const closers: Array<() => Promise<unknown>> = [];
 afterEach(async () => { await Promise.all(closers.splice(0).map((close) => close().catch(() => undefined))); });
 
-interface World { app: FastifyInstance; ccrc: string; reg: string; durable: DelegationDurability | null; coord: CoordStore | null }
+interface World { app: FastifyInstance; ccrc: string; reg: string; io: FleetIO; durable: DelegationDurability | null; coord: CoordStore | null }
 /** P is registered at INC (alive, its own incarnation); Q is not in the registry. P started agent X, Q started agent Z, both on day 0;
  *  the clock reads day 3. So the dry run closes Z (its parent is gone) and keeps X (its parent is alive, at the same incarnation). */
 async function world(o: { signedIn?: boolean; applier?: 'none'; sqlite?: true } = {}): Promise<World> {
@@ -112,11 +113,11 @@ async function world(o: { signedIn?: boolean; applier?: 'none'; sqlite?: true } 
   if (durable !== null) closers.push(() => durable.close());
   const app = Fastify();
   registerDelegationBackfillRoutes(app, {
-    applier: async () => durable, io: deps.io, registryDir: reg, now: () => T0 + 3 * DAY,
+    applier: async () => durable, io: deps.io, registryDir: reg, listedIds: () => new Set([P]), now: () => T0 + 3 * DAY,
     signedIn: (_req: FastifyRequest) => o.signedIn ?? true,
   });
   closers.push(() => app.close());
-  return { app, ccrc, reg, durable, coord };
+  return { app, ccrc, reg, io: deps.io, durable, coord };
 }
 const get = (w: World) => w.app.inject({ method: 'GET', url: DOOR });
 const post = (w: World, payload: unknown) => w.app.inject({ method: 'POST', url: DOOR, payload: payload as object });
@@ -134,15 +135,14 @@ describe('GET /api/coord/delegation-backfill: the dry run (spec §7.2, condition
     expect(existsSync(path.join(w.ccrc, DELEGATION_BACKFILL_FILE))).toBe(false);
   });
 
-  it('RT-2: a parent whose incarnation cannot be read fails the check; a registry that does not list fails every one', async () => {
+  it('RT-2: a parent whose incarnation cannot be read fails the check; no registry listing yet fails every one', async () => {
     const w = await world();
     writeFileSync(path.join(w.reg, `${P}.generation`), '');
     expect((await get(w)).json(), 'P present, its incarnation unreadable: X still fails').toMatchObject({ closes: 1, failedCheck: 1 });
     const dark = await world();
     const app = Fastify();
     registerDelegationBackfillRoutes(app, {
-      applier: async () => dark.durable, io: { ...testDeps(mkTmp('ccrc-s2-route-io-')).io, readdirMeasured: async () => ({ ok: false as const, reason: 'unreadable' as const }) },
-      registryDir: dark.reg, now: () => T0 + 3 * DAY, signedIn: () => true,
+      applier: async () => dark.durable, io: dark.io, registryDir: dark.reg, listedIds: () => null, now: () => T0 + 3 * DAY, signedIn: () => true,
     });
     closers.push(() => app.close());
     expect((await app.inject({ method: 'GET', url: DOOR })).json(), 'Q is not proved absent: Z fails too').toMatchObject({ closes: 0, failedCheck: 2 });

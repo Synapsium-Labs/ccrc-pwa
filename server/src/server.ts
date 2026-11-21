@@ -2180,7 +2180,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // no box token, registered from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`DELEGATION_BACKFILL_DOORS`) read.
   registerDelegationBackfillRoutes(app, {
     applier: async () => (watcher === undefined ? null : watcher.delegationApplier()), io: deps.io, registryDir: deps.cfg.registryDir,
-    now: () => deps.time.clock.wall(), signedIn: (req) => deps.cfg.authEnabled && sessionAuth(req).reason === 'session',
+    listedIds: () => watcher?.currentRegistryIds() ?? null, now: () => deps.time.clock.wall(), signedIn: (req) => deps.cfg.authEnabled && sessionAuth(req).reason === 'session',
   });
   // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
   // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
