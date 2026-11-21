@@ -7,7 +7,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { setLinking } from '../src/coord/linkingStore.js';
 import { hierarchyProjectsOf, type HierarchyProjectFacts } from '../src/coord/planStore.js';
-import { linearOwnerOfTeam, teamOwnerProject } from '../src/coord/planPolicy.js';
+import { linearOwnerOfTeam, teamOwnerDiagnostic, teamOwnerProject } from '../src/coord/planPolicy.js';
 import { CoordStore } from '../src/coord/store.js';
 import { planStorePort } from '../src/coord/planStore.js';
 import { registerPlanRoutes } from '../src/coord/planRoutes.js';
@@ -24,16 +24,14 @@ const facts = (project: string, over: Partial<HierarchyProjectFacts> = {}): Hier
 describe('teamOwnerProject with a workspace', () => {
   const rows = [facts('project-a', { order: 1, workspaceId: WS_A }), facts('project-b', { order: 2, workspaceId: WS_B })];
   it('a shared key held by two projects in two workspaces routes each inbound issue to its own workspace\'s project', () => {
-    expect(teamOwnerProject('AAA', rows, WS_A)).toBe('project-a');
-    expect(teamOwnerProject('AAA', rows, WS_B)).toBe('project-b');
+    expect(teamOwnerProject('AAA', rows, WS_A, null)).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
+    expect(teamOwnerProject('AAA', rows, WS_B, null)).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
   });
-  it('an unmeasured holder does not count in a workspace, while a key-only diagnostic still reads every holder', () => {
-    expect(teamOwnerProject('AAA', [facts('project-c', { order: 1 }), ...rows], WS_B)).toBe('project-b');
-    expect(teamOwnerProject('AAA', rows)).toBe('project-a');
-    expect(teamOwnerProject('AAA', rows, null)).toBe('project-a');
+  it('cannot pick a pinned owner when a higher-ranked unpinned holder is unmeasured', () => {
+    expect(teamOwnerProject('AAA', [facts('project-c', { order: 1 }), ...rows], WS_B, null)).toMatchObject({ kind: 'unmeasured' });
   });
   it('a workspace nobody holds the key in owns nothing', () => {
-    expect(teamOwnerProject('AAA', rows, '00000000-0000-4000-8000-0000000000c3')).toBeNull();
+    expect(teamOwnerProject('AAA', rows, '00000000-0000-4000-8000-0000000000c3', null)).toEqual({ kind: 'none', reason: 'no-holder' });
   });
 });
 
@@ -55,9 +53,9 @@ describe('linearOwnerOfTeam with a workspace', () => {
   const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
   const rows = [facts('project-a', { order: 1, workspaceId: WS_A, linearOwner: 'coord-a' }), facts('project-b', { order: 2, workspaceId: WS_B, linearOwner: 'coord-b' })];
   it("a shared key held by two projects in two workspaces picks each workspace's own project's owner", () => {
-    expect(linearOwnerOfTeam('AAA', rows, f, WS_A)).toMatchObject({ project: 'project-a', id: 'coord-a' });
-    expect(linearOwnerOfTeam('AAA', rows, f, WS_B)).toMatchObject({ project: 'project-b', id: 'coord-b' });
-    expect(linearOwnerOfTeam('AAA', rows, f)).toMatchObject({ project: 'project-a' });
+    expect(linearOwnerOfTeam('AAA', rows, f, WS_A, null)).toMatchObject({ project: 'project-a', id: 'coord-a' });
+    expect(linearOwnerOfTeam('AAA', rows, f, WS_B, null)).toMatchObject({ project: 'project-b', id: 'coord-b' });
+    expect(teamOwnerDiagnostic('AAA', rows, f)).toMatchObject({ project: 'project-a' });
   });
 });
 

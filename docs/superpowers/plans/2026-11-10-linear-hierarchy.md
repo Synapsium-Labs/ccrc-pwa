@@ -483,19 +483,25 @@ number from `POST /api/ledger/deviations`.
   workspace since run 3027 built `w8-migration-workspace` (reviews 2997 and 3038). The start, open-issue read and console
   state never select the first workspace holding a key. Reshape returns the routing refusal before checking migration state:
   a shared key on a row with no workspace is `team-ambiguous`, even when another workspace has already migrated it. For a
-  known workspace, the inbound and migration lanes use one owner rule: `teamOwnerProject` shares `projectOnTeam` with the
-  migration's programme matches. A pinned row counts in its own workspace; an unpinned row counts only where its key routes
-  uniquely, and in neither workspace when two hold it. Plan-map authorization uses that rule in each waiting workspace.
-  The hierarchy owner display, drift handoff and Upkeep notification now use the same rule with measured routing facts;
-  the first two read once outside the coordination hold, and the notification reuses the sync snapshot. Map Return refuses
-  `unreachable` before settlement if an unpinned holder could own the team and the facts cannot be read (including a listed
-  but unreadable slot record). The item and map stay intact so the operator can retry with the note. A Name a Linear owner
-  item settles only on a workspace-qualified, live owner and no issue for that team left waiting. The plan-map route's
-  fixtures pin diagnostic-only no-wait results, the selected workspace and read/write boundary, and a refusal without a
-  read when two owned workspaces await a map.
+  known workspace, the inbound and migration lanes use one owner rule: `teamOwnerProject` answers an owner with its
+  project, measured none, or unmeasured. A pinned row counts in its own workspace; an unpinned row counts only where its
+  key routes uniquely, and in neither workspace when two hold it. `measuredTeamRoutes` distinguishes a failed listing or a
+  configured slot without a current team record from a measured absence. Possible owners are refusal evidence only.
+  Plan triage (including Close and Raise) and plan-map refuse `unreachable` before an issue read or write when ownership is
+  unmeasured; a key-only diagnostic never authorizes either. Plan-map uses the same snapshot for authorization and its
+  read outside the coordination hold. Inbound routing, answered-item delivery and close notices send and stamp nothing
+  on an unmeasured owner. Waiting work stays retryable; Take Return refuses before effects. Drift Hand refuses `unreachable`
+  when it needs the team owner and cannot measure it. Hierarchy displays the uncertainty and Upkeep suppresses the notice;
+  the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
+  workspace-qualified owner with no issues for that team still waiting.
+  Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
+  `no-linear-owner` when otherwise there is no recipient. It settles only with recipient mail in the same transaction;
+  refusals leave the item, map and note retry intact. Migration completion waits rather than dropping an unnamed declared
+  programme whose membership cannot be measured. Ambiguous inbound with no owner still waits quietly and counts in the console.
   Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
-  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and `w8-triage-l1`;
+  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill`, `w8-triage-l1` and
+  `w8-ambiguous-notice` (after the pilot);
   `w8-write-ambiguous` was built in the review's fix round and dropped, and `w8-migration-workspace` by run 3027. Record: the
   wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new

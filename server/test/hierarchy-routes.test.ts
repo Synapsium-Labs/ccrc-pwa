@@ -110,6 +110,30 @@ describe('hierarchy routes', () => {
     });
   });
 
+  it('round 2: owner display does not substitute a pinned owner on an unreadable slot record', async () => {
+    claim('prog-a', 'project-a', 'sess-1', 1);
+    claim('prog-b', 'project-b', 'sess-2', 2);
+    db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-a', 'AAA')").run();
+    db.prepare("INSERT INTO project_linking (project, teamKey, teamWorkspace) VALUES ('project-b', 'AAA', ?)").run(WS.a.id);
+    const prior = app;
+    app = Fastify();
+    await prior.close();
+    registerHierarchyRoutes(app, {
+      plan: planStorePort(db), serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive',
+      readLinearStore: async () => {
+        const store = await readLinearStore(path.join(home, '.ccrc'));
+        if (store.kind !== 'listed') throw new Error('fixture store not listed');
+        return { ...store, slots: store.slots.map((slot) => ({ ...slot, record: { kind: 'unreadable', code: 'EIO' } })) };
+      },
+    });
+    const result = await get();
+    expect(result.statusCode).toBe(200);
+    expect(result.json().projects.map((row: { ownerNow: unknown }) => row.ownerNow)).toEqual([
+      expect.objectContaining({ id: null, source: 'none', live: false, unmeasured: true }),
+      expect.objectContaining({ id: null, source: 'none', live: false, unmeasured: true }),
+    ]);
+  });
+
   it('ifUnnamed is the coordinator the default rule gives with no named owner: for a named row not the named one, for none null, for a shared-key sibling its own default', async () => {
     claim('prog-a', 'project-a', 'sess-1', 1);
     claim('prog-b', 'project-b', 'sess-2', 2);

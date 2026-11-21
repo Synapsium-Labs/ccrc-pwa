@@ -46,7 +46,7 @@ import type { LinearJournal } from './journal.js';
 import type { CcrcPass, LinearWritePolicy } from './policy.js';
 import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
-import { currentDetails, routableSlots, routeProjectTeam, type LinearRouteSlot } from './route.js';
+import { currentDetails, measuredTeamRoutes, routableSlots, routeProjectTeam, type TeamRoutes } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import { restoreCommentChoice, restoreHoldVerdict, restoreTargetVerdict, restoredDescription } from './driftPolicy.js';
 import {
@@ -118,7 +118,7 @@ export interface PlanSyncDeps {
   /** A test's shorter tick budget. */
   tickDeadlineMs?: number;
   /** The Linear owner of a project (D-8183): who an Upkeep epic's failure mails, since it has no coordinator. None: no mail. */
-  upkeepOwnerOf?: (project: string, slots: readonly LinearRouteSlot[]) => string | null;
+  upkeepOwnerOf?: (project: string, routes: TeamRoutes | null) => string | null;
 }
 
 export interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; key: string }[] }
@@ -138,7 +138,7 @@ type Failure = Exclude<CcrcOpOutcome, { ok: true }>;
  *  said `same`, or a link answered `conflict`). Neither: nothing went (no key, no slot). */
 interface SendNote { wrote: boolean; same: boolean }
 /** What failing a binding needs to know about its object (a skip's binding is failed with no slot: A2). */
-interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan; routes: readonly LinearRouteSlot[] }
+interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan; routes: TeamRoutes | null }
 /** What a failed outcome needs to know about the object it was for. */
 interface Subject extends Told { slot: SlotInfo; /** The pass every call of this step is journaled under (`readAsk` reads it). */ pass: SendPass }
 
@@ -466,7 +466,7 @@ export class PlanSync {
   }
 
   /** The workspace a project's linked team routes to (`routeProjectTeam`), null when it has no team or no slot serves it. */
-  private workspaceOfProject(project: string, listed: ReturnType<typeof routableSlots>): string | null {
+  private workspaceOfProject(project: string, listed: TeamRoutes['slots']): string | null {
     const l = this.deps.coord.linkingOf(project);
     const route = l.teamKey === null ? null : routeProjectTeam(listed, { teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null });
     return route !== null && route.kind === 'slot' ? route.slot.workspaceId : null;
@@ -571,7 +571,7 @@ export class PlanSync {
    *  `upkeep:<project>` reads that project's Upkeep epic instead (D-8183): `program` is null, there is no programme row, and a
    *  project with no Upkeep epic has no snapshot. `readOnly` (the drift pass's `plannedOwned`): no episode is observed and no fill
    *  is asked for, so a read changes nothing. */
-  private snapshot(slug: string, store: LinearStoreRead, readOnly = false): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; routes: readonly LinearRouteSlot[]; waiting: string[]; unread: string[] } | null {
+  private snapshot(slug: string, store: LinearStoreRead, readOnly = false): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; routes: TeamRoutes | null; waiting: string[]; unread: string[] } | null {
     const { plan, coord } = this.deps;
     const upkeep = slug.startsWith(UPKEEP_DUE_PREFIX);
     const rowid = upkeep ? null : plan.programmeRowId(slug);
@@ -589,7 +589,8 @@ export class PlanSync {
       openTickets: tickets.filter((t) => t.state === 'open' || t.state === 'started').length,
     });
     const slots = slotsOf(store);
-    const listed = store.kind === 'listed' ? routableSlots(store) : [];
+    const routes = measuredTeamRoutes(store);
+    const listed = routes?.slots ?? [];
     const projectNames = [...new Set(stored.epics.flatMap((e) => [e.project, ...e.tickets.map((t) => t.project)]))];
     const projects: SyncSnapshot['projects'] = projectNames.map((project) => {
       const l = coord.linkingOf(project);
@@ -634,7 +635,7 @@ export class PlanSync {
       },
       plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs, putBackTickets: putBackTicketsOf(raw),
     };
-    return { snap, slots, routes: listed, waiting, unread };
+    return { snap, slots, routes, waiting, unread };
   }
 
   /** §5.6: the PR of each bound ticket's run, as a URL on the project's measured repository (an unmeasured repository has no
@@ -996,7 +997,7 @@ export class PlanSync {
   }
 
   /** D-8701's episode mail: once per programme, workspace and episode (its first fill names it), in a fixed sentence. */
-  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses', routes: readonly LinearRouteSlot[], snap?: SyncSnapshot): void {
+  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses', routes: TeamRoutes | null, snap?: SyncSnapshot): void {
     const streak = this.streakOf(`${kind}|${workspaceId}`);
     if (streak === undefined) return;
     if (kind === 'probe') {
@@ -1012,7 +1013,7 @@ export class PlanSync {
   }
 
   /** §5.4: a programme ended `done` with open issues: the coordinator is told once, in a fixed sentence (no Linear text). */
-  private mailOpenIssuesLeft(slug: string, count: number, routes: readonly LinearRouteSlot[]): void {
+  private mailOpenIssuesLeft(slug: string, count: number, routes: TeamRoutes | null): void {
     const owner = this.ownerOf(slug, routes);
     if (owner === null) return;
     const subject = `Linear sync: programme ${slug} open-issues-left`;
@@ -1023,7 +1024,7 @@ export class PlanSync {
   }
 
   /** Who is told about a key: a programme's coordinator, or an Upkeep epic's project's Linear owner (D-8183); none: nobody. */
-  private ownerOf(slug: string, routes: readonly LinearRouteSlot[]): string | null {
+  private ownerOf(slug: string, routes: TeamRoutes | null): string | null {
     return slug.startsWith(UPKEEP_DUE_PREFIX) ? this.deps.upkeepOwnerOf?.(slug.slice(UPKEEP_DUE_PREFIX.length), routes) ?? null : this.deps.plan.planOwnerOf(slug);
   }
 
@@ -1035,7 +1036,7 @@ export class PlanSync {
 
   /** Review 2457 F3: a restore comment the public-text check refused, told once per object, in a fixed sentence (never a value, never
    *  the check's class). The comment went out as ccrc's fallback naming the fields only, and the restore's field writes went. */
-  private mailRestoreTextRefused(slug: string, b: BindingRow, plan: StoredPlan, routes: readonly LinearRouteSlot[]): void {
+  private mailRestoreTextRefused(slug: string, b: BindingRow, plan: StoredPlan, routes: TeamRoutes | null): void {
     const local: Local = { kind: b.localKind, id: b.localId };
     const key = b.localKind === 'programme' ? slug : this.planKeyOf(plan, local);
     this.mailOnce(slug, `Linear sync: ${OBJECT_WORD[b.localKind]} ${key} restore-comment text-public (${slug})`,
@@ -1049,7 +1050,7 @@ export class PlanSync {
       `The Linear sync could not link the pull request to the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It does not try that link again; the issue stays in sync, and a later pull request is linked as usual.`, s.routes);
   }
 
-  private mailOnce(slug: string, subject: string, body: string, routes: readonly LinearRouteSlot[]): void {
+  private mailOnce(slug: string, subject: string, body: string, routes: TeamRoutes | null): void {
     const owner = this.ownerOf(slug, routes);
     if (owner === null) return;
     const { coord } = this.deps;
@@ -1109,9 +1110,12 @@ export function planSyncFor(o: {
     },
     now: Date.now, privateTrackerKeys: o.privateTrackerKeys, prOfRun: prOfRunFrom(o.coord, o.currentFleet ?? (() => null)),
     migrating: () => o.plan.migratingLocals(),
-    upkeepOwnerOf: (project, routes) => linearOwnerOfProject(project, o.plan.hierarchyProjectsOf(), {
+    upkeepOwnerOf: (project, routes) => {
+      const owner = linearOwnerOfProject(project, o.plan.hierarchyProjectsOf(), {
       latestProgrammeCoordinator: (p) => o.plan.latestProgrammeCoordinator(p), presence: o.presenceOf,
-    }, routes).id,
+    }, routes);
+      return owner.kind === 'owner' ? owner.id : null;
+    },
   });
 }
 

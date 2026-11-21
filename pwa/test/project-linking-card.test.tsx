@@ -855,6 +855,15 @@ describe('the hierarchy settings', () => {
     expect(screen.queryByText(/own owner setting is not used/)).toBeNull();
   });
 
+  it('shows when the current Linear owner could not be measured', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([
+      hrow('project-a', { ownerNow: { id: null, source: 'none', live: false, unmeasured: true, ifUnnamed: { id: 'coord-a', live: true } } }),
+    ]));
+    const card = rowOf('project-a');
+    expect(await within(card).findByText('The current Linear owner could not be measured.')).toBeInTheDocument();
+    expect(within(card).getByText('Default: coord-a (live)')).toBeInTheDocument();
+  });
+
   it('the none-live words for an inherited owner', () => {
     const r = hrow('project-b', { ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } });
     expect(defaultOwnerWords(r)).toBe('Default: none live');

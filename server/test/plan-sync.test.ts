@@ -129,8 +129,9 @@ const mails = (r: Rig): { subject: string; body: string; toId: string }[] =>
 const afterDebounce = (r: Rig): number => { r.t.now = Math.max(r.t.now, T + PLAN_SYNC_DEBOUNCE_MS); return r.t.now; };
 
 describe('Upkeep notification routing', () => {
-  it('mails the lower-order unpinned holder when it uniquely routes to the pinned project workspace', async () => {
+  it.each([false, true])('uses measured ownership for Upkeep notices (another slot unreadable: %s)', async (partial) => {
     const r = await rig();
+    if (partial) await seedSlot(r.ccrcDir, 'b');
     r.db.prepare('UPDATE project_linking SET linearOwner = ? WHERE project = ?').run('coord-first', 'project-a');
     r.db.prepare('INSERT INTO project_linking (project, teamKey, teamWorkspace, override, linearOwner) VALUES (?, ?, ?, ?, ?)')
       .run('project-b', 'AAA', WS.a.id, 'private', 'coord-pinned');
@@ -143,13 +144,17 @@ describe('Upkeep notification routing', () => {
     const sync = planSyncFor({
       coord: r.coord, plan: r.plan, ccrcDir: r.ccrcDir, rate: fx.rate, journal: fx.journal,
       policy: async () => ({ allow: false, why: 'denied', decisionId: null }),
-      refresher: fx.refresher, privateTrackerKeys: [], readLinearStore: () => readLinearStore(r.ccrcDir),
+      refresher: fx.refresher, privateTrackerKeys: [], readLinearStore: async () => {
+        const store = await readLinearStore(r.ccrcDir);
+        if (!partial || store.kind !== 'listed') return store;
+        return { ...store, slots: store.slots.map((slot) => slot.id === WS.b.id ? { ...slot, record: { kind: 'unreadable', code: 'EIO' } } : slot) };
+      },
       presenceOf: () => 'alive',
     });
     await sync.passFor('upkeep:project-b', Date.now() + 60_000);
     expect(fetch).not.toHaveBeenCalled();
     expect(r.plan.bindingsOf('upkeep:project-b')).toEqual([expect.objectContaining({ state: 'failed', failedWord: 'status-missing' })]);
-    expect(mails(r).map((m) => [m.toId, m.subject])).toEqual([
+    expect(mails(r).map((m) => [m.toId, m.subject])).toEqual(partial ? [] : [
       ['coord-first', 'Linear sync: epic upkeep status-missing (upkeep:project-b)'],
     ]);
   });

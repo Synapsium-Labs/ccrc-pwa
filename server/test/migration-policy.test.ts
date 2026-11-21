@@ -304,7 +304,7 @@ describe('shedTaken (review 2955 F2)', () => {
 });
 
 describe('mapProposerVerdict (D-8808: the map route\'s decider, review 2997 F2)', () => {
-  const ownerIn = (mine: readonly (string | null)[]) => (ws: string | null): string | null => (mine.includes(ws) ? 'coord-a' : 'coord-b');
+  const ownerIn = (mine: readonly (string | null)[]) => (ws: string | null) => ({ kind: 'owner' as const, id: mine.includes(ws) ? 'coord-a' : 'coord-b' });
   it('one waiting workspace the caller owns is the one', () => {
     expect(mapProposerVerdict('coord-a', ['ws-a', 'ws-b'], ['ws-a', 'ws-b'], ownerIn(['ws-a']))).toEqual({ ok: true, workspaceId: 'ws-a' });
   });
@@ -325,17 +325,18 @@ describe('mapProposerVerdict (D-8808: the map route\'s decider, review 2997 F2)'
 describe('projectOnTeam and migrationOfProject (D-8808)', () => {
   const slot = (workspaceId: string, ...keys: string[]) => ({ ref: { source: 'file' as const, id: workspaceId }, workspaceId, urlKey: workspaceId, teamKeys: keys });
   const both = [slot('ws-a', 'AAA'), slot('ws-b', 'AAA')];
+  const measured = (slots: typeof both) => ({ slots, unreadableWorkspaces: new Set<string>(), unreadableLegacy: false });
   it('a row naming a workspace is judged by it', () => {
-    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-b' }, 'AAA', 'ws-b', both)).toBe(true);
-    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-b' }, 'AAA', 'ws-a', both)).toBe(false);
-    expect(projectOnTeam({ teamKey: 'BBB', workspaceId: 'ws-a' }, 'AAA', 'ws-a', both)).toBe(false);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-b' }, 'AAA', 'ws-b', measured(both))).toBe(true);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-b' }, 'AAA', 'ws-a', measured(both))).toBe(false);
+    expect(projectOnTeam({ teamKey: 'BBB', workspaceId: 'ws-a' }, 'AAA', 'ws-a', measured(both))).toBe(false);
     expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-a' }, 'AAA', 'ws-a', null)).toBe(true);
   });
   it('a row naming none is routed: one slot decides, an ambiguous or unroutable key is false', () => {
-    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', [slot('ws-a', 'AAA')])).toBe(true);
-    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-b', [slot('ws-a', 'AAA')])).toBe(false);
-    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', both)).toBe(false);
-    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', null)).toBe(false);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', measured([slot('ws-a', 'AAA')]))).toBe(true);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-b', measured([slot('ws-a', 'AAA')]))).toBe(false);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', measured(both))).toBe(false);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', null)).toBe('unmeasured');
   });
   const m = (id: number, workspaceId: string) => ({ id, workspaceId, teamKey: 'AAA' });
   it('migrationOfProject: a pinned row takes its workspace\'s newest', () => {

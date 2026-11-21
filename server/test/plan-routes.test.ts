@@ -80,7 +80,7 @@ describe('plan map route workspace wiring', () => {
     const readOpen = vi.fn(async (_team: string, workspaceId: string) => {
       observed.readInside = inSerial;
       return { ok: true as const, workspaceId, rows: [{ linearId: `issue-${workspaceId}`, identifier: 'AAA-1', title: workspaceId,
-        description: '', team: 'AAA', state: 'unstarted', project: null, milestone: null, parent: null }], slots: null };
+        description: '', team: 'AAA', state: 'unstarted', project: null, milestone: null, parent: null }], routes: null };
     });
     const storeProposal = vi.fn((_team: string, _caller: string, _body: unknown, _open: Awaited<ReturnType<typeof readOpen>>) => {
       observed.proposalInside = inSerial;
@@ -112,13 +112,23 @@ describe('plan map route workspace wiring', () => {
     expect(migration.storeProposal).not.toHaveBeenCalled();
   });
 
+  it('round 2: an unmeasured map owner cannot start the issue read', async () => {
+    holder('project-a', null, 'coord-a');
+    holder('project-b', 'ws-b', 'coord-b');
+    const migration = await setup(['ws-b']);
+    const result = await map('coord-b');
+    expect([result.statusCode, errorOf(result)]).toEqual([503, 'unreachable']);
+    expect(migration.readOpen).not.toHaveBeenCalled();
+    expect(migration.storeProposal).not.toHaveBeenCalled();
+  });
+
   it('reads the caller-owned workspace and passes its actual result to the proposal under the mutex', async () => {
     holder('project-a', 'ws-a', 'coord-a');
     holder('project-b', 'ws-b', 'coord-b');
     const migration = await setup(['ws-a', 'ws-b']);
     const res = await map('coord-b');
     expect(migration.readOpen).toHaveBeenCalledOnce();
-    expect(migration.readOpen).toHaveBeenCalledWith('AAA', 'ws-b');
+    expect(migration.readOpen).toHaveBeenCalledWith('AAA', 'ws-b', { store: { kind: 'unreadable', code: 'ENOENT' }, routes: null });
     expect(migration.observed).toEqual({ readInside: false, proposalInside: true });
     expect(res.statusCode).toBe(200);
     expect(migration.storeProposal).toHaveBeenCalledOnce();

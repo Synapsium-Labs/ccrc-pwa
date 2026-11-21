@@ -135,15 +135,15 @@ no workspace on the row is refused `team-ambiguous` (409), as the rest of the hi
 | Lookup | Built | Test |
 |---|---|---|
 | Start ("Reshape in Linear") | `workspaceOfProject` routes the row's key and workspace. `start` returns a routing refusal before checking migration state; otherwise it inserts the migration in that workspace and decides its owning project there with `teamOwnerProject` | `migration-workspace.test.ts`: each project starts in its own workspace; an unpinned shared key is `team-ambiguous` even when another workspace has a proposing or applied migration; a project without a key still reads `no-team-key` |
-| The open-issue read | `readOpen(team, workspaceId)` reads the migration's own workspace's slot | The test pins both the request's workspace and the slot reference; choosing the first slot that holds the key fails it |
-| The Linear owner | `ownerOf` passes the workspace and routing facts to `linearOwnerOfTeam`: the map mail, the map's owner check and the Return mail. Return refuses `unreachable` before settlement when unmeasured routing could change the owner | `migration-workspace.test.ts` checks the workspace's recipient and proposer; `migration-propose.test.ts` checks the intact map and item on refusal, including a readable listing with an unreadable record, and delivery of the note on retry |
-| The plan-map route | The pure `mapProposerVerdict` judges the caller in each waiting workspace: one owned is the workspace read and stored; with nothing waiting, an owner learns `plan-bad-body` and anyone else `not-linear-owner`. Two owned waiting workspaces answer `team-ambiguous` without reading issues | `migration-policy.test.ts` pins the verdict; three Fastify cases in `plan-routes.test.ts` pin the selected workspace, passing its actual read to the proposal inside the mutex, no-wait diagnostics and ambiguous refusal. Each of the owner scope, selected read, null holder, and refusal word was independently mutated and restored |
+| The open-issue read | `readOpen` uses the migration's own workspace's slot from the snapshot that authorized the read | Fixtures pin the workspace, slot, and snapshot; the route passes its actual read result to the proposal inside the mutex |
+| The Linear owner | `ownerOf` passes the workspace and routing facts to `linearOwnerOfTeam`: the map mail, the map's owner check and the Return mail. Return cannot settle without a concrete recipient | `migration-workspace.test.ts` checks the workspace's recipient and proposer; `migration-propose.test.ts` checks the intact map and item on refusal and delivery of the note on retry |
+| The plan-map route | The pure `mapProposerVerdict` judges the caller in each waiting workspace. With nothing waiting, an owner learns `plan-bad-body` and anyone else `not-linear-owner`; two owned waiting workspaces answer `team-ambiguous` without reading issues. Unmeasured ownership also blocks the read | The policy and route fixtures pin owner scope, the selected read, the no-wait diagnostic and the refusal words. Filtering out **stored** null holders made the no-wait diagnostic test fail; removing the unused zero-holder `[null]` fallback did not |
 | The console's state | `stateOfProject` through the pure `migrationOfProject`: a pinned row reads its workspace's migrations without needing routing facts; an unpinned row uses the request's shared routing snapshot, a shared key showing "Not migrated". A key no slot serves matches by key alone only while all its migrations sit in one workspace | four `stateOfProject` cases |
 | Programme matches | The declare mails, `finishApply`'s declared programmes and the map's epic and leaf team checks (`MapContext.sameWorkspace`) ask `projectOnTeam` (L1): key and workspace | Two-workspace regressions reject both wrong-workspace epic and leaf placements, send declare mail only to the matching workspace's programme, and leave the other workspace's `planRequired` unchanged |
 
-The inbound and migration lanes share `teamOwnerProject`'s owner rule. In a known workspace it uses `projectOnTeam`, the
-same predicate used for programme matches: a pinned project belongs to its stored workspace; an unpinned one belongs
-only to the workspace its key resolves to, and to neither when that key is shared. The two-workspace regression shows
+The inbound and migration lanes share `teamOwnerProject`'s owner rule. It uses the same workspace resolver as
+`projectOnTeam`: a pinned project belongs to its stored workspace; an unpinned one belongs only to the workspace its
+key resolves to, and to neither when that key is shared. The two-workspace regression shows
 that a lower-order unpinned project cannot take the pinned project's migration, map mail, or inbound issue. The key-only
 owner lookup used when no map waits can supply a diagnostic, not permission to read or store a map. A Name a Linear owner
 item does not settle on a project fallback while its issues wait for routing (`plan-inbound.test.ts`).
@@ -151,5 +151,15 @@ item does not settle on a project fallback while its issues wait for routing (`p
 Fix round 1 also passes measured routing to the hierarchy owner display, the drift Hand fallback, and Upkeep sync mail. The
 hierarchy and drift doors read it outside the mutex; Upkeep reuses the snapshot that routed its pass. The tests in
 `hierarchy-routes.test.ts`, `drift-pass.test.ts` and `plan-sync.test.ts` each show that the lower-order unpinned holder wins
-when its key does resolve uniquely to the pinned row's workspace. No new departure number was needed; all edited files
-were claimed.
+when its key does resolve uniquely to the pinned row's workspace.
+
+**Fix round 2 (review 3048).** The rule distinguishes an owner, measured none, and an unmeasured decision. A listed
+slot with an unreadable, missing, or stale team record for its configured key does not count as a measured empty
+workspace. Close and Raise refuse `unreachable` before a re-read or write. Inbound waiting and answered mail and close
+notices cannot stamp or send to a substitute; key refusal still sets its retry hold. Take Return refuses before effects,
+and a handed issue or bound Upkeep ticket stays put when its destination workspace is unmeasured. Drift Hand refuses when it needs an unmeasured owner;
+the hierarchy card says the owner could not be measured, and Upkeep does not send a substitute notice. The project
+fallback belongs to measured none only. Map Return preserves the item and stored map on `unreachable`, `team-ambiguous`
+or `no-linear-owner`, pairing a successful settlement with its recipient mail in one transaction. Apply completion retries
+if needed to classify an unnamed declared programme rather than omitting it. The ownerless ambiguous inbound issue
+still waits quietly and counts in the console; `w8-ambiguous-notice` is carried until after the pilot.

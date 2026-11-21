@@ -5,7 +5,7 @@ import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, fail, leaf, migRig, OWNER, SLUG, U } from './migrationRig.js';
-import { WS } from './linearProxyRig.js';
+import { seedSlot, WS } from './linearProxyRig.js';
 
 afterEach(cleanMigRigs);
 
@@ -28,6 +28,26 @@ describe('the migration proposal (D-8186)', () => {
     expect(r.plan.migrationsOf()).toHaveLength(1);
   });
 
+  it('defers migration completion until unnamed declared programmes can be classified', async () => {
+    let partial = false;
+    const r = await migRig({ routing: (store) => !partial || store.kind !== 'listed' ? store : {
+      ...store, slots: store.slots.map((slot) => slot.id === WS.b.id ? { ...slot, record: { kind: 'unreadable', code: 'EIO' } } : slot),
+    } });
+    await seedSlot(r.ccrcDir, 'b');
+    r.addIssue(1);
+    const id = await r.approved([leaf(1, 'k1')]);
+    applyPlanChanges(r.db, 'prog-b', NO_PLAN_CHANGES(), 'coord-b', r.t.now, { home: 'project-a', title: 'Programme B' });
+    r.db.prepare('UPDATE programs SET planRequired = 0 WHERE slug = ?').run('prog-b');
+    partial = true;
+    await r.until(() => r.stateOf(id) === 'applied', 6);
+    expect(r.stateOf(id)).toBe('applying');
+    expect(r.plan.migrationById(id)?.reportItemId).toBeNull();
+    partial = false;
+    await r.until(() => r.stateOf(id) === 'applied');
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.db.prepare('SELECT planRequired FROM programs WHERE slug = ?').get('prog-b')).toMatchObject({ planRequired: 1 });
+  });
+
   it('a project with no team key cannot start', async () => {
     const r = await migRig();
     expect(r.mig.start('project-nokey', { ok: true, workspaceId: WS.a.id })).toMatchObject({ ok: false, word: 'no-team-key' });
@@ -36,7 +56,7 @@ describe('the migration proposal (D-8186)', () => {
   it('propose by a non-owner is not-linear-owner', async () => {
     const r = await migRig();
     r.addIssue(1);
-    expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id }).ok).toBe(true);
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
     const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     const res = r.mig.storeProposal('AAA', 'coord-x', { entries: [leaf(1, 'k1')] }, open);
@@ -50,7 +70,7 @@ describe('the migration proposal (D-8186)', () => {
   it('a map missing an open issue is map-incomplete and raises nothing', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);
-    expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id }).ok).toBe(true);
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
     const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     const res = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1')] }, open);
@@ -87,7 +107,7 @@ describe('the migration proposal (D-8186)', () => {
     const r = await migRig();
     r.addIssue(1);
     const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
-    expect(r.mig.act(itemId, migrationId, 'return', 'Place AAA-1 under the other epic', await r.mig.routingSlots())).toEqual({ ok: true });
+    expect(r.mig.act(itemId, migrationId, 'return', 'Place AAA-1 under the other epic', await r.mig.routingFacts())).toEqual({ ok: true });
     expect(r.plan.migrationById(migrationId)).toMatchObject({ state: 'proposing', map: null });
     const mail = mailsTo(r, OWNER).find((x) => x.subject.includes('came back'));
     expect(mail).toBeDefined();
@@ -110,7 +130,7 @@ describe('the migration proposal (D-8186)', () => {
     expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'open' })]);
     expect(mailsTo(r, OWNER)).toEqual(mailBefore);
 
-    expect(r.mig.act(itemId, migrationId, 'return', note, await r.mig.routingSlots())).toEqual({ ok: true });
+    expect(r.mig.act(itemId, migrationId, 'return', note, await r.mig.routingFacts())).toEqual({ ok: true });
     expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'done' })]);
     expect(mailsTo(r, OWNER).filter((m) => m.subject.includes('came back'))).toEqual([
       expect.objectContaining({ body: expect.stringContaining(note) }),
@@ -153,10 +173,35 @@ describe('the migration proposal (D-8186)', () => {
     } finally { await app.close(); }
   });
 
+  it.each([true, false])('round 2: Return without a recipient keeps the item and map (ambiguous: %s)', async (ambiguous) => {
+    const r = await migRig();
+    r.addIssue(1);
+    const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
+    if (ambiguous) {
+      await seedSlot(r.ccrcDir, 'b', { teams: [{ ...WS.b.teams[0], key: 'AAA' }] });
+    } else {
+      r.db.prepare("UPDATE project_linking SET teamKey = NULL WHERE project = 'project-a'").run();
+    }
+    const before = r.plan.migrationById(migrationId);
+    const mailBefore = mailsTo(r, OWNER);
+    const app = Fastify();
+    try {
+      registerHierarchyRoutes(app, {
+        plan: r.plan, serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive', migration: r.mig,
+        itemOf: (id) => r.coord.itemById(id), readLinearStore: () => readLinearStore(r.ccrcDir),
+      });
+      const result = await app.inject({ method: 'POST', url: `/api/items/${itemId}/linear`, payload: { act: 'return', note: 'Explain the new placement' } });
+      expect([result.statusCode, result.json().error]).toEqual([409, ambiguous ? 'team-ambiguous' : 'no-linear-owner']);
+      expect(r.plan.migrationById(migrationId)).toEqual(before);
+      expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'open' })]);
+      expect(mailsTo(r, OWNER)).toEqual(mailBefore);
+    } finally { await app.close(); }
+  });
+
   it('a proposing row mails the owner once for its map', async () => {
     const r = await migRig();
     r.addIssue(1);
-    expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id }).ok).toBe(true);
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
     await r.tick(); await r.tick();
     expect(mailsTo(r, OWNER).filter((x) => x.subject.includes('propose the map'))).toHaveLength(1);
   });
@@ -198,7 +243,7 @@ describe('the migration proposal (D-8186)', () => {
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open)).toMatchObject({ ok: true });
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingSlots())).toEqual({ ok: true });
+    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingFacts())).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.state).toBe('applied');
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-2']);
   });
@@ -213,7 +258,7 @@ describe('the migration proposal (D-8186)', () => {
     const tid = r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id;
     const bound = r.plan.bindingOf('ticket', tid, WS.a.id)!;
     r.issues.set(bound.linearId!, { id: bound.linearId!, identifier: 'AAA-50', title: 'Our own ticket', description: 'x', teamKey: 'AAA', stateType: 'unstarted', projectId: null, milestoneId: null, parentId: null });
-    expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id }).ok).toBe(true);
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
     const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(open.rows.map((x) => x.identifier).sort()).toEqual(['AAA-1', 'AAA-50']);
@@ -242,7 +287,7 @@ describe('the migration proposal (D-8186)', () => {
     r.addIssue(1); r.addIssue(2);
     expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);              // none
     const { migrationId, itemId } = await (async () => {
-      expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id }).ok).toBe(true);
+      expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
       expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);             // proposing
       const open = await r.mig.readOpen('AAA', WS.a.id);
       if (!open.ok) throw new Error('read');
@@ -304,7 +349,7 @@ describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)'
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: true });
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingSlots())).toEqual({ ok: true });
+    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingFacts())).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
   });
 
@@ -328,7 +373,7 @@ describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)'
     r.plan.insertMigration({ workspaceId: 'ws-elsewhere', teamKey: 'AAA', project: 'project-x', now: r.t.now });
     expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toMatchObject({ state: 'not-migrated' });
     r.addIssue(1);
-    expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id })).toMatchObject({ ok: false, word: 'migration-in-flight' });   // one at a time, every workspace
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a'))).toMatchObject({ ok: false, word: 'migration-in-flight' });   // one at a time, every workspace
     r.db.prepare("UPDATE linear_migrations SET state = 'failed' WHERE workspaceId = 'ws-elsewhere'").run();
     const { migrationId } = await r.propose([leaf(1, 'k1')]);
     r.plan.insertMigration({ workspaceId: 'ws-elsewhere', teamKey: 'AAA', project: 'project-x', now: r.t.now + 1 });
@@ -353,7 +398,7 @@ describe('review 2918 fix round 2: wiring the panel mutated green (D-8186)', () 
     await r.sync.passFor(SLUG, r.t.now + 60_000);
     const bound = r.plan.bindingOf('ticket', r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id, WS.a.id)!;
     r.issues.set(bound.linearId!, { id: bound.linearId!, identifier: 'AAA-50', title: 'Our own ticket', description: 'x', teamKey: 'AAA', stateType: 'unstarted', projectId: null, milestoneId: null, parentId: null });
-    expect(r.mig.start('project-a', { ok: true, workspaceId: WS.a.id }).ok).toBe(true);
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
     const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [entry(1, 'superseded', { successor: bound.linearId! })] }, open)).toMatchObject({ ok: true });

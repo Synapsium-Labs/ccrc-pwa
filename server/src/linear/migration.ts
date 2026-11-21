@@ -28,7 +28,7 @@ import type { MigrationRow, MoveRowStored, PlanStorePort } from '../coord/planSt
 import { EMPTY_MIGRATION_REPORT, IssueHeldError, MIGRATION_PLAN_BY } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { diffPlan, linearOwnerOfTeam, teamOwnerNeedsRouting, teamOwnerProject } from '../coord/planPolicy.js';
+import { diffPlan, linearOwnerOfTeam, teamOwnerProject } from '../coord/planPolicy.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from './ccrcCall.js';
 import type { LinearJournal } from './journal.js';
 import type { LinearWritePolicy } from './policy.js';
@@ -38,14 +38,14 @@ import { withCcrcProvenance } from './hierarchyOps.js';
 import { ownerItemInput } from './inboundPolicy.js';
 import { linearEgressText, statusOfType } from './ops.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type SlotInfo } from './planSync.js';
-import { projectOnTeam, routableSlots, routeProjectTeam, type LinearRouteSlot } from './route.js';
+import { projectOnTeam, measuredTeamRoutes, measuredProjectTeam, type TeamRoutes } from './route.js';
 import { egress, uuidOf } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
 import {
   applySteps, checkMap, closerRelation, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOf, mapItemInput, migrationSettled, parseMapProposal,
   programmeOfEntry, proposeMail, putBackSteps, putBackVerdict, reconcileMove, replacementComment, reportCounts,
   reportItemInput, returnMail, shedTaken, startVerdict, NO_TEAM_KEY, ticketKeyOf, ticketKindOf,
-  snapshotHolds, mapProposerVerdict, migrationOfProject, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
+  snapshotHolds, migrationOfProject, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from './migrationPolicy.js';
 
 /** How long one apply tick lets a key's pass run when it waits for it (the sync's own budget is its own). */
@@ -89,10 +89,10 @@ export interface LinearMigrationDeps {
 }
 
 type Refusal = { ok: false; word: string; detail: string };
-/** `slots`: the routable slots of the read that served it, for the programme matches of `checkMap` (D-8808). */
-export type OpenRead = { ok: true; workspaceId: string; rows: IssueSnapshotRow[]; slots: LinearRouteSlot[] | null } | Refusal;
+/** `routes`: the measured routing facts of the read that served it, for ownership and programme matches of `checkMap` (D-8808). */
+export type OpenRead = { ok: true; workspaceId: string; rows: IssueSnapshotRow[]; routes: TeamRoutes | null } | Refusal;
 /** Where a project's team resolves (D-8808): its workspace, or the refusal start answers. */
-export type ProjectWorkspace = { ok: true; workspaceId: string; slots?: readonly LinearRouteSlot[] | null } | Refusal;
+export type ProjectWorkspace = { ok: true; workspaceId: string; routes?: TeamRoutes | null } | Refusal;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 /** An issue node of the hierarchy reads (`issueRecord`) as a snapshot row; null for a node that lacks a field. */
@@ -163,19 +163,18 @@ export class LinearMigration {
     };
   }
   /** The Linear owner of a team in one workspace (D-8808: a key two workspaces hold has one owner project each). */
-  private ownerOf(team: string, workspaceId: string, slots: readonly LinearRouteSlot[] | null): { id: string | null; live: boolean; project: string } | null {
+  private ownerOf(team: string, workspaceId: string, routes: TeamRoutes | null) {
     const { plan, presenceOf } = this.deps;
-    const o = linearOwnerOfTeam(team, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf }, workspaceId, slots);
-    return o === null ? null : { id: o.id, live: o.live, project: o.project };
+    return linearOwnerOfTeam(team, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf }, workspaceId, routes);
   }
-  /** The store read once: its routable slots when listed, else null (unreadable, absent: nothing is routed). */
-  private async routable(): Promise<{ store: LinearStoreRead; slots: LinearRouteSlot[] | null }> {
+  /** The store read once, with the routing facts kept for owner and programme decisions. */
+  private async routable(): Promise<{ store: LinearStoreRead; routes: TeamRoutes | null }> {
     const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
-    return { store, slots: store.kind === 'listed' ? routableSlots(store) : null };
+    return { store, routes: measuredTeamRoutes(store) };
   }
 
   /** The team's open issues, every page up to `MIGRATION_OPEN_PAGES` (lane `migration`). */
-  private async readOpenIn(workspaceId: string, slot: SlotInfo, team: string, slots: LinearRouteSlot[] | null): Promise<OpenRead> {
+  private async readOpenIn(workspaceId: string, slot: SlotInfo, team: string, routes: TeamRoutes | null): Promise<OpenRead> {
     const rows: IssueSnapshotRow[] = [];
     let after: string | null = null;
     for (let page = 0; page < MIGRATION_OPEN_PAGES; page += 1) {
@@ -186,15 +185,15 @@ export class LinearMigration {
       const nodes = Array.isArray(out.value['nodes']) ? out.value['nodes'] : [];
       for (const n of nodes) { const r = rowOf(n); if (r !== null) rows.push(r); }
       const next = out.value['next'];
-      if (typeof next !== 'string') return { ok: true, workspaceId, rows, slots };
+      if (typeof next !== 'string') return { ok: true, workspaceId, rows, routes };
       after = next;
     }
     return { ok: false, word: 'unreachable', detail: `team ${team} has more open issues than ${MIGRATION_OPEN_PAGES} pages` };
   }
 
   /** Local routing facts for a synchronous decision after a door enters its serial section. */
-  async routingSlots(): Promise<readonly LinearRouteSlot[] | null> {
-    return (await this.routable()).slots;
+  async routingFacts(): Promise<TeamRoutes | null> {
+    return (await this.routable()).routes;
   }
 
   // ── Start (Task 7.2) ──
@@ -206,8 +205,9 @@ export class LinearMigration {
     if (!where.ok) return where;
     const v = startVerdict(plan.migrationsOf(), team, where.workspaceId);
     if (!v.ok) return v;
-    const owning = teamOwnerProject(team!, plan.hierarchyProjectsOf(), where.workspaceId, where.slots ?? null) ?? project;
-    return { ok: true, migrationId: plan.insertMigration({ workspaceId: where.workspaceId, teamKey: team!, project: owning, now: this.deps.now() }) };
+    const owning = teamOwnerProject(team!, plan.hierarchyProjectsOf(), where.workspaceId, where.routes ?? null);
+    if (owning.kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured' };
+    return { ok: true, migrationId: plan.insertMigration({ workspaceId: where.workspaceId, teamKey: team!, project: owning.kind === 'owner' ? owning.row.project : project, now: this.deps.now() }) };
   }
   /** Where a project's team resolves (D-8808): through `routeProjectTeam` with the row's own workspace, never the first workspace
    *  holding the key. A key two workspaces hold with none on the row is `team-ambiguous`. */
@@ -216,10 +216,10 @@ export class LinearMigration {
     const team = linking.teamKey;
     const unreachable = (t: string | null): ProjectWorkspace => ({ ok: false, word: 'unreachable', detail: `no Linear key serves team ${t}` });
     if (team === null) return NO_TEAM_KEY;
-    const { slots } = await this.routable();
-    if (slots === null) return unreachable(team);
-    const route = routeProjectTeam(slots, { teamKey: team, workspaceId: linking.teamWorkspace ?? null });
-    if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId, slots };
+    const { routes } = await this.routable();
+    const route = measuredProjectTeam(routes, { teamKey: team, workspaceId: linking.teamWorkspace ?? null });
+    if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId, routes };
+    if (route.kind === 'unmeasured') return unreachable(team);
     if (route.word === 'team-ambiguous') {
       const names = route.candidates.length === 0 ? '' : ` (${route.candidates.join(', ')})`;
       return { ok: false, word: 'team-ambiguous', detail: `team ${team.toUpperCase()} is in more than one Linear workspace${names}; pick the project's workspace on its row first` };
@@ -245,12 +245,14 @@ export class LinearMigration {
     return [...new Set(this.deps.plan.migrationsOf().filter((m) => this.waits(m, team)).map((m) => m.workspaceId))];
   }
 
-  /** Outside the mutex: the team's open issues in the migration's workspace, for `storeProposal`. */
-  async readOpen(team: string, workspaceId: string): Promise<OpenRead> {
-    const { store, slots } = await this.routable();
+  /** Outside the mutex: the team's open issues for `storeProposal`. The route passes the snapshot it authorized,
+   *  so route selection cannot change between that check and dispatching the read. */
+  async readOpen(team: string, workspaceId: string, snapshot?: { store: LinearStoreRead; routes: TeamRoutes | null }): Promise<OpenRead> {
+    const { store, routes } = snapshot ?? await this.routable();
     const slot = slotsOf(store).get(workspaceId);
     if (slot === undefined || !slot.teams.some((t) => t.key.toUpperCase() === team.toUpperCase())) return { ok: false, word: 'unreachable', detail: `no Linear key serves team ${team}` };
-    return this.readOpenIn(workspaceId, slot, team, slots);
+    if (this.ownerOf(team, workspaceId, routes).kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured' };
+    return this.readOpenIn(workspaceId, slot, team, routes);
   }
 
   /** Inside the mutex: the Linear owner's map, checked (`checkMap`) and stored with its snapshots, and its `decide` item raised.
@@ -261,8 +263,9 @@ export class LinearMigration {
     const row = this.waitingRow(team, open.workspaceId);
     const followUp = row?.state === 'applied' ? row.report?.skipped ?? [] : null;
     if (row === null) return { ok: false, word: 'plan-bad-body', detail: `no migration of team ${team} is waiting for a map` };
-    const owner = this.ownerOf(team, open.workspaceId, open.slots);
-    if (owner === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner', detail: `only the Linear owner of team ${team} proposes its map` };
+    const owner = this.ownerOf(team, open.workspaceId, open.routes);
+    if (owner.kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured' };
+    if (owner.kind !== 'owner' || owner.id !== caller) return { ok: false, word: 'not-linear-owner', detail: `only the Linear owner of team ${team} proposes its map` };
     const parsed = parseMapProposal(body, team);
     if (!parsed.ok) return parsed;
     // An issue ccrc's sync already holds (a programme born in the new shape, §10.5) is no part of a map: one writer per Linear object.
@@ -278,7 +281,7 @@ export class LinearMigration {
     const project = row.project ?? owner.project;
     const ctx: MapContext = {
       home: project, teamOf: (p) => coord.linkingOf(p).teamKey,
-      sameWorkspace: (p) => this.onTeam(p, team, open.workspaceId, open.slots),
+      sameWorkspace: (p) => this.onTeam(p, team, open.workspaceId, open.routes) === true,
       upkeepKeys: new Set(plan.upkeepPlanOf(project).epics.flatMap((e) => e.tickets.map((t) => t.key))), heldIssues,
     };
     const map: MapBody = { ...parsed.map, snapshot: Object.fromEntries(rows.map((r) => [r.linearId, snapshotOf(r)])) };
@@ -303,8 +306,8 @@ export class LinearMigration {
 
   // ── The operator's acts (Tasks 7.2 and 7.4; inside the mutex) ──
 
-  act(itemId: number, migrationId: number, act: 'approve' | 'return' | 'put-back' | 'done', note: string | null, slots: readonly LinearRouteSlot[] | null = null):
-    { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'item-act-mismatch' | 'migration-in-flight' | 'unreachable'; detail: string } {
+  act(itemId: number, migrationId: number, act: 'approve' | 'return' | 'put-back' | 'done', note: string | null, routes: TeamRoutes | null = null):
+    { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'item-act-mismatch' | 'migration-in-flight' | 'unreachable' | 'no-linear-owner' | 'team-ambiguous'; detail: string } {
     const { plan, coord } = this.deps;
     const now = this.deps.now();
     const m = plan.migrationById(migrationId);
@@ -326,10 +329,11 @@ export class LinearMigration {
       }
       case 'return': {
         if (m.state !== 'proposed' || m.itemId !== itemId) return { ok: false, word: 'not-open', detail: `the migration is ${m.state}` };
-        if (slots === null && teamOwnerNeedsRouting(m.teamKey, plan.hierarchyProjectsOf(), m.workspaceId)) {
-          return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured; retry Return with your note' };
-        }
-        const owner = this.ownerOf(m.teamKey, m.workspaceId, slots);
+        const owner = this.ownerOf(m.teamKey, m.workspaceId, routes);
+        if (owner.kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured; retry Return with your note' };
+        if (owner.kind === 'none' && owner.reason === 'team-ambiguous') return { ok: false, word: 'team-ambiguous', detail: 'pick the project’s Linear workspace before returning the map' };
+        if (owner.kind !== 'owner' || owner.id === null) return { ok: false, word: 'no-linear-owner', detail: 'name a Linear owner before returning the map' };
+        const recipient = owner.id;
         const back = m.appliedAt === null ? 'proposing' as const : 'applied' as const;
         const mail = returnMail(m.id, m.teamKey, note ?? '', now);
         // A returned follow-up's issues go back to the skipped list, and the map it would have joined comes back: no move row writes
@@ -340,7 +344,7 @@ export class LinearMigration {
         const report = { ...(m.report ?? EMPTY_MIGRATION_REPORT()), skipped: [...new Set([...(m.report?.skipped ?? []), ...unwritten])] };
         const done = settleWith('Returned to the Linear owner with your note.', () => {
           plan.setMigration(m.id, ['proposed'], back === 'proposing' ? { state: back, map: null } : { state: back, map: map?.prior ?? m.map, report }, now);
-          if (owner?.id != null) insertSystemMailTx(coord, null, { fromId: 'operator', toId: owner.id, runId: null, kind: 'question', subject: mail.subject, body: mail.body });
+          insertSystemMailTx(coord, null, { fromId: 'operator', toId: recipient, runId: null, kind: 'question', subject: mail.subject, body: mail.body });
         });
         return done ? { ok: true } : notOpen;
       }
@@ -388,14 +392,16 @@ export class LinearMigration {
     return { ok: true, id: m.id, team: m.teamKey, state: m.state, counts, entries: map.entries, structure, report: m.report };
   }
   /** The project row's hierarchy state (§11.1): the newest migration of its team in ITS workspace (`migrationOfProject`, D-8808). */
-  async stateOfProject(row: { teamKey: string | null; workspaceId: string | null }, slots?: readonly LinearRouteSlot[] | null): Promise<ReturnType<typeof hierarchyStateOf>> {
-    const routing = slots === undefined && row.teamKey !== null && row.workspaceId === null ? await this.routingSlots() : slots ?? null;
-    return hierarchyStateOf(migrationOfProject(row, this.deps.plan.migrationsOf(), routing));
+  async stateOfProject(row: { teamKey: string | null; workspaceId: string | null }, routes?: TeamRoutes | null): Promise<ReturnType<typeof hierarchyStateOf>> {
+    const routing = routes === undefined && row.teamKey !== null && row.workspaceId === null ? await this.routingFacts() : routes ?? null;
+    if (routing !== null && row.teamKey !== null && row.workspaceId === null
+        && measuredProjectTeam(routing, { teamKey: row.teamKey, workspaceId: null }).kind === 'unmeasured') return hierarchyStateOf(null);
+    return hierarchyStateOf(migrationOfProject(row, this.deps.plan.migrationsOf(), routing?.slots ?? null));
   }
   /** Whether a project's team is `team` in `workspaceId` (`projectOnTeam` over the project's row). */
-  private onTeam(project: string, team: string, workspaceId: string, slots: readonly LinearRouteSlot[] | null): boolean {
+  private onTeam(project: string, team: string, workspaceId: string, routes: TeamRoutes | null): boolean | 'unmeasured' {
     const l = this.deps.coord.linkingOf(project);
-    return projectOnTeam({ teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null }, team, workspaceId, slots);
+    return projectOnTeam({ teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null }, team, workspaceId, routes);
   }
 
   // ── The lane (Tasks 7.2 to 7.4) ──
@@ -404,7 +410,7 @@ export class LinearMigration {
     if (this.running) return;
     this.running = true;
     try {
-      const { slots } = await this.routable();
+      const { routes } = await this.routable();
       for (let m of this.deps.plan.migrationsOf()) {
         // An open report's skipped issue the owner has since taken leaves the list before the follow-up is mailed (review 2955 F2).
         if (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0) {
@@ -414,7 +420,7 @@ export class LinearMigration {
             if (this.deps.plan.setMigration(m.id, ['applied'], { report }, this.deps.now())) m = { ...m, report };
           }
         }
-        if (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && (m.report?.skipped.length ?? 0) > 0 && m.putBackAskedAt === null)) this.mailForMap(m, slots);
+        if (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && (m.report?.skipped.length ?? 0) > 0 && m.putBackAskedAt === null)) this.mailForMap(m, routes);
         if (m.state === 'approved' || m.state === 'applying') await this.applyTick(m);
         if (m.state === 'applied' && m.putBackAskedAt !== null) await this.putBackTick(m);
       }
@@ -433,15 +439,16 @@ export class LinearMigration {
   /** A `proposing` row: the owner is mailed for the map (or *Name a Linear owner* is raised, by the inbound lane's own item, once),
    *  and each live programme of the team with no declared plan has its coordinator mailed to declare it first (§10.1). Each mail
    *  is sent once, by its subject. A follow-up's mail names the skipped issues. */
-  private mailForMap(m: MigrationRow, slots: readonly LinearRouteSlot[] | null): void {
+  private mailForMap(m: MigrationRow, routes: TeamRoutes | null): void {
     const { coord, plan } = this.deps;
     const now = this.deps.now();
-    const owner = this.ownerOf(m.teamKey, m.workspaceId, slots);
-    const project = m.project ?? owner?.project ?? null;
+    const owner = this.ownerOf(m.teamKey, m.workspaceId, routes);
+    if (owner.kind === 'unmeasured') return;
+    const project = m.project ?? (owner.kind === 'owner' ? owner.project : null);
     if (project === null) return;
     const mail = proposeMail(m.id, m.teamKey, project, m.state === 'applied' ? m.report?.skipped ?? [] : []);
     tx(coord.db, () => {
-      if (owner !== null && owner.id !== null && owner.live) {
+      if (owner.kind === 'owner' && owner.id !== null && owner.live) {
         if (!coord.hasMailWithSubject('operator', null, owner.id, mail.subject)) {
           insertSystemMailTx(coord, null, { fromId: 'operator', toId: owner.id, runId: null, kind: 'question', subject: mail.subject, body: mail.body });
         }
@@ -451,7 +458,7 @@ export class LinearMigration {
       if (runs === null) return;
       for (const p of coord.programs()) {
         const home = coord.programHome(p.slug);
-        if (home === null || !runs.live.has(p.slug) || !this.onTeam(home, m.teamKey, m.workspaceId, slots)) continue;
+        if (home === null || !runs.live.has(p.slug) || this.onTeam(home, m.teamKey, m.workspaceId, routes) !== true) continue;
         if (plan.planOf(p.slug).planBy !== null) continue;
         const to = plan.planOwnerOf(p.slug);
         const d = declareMail(m.id, m.teamKey, p.slug);
@@ -460,7 +467,7 @@ export class LinearMigration {
         }
       }
     });
-    if (owner === null || owner.id === null || !owner.live) this.raiseOwnerItemOnce(project, now);
+    if (owner.kind !== 'owner' || owner.id === null || !owner.live) this.raiseOwnerItemOnce(project, now);
   }
   private raiseOwnerItemOnce(project: string, now: number): void {
     const { coord, plan, presenceOf } = this.deps;
@@ -610,7 +617,7 @@ export class LinearMigration {
     const unwritten = map.entries.some((e) => e.class !== 'unclear' && !skipped.has(e.identifier) && !taken.has(e.identifier) && !all.some((x) => x.subject === `issue:${e.issue}`));
     const pending = all.some((x) => x.appliedAt === null && !(x.identifier !== null && (skipped.has(x.identifier) || taken.has(x.identifier))));
     if (waiting.length > 0 || !structureBound || unwritten || pending) return;
-    this.finishApply(m, map, nextReport, all, now, store.kind === 'listed' ? routableSlots(store) : null);
+    this.finishApply(m, map, nextReport, all, now, measuredTeamRoutes(store));
   }
 
   /** The tick's lists written back (the row stays `applying`): `skipped` always, `unrelated` and `taken` only when they hold
@@ -842,21 +849,27 @@ export class LinearMigration {
   /** The apply is done: the report item is raised, and `planRequired` is set for the programmes the map names and the team's
    *  programmes that have declared a plan, never an unnamed one with no plan, whose coordinator's next run open it would refuse
    *  `plan-missing` mid-work with no word to it (D-8798, review 2892 F8). */
-  private finishApply(m: MigrationRow, map: MapBody, report: NonNullable<MigrationRow['report']>, moves: readonly MoveRowStored[], now: number, slots: readonly LinearRouteSlot[] | null): void {
+  private finishApply(m: MigrationRow, map: MapBody, report: NonNullable<MigrationRow['report']>, moves: readonly MoveRowStored[], now: number, routes: TeamRoutes | null): void {
     const { plan, coord } = this.deps;
     const counts = reportCounts(moves, map, report.skipped.length, report.taken ?? []);
     const named = [...new Set([...map.entries.flatMap((e) => (programmeOfEntry(e) === null || e.class === 'unclear' ? [] : [programmeOfEntry(e)!])),
       ...(map.epics ?? []).map((g) => g.programme), ...(map.backlog ?? []).map((g) => g.slug)])];
-    const declared = coord.programs().filter((p) => {
-      const home = coord.programHome(p.slug);
-      return home !== null && this.onTeam(home, m.teamKey, m.workspaceId, slots) && plan.planOf(p.slug).planBy !== null;
-    }).map((p) => p.slug);
+    const required = new Set(named);
+    for (const { slug } of coord.programs()) {
+      if (required.has(slug)) continue;
+      const home = coord.programHome(slug);
+      if (home === null) continue;
+      const membership = this.onTeam(home, m.teamKey, m.workspaceId, routes);
+      if (membership === false || plan.planOf(slug).planBy === null) continue;
+      if (membership === 'unmeasured') return; // retry completion without omitting a possibly eligible programme
+      required.add(slug);
+    }
     // A done programme the map placed open tickets into keeps its initiative active while they are open (D-8796, point 6).
     const placedInto = new Set(map.entries.flatMap((e) => (e.class === 'leaf' && programmeOfEntry(e) !== null && moves.some((x) => x.subject === `issue:${e.issue}` && x.appliedAt !== null) ? [programmeOfEntry(e)!] : [])));
     const done = coord.programs().filter((p) => p.state === 'done' && placedInto.has(p.slug)).map((p) => p.slug).sort();
     coord.raiseItemWithMail(reportItemInput(m.id, m.teamKey, counts, done), now, 'ccrc', (reportItemId) => {
       if (!plan.setMigration(m.id, ['applying'], { state: 'applied', appliedAt: m.appliedAt ?? now, reportItemId, report }, now)) throw new Error(`migration ${m.id} moved while it was finished`);
-      plan.setPlanRequired([...new Set([...named, ...declared])]);
+      plan.setPlanRequired([...required]);
     });
     // A follow-up's earlier report closes after the new one is raised: `moveItem` opens its own transaction (`tx` does not nest),
     // so it cannot run inside `raiseItemWithMail`'s.

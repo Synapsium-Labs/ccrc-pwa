@@ -367,19 +367,20 @@ export function migrationOfProject<M extends { id: number; workspaceId: string; 
   return new Set(ofKey.map((m) => m.workspaceId)).size <= 1 ? newest(ofKey) : null;
 }
 
-/** D-8808 (review 2997 F2): who may propose a team's map, and for which workspace. `waiting`: the workspaces with a migration waiting
- *  for a map; `holderWorkspaces`: the workspaces the project rows holding the key name (`[null]` when none names one); `ownerIdIn`:
- *  the Linear owner's session id of the team in a workspace. One waiting workspace the caller owns is the answer; two are
- *  `team-ambiguous`; with nothing waiting a caller who owns the team somewhere learns `plan-bad-body`, anyone else `not-linear-owner`. */
+/** D-8808: a caller must own exactly one waiting workspace. If an unmeasured workspace could be theirs, do not read
+ *  any map. With no waiting migration the key-only holder (a null workspace) can receive a diagnostic, not permission. */
 export function mapProposerVerdict(
-  caller: string, waiting: readonly string[], holderWorkspaces: readonly (string | null)[], ownerIdIn: (workspaceId: string | null) => string | null,
-): { ok: true; workspaceId: string } | { ok: false; word: 'not-linear-owner' | 'plan-bad-body' | 'team-ambiguous' } {
-  if (waiting.length === 0) {
-    return holderWorkspaces.some((w) => ownerIdIn(w) === caller) ? { ok: false, word: 'plan-bad-body' } : { ok: false, word: 'not-linear-owner' };
-  }
-  const owned = [...new Set(waiting)].filter((w) => ownerIdIn(w) === caller);
-  if (owned.length === 1) return { ok: true, workspaceId: owned[0]! };
-  return { ok: false, word: owned.length === 0 ? 'not-linear-owner' : 'team-ambiguous' };
+  caller: string, waiting: readonly string[], holderWorkspaces: readonly (string | null)[],
+  ownerIn: (workspaceId: string | null) => { kind: 'owner'; id: string | null } | { kind: 'none' } | { kind: 'unmeasured'; possibleIds: readonly string[] },
+): { ok: true; workspaceId: string } | { ok: false; word: 'not-linear-owner' | 'plan-bad-body' | 'team-ambiguous' | 'unreachable' } {
+  const workspaces = waiting.length === 0 ? holderWorkspaces : [...new Set(waiting)];
+  const measured = workspaces.map((w) => ({ workspace: w, owner: ownerIn(w) }));
+  const owned = measured.filter(({ owner }) => owner.kind === 'owner' && owner.id === caller);
+  if (waiting.length === 0 && owned.length > 0) return { ok: false, word: 'plan-bad-body' };
+  if (owned.length > 1) return { ok: false, word: 'team-ambiguous' };
+  if (measured.some(({ owner }) => owner.kind === 'unmeasured' && owner.possibleIds.includes(caller))) return { ok: false, word: 'unreachable' };
+  const workspaceId = owned[0]?.workspace;
+  return workspaceId == null ? { ok: false, word: 'not-linear-owner' } : { ok: true, workspaceId };
 }
 
 /** The hierarchy state a project row shows (§11.1) from its team's newest migration: none is "Not migrated". */

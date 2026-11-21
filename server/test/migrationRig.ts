@@ -88,7 +88,7 @@ export function cleanMigRigs(): void {
 }
 
 let counter = 5000;
-export async function migRig(o: { synced?: boolean } = {}): Promise<MigRig> {
+export async function migRig(o: { synced?: boolean; routing?: (store: Awaited<ReturnType<typeof readLinearStore>>) => Awaited<ReturnType<typeof readLinearStore>> } = {}): Promise<MigRig> {
   const dir = mkTmp('ccrc-migration-');
   dirs.push(dir);
   const ccrcDir = path.join(dir, '.ccrc');
@@ -156,7 +156,10 @@ export async function migRig(o: { synced?: boolean } = {}): Promise<MigRig> {
     now: () => r.t.now, privateTrackerKeys: [],
   });
   const deps: LinearMigrationDeps = {
-    coord, plan, planSync: r.sync, readLinearStore: () => readLinearStore(ccrcDir), call,
+    coord, plan, planSync: r.sync, readLinearStore: async () => {
+      const store = await readLinearStore(ccrcDir);
+      return o.routing === undefined ? store : o.routing(store);
+    }, call,
     directory: { get: () => DIRECTORY, filledAt: () => T - 1000, projectStatusesRead: () => 'read' },
     presenceOf: () => 'alive', now: () => r.t.now,
   };
@@ -178,7 +181,7 @@ export async function migRig(o: { synced?: boolean } = {}): Promise<MigRig> {
     "INSERT INTO runs (program, wave, project, state, kind, openedAt) VALUES (?, 1, 'project-a', ?, 'work', ?)",
   ).run(slug, state, T).lastInsertRowid);
   r.propose = async (entries, extra = {}, caller = OWNER) => {
-    const started = r.mig.start('project-a', { ok: true, workspaceId: WS.a.id });
+    const started = r.mig.start('project-a', await r.mig.workspaceOfProject('project-a'));
     if (!started.ok) throw new Error(`start refused: ${started.word}`);
     const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error(`readOpen refused: ${open.detail}`);
