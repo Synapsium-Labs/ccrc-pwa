@@ -84,7 +84,7 @@ describe('the migration proposal (D-8186)', () => {
     const r = await migRig();
     r.addIssue(1);
     const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
-    expect(r.mig.act(itemId, migrationId, 'return', 'Place AAA-1 under the other epic')).toEqual({ ok: true });
+    expect(r.mig.act(itemId, migrationId, 'return', 'Place AAA-1 under the other epic', await r.mig.routingSlots())).toEqual({ ok: true });
     expect(r.plan.migrationById(migrationId)).toMatchObject({ state: 'proposing', map: null });
     const mail = mailsTo(r, OWNER).find((x) => x.subject.includes('came back'));
     expect(mail).toBeDefined();

@@ -110,6 +110,17 @@ export function routeProjectTeam(slots: readonly LinearRouteSlot[], row: { teamK
   return own === undefined ? { kind: 'refused', word: 'team-unknown' } : { kind: 'slot', slot: own };
 }
 
+/** Whether a project belongs to a team in a workspace. Unpinned rows require an unambiguous routing snapshot. */
+export function projectOnTeam(
+  row: { teamKey: string | null; workspaceId: string | null }, team: string, workspaceId: string, slots: readonly LinearRouteSlot[] | null,
+): boolean {
+  if (row.teamKey === null || row.teamKey.toUpperCase() !== team.toUpperCase()) return false;
+  if (row.workspaceId !== null) return row.workspaceId === workspaceId;
+  if (slots === null) return false;
+  const route = routeProjectTeam(slots, { teamKey: row.teamKey, workspaceId: null });
+  return route.kind === 'slot' && route.slot.workspaceId === workspaceId;
+}
+
 /** §4.2's table. Total: every ask answers one slot or one refusal word. */
 export function routeLinear(slots: readonly LinearRouteSlot[], ask: LinearRouteAsk): LinearRoute {
   if (slots.length === 0) return { kind: 'refused', word: 'not-configured' };

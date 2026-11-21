@@ -36,7 +36,7 @@ export interface HierarchyRouteOpts {
   driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' | HierarchyItemRefusal };
   /** The per-team migration (D-8186, wave 7): its start, the map's and the report's acts, the item body's read and each team's
    *  state; undefined (a test, a script): those doors answer `unavailable` and every row reads "Not migrated". */
-  migration?: Pick<LinearMigration, 'start' | 'workspaceOfProject' | 'act' | 'view' | 'stateOfProject'>;
+  migration?: Pick<LinearMigration, 'start' | 'workspaceOfProject' | 'act' | 'view' | 'stateOfProject'> & Partial<Pick<LinearMigration, 'routingSlots'>>;
   now?: () => number;
 }
 
@@ -207,7 +207,8 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
         if (migration === undefined || (act !== 'approve' && act !== 'return' && act !== 'put-back' && act !== 'done')) break;
         if (act === 'return' && (note === null || note.trim() === '')) return refuseRoute(reply, 'bad-request', { detail: 'note' });
         try {
-          const done = await opts.serial(async () => migration.act(id, action.migrationId, act, note));
+          const slots = act === 'return' ? await migration.routingSlots?.() ?? null : null;
+          const done = await opts.serial(async () => migration.act(id, action.migrationId, act, note, slots));
           return done.ok ? { ok: true } : refuseRoute(reply, done.word, { detail: done.detail });
         } catch (err) {
           return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });

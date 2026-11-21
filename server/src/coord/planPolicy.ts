@@ -9,6 +9,7 @@ import {
   type PlanTicketDoneBody, type TicketDoneEvidence, type TicketState, type TriageDecision,
 } from '../../../shared/plan.js';
 import { isLinearIdentifier } from '../linear/ops.js';
+import { projectOnTeam, routeProjectTeam, type LinearRouteSlot } from '../linear/route.js';
 import { requestIdOf } from '../linear/planSyncPolicy.js';
 import type {
   BindingRow, Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
@@ -802,11 +803,12 @@ export function linearOwnerOf(project: string, f: OwnerFacts):
  *  that key (compared upper-case), else the one that set the key first (the lowest `order`), else, when none has an order, the
  *  only holder; null when no project holds the key. The ONE place the rule is written: the hierarchy routes' `ownerNow`, the
  *  triage route and the drift pass all ask it. */
-export function teamOwnerProject(teamKey: string, rows: readonly HierarchyProjectFacts[], workspaceId: string | null = null): string | null {
+export function teamOwnerProject(teamKey: string, rows: readonly HierarchyProjectFacts[], workspaceId: string | null = null, slots: readonly LinearRouteSlot[] | null = null): string | null {
   const key = teamKey.toUpperCase();
-  // D-8808: with the inbound row's workspace, a holder whose row names a different workspace is skipped; one with none still counts.
-  const holders = rows.filter((r) => r.teamKey !== null && r.teamKey.toUpperCase() === key
-    && (workspaceId === null || (r.workspaceId ?? null) === null || r.workspaceId === workspaceId));
+  // No workspace is a key-only diagnostic; a concrete workspace requires a measured route for unpinned rows.
+  const holders = rows.filter((r) => workspaceId === null
+    ? r.teamKey?.toUpperCase() === key
+    : projectOnTeam({ teamKey: r.teamKey, workspaceId: r.workspaceId ?? null }, teamKey, workspaceId, slots));
   const marked = holders.find((r) => r.ownsTeam);
   if (marked !== undefined) return marked.project;
   const ordered = holders.filter((r) => r.order !== null).sort((x, y) => (x.order as number) - (y.order as number));
@@ -820,9 +822,9 @@ type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
 /** The Linear owner of a team (`teamOwnerProject`'s project, then `linearOwnerOf` with that project's own named owner), with the
  *  project it was decided for; null when no project holds the key. */
 export function linearOwnerOfTeam(
-  teamKey: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, workspaceId: string | null = null,
+  teamKey: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, workspaceId: string | null = null, slots: readonly LinearRouteSlot[] | null = null,
 ): (ReturnType<typeof linearOwnerOf> & { project: string }) | null {
-  const project = teamOwnerProject(teamKey, rows, workspaceId);
+  const project = teamOwnerProject(teamKey, rows, workspaceId, slots);
   if (project === null) return null;
   const row = rows.find((r) => r.project === project)!;
   return { ...linearOwnerOf(project, { named: row.linearOwner, ownsTeamProject: null, ...f }), project };
@@ -831,11 +833,15 @@ export function linearOwnerOfTeam(
 /** The Linear owner that applies to one project (design §7.5): its team's owning project's (`linearOwnerOfTeam`) when it holds a
  *  key, else its own named owner or its latest programme's coordinator; with the project the owner was decided for. */
 export function linearOwnerOfProject(
-  project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
+  project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, slots?: readonly LinearRouteSlot[] | null,
 ): ReturnType<typeof linearOwnerOf> & { project: string } {
   const row = rows.find((r) => r.project === project);
-  // D-8808 (final review I1): the team's owner in the project row's own workspace, so a key two workspaces share answers each its own
-  const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f, row.workspaceId ?? null);
+  let workspaceId = row?.workspaceId ?? null;
+  if (slots !== undefined && workspaceId === null && row?.teamKey != null && slots !== null) {
+    const route = routeProjectTeam(slots, { teamKey: row.teamKey, workspaceId: null });
+    if (route.kind === 'slot') workspaceId = route.slot.workspaceId;
+  }
+  const viaTeam = row === undefined || row.teamKey === null || (slots !== undefined && workspaceId === null) ? null : linearOwnerOfTeam(row.teamKey, rows, f, workspaceId, slots ?? null);
   return viaTeam ?? { ...linearOwnerOf(project, { named: row?.linearOwner ?? null, ownsTeamProject: null, ...f }), project };
 }
 
@@ -902,11 +908,12 @@ export function parsePlanTake(body: unknown): { ok: true; take: PlanTakeBody } |
 }
 
 /** Who may triage which issue: only the team's Linear owner (`not-linear-owner`, judged first), and only an issue that is
- *  inbound and still waiting or mailed (`issue-not-inbound`). */
+ *  inbound and still waiting or mailed (`issue-not-inbound`). When workspace ownership is unmeasured, the key-only owner
+ *  can learn the retry word, but that diagnostic can never authorize an act. */
 export function triageVerdict(
-  caller: string, owner: { id: string | null }, row: Pick<InboundRow, 'state'> | null,
-): { ok: true } | { ok: false; word: 'not-linear-owner' | 'issue-not-inbound' } {
-  if (owner.id === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner' };
+  caller: string, owner: { id: string | null }, row: Pick<InboundRow, 'state'> | null, unmeasuredOwnerId: string | null = null,
+): { ok: true } | { ok: false; word: 'not-linear-owner' | 'issue-not-inbound' | 'unreachable' } {
+  if (owner.id === null || owner.id !== caller) return { ok: false, word: owner.id === null && caller === unmeasuredOwnerId ? 'unreachable' : 'not-linear-owner' };
   if (row === null || (row.state !== 'waiting' && row.state !== 'mailed')) return { ok: false, word: 'issue-not-inbound' };
   return { ok: true };
 }

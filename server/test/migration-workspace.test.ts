@@ -21,13 +21,13 @@ describe('start resolves the project by its workspace', () => {
   it('Reshape on project-b starts the ws-b migration, on project-a the ws-a one', async () => {
     const r = await twoWorkspaces();
     const b = await r.mig.workspaceOfProject('project-b');
-    expect(b).toEqual({ ok: true, workspaceId: WS.b.id });
+    expect(b).toMatchObject({ ok: true, workspaceId: WS.b.id });
     const out = r.mig.start('project-b', b);
     expect(out.ok).toBe(true);
     expect(r.plan.migrationsOf().map((m) => ({ w: m.workspaceId, p: m.project }))).toEqual([{ w: WS.b.id, p: 'project-b' }]);
     r.db.prepare("UPDATE linear_migrations SET state = 'failed'").run();
     const a = await r.mig.workspaceOfProject('project-a');
-    expect(a).toEqual({ ok: true, workspaceId: WS.a.id });
+    expect(a).toMatchObject({ ok: true, workspaceId: WS.a.id });
     expect(r.mig.start('project-a', a).ok).toBe(true);
     expect(r.plan.migrationsOf().filter((m) => m.state === 'proposing').map((m) => ({ w: m.workspaceId, p: m.project }))).toEqual([{ w: WS.a.id, p: 'project-a' }]);
   });
@@ -45,7 +45,7 @@ describe('start resolves the project by its workspace', () => {
     const r = await twoWorkspaces();
     pin(r, 'project-a', null);
     r.plan.insertMigration({ workspaceId: WS.b.id, teamKey: 'AAA', project: 'project-b', now: r.t.now });
-    r.db.prepare('UPDATE linear_migrations SET state = ?').run(state);
+    r.db.prepare('UPDATE linear_migrations SET state = ?, reportDoneAt = ?').run(state, state === 'applied' ? r.t.now : null);
     const where = await r.mig.workspaceOfProject('project-a');
     expect(r.mig.start('project-a', where)).toMatchObject({ ok: false, word: 'team-ambiguous' });
     expect(r.plan.migrationsOf()).toHaveLength(1);
@@ -87,6 +87,24 @@ describe('the Linear owner is the migration workspace\'s', () => {
   };
   const mails = (r: Awaited<ReturnType<typeof migRig>>, to: string): number =>
     (r.db.prepare('SELECT COUNT(*) AS n FROM mail WHERE toId = ?').get(to) as { n: number }).n;
+
+  it('an ambiguous unpinned holder does not own a ws-b migration or its map', async () => {
+    const r = await twoWorkspaces();
+    pin(r, 'project-a', null);
+    owners(r);
+    expect(r.mig.start('project-b', await r.mig.workspaceOfProject('project-b')).ok).toBe(true);
+    expect(r.plan.migrationsOf().map((m) => ({ w: m.workspaceId, p: m.project }))).toEqual([{ w: WS.b.id, p: 'project-b' }]);
+    await r.tick();
+    expect(mails(r, 'coord-b')).toBe(1);
+    expect(mails(r, 'coord-a')).toBe(0);
+    const open = await r.mig.readOpen('AAA', WS.b.id);
+    if (!open.ok) throw new Error('read');
+    const backlog = [{ slug: 'prog-new', title: 'New', epics: [
+      { key: 'e2', title: 'Default home', summary: 'Summary', checkpoints: [] },
+      { key: 'e3', title: 'Explicit home', summary: 'Summary', project: 'project-b', checkpoints: [] },
+    ] }];
+    expect(r.mig.storeProposal('AAA', 'coord-b', { entries: [], backlog }, open)).toMatchObject({ ok: true });
+  });
 
   it('the map mail of a ws-b migration goes to project-b\'s owner', async () => {
     const r = await twoWorkspaces();

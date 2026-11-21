@@ -186,6 +186,17 @@ const take = (r: Rig, slug: string, body: unknown, who: string) => send(r, `/api
 const errorOf = (res: { json: () => unknown }): string => (res.json() as { error?: string }).error ?? '';
 
 describe('inbound detection and the mail to the Linear owner (D-8183)', () => {
+  it('routes a ws-b issue past an ambiguous unpinned holder to project-b’s owner', async () => {
+    const r = await rig({ twoWs: true });
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
+    r.db.prepare('UPDATE project_linking SET teamKey = ?, teamWorkspace = ? WHERE project = ?').run('AAA', WS.b.id, 'project-b');
+    r.plan.setHierarchySettings('project-b', { initiatives: 'on', linearOwner: OTHER, ownsTeam: false }, 'test', T);
+    r.plan.upsertInbound({ linearId: U(70), workspaceId: WS.b.id, teamKey: 'AAA', identifier: 'AAA-70', title: 'Issue', body: null, seenAt: T });
+    await passAt(r, T + 1);
+    expect(r.plan.inboundOf(U(70))).toMatchObject({ state: 'mailed', mailedTo: OTHER });
+    expect(mails(r).map((m) => m.toId)).toEqual([OTHER]);
+  });
+
   it('an unbound issue in a managed team is mailed to the owner once', async () => {
     const r = await rig();
     await detect(r, [node(12)]);
@@ -1987,6 +1998,8 @@ describe('every cause is walked at pass level: canceled, and an unreadable store
     moveOut(r, 12);
     r.lin.store = store;
     r.asks.length = 0;
+    const outsider = await triage(r, { issue: 'AAA-12', decision: 'upkeep' }, OTHER);
+    expect([outsider.statusCode, errorOf(outsider)]).toEqual([403, 'not-linear-owner']);
     const res = await triage(r, { issue: 'AAA-12', decision: 'upkeep' });
     expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
     expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', retiredWhy: null });

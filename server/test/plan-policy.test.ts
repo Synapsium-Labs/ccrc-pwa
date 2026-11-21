@@ -242,6 +242,13 @@ const projectFacts = (project: string, over: Partial<HierarchyProjectFacts> = {}
   ({ project, teamKey: 'AAA', initiatives: 'on', linearOwner: null, ownsTeam: false, order: null, ...over });
 
 describe('teamOwnerProject (D-8183)', () => {
+  it('routes an unpinned holder only to its unique workspace', () => {
+    const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b' })];
+    const slot = (workspaceId: string) => ({ ref: { source: 'file' as const, id: workspaceId }, workspaceId, urlKey: workspaceId, teamKeys: ['AAA'] });
+    expect(teamOwnerProject('AAA', rows, 'ws-b', [slot('ws-a'), slot('ws-b')])).toBe('project-b');
+    expect(teamOwnerProject('AAA', rows, 'ws-a', [slot('ws-a')])).toBe('project-a');
+    expect(teamOwnerProject('AAA', rows, 'ws-b', null)).toBe('project-b');
+  });
   it('the project marked ownsTeam owns the team key', () => {
     const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, ownsTeam: true })];
     expect(teamOwnerProject('AAA', rows)).toBe('project-b');

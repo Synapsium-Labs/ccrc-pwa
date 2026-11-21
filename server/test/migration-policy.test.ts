@@ -1,9 +1,10 @@
 // D-8186: the migration map's deciders (`linear/migrationPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  applySteps, checkMap, mapProposerVerdict, projectOnTeam, migrationOfProject, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, shedTaken, ticketKeyOf, ticketKindOf, programmeOfEntry,
+  applySteps, checkMap, mapProposerVerdict, migrationOfProject, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, shedTaken, ticketKeyOf, ticketKindOf, programmeOfEntry,
   type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from '../src/linear/migrationPolicy.js';
+import { projectOnTeam } from '../src/linear/route.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
 import type { IssueSnapshot, MapBody, MapEntry, PlanEpicBody } from '../../shared/plan.js';
 

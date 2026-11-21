@@ -336,28 +336,18 @@ export interface MigrationFacts {
 export const migrationSettled = (m: Pick<MigrationFacts, 'state' | 'reportDoneAt'>): boolean =>
   m.state === 'put-back' || m.state === 'failed' || (m.state === 'applied' && m.reportDoneAt !== null);
 
+export const NO_TEAM_KEY = { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' } as const;
+
 /** `POST /api/projects/:project/hierarchy/migrate` (Task 7.2): one team at a time, in order (§10.2), and never a team already
  *  migrated. `rows` are every migration, any order. */
 export function startVerdict(rows: readonly MigrationFacts[], team: string | null, workspaceId: string | null):
   { ok: true } | { ok: false; word: 'no-team-key' | 'migration-in-flight'; detail: string } {
-  if (team === null) return { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' };
+  if (team === null) return NO_TEAM_KEY;
   const open = rows.find((m) => !migrationSettled(m));
   if (open !== undefined) return { ok: false, word: 'migration-in-flight', detail: `team ${open.teamKey}'s migration is not finished` };
   const same = rows.filter((m) => m.teamKey.toUpperCase() === team.toUpperCase() && (workspaceId === null || m.workspaceId === workspaceId));
   if (same.some((m) => m.state === 'applied')) return { ok: false, word: 'migration-in-flight', detail: `team ${team} is migrated already` };
   return { ok: true };
-}
-
-/** D-8808: whether a project row's team is `team` in `workspaceId`. The key must match; a row naming a workspace is judged by it; a row
- *  naming none by `routeProjectTeam` (the slot it routes to must be that workspace). Unroutable, ambiguous or unread slots: false. */
-export function projectOnTeam(
-  row: { teamKey: string | null; workspaceId: string | null }, team: string, workspaceId: string, slots: readonly LinearRouteSlot[] | null,
-): boolean {
-  if (row.teamKey === null || row.teamKey.toUpperCase() !== team.toUpperCase()) return false;
-  if (row.workspaceId !== null) return row.workspaceId === workspaceId;
-  if (slots === null) return false;
-  const route = routeProjectTeam(slots, { teamKey: row.teamKey, workspaceId: null });
-  return route.kind === 'slot' && route.slot.workspaceId === workspaceId;
 }
 
 /** D-8808: the migration a project row shows (`hierarchyStateOf` reads it): the newest of its team in its workspace. A row naming a

@@ -27,8 +27,8 @@ describe('teamOwnerProject with a workspace', () => {
     expect(teamOwnerProject('AAA', rows, WS_A)).toBe('project-a');
     expect(teamOwnerProject('AAA', rows, WS_B)).toBe('project-b');
   });
-  it('a holder with no workspace still counts, and no workspace asked reads every holder as before', () => {
-    expect(teamOwnerProject('AAA', [facts('project-c', { order: 1 }), ...rows], WS_B)).toBe('project-c');
+  it('an unmeasured holder does not count in a workspace, while a key-only diagnostic still reads every holder', () => {
+    expect(teamOwnerProject('AAA', [facts('project-c', { order: 1 }), ...rows], WS_B)).toBe('project-b');
     expect(teamOwnerProject('AAA', rows)).toBe('project-a');
     expect(teamOwnerProject('AAA', rows, null)).toBe('project-a');
   });
