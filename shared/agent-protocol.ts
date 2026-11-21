@@ -1340,10 +1340,11 @@ export interface TestboxCaptureReply {
   readonly detail: string | null;
 }
 
-/** THE ONE READER of a `testbox-capture` op's reply (the `res` frame itself: its envelope fields are not read), for the
- *  build the request named. `null` is "no answer to trust". The verdict is read by the verdict's one reader. */
+/** THE ONE READER of a `testbox-capture` op's reply (the `res` frame itself: its envelope fields `t`, `id` and `ok` are not
+ *  read, as `readTestboxOpReply` reads its own), for the build the request named. `null` is "no answer to trust". Each of
+ *  the four fields must be present; the verdict is read by the verdict's one reader. */
 export function readTestboxCaptureReply(raw: unknown, build: string): TestboxCaptureReply | null {
-  if (!isObj(raw) || !exactKeys(raw, ['outcome', 'refusal', 'result', 'detail'])) return null;
+  if (!isObj(raw) || !['outcome', 'refusal', 'result', 'detail'].every((k) => Object.prototype.hasOwnProperty.call(raw, k))) return null;
   const { outcome, refusal, result, detail } = raw;
   if (typeof outcome !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_CAPTURE_OUTCOME_MAP, outcome)) return null;
   if (!shortTextOrNull(detail)) return null;
