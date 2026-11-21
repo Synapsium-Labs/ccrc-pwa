@@ -160,7 +160,8 @@ for the operator, for a request that would change a programme's scope. The issue
 instructions. Refusals: `not-linear-owner` (only the team's owner triages), `issue-not-inbound` (not waiting for
 triage), `plan-bad-body`, `plan-closed`, `reserved-programme` (a hand to `linear-sync`), `ticket-workspace-mismatch`,
 `unknown-epic`, `unknown-checkpoint`, `linear-text-public`, `unreachable` (ccrc could not measure something the decision needs: the team's Linear owner, when you could be that owner,
-for any decision, a close and a raise included, while any other caller is refused `not-linear-owner`; the issue, read back from Linear to confirm it is still inbound, refused only for a decision that
+for any decision, a close and a raise included, while any other caller is refused `not-linear-owner`; the issue, read
+back from Linear to confirm it is still inbound, refused only for a decision that
 binds it: a hand or an Upkeep placement, while a close or a raise goes on; or, for a hand to your own programme, the
 workspace of the epic it is taken into. Try once more later; if it is refused again, stop and tell the operator: it may
 need a fix in Linear, or a new Linear key)
