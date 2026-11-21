@@ -118,7 +118,7 @@ these notes.
 
 | Item | What the code says | Done | Pin (seen red) |
 |---|---|---|---|
-| Review 2960 F1, as review 3106 F1 and F2 corrected it | A door's by-id read (`issueOwned`, shaped by `hierarchyOps.ts`'s `issueRecord`) shapes the whole issue: any field of that one issue outside Linear's grammar answers `malformed`, and it repeats until the issue changes in Linear. A body that could not be read (`client.ts`), a transport fault, also answers `malformed`, and may clear on a retry. A door refuses `unreachable` on any unmeasured answer (`inboundDoorVerdict`, no retry table); `RETRY_WORDS` sorts the close lane's write refusals. | plan.md's `plan triage` and `plan take`: Linear's refusal of that one issue as forbidden or invalid, or a `malformed` answer because a field of that issue is outside the grammar, gets the same answer until the issue changes; a `malformed` answer whose body could not be read may clear on a retry. D-8735 says the same, and names the close lane where it cites `RETRY_WORDS`. | The shared retry regex, red in each section with the old tail put back, and red against round 1's narrower text. |
+| Review 2960 F1, as review 3106 F1 and F2 corrected it | A door's by-id read (`issueOwned`, shaped by `hierarchyOps.ts`'s `issueRecord`) shapes the whole issue: any field of that one issue outside Linear's grammar answers `malformed`, and it repeats until the issue changes in Linear. A body that could not be read (`client.ts`), a transport fault, also answers `malformed`, and may clear on a retry; so may a readable response with no `data` or no issue, which the shaper reads `malformed` too. For a decision that binds the issue, a door refuses `unreachable` on any unmeasured answer, with one detail (`inboundDoorVerdict`, no retry table; a close, a raise or a return goes on); `RETRY_WORDS` sorts the close lane's refusals, from its write or its own by-id re-read. | Fix round 1 wrote the per-cause account into plan.md's `plan triage` and `plan take`; fix round 2 moved it to D-8735 alone, worded as Linear's answer as ccrc reads it. plan.md now says only what a coordinator can act on: try once more, then tell the operator. D-8735 names the close lane where it cites `RETRY_WORDS`. | The shared retry regex, red in each section with the old tail put back, and red against round 1's narrower text. |
 | Review 2960 A1 | Triage binds on `upkeep \|\| hand` (`planRoutes.ts`). A triage hand to the caller's own programme is taken at once into an epic (D-8706), and binds as the hand it is; `plan take`'s own decisions are a take into an epic, a close and a return. | Triage's sentence: "a hand or an Upkeep placement, while a close or a raise goes on". The take section already names its own decisions. | Triage's regex, red with the old list. |
 | Review 2960 A2 | Clause 22 carries the console-only rule. | D-8739 says, in the past tense, that the follow-up moved the sentence into clause 22. plan.md points at clause 22 rather than restating the rule. | plan.md's pointer sentence, and no "never answers one for them" there: red on the old text. |
 | Review 2960 A3 | `planGate` refuses through `ticketIsHeld`: `started`, or `open` with a run. | Task 2.5 and plan.md: "held by another run (started, or open with a run attached, a planned run included)". | plan.md's phrase, red on the old text. |
@@ -134,8 +134,22 @@ The coordinator's rulings of mail 29311. Words and pins only.
 | Item | Done | Pin (seen red) |
 |---|---|---|
 | F1 | The repeating `malformed` case widened from "missing its team or state" to any field of that one issue outside Linear's grammar, in both plan.md sections, D-8735 and the F1 row above. The attribution to `inboundRecheckOf`'s branch is dropped: the shaper refuses first. | The shared retry regex, red against round 1's text. |
-| F2 | D-8735 names the close lane where it cites `RETRY_WORDS`, and says a door re-reads the issue on every call and refuses `unreachable` on any unmeasured answer. | None (plan text). |
+| F2 | D-8735 names the close lane where it cites `RETRY_WORDS`, and says a door re-reads the issue on every call and, for a decision that binds the issue, refuses `unreachable` on any unmeasured answer (the binds qualifier added in fix round 2, review 3110 F2). | None (plan text). |
 | F3 | The "not restated" guard also refuses clause 22's own words in plan.md, read from SKILL.md's clause 22 line. | Red with clause 22's console sentence appended to plan.md. |
 | F4 | The A1 row says a triage hand to the caller's own programme is a take into an epic, and binds as a hand. | None (note text). |
 | F5 | Task 2.5's rewrite is tagged "amended by review 2960 A3"; this section's intro no longer says every change amends a D-entry. | None (plan and note text). |
 | F6 | The F4 row of fix round 2 is one line again, so the table renders. | None (note text). |
+
+### Fix round 2 (review 3110)
+
+The coordinator's rulings of mail 29334. Words and pins only.
+
+| Item | Done | Pin (seen red) |
+|---|---|---|
+| F1 | A coordinator never sees `malformed`, `linear-forbidden` or `linear-invalid`: a door's unmeasured re-read reaches it as one refusal, `unreachable`, with one detail (`recheckRefusal`, `planRoutes.ts`). So plan.md's `plan triage` and `plan take` say only what it can act on: ccrc could not read the issue back; try once more later; if refused again, stop and tell the operator (a fix in Linear, or a new Linear key). The per-cause account is D-8735's alone, worded as Linear's answer as ccrc reads it, since Linear never answers `malformed`: ccrc's shaper does. | The new sentence's regex, red against fix round 1's plan.md, and in each section alone; the section names none of the causes it cannot see. |
+| F2 | "For a decision that binds the issue" added where D-8735 and this note say a door refuses `unreachable` on an unmeasured answer. | None (plan and note text). |
+| F3 | D-8735's may-clear arm includes a readable response with no `data` or no issue. | None (plan text). |
+| F4 | D-8735: the close lane gives `malformed` up past its last backoff step whether it came from its write or its own by-id re-read (`InboundLane#refused`). | None (plan text). |
+| F5 | The test file's header says clause 22's wording is read there only to keep plan.md from restating it. | None (comment). |
+
+The review judge's `rules-mixed` stands as ruled: the pin test cannot leave the rules file it pins, so the PR stays whole.

@@ -3,7 +3,8 @@
 // coordinator meets from one, says the hierarchy is ccrc's and its items are the operator's to act on in the console, and
 // gives the Linear owner its one duty; the open step declares the plan first and names the run's ticket; the ledger
 // template's Waves table has an epic column; SKILL.md points at the plan reference. The contract's clause 22 (D-8739's
-// follow-up) is pinned in `coordinator-skill.test.ts`, so nothing here reads the contract.
+// follow-up) is pinned in `coordinator-skill.test.ts`; its wording is read here only to keep plan.md from restating it (review
+// 3110 F5).
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -157,25 +158,27 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3, 2960 F1, A1, 3106 F1)', () => {
+  it('plan triage and plan take each name unreachable as the coordinator can act on it, and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2920 F1, 2929 F1, 2960 A1, 3110 F1)', () => {
     for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
       const text = plan();
       const at = text.indexOf(`\n${heading}\n`);
       const next = text.indexOf('\n## ', at + 1);
       const section = flat(text.slice(at, next === -1 ? undefined : next));
       expect(at, heading).toBeGreaterThanOrEqual(0);
-      // review 2885 F5 as review 2920 F2 rules it: the third case, a key Linear refused with a 401 (only a 401 is a verdict on the
-      // key); review 2920 F3: the fourth, a workspace with no managed team, where nothing is re-read; review 2929 F3: the fifth, an
-      // answer about one issue (inboundPolicy.ts's ROW_WORDS: linear-forbidden, linear-invalid, malformed); review 2960 F1 and
-      // review 3106 F1: the by-id read (`issueOwned`, hierarchyOps.ts's issueRecord) shapes the whole issue, so any field outside
-      // the grammar answers `malformed` until the issue changes, while a body that could not be read (client.ts) may clear
-      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again; when Linear refused that one issue as forbidden or invalid, or answered `malformed` because a field of that issue is outside Linear's grammar, a retry gets the same answer until that issue changes in Linear; and a `malformed` answer whose body could not be read, a transport fault, may clear on a retry\)/);
+      // review 3110 F1, the coordinator's ruling: a door's unmeasured re-read reaches the coordinator as one refusal with one
+      // detail (`recheckRefusal`, planRoutes.ts; `inboundDoorVerdict` carries no inner word), so plan.md says only what it can
+      // act on (retry once, then tell the operator). The per-cause account (a 401, no managed team, Linear's refusal of the
+      // issue, ccrc's shaper reading it malformed, a body that could not be read) is D-8735's alone.
+      expect(section, heading).toMatch(/`unreachable` \(ccrc could not read the issue back from Linear to confirm it is still inbound,[^)]*Try once more later; if it is refused again, stop and tell the operator: it may need a fix in Linear, or a new Linear key\)/);
+      for (const cause of ['malformed', 'forbidden or invalid', 'with a 401', 'transport fault', 'no managed team']) {
+        expect(section, `${heading} names a cause the coordinator cannot see: ${cause}`).not.toContain(cause);
+      }
       // review 2920 F1 and 2929 F1: the clauses main's api.md pin held, now pinned where they live, "only" included: a decision
       // that binds the issue is refused, and the rest goes on (`inboundDoorVerdict`); review 2960 A1: each section names its own
       // verb's decisions, triage's binding pair being `planRoutes.ts`'s `upkeep || hand`
       expect(section, heading).toMatch(heading === '## plan take'
-        ? /`unreachable` \([^)]*refused only for a decision that binds it: a take into an epic, while a close or a return goes on; or, for an Upkeep ticket's take or close, the programme's home workspace could not be resolved;/
-        : /`unreachable` \([^)]*refused only for a decision that binds it: a hand or an Upkeep placement, while a close or a raise goes on;/);
+        ? /`unreachable` \([^)]*refused only for a decision that binds it: a take into an epic, while a close or a return goes on; or, for an Upkeep ticket's take or close, the programme's home workspace could not be resolved\./
+        : /`unreachable` \([^)]*refused only for a decision that binds it: a hand or an Upkeep placement, while a close or a raise goes on\./);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
   });

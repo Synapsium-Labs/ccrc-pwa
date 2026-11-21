@@ -340,15 +340,18 @@ number from `POST /api/ledger/deviations`.
   `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. When the
   doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused, no managed team in the issue's
   workspace), a decision that binds the issue (a take into an epic, an Upkeep placement, a hand) is refused `unreachable`
-  (503, the Linear read's existing word; a retry helps only when Linear or ccrc's Linear store could not be read: a missing
-  key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to replace it, a
-  workspace with no managed team is not re-read at all, and Linear's refusal of that one issue (`linear-forbidden`,
-  `linear-invalid`) or a `malformed` answer about it repeats until the issue changes in Linear: the by-id read shapes the
-  whole issue, so any field of it outside Linear's grammar answers `malformed`. A `malformed` answer whose body could not
-  be read, a transport fault, may clear on a retry. A door re-reads the issue on every call and refuses `unreachable` on
-  any unmeasured answer, reading no retry table (`inboundDoorVerdict`); `RETRY_WORDS` is the close lane's, and that lane
-  gives a `malformed` write refusal up past its last backoff step; amended by review 2920 F4, review 2929 F3, review 2960
-  F1 and review 3106 F1, F2), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  (503, the Linear read's existing word, with one detail whatever the cause, so `references/plan.md` tells a coordinator
+  only to try once more and then tell the operator. By cause, a retry helps only when Linear or ccrc's Linear store could
+  not be read: a missing key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to
+  replace it, and a workspace with no managed team is not re-read at all. Linear's answer, as ccrc reads it, repeats
+  until the issue changes in Linear when Linear refused that one issue (`linear-forbidden`, `linear-invalid`), or when
+  ccrc's shaper reads it `malformed` because a field of the issue is outside the grammar (the by-id read shapes the whole
+  issue); it may clear on a retry when the body could not be read (a transport fault), or when a readable response
+  carried no `data` or no issue, which the shaper reads `malformed` too. A door re-reads the issue on every call and, for a
+  decision that binds the issue, refuses `unreachable` on any unmeasured answer, reading no retry table
+  (`inboundDoorVerdict`). `RETRY_WORDS` is the close lane's, and that lane gives `malformed` up past its last backoff
+  step, whether it came from its write or from its own by-id re-read; amended by review 2920 F4, review 2929 F3, review
+  2960 F1, review 3106 F1 and F2, and review 3110 F1 to F4), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
   before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
