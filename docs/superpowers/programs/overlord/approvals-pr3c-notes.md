@@ -72,6 +72,15 @@ already refused. The code comment carries the reason.
   `stale-dialog` (the deny cleared the prompt before the poll saw it) leaves the park open and the row parked. The child-wide
   `markApprovalOperator` above it keeps its mark-before-press order (D-5298's "BEFORE any key"): it takes no parked row, and a
   refused press there leaves a painted dialog the operator can press again.
+- **`park-deny-drops-the-subagent-entry`** (fix round 2, review 3037 F1, direction (a), the coordinator's ruling). A subagent's
+  entry in hook state's `approvals` list outlived its park deny: only the transcript tie or the agent's next event dropped it,
+  and after a deny no tool event fires for that call. A queued sibling's prompt under the same menu (so the same dialog id)
+  then painted at once, the poll saw no clear, and a press on it passed `pressAnswersHeldPrompt` on the stale entry and voided
+  the parked park. The hook's approval wait (`ccd/session-hook.sh`, `_hook_approval_wait`) now calls `_hook_approvals_drop`
+  (this agent's id and this write's stamp only) on both park branches, the window's end on `live` and a `parked` ruling read,
+  right after it prints the deny; a window that ends unparked drops nothing, since that prompt is still painted and the
+  operator's. A main-thread prompt has no entry, so the call is a no-op there. The restart re-seed's main-thread prompt (review
+  3037 F2) gets a comment saying why it voids no park.
 - **The case the note asked for** is `server/test/approval-park-order.test.ts`, through the watcher: a clear edge in the tick
   whose sweep parks the row, a clear 1.5 s before `notifyAt`, a clear earlier than the slack (the operator's answer:
   `operator`), a press after the park, a press on another dialog, a press on a second prompt under the same id (F1), a press
@@ -147,6 +156,14 @@ saved copy, run, and the file restored and checked byte for byte.
   owner, all killed by `approval-park-order.test.ts`, the file restored byte for byte after each: the press matched by dialog
   id alone (R1-1); the last tick's cached hook state instead of a fresh read (R1-2); the hold recording no prompt stamp (R1-3);
   the rows marked whether or not the press landed (R1-4).
+- **Fix round 2 (review 3037).** Red first: `session-hook-approval-park.test.ts`'s two park cases (two subagents, the second
+  queued, the first parked at its window's end or on a `parked` read; its entry must go and the sibling's stay) were red against
+  the round's base, and the unparked case was green. Three hand mutants on the hook, each from a saved copy and restored byte for
+  byte: no drop at the window's end (R2-1) and no drop on the `parked` read (R2-2), each killed by exactly its own case; a drop
+  on every window end, parked or not (R2-3), killed by all three. The server's order case (`approval-park-order.test.ts`, a
+  subagent's row held, parked, then the sibling's prompt pressed under the same dialog id with the first entry gone) keeps the
+  park open; its control, the first entry left standing as the hook did before, turns the row `operator`, so the case
+  measures the drop's effect.
 
 ## Residuals
 
@@ -186,12 +203,25 @@ server of a pane answer, and the server reconstructs that decision from timing. 
 3. **The slack decided against the measured early sources** (today 1.5 s, the clock fallback plus margin), and whether the
    hook's deadline may ever undercut `notifyAt` less the slack (`CCRC_APPROVAL_CEILING_S`, a clock step).
 4. **A restart's kept entry** (re-seed parked rows' entries, or accept the gap).
+5. **The hook that drops a parked subagent prompt's entry is on the fleet box** (fix round 2), so a press on a queued sibling's
+   prompt under the same menu cannot void the parked one's park. It ships through the hook, so it needs a fleet roll first.
+6. **The child-wide mark and a throwing mark** (review 3037 F5). The child-wide `markApprovalOperator` still runs before the
+   press (D-5298) and marks every `held` and `released` row of the child whether or not the press lands; and a
+   `markApprovalOperatorRows` that throws after a landed press answers 200 with a log line and leaves the park open, its void
+   and updates outside a transaction.
+7. **The narrow windows** (review 3037 F3 and F4). A subagent prompt painted under a main-thread prompt's dialog id before its
+   own hook writes passes the main-thread arm (the hook's forks before its write, tens to hundreds of ms), as can two
+   main-thread prompts in one second under the whole-second clock fallback; and the press's fresh hook-state read and
+   `pressDialog`'s pane read are two reads, so a same-id repaint between them gets the mark.
 
 ## For the ledger
 
 - Hook refusals: one. The graph-first gate refused a read-only search of the test tree for the kebab-token scan (no graph
   query yet this session); I ran the graph query the refusal named (its graph is not an ancestor of HEAD, so its answer was
   a lead only), and the gate then let the search through.
+- Fix round 2 (review 3037, the coordinator's rulings): F1 by direction (a), the hook's drop at the park deny, red first and
+  mutation-measured; F2 a comment on the restart re-seed; F3, F4 and F5 on the arming list. New claim, taken first: the hook
+  and its park suite.
 - Fix round 1 (review 3022, the coordinator's rulings): F1, F2 fixed with red-first cases; F3 kept and pinned; F4's slack
   lowered to 1.5 s; F5 and the nits in this note; `main` absorbed once at the coordinator's word. Co-edit agreed with W1-4b on
   `store.ts` (their mail 28828, one comment in `lastRunBySession`; my answer 28826: yes).

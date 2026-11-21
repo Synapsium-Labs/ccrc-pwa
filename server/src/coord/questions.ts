@@ -1431,6 +1431,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         const rows = pendingApprovals.rows;
         dropApproval(r.id, 'reseed-pending');
         if (hs.ask !== null && 'approval' in hs.ask) {
+          // The prompt is taken as the main thread's, with no `waitBy` test (review 3037 F2). It voids no park: the re-seed
+          // covers only main-thread rows still `held` (`heldApprovalRowsByChild`), never a parked one, and a press marks those.
           setHeldApproval(r.id, {
             until: Math.max(...rows.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: rows.map((x) => x.id),
             ev: askHoldPayload(r, hs, dialog, null), prompt: { agentId: '', at: hs.updatedAt },
