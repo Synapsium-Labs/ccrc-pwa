@@ -17,6 +17,7 @@ import { feedFor, type FeedFacts, type FeedMail, type FeedReading, type FeedSubs
 import { HELPER_FACTS_PENDING_MAX, SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { helpersFrame, rosterInputOf, type Proc } from './workflows/model.js';
 import type { HelperFact } from './transcript/parse.js';
+import type { HelperScanSeam } from './workflows/helperScan.js';
 import { foldHookStateRead, HOOKSTATE_FRESH_MS, type HookStateRawRead } from './hookstate.js';
 import { paintedApprovalOf } from './coord/approvalEnvelope.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
@@ -139,6 +140,9 @@ export class SessionStream implements FeedSubscriber {
   /** H1b (D-8862): the helper facts the backlog and the tailer gave since the last reading, handed to the reader by the next
    *  one. A backlog restates them from its window (`sendBacklogAndTail`), so they reset where the backlog resets. */
   private helperFacts: HelperFact[] = [];
+  /** H1c (D-8873): where this stream's own reading of the transcript began (the backlog's window, or the client's offset on
+   *  a resume), so the reader's start scan reads only the bytes before it. */
+  private helperScan: HelperScanSeam | undefined;
   /** The hook's last fresh Stop listed a `workflow` among its background kinds
    *  (D-5231's pair, read by `applyHook`). The one witness that a workflow
    *  exists when its directory does not — see `checkWorkflows`. */
@@ -345,6 +349,7 @@ export class SessionStream implements FeedSubscriber {
         // HAD one and cannot say so — a stale build — and it gets the full
         // backlog instead of an offset honoured against a file nobody agreed
         // on. It costs a current client nothing.
+        this.helperScan = { file: r.data.file, end: this.since.offset };
         this.startTailer(r.data.file, r.data.uuid, this.since.offset);
       } else {
         await this.sendBacklogAndTail(r.data);
@@ -547,7 +552,8 @@ export class SessionStream implements FeedSubscriber {
   /** D-5560/D-5561: read the session's workflows and, since H1b (D-8862), its Agent helpers (`workflows/read.ts`), and
    *  send them when they differ from what this client last saw. What a reading becomes, and whether the frame is due, is
    *  `helpersFrame`'s decision (model.ts; its gate `frameDue` replaced the copy this method held, review 2961 F9); the
-   *  roster is `rosterInputOf` the feed's raw hook read and its read time. This method only carries them. A new session
+   *  roster is `rosterInputOf` the feed's ordered helper roster read (`helperHook`) and its read time, and the start scan
+   *  starts from this stream's seam (H1c). This method only carries them. A new session
    *  dir rebuilds the reader, which forgets the old dir's helpers with its workflows.
    *  Read-only: nothing here starts, stops or changes a workflow or a helper. */
   private async checkWorkflows(file: string, proc: Proc, hook: FeedReading['helperHook'] = null): Promise<void> {
@@ -561,7 +567,7 @@ export class SessionStream implements FeedSubscriber {
     const facts = this.helperFacts;
     this.helperFacts = [];
     const roster = rosterInputOf(hook?.raw ?? null, hook?.at ?? null, now, HOOKSTATE_FRESH_MS);
-    const { workflows: read, helpers } = await this.workflows.readAll(proc, now, { roster, facts });
+    const { workflows: read, helpers } = await this.workflows.readAll(proc, now, { roster, facts, scan: this.helperScan });
     if (this.stopped) return;
     const { due, frame } = helpersFrame({
       read, hookSaysWorkflow: this.hookWorkflowBackground, lastRead: this.shownWorkflows.workflows, arm: helpers.arm,
@@ -819,10 +825,11 @@ export class SessionStream implements FeedSubscriber {
     // `io.stat` right here, so this method and `readBacklog` could stat the
     // same path a moment apart and disagree; and that stat's `null` asserted
     // absence for conditions nobody measured (D-114).
-    const { events, offset, missing, measured, helpers } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
+    const { events, offset, missing, measured, helpers, scanEnd, cut } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
     this.tailed = r.resolution;
     this.helperFacts = helpers ?? [];
+    this.helperScan = scanEnd === undefined ? undefined : { file: r.file, end: scanEnd, ...(cut !== undefined ? { cut } : {}) };
     // D-5560: the client drops its workflow rows on every backlog (a backlog is
     // where the session dir can change under it), so the next workflows read
     // is a FIRST read again and is stated — see `lastWorkflowsJson`.

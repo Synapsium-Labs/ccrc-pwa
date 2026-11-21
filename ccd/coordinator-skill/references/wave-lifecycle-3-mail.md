@@ -97,12 +97,12 @@ Same `fromId`/`fromUuid` pair as the ack, checked the same way. `artifacts`,
 when given, must be **absolute paths** — the ingress refuses a relative one
 `bad-kind` — because the recipient reads the file directly, from whatever
 directory its own turn happens to be in, not from this session's.
-Urgent mail is not open yet: `POST /api/mail` ignores an `"urgent"` field until its ingress lands, so no mail is
-urgent and no 202 echoes it. Once it lands, only a run's coordinator may set `"urgent":true`, on mail to that run's own
-worker or reviewer that names that run in `runId`, and the ingress refuses `urgent-wrong-run` (400) when the mail names
-no run or another one (name the run), `urgent-not-allowed` (403) for any other sender, `urgent-unmeasured` (503) when
-it could not read the facts that decide (retry later), and `urgent-outstanding` (409) while your earlier urgent mail to
-that recipient is still unread (send this one without `urgent`).
+Only a run's coordinator may set `"urgent":true`, on mail to that run's own worker or reviewer that names that run in
+`runId`; an accepted urgent mail answers 202 with `"urgent":true`, and a value that is not a boolean is `bad-kind`. The
+ingress refuses `urgent-wrong-run` (400) when the mail names no run or another one (name the run), `urgent-not-allowed`
+(403) for any other sender, `urgent-unmeasured` (503) when it could not read the facts that decide (retry later), and
+`urgent-outstanding` (409) while your earlier urgent mail to that recipient is still unread (send this one without
+`urgent`). Under a `clientKey`, `urgent` is part of the mail: a retry that adds or drops it is `key-conflict`.
 
 **One `kind`/`subject` pair has a body SHAPE rather than free prose:** a
 worker's `status`/`wave-done`, whose four fingerprint fields the coordinator

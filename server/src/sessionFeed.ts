@@ -28,8 +28,9 @@ import { orderHelperHook, type HelperHookReading } from './workflows/model.js';
  *  read RETURNED (`doneAt`, `at`): counted from its start, a capture the remote tmux timeout (10 s) ended would always
  *  arrive stale, and the feed would capture again exactly when the link is slow. The watcher publishes every tick
  *  (2 s); past this the watcher is not publishing for this session (not registered yet, a stalled tick) and the feed
- *  looks itself. */
-const PUBLISHED_FRESH_MS = 10_000;
+ *  looks itself. It is also the most a reading's hook read can lag the last one, which bounds the helper roster's order
+ *  (`model.ts#orderHelperHook`, session helpers H1c, D-8873). */
+export const PUBLISHED_FRESH_MS = 10_000;
 /** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
  *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
 export const FAILED_CAPTURES_CLEAR = 3;
@@ -208,7 +209,7 @@ export class SessionFeed {
     const { io } = this.deps;
     const tasks = facts === null ? null : await readTasks(io, facts.cfgDir, facts.uuid, { touchedAt: true });
     const hook = facts === null ? null : await this.hookRead(facts.uuid, startedAt);
-    const helperHook = hook === null ? null : (this.lastHelperHook = orderHelperHook(this.lastHelperHook, hook));
+    const helperHook = hook === null ? null : (this.lastHelperHook = orderHelperHook(this.lastHelperHook, hook, PUBLISHED_FRESH_MS));
     const mail = facts === null || !this.deps.coord ? null : this.deps.coord.outstandingMailFor(this.id, MAIL_LIMIT);
     return { startedAt, gen, dialog, tasks, hook: hook?.raw ?? null, helperHook, mail };
   }

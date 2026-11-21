@@ -10,6 +10,7 @@ import type { StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
 import { normalText } from './driftPolicy.js';
 import { publicTextVerdict } from '../linking/policy.js';
+import { routeProjectTeam, type LinearRouteSlot } from './route.js';
 
 export type IssueSnapshotRow = IssueSnapshot & { linearId: string; identifier: string };
 export interface IssueAfter {
@@ -34,6 +35,8 @@ export interface MapContext {
   /** The Linear ids and identifiers of the issues ccrc's plan already holds in the workspace: a superseded entry's successor
    *  exists in the map or here (review 2892 F6). Absent: none. */
   heldIssues?: ReadonlySet<string>;
+  /** D-8808: whether a project's team is the map's team IN THE MIGRATION'S WORKSPACE (`projectOnTeam`). Absent: every project is. */
+  sameWorkspace?: (project: string) => boolean;
 }
 /** A finished entry's pull request: `<owner>/<repo>#<number>` (review 2892 F7, D-8801): its shape only, as L1 cannot ask GitHub. */
 const PR_REF = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,8})$/u;
@@ -162,7 +165,7 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
   for (const g of [...groups.map((x) => ({ slug: x.programme, epics: x.epics })), ...backlog.map((x) => ({ slug: x.slug, epics: x.epics }))]) {
     for (const ep of g.epics) {
       const key = ctx.teamOf(ep.project ?? ctx.home);
-      if (key === null || key.toLowerCase() !== team) return fail('plan-bad-body', `epic-other-team:${g.slug}/${ep.key}`);
+      if (key === null || key.toLowerCase() !== team || ctx.sameWorkspace?.(ep.project ?? ctx.home) === false) return fail('plan-bad-body', `epic-other-team:${g.slug}/${ep.key}`);
     }
   }
   for (const e of map.entries) {
@@ -170,7 +173,7 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
     const project = epicsFor(e.target!.programme!).get(e.target!.epic!)!.project;
     const key = ctx.teamOf(project);
     if (key === null) return fail('plan-bad-body', `leaf-no-team:${e.identifier}`);
-    if (key.toLowerCase() !== team) return fail('plan-bad-body', `leaf-other-team:${e.identifier}`);
+    if (key.toLowerCase() !== team || ctx.sameWorkspace?.(project) === false) return fail('plan-bad-body', `leaf-other-team:${e.identifier}`);
   }
 
   // 6. Ticket keys.
@@ -333,16 +336,51 @@ export interface MigrationFacts {
 export const migrationSettled = (m: Pick<MigrationFacts, 'state' | 'reportDoneAt'>): boolean =>
   m.state === 'put-back' || m.state === 'failed' || (m.state === 'applied' && m.reportDoneAt !== null);
 
+export const NO_TEAM_KEY = { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' } as const;
+
 /** `POST /api/projects/:project/hierarchy/migrate` (Task 7.2): one team at a time, in order (§10.2), and never a team already
  *  migrated. `rows` are every migration, any order. */
 export function startVerdict(rows: readonly MigrationFacts[], team: string | null, workspaceId: string | null):
   { ok: true } | { ok: false; word: 'no-team-key' | 'migration-in-flight'; detail: string } {
-  if (team === null) return { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' };
+  if (team === null) return NO_TEAM_KEY;
   const open = rows.find((m) => !migrationSettled(m));
   if (open !== undefined) return { ok: false, word: 'migration-in-flight', detail: `team ${open.teamKey}'s migration is not finished` };
   const same = rows.filter((m) => m.teamKey.toUpperCase() === team.toUpperCase() && (workspaceId === null || m.workspaceId === workspaceId));
   if (same.some((m) => m.state === 'applied')) return { ok: false, word: 'migration-in-flight', detail: `team ${team} is migrated already` };
   return { ok: true };
+}
+
+/** D-8808: the migration a project row shows (`hierarchyStateOf` reads it): the newest of its team in its workspace. A row naming a
+ *  workspace needs no slots; one naming none is routed (a slot gives the workspace, an ambiguous key shows none: the operator is
+ *  refused at Reshape too); a key no slot serves matches by key alone only while all its migrations sit in one workspace. */
+export function migrationOfProject<M extends { id: number; workspaceId: string; teamKey: string }>(
+  row: { teamKey: string | null; workspaceId: string | null }, migrations: readonly M[], slots: readonly LinearRouteSlot[] | null,
+): M | null {
+  if (row.teamKey === null) return null;
+  const key = row.teamKey.toUpperCase();
+  const ofKey = migrations.filter((m) => m.teamKey.toUpperCase() === key);
+  const newest = (ms: readonly M[]): M | null => [...ms].sort((a, b) => b.id - a.id)[0] ?? null;
+  if (row.workspaceId !== null) return newest(ofKey.filter((m) => m.workspaceId === row.workspaceId));
+  const route = slots === null || slots.length === 0 ? null : routeProjectTeam(slots, { teamKey: key, workspaceId: null });
+  if (route !== null && route.kind === 'slot') return newest(ofKey.filter((m) => m.workspaceId === route.slot.workspaceId));
+  if (route !== null && route.word === 'team-ambiguous') return null;
+  return new Set(ofKey.map((m) => m.workspaceId)).size <= 1 ? newest(ofKey) : null;
+}
+
+/** D-8808: a caller must own exactly one waiting workspace. If an unmeasured workspace could be theirs, do not read
+ *  any map. With no waiting migration the key-only holder (a null workspace) can receive a diagnostic, not permission. */
+export function mapProposerVerdict(
+  caller: string, waiting: readonly string[], holderWorkspaces: readonly (string | null)[],
+  ownerIn: (workspaceId: string | null) => { kind: 'owner'; id: string | null } | { kind: 'none' } | { kind: 'unmeasured'; possibleIds: readonly string[] },
+): { ok: true; workspaceId: string } | { ok: false; word: 'not-linear-owner' | 'plan-bad-body' | 'team-ambiguous' | 'unreachable' } {
+  const workspaces = waiting.length === 0 ? holderWorkspaces : [...new Set(waiting)];
+  const measured = workspaces.map((w) => ({ workspace: w, owner: ownerIn(w) }));
+  const owned = measured.filter(({ owner }) => owner.kind === 'owner' && owner.id === caller);
+  if (waiting.length === 0 && owned.length > 0) return { ok: false, word: 'plan-bad-body' };
+  if (owned.length > 1) return { ok: false, word: 'team-ambiguous' };
+  if (measured.some(({ owner }) => owner.kind === 'unmeasured' && owner.possibleIds.includes(caller))) return { ok: false, word: 'unreachable' };
+  const workspaceId = owned[0]?.workspace;
+  return workspaceId == null ? { ok: false, word: 'not-linear-owner' } : { ok: true, workspaceId };
 }
 
 /** The hierarchy state a project row shows (§11.1) from its team's newest migration: none is "Not migrated". */

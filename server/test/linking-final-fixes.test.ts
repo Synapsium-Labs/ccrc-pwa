@@ -127,8 +127,8 @@ describe("linearOwnerOfProject decides a shared key's owner in the project row's
     ({ project, teamKey: 'AAA', initiatives: 'on' as const, linearOwner, ownsTeam: false, order, workspaceId });
   it("project-b's owner is project-b's, not the first holder's in another workspace", () => {
     const rows = [row('project-a', WS.a.id, 1, 'coord-a'), row('project-b', WS.b.id, 2, 'coord-b')];
-    expect(linearOwnerOfProject('project-b', rows, f)).toMatchObject({ project: 'project-b', id: 'coord-b' });
-    expect(linearOwnerOfProject('project-a', rows, f)).toMatchObject({ project: 'project-a', id: 'coord-a' });
+    expect(linearOwnerOfProject('project-b', rows, f, null)).toMatchObject({ project: 'project-b', id: 'coord-b' });
+    expect(linearOwnerOfProject('project-a', rows, f, null)).toMatchObject({ project: 'project-a', id: 'coord-a' });
   });
 });
 

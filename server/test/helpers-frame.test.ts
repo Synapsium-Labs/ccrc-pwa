@@ -246,9 +246,16 @@ describe('the reads\' two small parsers (cases added after the first mutation ro
     for (const v of [1, 'true', 'yes', {}, null]) expect(parseHelperMeta(JSON.stringify({ finished: v }))?.finished).toBe(false);
   });
 
-  it('parseHelperMeta: display text loses controls and lone surrogates, but keeps letters and paired emoji', () => {
+  it('parseHelperMeta: display text is the shared one-line strip (shared/unprintable.ts#stripLine) less lone surrogates: a run of the set is a space, the ends are trimmed, letters and paired emoji stay (review 3033 F5)', () => {
     expect(parseHelperMeta(JSON.stringify({ agentType: 'Ex\u0000plore', description: '\u001bα😀\ntext\u007f', model: 'm\ud800', effort: '\u0085\udc00' })))
-      .toEqual({ agentType: 'Explore', description: 'α😀text', model: 'm', effort: null, finished: false });
+      .toEqual({ agentType: 'Ex plore', description: 'α😀 text', model: 'm', effort: null, finished: false });
+  });
+
+  it('display text loses what the shared set names and the old strip let through: format characters, bidi overrides and isolates, the line separators, U+2060 to U+206F and the BOM (review 3033 F5)', () => {
+    const m = parseHelperMeta(JSON.stringify({
+      agentType: 'Ex\u202eplore', description: 'a\u2066b\u200bc\u2028d\u2029e\u2061f\ufeffg', model: '\u200e\u200fm', effort: '\u00adhigh',
+    }));
+    expect(m).toEqual({ agentType: 'Ex plore', description: 'a b c d e f g', model: 'm', effort: 'high', finished: false });
   });
 
   it('a launch model and summary cannot bring controls or lone surrogates back onto a row', () => {
@@ -257,7 +264,7 @@ describe('the reads\' two small parsers (cases added after the first mutation ro
       end: { outcome: 'done', at: NOW - 1_000, summary: 's\u0000\udc00😀', hasReport: true, from: 'notification' },
     };
     expect(frameOf({ arm: armOf({ a1: meta({ model: null }) }, { a1: f }, []) }).frame.agents?.[0])
-      .toMatchObject({ model: 'm😀', summary: 's😀' });
+      .toMatchObject({ model: 'm 😀', summary: 's 😀' });
   });
 
   it('parseHelperMeta: an array or a scalar is not a meta; an empty string field is not measured (null)', () => {

@@ -2586,12 +2586,20 @@ export class CoordStore {
    * id>)` — the honest outcome, since the party that can tell which program it
    * meant is the human reading it. Recorded here rather than opened; an operator
    * door that re-points one by id is a decision somebody makes on purpose.
+   *
+   * THE OVERLORD'S URGENT MAIL TO A DISPLACED CLAIMANT MOVES TOO, by session id (mid-turn mail, review 2833 F3): the rule
+   * marks a mail `overlord` only when its recipient claims the run it names (`urgentMail.ts`, the Overlord arm), and the
+   * hold derives from the delivery (`urgentHolds`). So it is a mail to the CHAIR of a run in this programme, whatever its
+   * `toId` says; left on the displaced id, it would hold a session that is no longer the chair and never hold the heir.
+   * Its run names the programme (`r.program`), so nothing is guessed. A `coordinator` urgent mail is a run's worker's,
+   * and never moves, even when that worker later becomes the claimant and is displaced (review 3069 F3). An abandoned
+   * urgent park stays where it is, as every park does (slug `urgent-park-not-moved`).
    */
   private repointCoordinatorMail(program: string, to: string, displaced: readonly string[]): DeliveryBulkWrite {
     return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding',
       `toId IN (${placeholders(displaced.length)}) AND mailId IN (` +
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
-      "WHERE m.toId = 'coordinator' AND r.program = ?)",
+      "WHERE (m.toId = 'coordinator' OR m.urgentAs = 'overlord') AND r.program = ?)",
       [...displaced, program]) };
   }
 
@@ -7012,12 +7020,12 @@ export class CoordStore {
    *  sender stored none under that key. `mail_client_key_once` makes the row unique. A stored `kind` outside the sendable
    *  vocabulary cannot equal a request's, so it is read as it is; `artifacts` that do not parse as a list of strings read as
    *  `['']`, which no request carries (the ingress admits absolute paths only), so the decider answers `conflict`, never
-   *  `same`, on a row it cannot read. */
+   *  `same`, on a row it cannot read. `urgent` is whether `mail.urgentAs` is set (mid-turn mail, ruling N10). */
   mailByClientKey(fromId: string, clientKey: string): KeyedMail | null {
     const row = this.db.prepare(
-      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo FROM mail WHERE fromId = ? AND clientKey = ?',
+      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo, urgentAs FROM mail WHERE fromId = ? AND clientKey = ?',
     ).get(fromId, clientKey) as { id: number; toId: string; runId: number | null; kind: string; subject: string;
-      body: string; artifacts: string; inReplyTo: number | null } | undefined;
+      body: string; artifacts: string; inReplyTo: number | null; urgentAs: string | null } | undefined;
     if (row === undefined) return null;
     const UNREADABLE: readonly string[] = [''];
     let artifacts: readonly string[] = UNREADABLE;
@@ -7026,7 +7034,7 @@ export class CoordStore {
       if (Array.isArray(parsed) && parsed.every((a) => typeof a === 'string')) artifacts = parsed;
     } catch { /* UNREADABLE stands */ }
     return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
-      body: row.body, artifacts, inReplyTo: row.inReplyTo };
+      body: row.body, artifacts, inReplyTo: row.inReplyTo, urgent: row.urgentAs !== null };
   }
 
   /** The urgent hold (mid-turn mail, spec §3.2, plan Task 2.5): per recipient, the urgent deliveries `mail inbox` would

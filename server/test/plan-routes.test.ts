@@ -34,12 +34,12 @@ let verdicts: Map<number, RunVerdict>;
 const NO: GateDecision = { allow: false, verdict: 'no-session', reason: 'refused', device: null };
 const serial: PlanRouteOpts['serial'] = (fn) => { const next = lock.then(fn, fn); lock = next.catch(() => undefined); return next; };
 
-const build = async (): Promise<FastifyInstance> => {
+const build = async (extra: Partial<PlanRouteOpts> = {}): Promise<FastifyInstance> => {
   const a = Fastify();
   registerPlanRoutes(a, {
     coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS,
     sessionAuth: () => session, authEnabled, readLinearStore: async () => ({ kind: 'unreadable', code: 'ENOENT' }),
-    runOfSession: (id) => runs[id] ?? null, now: () => 1_000, runVerdicts: { all: () => verdicts },
+    runOfSession: (id) => runs[id] ?? null, now: () => 1_000, runVerdicts: { all: () => verdicts }, ...extra,
   });
   await a.ready();
   return a;
@@ -66,6 +66,91 @@ const put = (body: unknown, who = 'coord-a', slug = 'prog-a') => send(`/api/prog
 const view = (res: { json: () => unknown }): PlanView => (res.json() as { plan: PlanView }).plan;
 const errorOf = (res: { json: () => unknown }): string => (res.json() as { error?: string }).error ?? '';
 const FIRST = { home: 'project-a', epics: [epic('e1', [1]), epic('e2', [2])] };
+
+describe('plan map route workspace wiring', () => {
+  const map = (who: string) => send('/api/teams/aaa/plan/map', { entries: [] }, who);
+  const holder = (project: string, workspace: string | null, owner: string) => {
+    coord.db.prepare('INSERT INTO project_linking (project, teamKey, teamWorkspace, override) VALUES (?, ?, ?, ?)')
+      .run(project, 'AAA', workspace, 'private');
+    plan.setHierarchySettings(project, { initiatives: 'on', linearOwner: owner, ownsTeam: false }, 'test', 1);
+  };
+  const setup = async (waiting: string[]) => {
+    let inSerial = false;
+    const observed = { readInside: null as boolean | null, proposalInside: null as boolean | null };
+    const readOpen = vi.fn(async (_team: string, workspaceId: string) => {
+      observed.readInside = inSerial;
+      return { ok: true as const, workspaceId, rows: [{ linearId: `issue-${workspaceId}`, identifier: 'AAA-1', title: workspaceId,
+        description: '', team: 'AAA', state: 'unstarted', project: null, milestone: null, parent: null }], routes: null };
+    });
+    const storeProposal = vi.fn((_team: string, _caller: string, _body: unknown, _open: Awaited<ReturnType<typeof readOpen>>) => {
+      observed.proposalInside = inSerial;
+      return { ok: true as const, migrationId: 42, counts: { created: 0, moved: 0, closed: 0, left: 0, skipped: 0 } };
+    });
+    const waitingWorkspaces = vi.fn((_team: string) => waiting);
+    await app.close();
+    app = await build({ migration: { waitingWorkspaces, readOpen, storeProposal }, serial: (fn) => serial(async () => {
+      inSerial = true;
+      try { return await fn(); } finally { inSerial = false; }
+    }) });
+    return { readOpen, storeProposal, waitingWorkspaces, observed };
+  };
+
+  it('diagnoses no waiting map for the legacy unpinned owner, but not a stranger or an absent holder', async () => {
+    const migration = await setup([]);
+    const absent = await map('coord-a');
+    expect([absent.statusCode, errorOf(absent)]).toEqual([403, 'not-linear-owner']);
+    holder('project-a', null, 'coord-a');
+    const owner = await map('coord-a');
+    expect([owner.statusCode, errorOf(owner)]).toEqual([400, 'plan-bad-body']);
+    expect(owner.json().detail).toContain('waiting for a map');
+    holder('project-b', 'ws-b', 'coord-b');
+    const mixed = await map('coord-a');
+    expect([mixed.statusCode, errorOf(mixed)]).toEqual([400, 'plan-bad-body']);
+    const stranger = await map('coord-c');
+    expect([stranger.statusCode, errorOf(stranger)]).toEqual([403, 'not-linear-owner']);
+    expect(migration.readOpen).not.toHaveBeenCalled();
+    expect(migration.storeProposal).not.toHaveBeenCalled();
+  });
+
+  it('round 2: an unmeasured map owner cannot start the issue read', async () => {
+    holder('project-a', null, 'coord-a');
+    holder('project-b', 'ws-b', 'coord-b');
+    const migration = await setup(['ws-b']);
+    const result = await map('coord-b');
+    expect([result.statusCode, errorOf(result)]).toEqual([503, 'unreachable']);
+    expect(migration.readOpen).not.toHaveBeenCalled();
+    expect(migration.storeProposal).not.toHaveBeenCalled();
+  });
+
+  it('reads the caller-owned workspace and passes its actual result to the proposal under the mutex', async () => {
+    holder('project-a', 'ws-a', 'coord-a');
+    holder('project-b', 'ws-b', 'coord-b');
+    const migration = await setup(['ws-a', 'ws-b']);
+    const res = await map('coord-b');
+    expect(migration.readOpen).toHaveBeenCalledOnce();
+    expect(migration.readOpen).toHaveBeenCalledWith('AAA', 'ws-b', { store: { kind: 'unreadable', code: 'ENOENT' }, routes: null });
+    expect(migration.observed).toEqual({ readInside: false, proposalInside: true });
+    expect(res.statusCode).toBe(200);
+    expect(migration.storeProposal).toHaveBeenCalledOnce();
+    const read = await migration.readOpen.mock.results[0]!.value;
+    expect(migration.storeProposal).toHaveBeenCalledWith('AAA', 'coord-b', { entries: [] }, read);
+    expect(migration.storeProposal.mock.calls[0]![3]).toBe(read);
+    expect(read.rows[0]!.linearId).toBe('issue-ws-b');
+  });
+
+  it('refuses two waiting workspaces owned by the caller with actionable detail and no read', async () => {
+    holder('project-a', 'ws-a', 'coord-a');
+    holder('project-b', 'ws-b', 'coord-a');
+    const migration = await setup(['ws-a', 'ws-b']);
+    const res = await map('coord-a');
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'team-ambiguous']);
+    const detail = (res.json() as { detail: string }).detail;
+    expect(detail).toMatch(/workspace/i);
+    expect(detail).toMatch(/operator/i);
+    expect(migration.readOpen).not.toHaveBeenCalled();
+    expect(migration.storeProposal).not.toHaveBeenCalled();
+  });
+});
 
 describe('plan put', () => {
   it('a put by the claimant stores the plan and answers PlanView', async () => {

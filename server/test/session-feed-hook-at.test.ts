@@ -1,16 +1,20 @@
 // Session helpers H1b (D-8862): the hook roster's READ TIME reaches the decision (review 2900 F6, review 2961 F7). Figure 2's
 // `launched` compares a launch result's time with the roster's read time (`HookReading.at`), which the feed used to drop:
 // `FeedReading.hook` remains the bare raw read. The helper arm carries the published copy's `at`, else the
-// moment the feed's own fallback read returned. And the feed is the ONE place that orders them: a reading never carries a
-// roster read earlier than one it already handed on (one memory per feed), so the decision's drop witness never compares a
-// roster with an older one. Neutral fixture names.
+// moment the feed's own fallback read returned. And the HELPER ROSTER alone is ordered (`model.ts#orderHelperHook`, applied
+// by the feed to `FeedReading.helperHook`; every other hook consumer reads `hook`, the latest raw read, review 3033 F7): a
+// reading never carries a roster read earlier than one it already handed on (one memory per feed), so the decision's drop
+// witness never compares a roster with an older one. Since H1c (D-8873, review 3033 F4) a read more than the feed's
+// freshness window (`PUBLISHED_FRESH_MS`, 10 s) older than the last is a clock step, not a lag, and is taken, so the roster
+// freezes for at most that long after the clock steps back. Neutral fixture names.
 //
 // RED FIRST: committed before the code, against origin/main, where a reading has no `helperHook.at`.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Deps } from '../src/server.js';
-import { feedFor, type FeedReading } from '../src/sessionFeed.js';
+import { PUBLISHED_FRESH_MS, feedFor, type FeedReading } from '../src/sessionFeed.js';
+import { orderHelperHook, type HelperHookReading, type HookRosterRead } from '../src/workflows/model.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -158,5 +162,45 @@ describe('the order and the stamp, pinned after the first mutation round', () =>
     const { readings } = await subscribe(new Bus());
     expect(readings[0]!.hook?.ok).toBe(true);
     expect(readings[0]!.helperHook!.at - readings[0]!.startedAt).toBeGreaterThanOrEqual(50);
+  });
+});
+
+// H1c (D-8873, review 3033 F4): the helper roster's freeze after a backward clock step, bounded. RED FIRST against
+// origin/main, where any older read is held until the clock passes the last one.
+describe('the helper roster after the clock steps back: held for at most PUBLISHED_FRESH_MS (review 3033 F4)', () => {
+  const raw = (ids: string[]): HookRosterRead => ({ ok: true, identity: 'current', state: { updatedAt: 0, subagents: ids.map((id) => ({ id, name: 'Explore', startedAt: 0 })) } });
+  const at = (t: number, ids: string[], uuid = UUID): HelperHookReading => ({ uuid, at: t, raw: raw(ids) });
+  const T = 1_800_000_000_000;
+
+  it('the window is the feed\'s freshness window: a lag can be no longer, because an older copy is not the reading', () => {
+    expect(PUBLISHED_FRESH_MS).toBe(10_000);
+  });
+
+  it('an older read within the window is a lag and is held; one older than the window is a clock step and is taken', () => {
+    const last = at(T, ['a1', 'a2']);
+    expect(orderHelperHook(last, at(T - 1, ['a1']), PUBLISHED_FRESH_MS)).toBe(last);
+    expect(orderHelperHook(last, at(T - PUBLISHED_FRESH_MS, ['a1']), PUBLISHED_FRESH_MS)).toBe(last);
+    const stepped = at(T - PUBLISHED_FRESH_MS - 1, ['a1']);
+    expect(orderHelperHook(last, stepped, PUBLISHED_FRESH_MS)).toBe(stepped);
+  });
+
+  it('a newer or equal read, a first read and another identity\'s read are taken as before', () => {
+    const last = at(T, ['a1']);
+    for (const next of [at(T, ['a2']), at(T + 1, ['a2']), at(T - 60_000, ['zz'], 'b'.repeat(36))]) expect(orderHelperHook(last, next, PUBLISHED_FRESH_MS)).toBe(next);
+    const first = at(T - 60_000, ['a1']);
+    expect(orderHelperHook(null, first, PUBLISHED_FRESH_MS)).toBe(first);
+  });
+
+  it('through the feed: after a step back of a minute, the next reading hands the helper roster the new read at once', async () => {
+    const bus = new Bus();
+    const t = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(t);
+    try {
+      const { readings, poll } = await subscribe(bus, () => { bus.emit(`hook:${ID}`, { at: t, uuid: UUID, raw: roster(['a1', 'a2']) }); });
+      clock.mockReturnValue(t - 60_000);
+      bus.emit(`hook:${ID}`, { at: t - 60_000, uuid: UUID, raw: roster(['a1']) });
+      await poll();
+      expect(readings.at(-1)!.helperHook!.at).toBe(t - 60_000);
+    } finally { clock.mockRestore(); }
   });
 });

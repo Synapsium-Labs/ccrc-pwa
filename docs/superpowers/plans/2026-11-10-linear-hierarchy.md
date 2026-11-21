@@ -390,9 +390,15 @@ number from `POST /api/ledger/deviations`.
   and A1). A close asks again inside its flight, after its read and before each of its writes (the comment, the relation, the
   state), and a held answer ends it there, with nothing more sent. Only a take that lands while one write is already in flight
   lets that one write reach Linear (recorded in the move row when it is the relation or the state write; a comment is recorded
-  nowhere); a state write that lands is followed by one more ask, so the issue is then listed taken, not counted closed. Either
-  way the issue is left alone from then on: put back skips an issue a live binding holds, never reopens or rewrites it, and
-  lists it as taken (the coordinator's rulings on review 2998 F1, F4 and F5 and on review 3004 F2 and F3). The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
+  nowhere); a state write that lands is followed by one more ask, so the issue is then listed taken, not counted closed, and
+  the move row's stamp and the report listing it taken are written in one transaction. A state write that reached Linear but
+  whose answer was refused leaves the row unapplied; the next tick's reconcile asks again after its read, and a held closer is
+  then listed taken, never marked applied, listed unrelated or counted closed. Either way the issue is left alone from then
+  on: put back asks before its read, again after it and again inside the write's flight just before the restoring update, so
+  it skips an issue a live binding holds, never reopens or rewrites it, and lists it as taken, the row marked handled and the
+  report saved in one transaction (the coordinator's rulings on review 2998 F1, F4 and F5, on review 3004 F2 and F3, and on
+  review 3016 F1, F2 and A2). The one window left, in a close and in put back alike, is a take that lands while a single
+  write is already in flight; nothing of this entry holds a team's migration back. The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
   cap, and a rate refusal of any of them rests the lane. Two passes of the plan sync's own are counted by neither cap: step 1's
   structure pass (only until the plan's objects exist), on lane `migration` for the objects the map declares, and the Upkeep
   epic's pass, whose create has no move row and so goes out on lane `sync` as the plan sync's own. Each is bounded by its lane,
@@ -451,9 +457,10 @@ number from `POST /api/ledger/deviations`.
   a named one must hold the key (`team-unknown`). With none named (absent or null), a key reads the Linear store: the one
   connected workspace that holds it is stored, two holders are refused `team-ambiguous`, an unreadable store is
   `unavailable`, and a key no connected workspace holds is stored with none. A cleared key reads no store. Saving the
-  unchanged key with no workspace named keeps the stored workspace, a row written before this wave's migration keeping its
+  unchanged key with the workspace absent keeps the stored workspace, a row written before this wave's migration keeping its
   none, without reading the store: nothing new is stored, and a later use resolves the key and refuses `team-ambiguous`
-  if two workspaces hold it. Saving the unchanged key keeps whoever set it (review 2971 F2, F4; review 2997 F3, A5). One resolver, `routeProjectTeam`, serves the plan
+  if two workspaces hold it. An explicit `workspace: null` with the unchanged key reads the store like any other write with
+  a key (the code is the rule, review 3020 F1; the card never sends null). Saving the unchanged key keeps whoever set it (review 2971 F2, F4; review 2997 F3, A5). One resolver, `routeProjectTeam`, serves the plan
   sync, the plan routes and the linking routes; the Linear proxy is unchanged, because it does not know the caller's
   project. The inbound owner rule takes the issue's workspace at all four of its key lookups (review 2971 F1). Task 8.3's read
   (`attachmentsForUrl`) has a constructed fixture (its schema is an assumption until the live capture), reads under its own
@@ -472,12 +479,31 @@ number from `POST /api/ledger/deviations`.
   here, not hidden: the choice of which inbound row a `plan triage` acts on (searching every workspace that holds the key,
   preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
   another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
-  it into the policy. The migration lane (wave 7's code) and the plan-map route still resolve a team by its key alone; the
-  follow-up `w8-migration-workspace` makes them go through `routeProjectTeam` after this wave and #3137 land, and no
-  team's migration starts before it (review 2997 F1, F2). Follow-ups this wave leaves: `w8-migration-workspace`,
+  it into the policy. The migration lane (wave 7's code) and the plan-map route resolve a team through the project row's
+  workspace since run 3027 built `w8-migration-workspace` (reviews 2997 and 3038). The start, open-issue read and console
+  state never select the first workspace holding a key. Reshape returns the routing refusal before checking migration state:
+  a shared key on a row with no workspace is `team-ambiguous`, even when another workspace has already migrated it. For a
+  known workspace, the inbound and migration lanes use one owner rule: `teamOwnerProject` answers an owner with its
+  project, measured none, or unmeasured. A pinned row counts in its own workspace; an unpinned row counts only where its
+  key routes uniquely, and in neither workspace when two hold it. `measuredTeamRoutes` distinguishes a failed listing or a
+  configured slot without a current team record from a measured absence. Possible owners are refusal evidence only.
+  Plan triage (including Close and Raise) and plan-map refuse `unreachable` before an issue read or write when ownership is
+  unmeasured; a key-only diagnostic never authorizes either. Plan-map uses the same snapshot for authorization and its
+  read outside the coordination hold. Inbound routing, answered-item delivery and close notices send and stamp nothing
+  on an unmeasured owner. Waiting work stays retryable; Take Return refuses before effects. Drift Hand refuses `unreachable`
+  when it needs the team owner and cannot measure it. Hierarchy displays the uncertainty and Upkeep suppresses the notice;
+  the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
+  workspace-qualified owner with no issues for that team still waiting.
+  Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
+  `no-linear-owner` when otherwise there is no recipient. It settles only with recipient mail in the same transaction;
+  refusals leave the item, map and note retry intact. Migration completion waits rather than dropping an unnamed declared
+  programme whose membership cannot be measured. Ambiguous inbound with no owner still waits quietly and counts in the console.
+  Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
-  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and `w8-triage-l1`;
-  `w8-write-ambiguous` was built in the review's fix round and dropped. Record: the wave 8 note.
+  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill`, `w8-triage-l1` and
+  `w8-ambiguous-notice` (after the pilot);
+  `w8-write-ambiguous` was built in the review's fix round and dropped, and `w8-migration-workspace` by run 3027. Record: the
+  wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
   with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`

@@ -37,7 +37,10 @@ const counted = (inner: FleetIO): Counted => {
     ranges,
     fail: () => false,
     readdirMeasured: async (p, ...rest) => { calls.push({ op: 'readdir', file: name(p) }); return inner.readdirMeasured(p, ...rest); },
-    statMeasured: async (p) => { calls.push({ op: 'stat', file: name(p) }); return inner.statMeasured(p); },
+    statMeasured: async (p) => {
+      calls.push({ op: 'stat', file: name(p) });
+      return io.fail('stat', name(p)) ? { ok: false, reason: 'unreadable' } : inner.statMeasured(p);
+    },
     readFileMeasured: async (p, ...rest) => {
       calls.push({ op: 'read', file: name(p) });
       return io.fail('read', name(p)) ? { ok: false, reason: 'unreadable' } : inner.readFileMeasured(p, ...rest);
@@ -574,5 +577,114 @@ describe('a finished row whose last write is read one reading late is held, not 
     const first = await read(r, listed(['k1']));
     expect(first.arm.agents).toEqual([expect.objectContaining({ id: 'k1', state: 'finished', endedAt: null })]);
     expect((await read(r, listed(['k1']))).arm.agents).toEqual([]);
+  });
+});
+
+// Session helpers H1c (D-8873): the read tier's gaps review 3033 named (F1, F2, F3, F6), each case red under the mutant the
+// review measured surviving at 2314ded6. RED FIRST against origin/main for F1 (main nulls a measured last write); F2, F3 and F6
+// pin main's behaviour (characterization pins, each red under its mutant: see h1c.md's mutation table).
+describe('the tier\'s measured last write, reserves and budget (review 3033 F1, F2, F3, F6)', () => {
+  /** k1 is read open (its last write measured), then this reader SEES it drop (x0, older, still listed) and its meta now
+   *  says finished: step 2 re-reads the meta, and step 5 attempts its last write. */
+  const dropAfterMeasure = async (io: Counted, failing: 'stat' | 'range'): Promise<SessionHelpers> => {
+    seedMeta('x0'); seedTranscript('x0', plainLine(NOW - 50_000));
+    seedMeta('k1'); seedTranscript('k1', plainLine(NOW - 30_000));
+    const r = new SessionHelpers(io, S);
+    expect((await read(r, listed(['x0', 'k1']))).arm.agents.find((a) => a.id === 'k1')).toMatchObject({ state: 'running', lastActivityAt: NOW - 30_000 });
+    seedMeta('k1', { finished: true });
+    if (failing === 'range') grow('k1', plainLine(NOW - 20_000));
+    io.fail = (op, file) => op === failing && file === 'agent-k1.jsonl';
+    return r;
+  };
+
+  for (const failing of ['stat', 'range'] as const) {
+    it(`F1: a failed final ${failing} keeps the last write it already measured: the row ends at it and stays kept`, async () => {
+      const io = counted(localIO);
+      const r = await dropAfterMeasure(io, failing);
+      const second = await read(r, listed(['x0']));
+      expect(second.arm.agents.find((a) => a.id === 'k1')).toMatchObject({ state: 'finished', endedAt: NOW - 30_000, lastActivityAt: NOW - 30_000 });
+      expect((await read(r, listed(['x0']))).arm.agents.find((a) => a.id === 'k1')).toMatchObject({ state: 'finished', endedAt: NOW - 30_000 });
+    });
+  }
+
+  it('F1: a helper whose last write was never measured still ends as unknown (drawn once, then gone)', async () => {
+    seedMeta('k2', { finished: true });
+    const io = counted(localIO);
+    io.fail = (op, file) => op === 'stat' && file === 'agent-k2.jsonl';
+    const r = new SessionHelpers(io, S);
+    expect((await read(r, listed(['k2']))).arm.agents).toEqual([expect.objectContaining({ id: 'k2', state: 'finished', endedAt: null })]);
+    expect((await read(r, listed(['k2']))).arm.agents).toEqual([]);
+  });
+
+  it('F2: a due meta re-stat keeps its reserve against a burst of twelve new ids in the same reading', async () => {
+    seedMeta('o1'); seedTranscript('o1', plainLine(NOW - 40_000));
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(['o1']));
+    for (let k = 1; k < RESTAT_EVERY; k++) await read(r, listed(['o1']));
+    io.calls.length = 0;
+    const burst = Array.from({ length: 12 }, (_, i) => `n${i}`);
+    await read(r, listed(['o1', ...burst]));
+    const got = helperCalls(io).map((c) => `${c.op} ${c.file}`);
+    expect(got).toContain('stat agent-o1.meta.json');
+    expect(got.length).toBeLessThanOrEqual(HELPER_READS_PER_TICK);
+  });
+
+  it('F2: a finished helper\'s last-write attempt keeps its reserve against a burst of twelve new ids', async () => {
+    // reading 1 spends the whole budget on twelve meta reads (o2's says finished; eleven ids have no meta), so o2's last
+    // write is still owed when the burst arrives
+    seedMeta('o2', { finished: true }); seedTranscript('o2', plainLine(NOW - 30_000));
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(['o2', ...Array.from({ length: 11 }, (_, i) => `p${i}`)]));
+    expect(helperCalls(io).map((c) => c.file)).not.toContain('agent-o2.jsonl');
+    io.calls.length = 0;
+    const burst = Array.from({ length: 12 }, (_, i) => `n${i}`);
+    const { arm } = await read(r, listed(['o2', ...burst]));
+    const got = helperCalls(io).map((c) => `${c.op} ${c.file}`);
+    expect(got).toContain('stat agent-o2.jsonl');
+    expect(got.length).toBeLessThanOrEqual(HELPER_READS_PER_TICK);
+    expect(arm.agents.find((a) => a.id === 'o2')).toMatchObject({ state: 'finished', endedAt: NOW - 30_000 });
+  });
+
+  it('F3: eight open helpers whose new bytes all fail to read cost at most HELPER_READS_PER_TICK calls', async () => {
+    const ids = Array.from({ length: 8 }, (_, i) => `g${i}`);
+    for (const id of ids) { seedMeta(id); seedTranscript(id, plainLine(NOW - 40_000)); }
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    for (let k = 0; k < 3; k++) await read(r, listed(ids));
+    for (const id of ids) grow(id, plainLine(NOW - 1_000));
+    io.fail = (op) => op === 'range';
+    io.calls.length = 0;
+    await read(r, listed(ids));
+    expect(helperCalls(io).length).toBeLessThanOrEqual(HELPER_READS_PER_TICK);
+    expect(helperCalls(io).filter((c) => c.op === 'range').length).toBeGreaterThan(0);
+  });
+
+  it('F3: twelve final helpers whose last-write reads all fail cost at most HELPER_READS_PER_TICK calls in step 5', async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `q${i}`);
+    for (const id of ids) { seedMeta(id, { finished: true }); seedTranscript(id, plainLine(NOW - 30_000)); }
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(ids)); // twelve meta reads
+    io.fail = (op) => op === 'range';
+    io.calls.length = 0;
+    await read(r, listed(ids));
+    expect(helperCalls(io).length).toBeLessThanOrEqual(HELPER_READS_PER_TICK);
+    expect(helperCalls(io).filter((c) => c.op === 'range').length).toBe(6);
+  });
+
+  it('F6: a helper held for its last write is not looked at in step 3: its transcript is stat\'ed once in the reading', async () => {
+    seedMeta('x0'); seedTranscript('x0', plainLine(NOW - 50_000));
+    seedMeta('k1'); seedTranscript('k1', plainLine(NOW - 30_000));
+    seedMeta('x2'); seedTranscript('x2', plainLine(NOW - 20_000));
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(['x0', 'k1', 'x2']));
+    seedMeta('k1', { finished: true });
+    io.calls.length = 0;
+    const { arm } = await read(r, listed(['x0', 'x2']));
+    expect(helperCalls(io).filter((c) => c.file === 'agent-k1.jsonl').map((c) => c.op)).toEqual(['stat']);
+    expect(arm.agents.find((a) => a.id === 'k1')).toMatchObject({ state: 'finished', endedAt: NOW - 30_000 });
   });
 });
