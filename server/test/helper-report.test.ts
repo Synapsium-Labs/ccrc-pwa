@@ -34,6 +34,7 @@ interface HeldReport { text: string; cut: boolean }
 type Answer = { type: 'helper-report'; id: string; report: string | null; cut: boolean };
 const M = model as unknown as {
   holdReports(prev: ReadonlyMap<string, HeldReport>, facts: readonly HelperFact[], folded: ReturnType<typeof foldHelperFacts>): Map<string, HeldReport>;
+  boundReports(held: ReadonlyMap<string, HeldReport>, drawn: AgentArm['agents']): Map<string, HeldReport>;
   reportAnswer(held: ReadonlyMap<string, HeldReport>, agents: AgentArm['agents'], id: string): Answer;
 };
 
@@ -51,13 +52,13 @@ const meta = (o: Partial<HelperMeta> = {}): HelperMeta => ({
 const listedNone: RosterInput = { kind: 'usable', at: NOW, entries: [] };
 
 /** The fold, the held reports and the decision of one reading, as `SessionHelpers` composes them. */
-const reading = (facts: HelperFact[], ids: string[], now = NOW, prevHeld: ReadonlyMap<string, HeldReport> = new Map()) => {
+const reading = (facts: HelperFact[], ids: string[], now = NOW, prevHeld: ReadonlyMap<string, HeldReport> = new Map(), roster: RosterInput = listedNone) => {
   const folded = foldHelperFacts(new Map(), facts);
-  const held = M.holdReports(prevHeld, facts, folded);
   const arm = decideAgentHelpers({
-    now, roster: listedNone, proc: { kind: 'live', startedAt: NOW - 3_600_000 }, facts: folded,
+    now, roster, proc: { kind: 'live', startedAt: NOW - 3_600_000 }, facts: folded,
     metas: new Map(ids.map((id) => [id, meta()])), memory: emptyHelperMemory(),
   });
+  const held = M.boundReports(M.holdReports(prevHeld, facts, folded), arm.agents);
   return { held, arm };
 };
 
@@ -116,16 +117,38 @@ describe('held reports: the fold\'s own end facts, capped at parse time', () => 
     const earlier = factsOf(notice('a1', NOW - 5_000, 'first report'));
     const one = reading(later, ['a1']);
     const folded = foldHelperFacts(foldHelperFacts(new Map(), later), earlier);
-    const held = M.holdReports(one.held, earlier, folded);
+    const held = M.boundReports(M.holdReports(one.held, earlier, folded), one.arm.agents);
     expect(M.reportAnswer(held, one.arm.agents, 'a1').report).toBe('second report');
   });
 
-  it(`at most HELPER_KEPT_MAX (${HELPER_KEPT_MAX}) reports are held, the newest by end time`, () => {
+  it(`of the reports no drawn row shows, at most HELPER_KEPT_MAX (${HELPER_KEPT_MAX}) are held, the newest by end time`, () => {
     const facts = factsOf(...Array.from({ length: HELPER_KEPT_MAX + 4 }, (_, i) => notice(`a${i}`, NOW - 100_000 + i * 1_000, `report ${i}`)));
-    const held = M.holdReports(new Map(), facts, foldHelperFacts(new Map(), facts));
+    const held = M.boundReports(M.holdReports(new Map(), facts, foldHelperFacts(new Map(), facts)), []);
     expect(held.size).toBe(HELPER_KEPT_MAX);
     expect(held.has('a0'), 'the oldest end is not held').toBe(false);
     expect(held.has(`a${HELPER_KEPT_MAX + 3}`)).toBe(true);
+  });
+
+  it('a notification that is no row\'s (a workflow\'s, a shell\'s) never evicts a drawn row\'s report', () => {
+    const others = Array.from({ length: HELPER_KEPT_MAX + 5 }, (_, i) => notice(`t${i}`, NOW - 1_000 + i, `task ${i}`));
+    const { held, arm } = reading(factsOf(notice('a1', NOW - 50_000, 'the agent report'), ...others), ['a1']);
+    expect(arm.agents.map((a) => a.id), 'only a1 is an Agent row').toEqual(['a1']);
+    expect(M.reportAnswer(held, arm.agents, 'a1').report).toBe('the agent report');
+    expect(held.size).toBe(1 + HELPER_KEPT_MAX);
+  });
+
+  it('two ends at one time are told apart by their outcome: the fold\'s (failed) keeps its report, not the done one\'s', () => {
+    const facts = factsOf(notice('a1', NOW - 1_000, 'the failure', 'failed'), notice('a1', NOW - 1_000, 'the success'));
+    const { held, arm } = reading(facts, ['a1']);
+    expect(arm.agents[0]).toMatchObject({ state: 'failed', hasReport: true });
+    expect(M.reportAnswer(held, arm.agents, 'a1').report).toBe('the failure');
+  });
+
+  it('a helper continued after its end (listed again with a later start) shows no report, though its old end is held', () => {
+    const roster: RosterInput = { kind: 'usable', at: NOW, entries: [{ id: 'a1', name: 'Explore', startedAt: NOW - 1_000 }] };
+    const { held, arm } = reading(factsOf(notice('a1', NOW - 5_000, 'the first report')), ['a1'], NOW, new Map(), roster);
+    expect(arm.agents[0]).toMatchObject({ state: 'running', hasReport: false });
+    expect(M.reportAnswer(held, arm.agents, 'a1').report).toBeNull();
   });
 });
 

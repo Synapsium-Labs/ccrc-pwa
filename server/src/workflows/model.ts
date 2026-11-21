@@ -1028,8 +1028,8 @@ const sameEnd = (a: HeldReport['end'], b: HelperEnd): boolean =>
  * The reports to hold after a reading's facts were folded (`folded`): each incoming fact's report (masked, then cut at
  * `HELPER_REPORT_MAX_BYTES` at parse time, reviews 2900 F7 and F15) is held while the fold's end for its id is that fact,
  * so a later end replaces it and an earlier one arriving late does not. A held report whose id's end moved on, or whose id
- * the fold forgot, is dropped. At most `HELPER_KEPT_MAX` are held, the newest by end time (a null time ranks newest), the
- * order the finished fold keeps rows by, so a row the keep still draws keeps its report. `prev` is never mutated.
+ * the fold forgot, is dropped. Unbounded here: `boundReports` bounds it once the reading has decided its rows. `prev` is
+ * never mutated.
  */
 export function holdReports(prev: ReadonlyMap<string, HeldReport>, facts: readonly HelperFact[], folded: ReadonlyMap<string, HelperIdFacts>): Map<string, HeldReport> {
   const out = new Map<string, HeldReport>();
@@ -1043,10 +1043,22 @@ export function holdReports(prev: ReadonlyMap<string, HeldReport>, facts: readon
     const mine = { outcome: HELPER_OUTCOME[f.status], at: f.at, from: f.source, summary: f.summary };
     if (end !== null && sameEnd(mine, end)) out.set(f.id, { text: f.report, cut: f.reportCut, end: mine });
   }
-  if (out.size <= HELPER_KEPT_MAX) return out;
+  return out;
+}
+
+/**
+ * The bound of the held reports, once a reading has decided its rows (`drawn`): every report of a row drawn with
+ * `hasReport` is kept (at most `HELPER_KEPT_MAX`, the finished fold's own bound), and of the rest — a helper whose row is
+ * not decided yet, and the notifications of tasks that are no Agent helper (a workflow's, a shell's), which nothing here
+ * can tell apart — the newest `HELPER_KEPT_MAX` by end time (a null time ranks newest). So a notification that is no row's
+ * never evicts a drawn row's report. At most 40 reports of at most 16 KiB each per stream.
+ */
+export function boundReports(held: ReadonlyMap<string, HeldReport>, drawn: readonly AgentHelperView[]): Map<string, HeldReport> {
+  const shown = new Set(drawn.filter((a) => a.hasReport).map((a) => a.id));
   const rank = (h: HeldReport): number => h.end.at ?? Infinity;
-  const newest = [...out].sort(([a, x], [b, y]) => rank(y) - rank(x) || (a < b ? -1 : 1)).slice(0, HELPER_KEPT_MAX);
-  return new Map(newest);
+  const rest = [...held].filter(([id]) => !shown.has(id))
+    .sort(([a, x], [b, y]) => rank(y) - rank(x) || (a < b ? -1 : 1)).slice(0, HELPER_KEPT_MAX);
+  return new Map([...[...held].filter(([id]) => shown.has(id)), ...rest]);
 }
 
 /** The answer to a `helper-report` request: the held report of a row the last reading DREW with `hasReport`, else

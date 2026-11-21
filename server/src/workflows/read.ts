@@ -33,6 +33,7 @@ import {
   decideAgentHelpers,
   emptyHelperMemory,
   foldHelperFacts,
+  boundReports,
   holdReports,
   isAgentHelper,
   isFinishedKept,
@@ -505,7 +506,7 @@ interface HelperCache {
  */
 export class SessionHelpers {
   private facts: Map<string, HelperIdFacts> = new Map();
-  /** H2 (D-8872): the reports of the fold's own end facts, at most `HELPER_KEPT_MAX` (`model.ts#holdReports`). */
+  /** H2 (D-8872): the reports of the fold's own end facts (`model.ts#holdReports`), bounded by `boundReports`. */
   private reports: ReadonlyMap<string, HeldReport> = new Map();
   /** The rows the last reading drew: a report is answered only for one of them (`model.ts#reportAnswer`). */
   private drawn: AgentArm['agents'] = [];
@@ -619,6 +620,7 @@ export class SessionHelpers {
     const arm = decideAgentHelpers({ now: i.now, roster: i.roster, proc: i.proc, facts: this.facts, metas, memory: this.memory });
     this.memory = arm.memory;
     this.drawn = arm.agents;
+    this.reports = boundReports(this.reports, arm.agents);
     this.last = new Map(arm.agents.map((a) => [a.id, a.state]));
     // Forget an id nothing names any more: not listed, no fact, no row.
     for (const id of [...this.cache.keys()]) if (!nameOf.has(id) && !this.facts.has(id) && !this.last.has(id)) this.cache.delete(id);
