@@ -517,7 +517,16 @@ number from `POST /api/ledger/deviations`.
   failed, the measurement Reshape makes) shows its measured owner and a migration state of not measured, with no Reshape
   (review 3087 F1; any pinned row, not only the top one, as built: review 3096 F1); Upkeep suppresses the notice;
   the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
-  workspace-qualified owner with no issues for that team still waiting.
+  workspace-qualified owner with no issues for that team still waiting. The one measured none that waited silently (review 3048 F5) now raises an
+  item: when the owner rule answers `team-ambiguous` for a waiting issue (the holders that could serve its workspace are rows
+  naming no workspace, and two readable workspaces hold the key), the inbound lane's route step raises one *Choose the Linear
+  workspace of team KEY* item per team key while none is open, naming those projects and the settings page whose Workspace
+  routes the team, and settles it once no waiting issue of the key measures ambiguous or unmeasured, never while the
+  routing is unread (`sharedKeyItemVerdict` decides, beside `ownerItemReady`). Unmeasured routing raises nothing. The wire's
+  item action gains one verb, `linear-team-workspace` with its `teamKey`, which takes no act (`LINEAR_ITEM_ACTS` gives it
+  none) and which the console draws as the step and a link to Settings, Security; the stored action column is unchanged
+  (its JSON reads the new verb, and a reader that does not know a verb reads no action, so an older console draws a plain
+  item), and there is no migration (the coordinator's answer to the departure question, run 3187).
   Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
   `no-linear-owner` when otherwise there is no recipient. It settles only with recipient mail in the same transaction;
   refusals leave the item, map and note retry intact. The console's item act path says a Return sentence for
