@@ -94,7 +94,42 @@ so they were not run again.
 
 ## 4. Runs
 
-To be completed by the full run.
+**Measured.** One test file per process through the test slice, `--maxWorkers=2`, on 2026-11-21 from 14:31Z to 16:02Z.
+The load at each file's start was between 8.5 and 36.1, under sustained I/O pressure on the box: about 10% of time stalled
+on I/O, and one `coord-db` worker sat in disk sleep waiting on the journal.
+
+The list has 87 files:
+- the four test files above;
+- every server test that imports `workflows/helperScan`, `workflows/read`, `workflows/model`, `transcript/tail` or
+  `sessionws`;
+- `coord-db` and `run-close-switch` (the migration-list pins);
+- the rings suites and `single-definition` (43 files);
+- `growth-caps`, `growth-check`, `topology-clean`, `deviation-refs` (after a fetch of `main` at fd16dcd0c2), `dtbd` and
+  the ledger guard.
+
+The first full run: 82 of the 87 files passed, the 43 `single-definition` files among them. Five did not. Each was re-run
+alone once. A file that failed again was run on an extraction of this branch's base, `main` at 841a8528f6:
+
+| File | First run | Alone, on this branch | On the base |
+|---|---|---|---|
+| `rings/pwa-one-owner` | its worker killed by SIGKILL after 32 of 42 passed | 42 of 42 pass | |
+| `coord-db` | 2 of 155 time out: W3-M64's released identity at 20 s, the migration's failure at any statement at 120 s | 3 time out, those two among them (load 24.2) | the same two time out (load 16.8) |
+| `ask-pairing-transcript` | one case times out at 60 s (the recorded frame sequences) | the same | the same case times out; one more fails only because the extraction has no `pwa/` |
+| `secret-mask` | the slow-typing case times out at 20 s, and its worker dies | that case and the slow long-word case time out | the slow long-word case times out at 20 s |
+| `session-ladders-characterization` | the fresh-heartbeat case: `claimProbe` reads `gone` | the same | the same (H1c's note records it: its `NOW` is read at module load) |
+
+The four that fail alone also fail on the base, in the same cases or in the same describe's timing cases. They are load
+timeouts and a wall-clock pin, not this change. **Inferred** for the cause: none of the failing cases reaches the start
+scan, whose only caller is the workflows reading, or the backlog's unreadable or empty arm.
+
+Typechecks:
+- `tsc --noEmit` for the server: passes.
+- The server tests' full typecheck (`test/tsconfig.tests.json`) was killed by the test slice's 6 GB memory cap, as H1c's
+  was.
+- In its place, a scratch tsconfig that extends it and includes the four test files above passes. With `--listFiles` it
+  compiles those four, `helperScan.ts` and `tail.ts`.
+
+CI's fast run is the arbiter for the tests typecheck.
 
 ## 5. Residuals and records
 
