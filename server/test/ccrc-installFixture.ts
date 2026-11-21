@@ -1900,6 +1900,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "model-advance-held-back": "SKIP",
   "model-default": "PASS",
   "model-held-behind": "SKIP",
+  // Model classes wave 3 (release-lookup-warn): SKIP at every stage: no Codex lane has been probed on a fresh box, so
+  // there is no release lookup record.
+  "model-release-lookup": "SKIP",
   "model-sessions-behind": "SKIP",
   "models": "SKIP",
   "name": "SKIP",
