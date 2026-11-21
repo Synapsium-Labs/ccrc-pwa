@@ -4952,7 +4952,7 @@ except five labelled characterization pins.
 - `pwa/src/stores/session.ts` (L4, C3): `requestHelperReport(id)` sends the request; the reducer applies the answer into
   `reports`, keeps only the ids the frame still carries, and the three reset sites clear it.
 - `server/src/workflows/model.ts` (L1, C3): `keepWorkflows` replaces `selectRows` and asks `isFinishedKept`, the keep's one
-  clock (review 2900 F5); `holdReports` and `reportAnswer`. `shared/workflows.ts`: `HelperReportRequest`,
+  clock (review 2900 F5); `holdReports`, `boundReports` and `reportAnswer`. `shared/workflows.ts`: `HelperReportRequest`,
   `HelperReportAnswer`; `WORKFLOW_EVICT_MS` retired with its pins.
 - `server/src/workflows/read.ts` (L3, C3): `finishedView` asks `isFinishedKept`; a kept finished run is held as read and
   left quiet (no stat per reading); `SessionHelpers` holds the reports and answers `reportOf`.
@@ -4982,9 +4982,9 @@ lines in `read.ts`, `model.ts` and `sessionws.ts` and named mine, which do not o
 - **D-8872** — `helpers-section-drawn`: Task H2, issued on 2026-11-21. The Helpers section is drawn from the frame, the
   workflow keep is the helpers' ten minutes, and a finished helper's report travels on request. It departs from the spec in
   these places:
-  - `reports-held-for-drawn-rows`: the reader holds the reports of the fold's own end facts, at most `HELPER_KEPT_MAX`, the
-    newest by end time (the finished fold's own order), and answers a report only for a row the last reading drew with
-    `hasReport`; §8 says only that a report is at most 16 KiB.
+  - `reports-held-for-drawn-rows`: the reader holds the reports of the fold's own end facts: every report of a row drawn
+    with `hasReport`, and the newest `HELPER_KEPT_MAX` of the rest by end time (so at most 40 of at most 16 KiB each), and
+    answers a report only for a row the last reading drew with `hasReport`; §8 says only that a report is at most 16 KiB.
   - `report-answer-null`: an unknown or evicted id is answered `report: null`, which the row says as "This report is no
     longer held"; an older server never answers, and the row then shows nothing, never that there is none.
   - `keep-workflows-replaces-select-rows`: `selectRows` retires; `keepWorkflows` is the workflow arm's keep, which also
@@ -5016,7 +5016,9 @@ workflow opens too); Table 12 (`HelpersSection.tsx` also exports the column's st
 
 **Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H1a's and H1b's: each
 TypeScript file held as a Python module's text, each mutant written into a scratch copy of the tree outside the work tree,
-removed after the run, its test files run once through `ccrc test`): MUTATION_SUMMARY The table is in
+removed after the run, its test files run once through `ccrc test`): 77 mutants at the tip, 73 killed and 4 accepted (three change only what the stream holds in memory, never an
+answer; one is a branch the reader cannot reach). The first pass found one defect, fixed here (a notification that is no
+row's could evict a drawn row's report: `boundReports`), and seven missing cases, each added. The table is in
 `docs/superpowers/programs/desktop-polish/h2.md`.
 
 **Looked at in the real app.** The production build, through the browser harness, at 360, 1280 and 1600 px, in Refined and
