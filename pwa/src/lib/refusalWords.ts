@@ -420,12 +420,12 @@ export const LINKING_ROUTE_TEXT: Readonly<Record<'write-failed' | 'bad-request',
 export const linkingErrorText = (err: unknown): string => refusalText(err, LINKING_ROUTE_TEXT) ?? apiErrorText(err);
 
 /** The migration's own refusals (D-8186): `POST /api/projects/:project/hierarchy/migrate` answers `no-team-key`, `migration-in-flight`
- *  and `unreachable` (no Linear key serves the team; nothing was written). `no-team-key` is said here for the migration, not as the
+ *  and `unreachable` (no readable Linear key serves the team, or its Linear owner is not measured; nothing was written). `no-team-key` is said here for the migration, not as the
  *  template sentence of `LINKING_REFUSAL_TEXT`, which names the template pull request. */
 export const MIGRATE_REFUSAL_TEXT: Readonly<Record<'no-team-key' | 'migration-in-flight' | 'unreachable', string>> = {
   'no-team-key': "Set this project's Linear team key first, then reshape the team in Linear. Nothing was changed.",
   'migration-in-flight': 'Teams are reshaped one team at a time: another team\'s migration is still open, or this team is already migrated. Nothing was changed.',
-  unreachable: 'No Linear key that ccrc holds serves this team, so nothing was asked of Linear. Check the workspace in Settings, then try again.',
+  unreachable: 'ccrc could not find a readable Linear key for this team, or could not measure its Linear owner, so nothing was asked of Linear. Check the workspace in Settings, then try again.',
 };
 /** The migration's refusal in its fixed sentence, or null for a word that is not one of its own. */
 export const migrateRefusalText = (err: unknown): string | null => refusalText(err, MIGRATE_REFUSAL_TEXT);

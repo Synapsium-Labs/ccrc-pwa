@@ -5,8 +5,8 @@ import { isPlanKey, MAP_CLASSES, TICKET_KINDS, type HierarchyState, type IssueSn
 import type { LinkingMode } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
-import { parsePlanPut } from '../coord/planPolicy.js';
-import type { StoredPlan } from '../coord/planStore.js';
+import { parsePlanPut, teamOwnerUnmeasured } from '../coord/planPolicy.js';
+import type { HierarchyProjectFacts, StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
 import { normalText } from './driftPolicy.js';
 import { publicTextVerdict } from '../linking/policy.js';
@@ -395,13 +395,14 @@ export function hierarchyStateOf(m: MigrationFacts | null): { state: HierarchySt
   }
 }
 
-/** F1 (D-8186, D-8808): the console state of a project row. An unpinned row with a team key whose routing is not measured (no
- *  listing, or an unreadable slot) says `unmeasured`, never "not-migrated"; a pinned row needs no routing, and a row with no
- *  team key has none to measure. It reads the routing itself (`measuredProjectTeam`); the caller only supplies it. */
+/** F1 (D-8186, D-8808): the console state of a project row. A row whose team owner is not measured (`teamOwnerUnmeasured`, the pick
+ *  the card's owner display reads: no listing, an unreadable slot, or an unpinned holder that outranks a pinned row) says
+ *  `unmeasured`, never "not-migrated", and Reshape is not offered for it. A row with no team key has none to measure. The caller
+ *  only supplies the rows and the routing. */
 export function hierarchyStateOfRow<M extends MigrationFacts & { id: number; workspaceId: string; teamKey: string }>(
-  row: { teamKey: string | null; workspaceId: string | null }, migrations: readonly M[], routing: TeamRoutes | null,
+  row: { teamKey: string | null; workspaceId: string | null }, rows: readonly HierarchyProjectFacts[], migrations: readonly M[], routing: TeamRoutes | null,
 ): { state: HierarchyState; at: number | null; itemId: number | null } {
-  if (row.teamKey !== null && row.workspaceId === null && measuredProjectTeam(routing, { teamKey: row.teamKey, workspaceId: null }).kind === 'unmeasured') return { state: 'unmeasured', at: null, itemId: null };
+  if (row.teamKey !== null && teamOwnerUnmeasured(row, rows, routing)) return { state: 'unmeasured', at: null, itemId: null };
   return hierarchyStateOf(migrationOfProject(row, migrations, routing?.slots ?? null));
 }
 

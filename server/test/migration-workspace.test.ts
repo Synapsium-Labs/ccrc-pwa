@@ -172,7 +172,7 @@ describe('the console view when the routing is not measured', () => {
     if (mode() === 'slot-unreadable' && store.kind === 'listed') return { ...store, slots: store.slots.map((s) => ({ ...s, key: { kind: 'unreadable', code: 'EIO' } })) };
     return store;
   } });
-  it('an unpinned row with one slot record unreadable is unmeasured even when a migration exists for its key', async () => {
+  it('an unpinned row with its slot keys unreadable is unmeasured even when a migration exists for its key', async () => {
     let mode: Mode = 'ok';
     const r = await rigWith(() => mode);
     r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
@@ -186,8 +186,20 @@ describe('the console view when the routing is not measured', () => {
     expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toEqual({ state: 'unmeasured', at: null, itemId: null });
     expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null }, null)).toEqual({ state: 'unmeasured', at: null, itemId: null });
   });
+  it('a pinned row outranked by an unpinned holder of its key is unmeasured when a slot is unreadable, even with a migration in its workspace', async () => {
+    let mode: Mode = 'ok';
+    const r = await rigWith(() => mode);
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
+    r.db.prepare('INSERT INTO project_linking (project, teamKey, override, teamWorkspace) VALUES (?, ?, ?, ?)').run('project-b', 'AAA', 'private', WS.b.id);
+    r.db.prepare('UPDATE project_linking SET teamWorkspace = NULL WHERE project = ?').run('project-a');
+    r.plan.insertMigration({ workspaceId: WS.b.id, teamKey: 'AAA', project: 'project-b', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.b.id })).toMatchObject({ state: 'migrating' });
+    mode = 'slot-unreadable';
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.b.id })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+  });
   it('a pinned row needs no routing, and a row with no team key has none to measure', async () => {
     const r = await rigWith(() => 'no-listing');
+    pin(r, 'project-a', WS.a.id);
     r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
     expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.a.id })).toMatchObject({ state: 'migrating' });
     expect(await r.mig.stateOfProject({ teamKey: null, workspaceId: null })).toMatchObject({ state: 'not-migrated' });

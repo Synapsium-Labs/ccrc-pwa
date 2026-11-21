@@ -315,7 +315,7 @@ describe('linearOwnerOfProject (D-8183)', () => {
   });
 });
 
-it('keeps whole-read uncertainty distinct from a known unreadable holder slot', () => {
+it('a pinned top holder owns on a failed listing and on its unreadable slot alike; an outranking unpinned row makes it unmeasured', () => {
   const rows = [projectFacts('project-b', { order: 1, workspaceId: 'ws-b', linearOwner: 'coord-b' }), projectFacts('project-a', { order: 2 })];
   const f = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
   expect(linearOwnerOfTeam('AAA', rows, f, 'ws-b', null)).toMatchObject({ kind: 'owner', project: 'project-b' });

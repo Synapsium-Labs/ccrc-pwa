@@ -855,7 +855,7 @@ export function linearOwnerOfTeam(team: string, rows: readonly HierarchyProjectF
 }
 
 /** Read a project's team owner, and its workspace for waiting-issue checks, without a project fallback. */
-function projectTeamOwner(row: HierarchyProjectFacts | undefined, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): { pick: ProjectPick; workspace: string | null } {
+function projectTeamOwner(row: Pick<HierarchyProjectFacts, 'teamKey' | 'workspaceId'> | undefined, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): { pick: ProjectPick; workspace: string | null } {
   if (row === undefined || row.teamKey === null) return { pick: NO_HOLDER, workspace: null };
   const pin = row.workspaceId ?? null;
   if (pin !== null) return { pick: teamOwnerProject(row.teamKey, rows, pin, routes), workspace: pin };
@@ -863,6 +863,12 @@ function projectTeamOwner(row: HierarchyProjectFacts | undefined, rows: readonly
   if (route.kind === 'unmeasured') return { pick: { kind: 'unmeasured', possible: [] }, workspace: null };
   if (route.kind === 'refused') return { pick: route.word === 'team-ambiguous' ? { kind: 'none', reason: route.word } : NO_HOLDER, workspace: null };
   return { pick: teamOwnerProject(row.teamKey, rows, route.slot.workspaceId, routes), workspace: route.slot.workspaceId };
+}
+
+/** Whether a project row's team owner is not measured: the one pick the hierarchy card's owner display reads, so the console's
+ *  migration state and Reshape cannot disagree with it (D-8186, D-8808). */
+export function teamOwnerUnmeasured(row: Pick<HierarchyProjectFacts, 'teamKey' | 'workspaceId'>, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): boolean {
+  return projectTeamOwner(row, rows, routes).pick.kind === 'unmeasured';
 }
 
 /** The project fallback is for display and handoff only, and applies only on a measured `none`. */
