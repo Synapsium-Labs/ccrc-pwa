@@ -382,7 +382,8 @@ describe('the scanner is looking at something', () => {
     // compares every other route, and the armed no-cookie sweep sees the gate's 401
     // first.
     // 5 since the history route (docs W5b-1, rich-docs spec G4): `GET /api/docs/:project/history`, the same class.
-    expect(scanRoutes('docs/routes.ts').length).toBe(5);
+    // 6 since the range route (X2 P1.3): `GET /api/docs/:project/range`, the same class.
+    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 6').toBe(6);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
@@ -747,7 +748,17 @@ describe('the scanner is looking at something', () => {
     // the HTTP half 280 -> 281, the gated count stays 180 (281 - 101), the exempt-HTTP count 100 -> 101.
     // 285 since the hook's report door (Overlord W1 door process B1), in `continuity/routes.ts`: `POST /api/sessions/:id/report`, one
     // box-token machine lane IN EXEMPT: the HTTP half 281 -> 282, the gated count stays 180, the exempt-HTTP count 101 -> 102.
-    expect(ROUTES.length).toBe(285);
+    // 286 since `GET /api/docs/:project/range` (X2 P1.3, the range read in frames), merged after the report door: session-gated
+    // and NOT EXEMPT, no box token: the HTTP half 282 -> 283, the gated count 180 -> 181, the exempt-HTTP count stays 102.
+    // 289 since the per-team migration (Linear hierarchy wave 7, D-8186): `POST /api/teams/:team/plan/map` (`plan map-propose`) in
+    // `coord/planRoutes.ts`, a box-token machine lane IN EXEMPT like its plan siblings, and `POST /api/projects/:project/hierarchy/migrate`
+    // and `GET /api/migrations/:id` in `coord/hierarchyRoutes.ts`, session-gated and NOT EXEMPT, no box token: the HTTP half 283 -> 286,
+    // the gated count 181 -> 183, the exempt-HTTP count 102 -> 103.
+    // 290 since D-8808's `POST /api/linking/suggest` (`linking/routes.ts`), a box-token machine lane IN EXEMPT beside `GET /api/linking`: the
+    // HTTP half 286 -> 287, the gated count stays 183 (287 - 104), the exempt-HTTP count 103 -> 104.
+    // 291 since D-8809's `POST /api/linking/confirm` (`linking/routes.ts`), the Overlord's confirm, a box-token machine lane IN EXEMPT beside
+    // the suggest door: the HTTP half 287 -> 288, the gated count stays 183 (288 - 105), the exempt-HTTP count 104 -> 105.
+    expect(ROUTES.length).toBe(291);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
@@ -805,6 +816,7 @@ describe('the scanner is looking at something', () => {
       'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
       'POST /api/docs/:project/refresh',
       'GET /api/docs/:project/history',
+      'GET /api/docs/:project/range',
       // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
       'GET /api/linear/resolve',
       // …and its four Settings routes for workspace keys (#1444, plan task LK11), lost with it.
@@ -932,7 +944,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 285 scanned + the static wildcard when the bundle is built.
+    // 291 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1085,6 +1097,8 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/linear/proxy/issues/:id/comments',
       'POST /api/linear/proxy/issues/:id/links',
       'POST /api/linear/proxy/search',
+      'POST /api/linking/confirm',
+      'POST /api/linking/suggest',
       'POST /api/mail',
       'POST /api/mail/:id/ack',
       'POST /api/notify',
@@ -1119,6 +1133,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/sessions/:id/report',
       'POST /api/sessions/:id/start',
       'POST /api/sessions/:id/start/loads',
+      'POST /api/teams/:team/plan/map',
       'POST /api/teams/:team/plan/triage',
       'POST /api/testbox/tools-sync',
       'POST /api/timers',
@@ -1151,7 +1166,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-three with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-six with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1303,6 +1318,15 @@ describe('the coordinator intent door: exempt from the session gate, and not for
 });
 
 // ── the attributed landing writes (landing order wave 5f) ─────────────────────────────────────────────────────────────
+
+describe('the linking suggest door\'s EXEMPT reason names its coordinator check (D-8808, review 2971 F7)', () => {
+  it('says the caller must claim an open run, and the word a session that does not is refused with', () => {
+    const reason = EXEMPT.get('POST /api/linking/suggest')!;
+    expect(reason).toContain('box-token gated');
+    expect(reason).toContain('claims an open run');
+    expect(reason).toContain('not-a-coordinator');
+  });
+});
 
 describe('the landing write doors: exempt from the session gate, and the route still requires the box token', () => {
   const KEYS = ['POST /api/landing/entries', 'POST /api/landing/order'] as const;
@@ -1689,7 +1713,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 282 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 288 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1753,7 +1777,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 282 HTTP routes, not the 102 exempt.
+          //    is not itself flag-aware — the assertion that covers all 288 HTTP routes, not the 105 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

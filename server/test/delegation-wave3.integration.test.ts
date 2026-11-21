@@ -1156,6 +1156,11 @@ const W4_PWA_FILES = [
   // draw and label them, and name the wire types and the words module like the files above. No quote mark in a comment here:
   // the health test mirrors this block by reading every quoted string in it.
   'pwa/src/fleet/WorktreeControls.tsx', 'pwa/src/fleet/sessionWorktrees.ts', 'pwa/src/session/SessionWorktrees.tsx',
+  // Desktop polish H4 (D-8828): the Archive screen holds the work no session owns. The section, the screen that draws it and the
+  // route that reads the frame into it name the wire types and the words module like the files above.
+  'pwa/src/fleet/ArchiveUnownedWork.tsx', 'pwa/src/screens/ArchiveScreen.tsx', 'pwa/src/app.tsx',
+  // Fix round 1: the Archived row at the fleet foot is the door to the section, so the fleet screen reads the frame for its count.
+  'pwa/src/screens/FleetScreen.tsx',
 ] as const;
 /** Wave 5 PR8c's PWA files (D-8114): the Settings card over the adoption switch. It reads the switch's door and the lane's counts
  *  and list (`GET /api/coord/delegation-adopt`), so its files name the door and the wire's types; no string they make public says

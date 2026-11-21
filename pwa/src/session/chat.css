@@ -107,6 +107,17 @@
   .chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
 }
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
+/* D-8834 (C51; C50's D-8817 drew the badge in the details row): a coordinator's role badge sits on the TITLE line, right after the
+   session's name (`HeaderTitleText`), in both skins. It is an inline box in the title's own line, so it shares the name's line
+   box and adds no line to the header, and its glyph is `1em` of the title's own font size, the size of the name's text. It
+   paints no colour and sets no size of its own: the line's ink is the title's (the primary) and its text size is the title's.
+   `vertical-align: -0.125em` is the icon rule: the glyph's bottom edge sits a little under the baseline, as the vendored icons
+   are drawn, so it reads as resting on the line. The gap is the crumb separator's. */
+/* The name's last character and the badge are one unbreakable box (`HeaderTitleText`, review 2963 F1), so the badge never sits
+   alone on a line; every other break in the name stays where it was. */
+.chat-title-glue { white-space: nowrap; }
+.chat-title-role { vertical-align: -0.125em; margin-inline-start: var(--sp-1); }
+.chat-title-role svg { width: 1em; height: 1em; }
 .chat-facts .sess-subagent-list { flex-basis: 100%; }
 /* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its
    min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long

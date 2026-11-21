@@ -92,10 +92,11 @@ const ROLE_FACTS_SET: MutantSet<RoleOfModule> = {
   modulePath: path.join(ROOT, 'server/src/roleOf.ts'),
   mutants: [
     { id: 'R1', old: "childRunKind: i.child.kind === 'child' ? i.childRunKind : 'unmeasured',", new: 'childRunKind: i.childRunKind,' },
-    { id: 'R2', old: "i.openCoordinators === 'unmeasured' ? 'unmeasured' : word(", new: "i.openCoordinators === 'unmeasured' ? 'no' : word(" },
+    // R2 and R5 read `claimsOpenRunOf`, the one decider `roleFactsOf` calls since D-8808 (review 2997 A4).
+    { id: 'R2', old: "openCoordinators === 'unmeasured' ? 'unmeasured' : word(", new: "openCoordinators === 'unmeasured' ? 'no' : word(" },
     { id: 'R3', old: "v ? 'yes' : 'no'", new: "v ? 'yes' : 'unmeasured'" },
     { id: 'R4', old: 'declaredIntent: word(i.intentDeclared),', new: "declaredIntent: 'unmeasured'," },
-    { id: 'R5', old: 'word(i.openCoordinators.has(sessionId))', new: 'word(i.openCoordinators.size > 0)' },
+    { id: 'R5', old: 'word(openCoordinators.has(sessionId))', new: 'word(openCoordinators.size > 0)' },
     { id: 'R6', old: 'designation: designationFactOf(sessionId, i.designation),', new: "designation: 'none'," },
   ],
   suite: roleFactsOfCases,

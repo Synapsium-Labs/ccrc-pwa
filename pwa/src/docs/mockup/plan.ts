@@ -64,7 +64,8 @@ export function mockupSizeBasis(
       if (pin.commit === tree.ref.commit && typeof size === 'number') return { kind: 'listed', bytes: size };
     } else {
       const d = entry.draft;
-      if (d !== null && d.fp === pin.fp && typeof d.size === 'number') return { kind: 'listed', bytes: d.size };
+      // A fingerprint names the bytes; two absent ones (a stat-pinned draft, X2 P1) name nothing alike.
+      if (d !== null && d.fp !== null && d.fp === pin.fp && typeof d.size === 'number') return { kind: 'listed', bytes: d.size };
     }
   }
   return { kind: 'class-cap', bytes: DOCS_CLASS_CAP[cls] };

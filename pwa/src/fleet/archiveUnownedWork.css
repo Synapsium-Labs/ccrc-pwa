@@ -1,0 +1,53 @@
+/* The Archive's "Work no session owns" section (desktop polish H4, D-8828). Layout and ink only. Every rule sits inside the
+   Section's card, which paints --bg-surface (SECTION_CARD in @ccrc/ui's section.tsx), so each ink is measured on it. A new
+   sheet, not fleet.css, which is capped (growth-caps). The controls inside a row are `.proj-work-controls` (fleet.css) and
+   their Buttons carry the tap floor themselves. */
+.archive-unowned-group {
+  display: grid;
+  min-width: 0;
+}
+/* A subhead names a kind of row and its count; a band, never a button. */
+.archive-unowned-sub {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+/* A row: what it is on the left, its acts on the right; the acts drop under the words when the card is narrow (a phone). */
+.archive-unowned-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-3);
+  min-width: 0;
+  min-height: var(--tap-min);
+  padding: var(--sp-1) 0;
+  border-top: 1px solid var(--edge-subtle);
+  color: var(--ink-primary);
+}
+.archive-unowned-what {
+  display: grid;
+  flex: 1 1 16rem;
+  gap: 2px;
+  min-width: 0;
+}
+.archive-unowned-where {
+  min-width: 0;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.archive-unowned-path { font-family: var(--family-mono); }
+.archive-unowned-meta {
+  font-size: var(--fs-meta);
+  color: var(--ink-tertiary);
+}
+/* A count beside a title or a subhead: quiet, in the same tertiary ink as a row's second line. */
+.archive-unowned-count {
+  font-weight: 400;
+  color: var(--ink-tertiary);
+}

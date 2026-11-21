@@ -1058,8 +1058,10 @@ export const SWEEP_STOPPED = 'sweep-stopped';
 
 /** WHICH fleet act the sweep's abandon ran before an in-arm stop (`sweep-stopped.fleetAct`, `coord/close.ts`): the
  *  worker RELEASED (nothing else claimed the workspace — unheld until its coordinator re-holds it) or RE-HELD under a
- *  surviving run's reason (still claimed). Two acts, two words (review 339, F3). Spelled here, once. */
-export const SWEEP_FLEET_ACTS = ['released', 're-held'] as const;
+ *  surviving run's reason (still claimed). Two acts, two words (review 339, F3). D-6096 (review 2993 F6): or NONE, for a run
+ *  whose abandon composes no fleet act (an in-place run's workspace is its coordinator's), so no notice says re-held.
+ *  Spelled here, once. */
+export const SWEEP_FLEET_ACTS = ['released', 're-held', 'none'] as const;
 export type SweepFleetAct = typeof SWEEP_FLEET_ACTS[number];
 
 /** The journal's answer kinds, as a Record so the census can derive its guard from the union (D-8071: `runStuck.ts` reads `no-history`). */

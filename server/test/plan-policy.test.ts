@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   diffPlan, epicForWave, epicIsDone, linearOwnerOf, listedWaves, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
-  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, parsePlanTake, parsePlanTriage, teamOwnerProject, triageVerdict,
+  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, ownerItemReady, parsePlanTake, parsePlanTriage, teamOwnerProject, teamOwnerDiagnostic, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
 import * as policy from '../src/coord/planPolicy.js';
@@ -241,21 +241,52 @@ describe('callers and owners', () => {
 const projectFacts = (project: string, over: Partial<HierarchyProjectFacts> = {}): HierarchyProjectFacts =>
   ({ project, teamKey: 'AAA', initiatives: 'on', linearOwner: null, ownsTeam: false, order: null, ...over });
 
+const routesFor = (...workspaces: string[]) => ({
+  slots: workspaces.map((workspaceId) => ({ ref: { source: 'file' as const, id: workspaceId }, workspaceId, urlKey: workspaceId, teamKeys: ['AAA'] })),
+  unreadableWorkspaces: new Set<string>(), unreadableLegacy: false,
+});
+
 describe('teamOwnerProject (D-8183)', () => {
+  it('routes an unpinned holder only to its unique workspace', () => {
+    const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b' })];
+    expect(teamOwnerProject('AAA', rows, 'ws-b', routesFor('ws-a', 'ws-b'))).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
+    expect(teamOwnerProject('AAA', rows, 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
+    expect(teamOwnerProject('AAA', rows, 'ws-b', null)).toMatchObject({ kind: 'unmeasured', possible: [{ project: 'project-a' }, { project: 'project-b' }] });
+    expect(teamOwnerProject('AAA', rows.slice(0, 1), 'ws-b', routesFor('ws-a', 'ws-b'))).toEqual({ kind: 'none', reason: 'team-ambiguous' });
+  });
+  it('preserves confirmed unpinned ambiguity in an unreadable workspace that has no pinned holder', () => {
+    const routes = { ...routesFor('ws-a', 'ws-b'), unreadableWorkspaces: new Set(['ws-c']) };
+    const rows = [projectFacts('project-a')];
+    expect(teamOwnerProject('AAA', rows, 'ws-c', routes)).toEqual({ kind: 'none', reason: 'team-ambiguous' });
+    // The unpinned row's routing is readable (two readable workspaces already hold the key), so it joins neither and the pinned holder owns.
+    expect(teamOwnerProject('AAA', [...rows, projectFacts('project-c', { workspaceId: 'ws-c' })], 'ws-c', routes)).toMatchObject({ kind: 'owner', row: { project: 'project-c' } });
+  });
+  it('one owner answer for a failed listing and an unreadable slot (F8, D-8808)', () => {
+    const unreadable = (...ids: string[]) => ({ ...routesFor('ws-a'), unreadableWorkspaces: new Set(ids) });
+    const pinnedTop = [projectFacts('project-b', { order: 1, workspaceId: 'ws-b' }), projectFacts('project-a', { order: 2 })];
+    // A pinned top holder is the owner whatever the routing says.
+    expect(teamOwnerProject('AAA', pinnedTop, 'ws-b', null)).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
+    expect(teamOwnerProject('AAA', pinnedTop, 'ws-b', unreadable('ws-b'))).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
+    // An unpinned top holder whose routing cannot be read is unmeasured, in both shapes.
+    const unpinnedTop = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b' })];
+    expect(teamOwnerProject('AAA', unpinnedTop, 'ws-b', null)).toMatchObject({ kind: 'unmeasured' });
+    expect(teamOwnerProject('AAA', unpinnedTop, 'ws-b', unreadable('ws-b'))).toMatchObject({ kind: 'unmeasured' });
+    expect(teamOwnerProject('AAA', unpinnedTop, 'ws-b', unreadable('ws-c'))).toMatchObject({ kind: 'unmeasured' });
+  });
   it('the project marked ownsTeam owns the team key', () => {
     const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, ownsTeam: true })];
-    expect(teamOwnerProject('AAA', rows)).toBe('project-b');
+    expect(teamOwnerProject('AAA', rows, 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
   });
   it('with none marked, the first project that set the key owns it, whatever the row order', () => {
     const rows = [projectFacts('project-b', { order: 5 }), projectFacts('project-a', { order: 2 }), projectFacts('project-c', { order: null })];
-    expect(teamOwnerProject('aaa', rows)).toBe('project-a');
+    expect(teamOwnerProject('aaa', rows, 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
   });
   it('a key no project holds has no owning project, and another team key is not counted', () => {
-    expect(teamOwnerProject('BBB', [projectFacts('project-a', { order: 1 })])).toBeNull();
-    expect(teamOwnerProject('AAA', [projectFacts('project-a', { teamKey: 'BBB', order: 1, ownsTeam: true })])).toBeNull();
+    expect(teamOwnerProject('BBB', [projectFacts('project-a', { order: 1 })], 'ws-a', null)).toEqual({ kind: 'none', reason: null });
+    expect(teamOwnerProject('AAA', [projectFacts('project-a', { teamKey: 'BBB', order: 1, ownsTeam: true })], 'ws-a', null)).toEqual({ kind: 'none', reason: null });
   });
   it('a project with a key and no order still owns it when it is the only one', () => {
-    expect(teamOwnerProject('AAA', [projectFacts('project-a', { order: null })])).toBe('project-a');
+    expect(teamOwnerProject('AAA', [projectFacts('project-a', { order: null })], 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
   });
 });
 
@@ -263,11 +294,11 @@ describe('linearOwnerOfTeam (D-8183)', () => {
   const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
   it("answers the owning project's named owner, else its latest programme's coordinator", () => {
     const rows = [projectFacts('project-a', { order: 1, linearOwner: 'coord-x' }), projectFacts('project-b', { order: 2 })];
-    expect(linearOwnerOfTeam('AAA', rows, f)).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named', live: true });
-    expect(linearOwnerOfTeam('AAA', [projectFacts('project-b', { order: 2 })], f)).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
+    expect(linearOwnerOfTeam('AAA', rows, f, 'ws-a', routesFor('ws-a'))).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named', live: true });
+    expect(linearOwnerOfTeam('AAA', [projectFacts('project-b', { order: 2 })], f, 'ws-a', routesFor('ws-a'))).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
   });
   it('a team no project holds has no owner row at all', () => {
-    expect(linearOwnerOfTeam('CCC', [projectFacts('project-a', { order: 1 })], f)).toBeNull();
+    expect(linearOwnerOfTeam('CCC', [projectFacts('project-a', { order: 1 })], f, 'ws-a', null)).toEqual({ kind: 'none', reason: null });
   });
 });
 
@@ -275,12 +306,42 @@ describe('linearOwnerOfProject (D-8183)', () => {
   const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
   it("a project with no key is its own owner's; a sharing project answers the team's owning project", () => {
     const rows = [projectFacts('project-a', { teamKey: null, linearOwner: 'coord-x' }), projectFacts('project-b', { order: 1 }), projectFacts('project-c', { order: 2, linearOwner: 'coord-c' })];
-    expect(linearOwnerOfProject('project-a', rows, f)).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named' });
-    expect(linearOwnerOfProject('project-c', rows, f)).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
-    expect(linearOwnerOfProject('project-b', rows, f)).toMatchObject({ project: 'project-b', id: 'coord-of-project-b' });
+    expect(linearOwnerOfProject('project-a', rows, f, routesFor('ws-a'))).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named' });
+    expect(linearOwnerOfProject('project-c', rows, f, routesFor('ws-a'))).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
+    expect(linearOwnerOfProject('project-b', rows, f, routesFor('ws-a'))).toMatchObject({ project: 'project-b', id: 'coord-of-project-b' });
   });
   it('a project that is in no row has no named owner and only the default', () => {
-    expect(linearOwnerOfProject('project-z', [], f)).toMatchObject({ project: 'project-z', id: 'coord-of-project-z', source: 'default' });
+    expect(linearOwnerOfProject('project-z', [], f, null)).toMatchObject({ project: 'project-z', id: 'coord-of-project-z', source: 'default' });
+  });
+});
+
+it('a pinned top holder owns on a failed listing and on its unreadable slot alike; an outranking unpinned row makes it unmeasured', () => {
+  const rows = [projectFacts('project-b', { order: 1, workspaceId: 'ws-b', linearOwner: 'coord-b' }), projectFacts('project-a', { order: 2 })];
+  const f = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
+  expect(linearOwnerOfTeam('AAA', rows, f, 'ws-b', null)).toMatchObject({ kind: 'owner', project: 'project-b' });
+  expect(linearOwnerOfTeam('AAA', rows, f, 'ws-b', { ...routesFor(), unreadableWorkspaces: new Set(['ws-b']) })).toMatchObject({ kind: 'owner', project: 'project-b' });
+  // Outranked by an unpinned row whose routing cannot be read: unmeasured, naming both possible owners.
+  const outranked = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b', linearOwner: 'coord-b' })];
+  expect(linearOwnerOfTeam('AAA', outranked, f, 'ws-b', { ...routesFor(), unreadableWorkspaces: new Set(['ws-b']) })).toEqual({ kind: 'unmeasured', possibleIds: ['coord-b'] });
+  expect(teamOwnerDiagnostic('AAA', rows, f)).toMatchObject({ kind: 'owner', project: 'project-b' });
+});
+
+describe('ownerItemReady (D-8183)', () => {
+  it('does not settle on a live qualified owner while its workspace still has a waiting issue', () => {
+    const rows = [projectFacts('project-a', { workspaceId: 'ws-a', linearOwner: 'coord-a' })];
+    const facts = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
+    expect(ownerItemReady('project-a', rows, facts, null, [{ teamKey: 'AAA', workspaceId: 'ws-a' }])).toBe(false);
+    expect(ownerItemReady('project-a', rows, facts, null, [{ teamKey: 'AAA', workspaceId: 'ws-b' }])).toBe(true);
+  });
+});
+
+describe('ownerItemReady live-owner check (F11, D-8808)', () => {
+  it('does not settle when the workspace-qualified owner exists but is not live', () => {
+    const rows = [projectFacts('project-a', { workspaceId: 'ws-a', linearOwner: 'coord-a' })];
+    const gone = { latestProgrammeCoordinator: () => null, presence: () => 'dead' as const };
+    const alive = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
+    expect(ownerItemReady('project-a', rows, gone, null, [])).toBe(false);
+    expect(ownerItemReady('project-a', rows, alive, null, [])).toBe(true);
   });
 });
 

@@ -242,17 +242,26 @@ export function coordinatorRole(session: FleetSession): boolean {
   return role === 'coordinator';
 }
 
-/** The word the header and the session details say for a coordinator, and the palette's session entries too. */
+/** The word a coordinator is called: the badge's accessible name (D-8817), and the palette's session entries' text, which
+ *  the operator types to search. No row or header draws it as visible text any more. */
 export const COORDINATOR_WORD = 'coordinator';
 
-/** THE role fact: the card's (D-8142) and the header's one object, so the word and its title have one home. */
-/** The role's hover title, written once: the card's role cell and the header's role detail both read it. */
+/** The role's hover title, written once: the card's role badge and the header's read it. */
 export const COORDINATOR_ROLE_TITLE = 'this session is its project\'s coordinator';
+
+/** THE coordinator badge (the operator's note of 2026-11-19, D-8817), spelt once: the icon, the accessible name and the
+ *  hover title `RoleBadge` (`@ccrc/ui`) draws, which the card's role cell and the header's role detail both spread. */
+export const COORDINATOR_BADGE = { icon: 'network', label: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE } as const;
+
+/** The role fact: the card's (D-8142) and the header's one object. It is the name and title the badge carries (the same two
+ *  constants as `COORDINATOR_BADGE`), as a `Fact`, for the one place that asks whether a card has a role cell. */
 const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE };
 
-/** The width the card's role cell takes on the context line: the word and its middot separator (D-8142). A branch
- *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
-export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
+/** The width the card's role cell takes on the context line, in characters of the meta line's mono face (D-8142, D-8817):
+ *  the badge's 16px icon, 2.2 characters at the meta line's `--fs-xs` (12px), rounded up to 3, and its middot separator. A
+ *  branch beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. The cell was 11 characters and
+ *  the separator (14) when it drew the word. */
+export const ROLE_CELL_CHARS = 3 + ' · '.length;
 
 /** D-8771: the words `backgroundWords` puts after its count (`in background`), TAKEN FROM ITS OWN OUTPUT, so the words are
  *  spelt once, in `shared/api.ts`: a reword there reaches the card's uncounted form and the allowance below together. */
@@ -464,6 +473,28 @@ export function cardFacts(f: SessionFactSet): CardFacts {
     marker: markers(f)[0] ?? null,
     workingOn: f.workingOn === null ? null : { key: 'working-on', text: f.workingOn, title: `works on ${f.workingOn}’s code` },
   };
+}
+
+/** Whether the header's meta row (`SessionMeta`, header mode) draws ANY cell for these facts: one reading of its cells' own
+ *  conditions, so the details row can be decided from the facts (`detailsHaveFacts`, desktop polish C51 review 2963 F3 to F6)
+ *  rather than from a stylesheet's reading of what rendered. The cells, in `SessionMeta`'s order: the hold (unless the context
+ *  is the programme, which the coordination row names), the child marker, the last spawn, the ask-state chip, the cleanup
+ *  facts, the task tally, the graph counter, the current build, the subagent and delegated disclosures, and every marker but
+ *  the spawn and the restart (the header draws those as chips of its own). `header-details-facts.test.tsx` renders
+ *  `SessionMeta` for each cell alone and requires this to agree with whether it drew one. */
+export function headerMetaHasCells(f: SessionFactSet): boolean {
+  const ctx = contextFact(f);
+  return (f.session.held !== null && ctx?.key !== 'programme')
+    || (ctx?.key === 'child-marker' && f.childOf !== null && f.heldRun === null)
+    || f.spawn !== null
+    || f.askState !== null
+    || f.cleanup.length > 0
+    || f.tasks !== null
+    || f.graph !== null
+    || f.build.kind === 'current'
+    || (f.subagents !== null && f.subagents.length > 0)
+    || f.delegated !== null
+    || markers(f).some((m) => m.key !== 'spawn' && m.key !== 'restarted');
 }
 
 /** What the HEADER shows: every fact, in reading order. A superset of `cardFacts`. */

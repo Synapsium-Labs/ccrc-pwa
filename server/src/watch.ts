@@ -49,7 +49,7 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_SETTLE_TICKS } from './askwindow.js';
+import { APPROVAL_RULED_GRACE_MS, ASK_SETTLE_TICKS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -75,6 +75,7 @@ import {
 import { stallCoordBallMailStep } from './coord/coordBall.js';
 import { ballOnlySubjects, coordBallInputOf, idleNudgeOpenRunOf, r7BreachNotice, type StallCoordinatorSubject } from './coord/coordBallLane.js';
 import { blockWakesPass } from './coord/blockWakeLane.js';
+import { admissionWakePass, type AdmissionWakeMemory } from './coord/admissionWakeLane.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
@@ -199,6 +200,8 @@ import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import { skillInstallPass } from './coord/skillInstallLane.js';
+import { rolloutListingOf, skillRolloutPass } from './coord/skillRolloutLane.js';
+import { isSkillRolloutMail } from './coord/skillRollout.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -301,7 +304,7 @@ import {
   WAKE_GATE_DEFAULT, WAKE_GATE_LINE_MS, wakeAdmit, wakeMemoryGate, wakeRefund, wakeRefusalWord, type WakeAdmission, type WakeKind, type WakeMemoryRefusal, type WakeRefused,
 } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
-import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor, workerFactsFor } from './turnverdict.js';
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
 import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
@@ -616,10 +619,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
  *  resume. */
 // `ASKS_DISABLED_MARKER` is imported from its `shared/switches.ts` row as well (D-5855).
 
-/** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
- *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
- *  a sweep's slack. */
-const APPROVAL_RULED_GRACE_MS = 10_000;
+// `APPROVAL_RULED_GRACE_MS` (D-5298) lives in `askwindow.ts` since approvals PR 3: the ruling read uses it too.
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
@@ -1121,6 +1121,8 @@ export class FleetWatcher {
   /** D-8126 (A7-5, review 2807 F6): the accounts whose `skill-ensure` call is still running, kept across the self-install
    *  lane's passes so an overdue call still holds its home (`SkillInstallLaneDeps.inFlight`). */
   private readonly skillInstallInFlight = new Set<string>();
+  /** D-8126 (A9-3): the coordinator-skill revisions whose rollout mail this process has settled (`SkillRolloutDeps.settled`). */
+  private readonly skillRolloutSettled = new Set<string>();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -1291,6 +1293,10 @@ export class FleetWatcher {
    *  automatic wakes and the routes' asked ones (`admitWake`) share it. In memory by design — a restart empties it,
    *  which can let one extra burst through and no more. */
   private wakeRecent: number[] = [];
+  /** D-8792 (D-6094's pacing): the freed-slot admit's window (`admitFreedSlot`), a list of its own. */
+  private freedSlotRecent: number[] = [];
+  /** D-6095: the `admissionWake` lane's own window and round-robin (`AdmissionWakeMemory`), in memory by design. */
+  private readonly admissionWakeMemory: AdmissionWakeMemory = { recent: [], served: new Map() };
   /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
    *  as it is read. */
   private readonly lastWakeAt = new Map<string, number>();
@@ -2337,6 +2343,18 @@ export class FleetWatcher {
     return this.wakeVerdictAt(kind, id, Date.now()).admit;
   }
 
+  /**
+   * D-8792 (D-6094's pacing): admit one dispatch-cap slot the worker readings freed (a run whose worker is waiting or gone,
+   * counted out only while the `cap-counts-working` row is armed). `WAKE_BURST` per `WAKE_WINDOW_MS` through the pure
+   * `wakeAdmit`, in a list of its OWN: it never records into `wakeRecent`, so a real process wake is charged once and a
+   * mail wake is never pushed back by it (D-8793: the cap governs starts, not wakes).
+   */
+  admitFreedSlot(): boolean {
+    const r = wakeAdmit(this.freedSlotRecent, Date.now(), 'auto');
+    this.freedSlotRecent = r.recent;
+    return r.admit;
+  }
+
   /** `admitWake` with the reason a refusal had (D-8122): `wake-budget` for the window, the memory gate's word for the
    *  gate. The mail lane reads it to name the gate on the delivery. */
   wakeVerdict(kind: WakeKind, id: string): { admit: boolean; refused: WakeMemoryRefusal | 'wake-budget' | null } {
@@ -2422,6 +2440,8 @@ export class FleetWatcher {
         listing: async () => {
           try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
         },
+        // D-8791: the waiting case's one mail to the run's coordinator.
+        stallNotice: (run, n) => queueStallNotice(coord, run, n),
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2548,6 +2568,17 @@ export class FleetWatcher {
    *  SHADOW until `$REG/stale-archive-live`. */
   async sweepStaleArchive(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     await this.runLane('staleArchive', () => this.staleArchive.pass(records, names));
+  }
+
+  /** The `admissionWake` lane (D-6095; `coord/admissionWakeLane.ts`): a coordinator the concurrency cap refused is mailed
+   *  when the cap has room. Gated on `primed`; the pass holds itself on the two switches and the serialiser. */
+  async sweepAdmissionWake(names: readonly string[] | null): Promise<void> {
+    const coord = this.deps.coord;
+    if (!this.primed || !coord) return;
+    const turnReads = turnReadDeps(this.deps, this);
+    await this.runLane('admissionWake', () => admissionWakePass({ coord, names, serial: this.stopDoneSerial,
+      workerFacts: (sid) => workerFactsFor(turnReads, sid), freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
+      push: (n) => this.pushOne(n, this.activeProjects), warn: (line) => console.warn(line) }));
   }
 
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
@@ -2878,9 +2909,17 @@ export class FleetWatcher {
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
       void this.runLane('linearDrift', () => this.deps.driftPass?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
+      // NEVER awaited, the same reasons: the LINEAR MIGRATION (D-8186): a team's map mails, its apply and its put back.
+      void this.runLane('linearMigration', () => this.deps.linearMigration?.tick())?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
       const skillCoord = this.deps.coord;
       if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
+      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing. Its own `coord` feed row is record-only, and
+      // the mail it queues is record-only in `pushNewMail` (`isSkillRolloutMail`) and never asks a wake. Only where
+      // `index.ts` set the revision (`deps.skillRolloutRevision`): a test's or a script's watcher never mails its claimants.
+      const rolloutRevision = this.deps.skillRolloutRevision;
+      if (skillCoord !== undefined && rolloutRevision !== undefined) void this.runLane('skillRollout', () => skillRolloutPass({ coord: skillCoord, revision: rolloutRevision, settled: this.skillRolloutSettled, log: (line) => console.warn(line),
+        record: (e, dedupeKey) => this.pushOne({ kind: 'coord', sessionId: e.sessionId, project: '', title: e.title, body: e.body, runId: null, recordAlways: true, recordOnly: true, dedupeKey }, this.activeProjects) }, rolloutListingOf(registryRead)))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -3086,6 +3125,8 @@ export class FleetWatcher {
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
       void this.sweepBlockWakes(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-6095: the admission wake, its own lane, never awaited; it reads the tick's listing for the two switches.
+      void this.sweepAdmissionWake(registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.
@@ -3388,7 +3429,7 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }

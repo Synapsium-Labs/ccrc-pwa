@@ -25,7 +25,7 @@ import type { DocsVisit } from '../src/docs/useDocsVisit';
 import { createReaderProgress, type ReaderBar } from '../src/docs/readerBar';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  COMMIT_A, FP_1, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
+  COMMIT_A, FP_1, NO_RANGE_VISIT, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 
@@ -245,7 +245,7 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
       file: { s: 'loading', pin }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     };
     render(<DocsHead page={pageAt('/docs/demo/specs/a.md?ref=main')} visit={visit} tree={tree} />);
     const word = DOCS_HEAD_TEXT.sourceDraftUnbadged;
@@ -441,7 +441,7 @@ describe('the phone head is one shell across the swap at ready (asks 554 and 555
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
       file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_A, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } },
       freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     };
     const bar: ReaderBar = { title: 'Doc title', command: vi.fn(), progress: createReaderProgress() };
     const page = pageAt(url);

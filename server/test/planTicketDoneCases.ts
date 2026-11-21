@@ -216,6 +216,17 @@ export const DONE_CASES: TicketDoneCase[] = [
       expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { links: tied(pair('project-a', 7, RUN, AUTO40)) })))).toBe('ok');
       expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { links: tied(pair('project-a', 7, RUN)) })))).toBe('ok');
     } },
+  // Review 2740 F2: the decider reads EVERY tie of the pull request, not the newest alone. The landing store keeps one entry per
+  // (project, pr) (UNIQUE in `landing_entries`), so the route hands one tie at most; this pins the decider's own contract.
+  { name: 'verdict: a pull request whose ties name two runs is refused when either run holds another declared ticket (review 2740 F2)',
+    run: (m) => {
+      const held = pair('project-a', 7, RUN, { ticketId: 12, key: 't2' });
+      const free = pair('project-a', 7, RUN + 1);
+      expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { links: tied(held, free) })))).toBe('evidence-unverified');
+      expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { links: tied(free, held) })))).toBe('evidence-unverified');
+      // Control: neither run holds one.
+      expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { links: tied(free, pair('project-a', 7, RUN + 2, AUTO40)) })))).toBe('ok');
+    } },
   { name: 'verdict: the same pull request number on another project\'s line ties nothing to this ticket\'s pull request (review 2712 F8)',
     run: (m) => {
       const stored = [{ ticketId: 12, key: 't2', project: 'project-a', evidence: { runId: RUN } }];

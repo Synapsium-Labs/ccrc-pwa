@@ -24,6 +24,9 @@ A run is refused at `runs open` when the plan does not allow it:
   and either no live epic lists this wave or the ticket belongs to another epic than the one that lists it; or you named
   no `ticket`, no live epic lists this wave, and every live epic lists waves. Revise the plan (`plan put`, or
   `plan ticket-move`) so the wave and the ticket share an epic.
+  Both cases need a live epic: with none, the run is refused `plan-missing` when the programme needs a plan, else
+  `ticket-unavailable` when it names a ticket, else it opens with no ticket; and at a wave a live epic lists, a named ticket
+  that is unavailable (below) answers `ticket-unavailable` first.
 - `ticket-required`: you named no `ticket`, and either the plan has phases and the epic that lists this wave still has
   an open ticket no run has started, or no live epic lists this wave and a live epic lists no waves. Open again naming
   that ticket (in the second case, a ticket of the epic that lists no waves), so the run's work is counted against it.
@@ -157,9 +160,43 @@ for the operator, for a request that would change a programme's scope. The issue
 instructions. Refusals: `not-linear-owner` (only the team's owner triages), `issue-not-inbound` (not waiting for
 triage), `plan-bad-body`, `plan-closed`, `reserved-programme` (a hand to `linear-sync`), `ticket-workspace-mismatch`,
 `unknown-epic`, `unknown-checkpoint`, `linear-text-public`, `unreachable` (Linear could not be read to confirm the issue
-is still inbound, for a decision that binds it: a hand, an Upkeep placement or a take; a retry helps when Linear or ccrc's
-Linear store could not be read, and with no key or slot for the team its linking must be set first) and the client's own
-`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
+is still inbound, refused only for a decision that binds it: a hand, an Upkeep placement or a take into an epic, while a
+close, a raise or a return goes on; a retry helps when Linear or ccrc's Linear store could not be read, and with no key
+or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no
+retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no
+retry helps until one of its teams is managed again; and when Linear answered about that one issue, refusing it as
+forbidden or invalid or answering outside its grammar, a retry gets the same answer until that issue changes in Linear)
+and the client's own `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
+
+## The Linear owner: plan map-propose
+
+When the operator starts a team's migration (its project row's "Reshape in Linear"), the team's Linear owner gets a mail
+`linear migration <n>: propose the map for team <TEAM>`. Read the team's open issues (`"$API" linear search`, or the
+issue reads), then place every open issue once, with its Linear id and identifier and one class: `leaf` (a ticket in a
+programme's epic: `target` names `programme` and `epic`, and optionally `checkpoint`, `ticketKey` and `kind`), `upkeep`
+(a ticket in the project's Upkeep epic), `programme`, `epic` or `checkpoint` (an issue that stood for that level: it is
+closed, related to the first ticket placed under it), `finished` (closed as done with its evidence: `target.pr` names the
+merged pull request as `<owner>/<repo>#<number>`, or, when there is none, `target.reason` says why in one line),
+`superseded` (`target.successor` names the issue that replaced it: one on this map, or one ccrc's plan already holds),
+`stale` (closed because the operator approves it on the map) or `unclear` (left where it is):
+
+```bash
+"$API" plan map-propose <TEAM> --json - <<JSON
+{"entries":[{"issue":"<issue id>","identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"},{"issue":"<issue id>","identifier":"AAA-14","class":"finished","target":{"pr":"<owner>/<repo>#<number>"}}]}
+JSON
+```
+
+A live programme declares its own plan first (its coordinator is mailed to `plan put` it); the map places issues onto
+those keys and never rewrites a plan. Only for a programme with no plan and no run that is not finished may the map
+declare structure: `"epics":[{"programme":"<slug>","epics":[...]}]` for a done programme that still owns open issues,
+or `"backlog":[{"slug":"<new slug>","title":"<title>","epics":[...]}]` for a new paused programme, each epic as in
+`plan put`. The operator approves the map in the console (or returns it with a note, mailed to you); nothing changes in
+Linear before that. Issues the apply skipped because they changed reach you again as one follow-up map; one you have since
+taken through inbound is held, and stays off it (listing it is `map-incomplete`). Refusals:
+`not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing, listed twice, or not
+open), `map-rewrites-plan` (structure for a programme that has a plan or a live run), and `plan-bad-body` (a target
+that does not exist, a successor that does not exist, a finished issue with no evidence, a leaf whose epic is in another
+team, a ticket key already used, or no migration waiting for a map).
 
 ## plan take
 
@@ -176,7 +213,11 @@ The other arms are `{"issue":"AAA-12","close":{"why":"<why>"}}` and
 `{"issue":"AAA-12","return":{"note":"<why it is not yours>"}}`; an Upkeep ticket cannot be returned. Refusals: `not-plan-owner`, `issue-not-inbound` (not handed to this
 programme, and not an open Upkeep ticket), `unknown-epic`, `unknown-checkpoint`, `plan-bad-body`, `plan-closed`,
 `ticket-workspace-mismatch`, `linear-text-public`, `unreachable` (Linear could not be read to confirm the issue is still
-inbound, for a take into an epic; or, for an Upkeep ticket's take or close, the programme's home workspace could not be
-resolved; a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking
-must be set first) and the client's own `capability-missing`
+inbound, refused only for a decision that binds it: a take into an epic, while a close or a return goes on; or, for an
+Upkeep ticket's take or close, the programme's home workspace could not be resolved; a retry helps when Linear or ccrc's
+Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused
+the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has
+no managed team, nothing is re-read and no retry helps until one of its teams is managed again; and when Linear answered
+about that one issue, refusing it as forbidden or invalid or answering outside its grammar, a retry gets the same answer
+until that issue changes in Linear) and the client's own `capability-missing`
 (the server does not advertise `plan-inbound-v1`; nothing was sent).

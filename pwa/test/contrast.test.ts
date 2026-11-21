@@ -1162,9 +1162,11 @@ describe('every stylesheet under src/ is audited', () => {
       'src/docs/docs.css',
       'src/docs/export/export.css', // Export's own chrome (W5 Export): never imported by the app; read into every export's <style>
       'src/face/splash.css', // the splash (Overlord face Task 9): a still layer on --bg-page, tokens only
+      'src/fleet/archiveUnownedWork.css', // the Archive's Work no session owns section (desktop polish H4, D-8828): layout and ink only, every ink on the Section card's --bg-surface (or the head's --bg-page)
       'src/fleet/fleet.css',
       'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
       'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
+      'src/ledgers/migration.css',  // the migration map and report bodies' structure lists (D-8186): spacing and wrapping only, no colour
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
       'src/readerLab/readerLab.css', // the reader lab page (reader lab plan, Task 10): layout only, no colour of its own
       'src/screens/run-find.css', // the run board's search (D-8072): layout and ink only, grounded on --bg-page
@@ -2318,12 +2320,14 @@ describe('the programme box\'s hues (Task G2)', () => {
     }
   });
 
-  it('measures the kicker on the tint and the workers\' slugs on the surface, through the stylesheet, in every palette', () => {
+  it('measures the kicker on the tint, the workers\' slugs and the coordinator\'s badge on the surface, through the stylesheet, in every palette', () => {
     for (const h of PROG_HUES) {
       for (const [key, pair] of [
         [`.pg-kicker [as .pg-kicker[data-hue='${h}']]`, 'var(--pg) on var(--pg-tint)'],
         [`.pg-tray [data-hue='${h}'] .sess-pw-prog [in .pg-tray]`, `var(--prog-${h}) on var(--bg-surface)`],
         [`.pg-elsewhere [data-hue='${h}'] .sess-pw-prog [in .pg-elsewhere]`, `var(--prog-${h}) on var(--bg-surface)`],
+        // D-8817: the coordinator's badge in its programme's hue, on the coordinator band's ground, the card's surface.
+        [`.pg-box[data-hue='${h}'] .pg-coord .sess-role [in .pg-coord]`, `var(--prog-${h}) on var(--bg-surface)`],
       ] as const) {
         const rows = rowsFor(key);
         expect(rows, key).toHaveLength(THEME_COUNT);
@@ -2462,9 +2466,11 @@ describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () 
     }
   });
 
-  it('measures the programme\'s name on the surface in each hue, in every palette', () => {
+  // WM4's fix round 1 amendment (D-8823 `head-icon-not-word`): the head's word is gone and its programme icon stands in the programme's hue on the
+  // same surface, so the row is the icon's, one per hue, as the box's badge is pinned.
+  it('measures the programme\'s icon on the surface in each hue, in every palette', () => {
     for (const h of HUES) {
-      const key = `.pv-head .pv-kicker [in .pv-head] [as .pv-head[data-hue='${h}']]`;
+      const key = `.pv-head .pv-ico [in .pv-head] [as .pv-head[data-hue='${h}']]`;
       const rows = rowsFor(key);
       expect(rows, key).toHaveLength(THEME_COUNT);
       for (const row of rows) {

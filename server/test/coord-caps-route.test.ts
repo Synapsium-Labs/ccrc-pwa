@@ -25,6 +25,7 @@ import { CAP_MAX, CAP_MIN } from '../src/coord/caps.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedLegacyProgramme } from './helpers/plan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
@@ -79,7 +80,8 @@ describe('GET /api/coord/caps', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 4 },
-      usage: { running: 0 },
+      // D-8792: the cap reader's two additive fields; no run, so none waits, and the merge leaves the row in shadow.
+      usage: { running: 0, waiting: 0, workingOnly: false },
       updatedAt: 1_700_000_000_000 });
   });
 
@@ -109,7 +111,8 @@ describe('GET /api/coord/caps', () => {
       wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
     coord.markDispatched(r.id, 'the-worker', 'ws', 'ws/ws', false);
     expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
-    expect((await getCaps(app)).json().usage).toEqual({ running: 1 });
+    // D-8792: `the-worker` has no registry row, so its worker reads gone: reported waiting, and in shadow still counted.
+    expect((await getCaps(app)).json().usage).toEqual({ running: 1, waiting: 1, workingOnly: false });
   });
 });
 
@@ -120,7 +123,7 @@ describe('POST /api/coord/caps', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 5 },
-      usage: { running: 0 },
+      usage: { running: 0, waiting: 0, workingOnly: false },
       // A write stamps it; the route reads the STORED value back, so this is the
       // server's own clock and not the caller's assertion about it.
       updatedAt: expect.any(Number) });
@@ -552,10 +555,39 @@ describe('the caps answer shape is defined ONCE, and both halves send it', () =>
     const b = blankCommentsAndStrings(r);
     expect(/const capsView\s*=/.test(b),
       'the shared builder is gone under this name — the scan below is over nothing').toBe(true);
+    // D-8792: both halves send `capsViewMeasured`, which adds the cap reader's two fields to the shared builder's
+    // answer, and builds nothing of its own: its body calls `capsView(`.
+    const reg = sourceOfSymbol(path.join(srcRoot, 'coord', 'routes.ts'), 'registerCoordRoutes');
+    const at = reg.indexOf('const capsViewMeasured');
+    expect(at, 'the measured view is gone under this name').toBeGreaterThan(-1);
+    // Review 2875 F10: an end that is not found would slice to the end of the function and weaken this pin silently.
+    const end = reg.indexOf('\n  };', at);
+    expect(end, 'the measured view\'s end is not found, so the slice below would run past it').toBeGreaterThan(at);
+    const measured = reg.slice(at, end);
+    expect(measured, 'the measured view rebuilds the answer instead of extending the shared one').toMatch(/\bcapsView\(store\)/);
+    // Review 2875 F9: with no worker port the view sends no `waiting`, never a defaulted 0.
+    expect(measured, 'the measured view guesses a waiting count').not.toMatch(/waiting\s*=\s*0/);
     for (const decl of ["app.get('/api/coord/caps'", "app.post('/api/coord/caps'"]) {
       expect(handlerBody(r, b, decl), `${decl} builds its own answer instead of the shared one`)
-        .toContain('capsView(');
+        .toContain('capsViewMeasured(');
     }
+  });
+
+  it('review 2875 F1: the POST takes the worker readings after the coordination lock, never inside it', () => {
+    // Keyed on scan/symbols.ts (sourceOfSymbol), never a literal read of routes.ts: ARCH-06's ratchet holds that file's
+    // literal pins at their ceiling.
+    const reg = sourceOfSymbol(path.join(srcRoot, 'coord', 'routes.ts'), 'registerCoordRoutes');
+    const post = reg.indexOf("app.post('/api/coord/caps'");
+    expect(post, 'the caps POST is gone under this registration').toBeGreaterThan(-1);
+    const lock = reg.indexOf('coordMutex.run(', post);
+    expect(lock, 'the POST no longer takes the lock: this scan is over nothing').toBeGreaterThan(post);
+    const close = reg.indexOf('\n    });', lock);
+    expect(close, 'the lock body\'s end is not found').toBeGreaterThan(lock);
+    const next = reg.indexOf('app.', close);
+    expect(next, 'the next registration is not found').toBeGreaterThan(close);
+    expect(reg.slice(lock, close), 'the worker readings are taken inside the lock').not.toContain('capsViewMeasured(');
+    expect(reg.slice(lock, close)).toContain('capsView(coord)');
+    expect(reg.slice(close, next), 'the measured view is not built after the lock').toContain('capsViewMeasured(coord, view)');
   });
 
   it('…and the usage half is read in exactly one place, so a rebuild cannot be faithful', () => {

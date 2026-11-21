@@ -27,6 +27,7 @@ import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
+import { isHelperId } from '../../shared/workflows.js';
 import { buildAgreement, defaultCachePath, inventoryBuildAgreement, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -188,9 +189,11 @@ import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
  * so a member added to it lands here as a compile error rather than as a frame
  * silently ignored.
  */
-function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
+export function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
   if (raw === null || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
+  // H2 (D-8872): one finished helper's report, asked by its agent id (`isHelperId`, the one rule); anything else is null.
+  if (o['type'] === 'helper-report') return isHelperId(o['id']) ? { type: 'helper-report', id: o['id'] } : null;
   if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
   return { type: 'visible', visible: o['visible'] };
 }
@@ -283,6 +286,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/hierarchy',
   // A project's Upkeep epic (D-8183): its tickets' titles are what a person typed in Linear.
   '/api/projects/:project/upkeep',
+  // The per-team migration's map and report (D-8186): titles and identifiers are Linear text.
+  '/api/migrations/:id',
   // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
@@ -2113,7 +2118,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     answered: (id, route, res) => answeredFrame(id, route, res),
     hookStateOf: (id) => watcher?.currentHookStates().get(id) ?? null,
   };
-  const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps });
+  const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps, gate: accountGate });
   const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors, presenceOf);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
@@ -2140,13 +2145,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys, presenceOf, runVerdicts: watcher?.runVerdicts,
     inboundRecheck: (row) => deps.driftPass?.recheckInbound(row) ?? Promise.resolve({ kind: 'unmeasured', word: null }),
+    migration: deps.linearMigration ?? undefined,
   });
 
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
     itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
-    driftAct: (i, a, b) => deps.driftPass?.act(i, a, b) ?? { ok: false, word: 'unavailable' },
+    driftAct: (i, a, b, slots) => deps.driftPass?.act(i, a, b, slots) ?? { ok: false, word: 'unavailable' },
+    migration: deps.linearMigration ?? undefined, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
@@ -2208,14 +2215,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     managed: (w, t) => deps.plan?.managedTeams().some((m) => m.workspaceId === w && m.teamKey.toUpperCase() === t.toUpperCase()) ?? false,
     boundIssue: (w, i) => deps.plan?.issueBound(w, i) ?? false,
   });
-  // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
-  registerLinkingRoutes(app, {
-    coord: deps.coord, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
-    mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
-    readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
-    runCcd: deps.runCcd, fleetState: () => deps.fleetState,
-  });
   // The caller identity port (Overlord W1 gates A, §3.6 H2): its one adapter, over the readers the continuity routes take.
   const identity = attributionIdentity({
     attribute: (id, uuid, field) => attributionVerdict(deps.io, deps.cfg, id, uuid, field),
@@ -2242,6 +2241,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
+  });
+  // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project, and (D-8809)
+  // the Overlord's confirm of a team candidate behind the gate above.
+  registerLinkingRoutes(app, {
+    coord: deps.coord, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
+    mailToken: () => deps.mailToken ?? null,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
+    privateTrackerKeys: deps.cfg.privateTrackerKeys, gate, notice, bus, build: deps.build?.version ?? null,
   });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
@@ -2395,7 +2404,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m !== null) viewers.setVisible(token, m.visible ? id : null);
+        if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
+        else if (m?.type === 'helper-report') stream.helperReport(m.id);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {

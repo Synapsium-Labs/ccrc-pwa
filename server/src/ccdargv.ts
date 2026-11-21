@@ -1045,6 +1045,21 @@ export const CCD_ARGV = {
    *  `['docs-log','--project']`, behind `DOCS_LOG_CAP`. The path is a value read by fixed index, never a pathspec. */
   docsLog: (project: string, commit: string, section: DocSectionSlug, path: string) =>
              argv(['docs-log', '--project', project, '--commit', commit, '--section', section, '--path', path]),
+
+  /** One file read by range (X2 spec 2026-11-18 section 4.3, plan P1.2), under its own grant
+   *  `['docs-show-range','--project']`, behind `DOCS_RANGE_CAP`. ONE builder for its four argv shapes, the way
+   *  `docsShowCommitted` and `docsShowDraft` split by the pin's source: `where` is `{commit}` for a committed doc or
+   *  `{branch, head}` for a draft (bare branch, as `docsShowDraft` takes it), `pin` is the pin's wire form
+   *  (`blob:<sha>`, `fp:<sha>` or `stat:<size>:<mtimeNs>`), and `step` is `'prepare'` (one trailing `--prepare`) or
+   *  `{snapshot, offset, length}` (a frame). Every value reaches ccd UNVALIDATED, as for the other docs builders. */
+  docsShowRange: (project: string, where: { commit: string } | { branch: string; head: string },
+                  section: DocSectionSlug, path: string, pin: string,
+                  step: 'prepare' | { snapshot: string; offset: number; length: number }) =>
+                   argv(['docs-show-range', '--project', project,
+                         ...('commit' in where ? ['--commit', where.commit] : ['--draft-branch', where.branch, '--head', where.head]),
+                         '--section', section, '--path', path, '--pin', pin,
+                         ...(step === 'prepare' ? ['--prepare']
+                           : ['--snapshot', step.snapshot, '--offset', String(step.offset), '--length', String(step.length)])]),
 } as const;
 
 /**
@@ -1354,6 +1369,12 @@ export const DOCS_SECTIONS_CAP = 'docs-sections-v2';
  *  Read through `ccdCan`'s `docsLog` row (refuses on no evidence), inside the docs gate's tri-state. */
 export const DOCS_LOG_CAP = 'docs-log-v1';
 
+/** The `ccd caps` token that says this box's ccd has `docs-show-range` at exactly the argv `docsShowRange` builds
+ *  (X2 spec 2026-11-18 section 4.3, P1.2). Spelled ONCE in `server/src`; ccd's `echo docs-range-v1` and
+ *  `ccdCapTokens.ts` are the other two spellings. Read through `ccdCan`'s `docsShowRange` row (refuses on no evidence),
+ *  inside the docs gate's tri-state. */
+export const DOCS_RANGE_CAP = 'docs-range-v1';
+
 /** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
  *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
  *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
@@ -1618,6 +1639,7 @@ export const CCD_CAN = {
   docsShowDraft: capRow(DOCS_CAP),
   docsFetch: capRow(DOCS_CAP),
   docsLog: capRow(DOCS_LOG_CAP),
+  docsShowRange: capRow(DOCS_RANGE_CAP),
 } as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
 
 /** A `CCD_ARGV` row name: what `ccdCan` is asked about. */

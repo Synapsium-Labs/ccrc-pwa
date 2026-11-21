@@ -57,7 +57,7 @@ import { consoleSubject } from '../auth/attributionIdentity.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
 import { DARK_MARK_ACTOR, askListsView, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
 import type { AnswerMarksRead } from './answerMarkStore.js';
-import { askForMark, markableAsks } from './questions.js';
+import { askForMark, markableAsks, parkedApprovalsView } from './questions.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, SLOT_WAIT_MS, operatorSecretLaneId, slotChains, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
@@ -182,6 +182,7 @@ export function waitingViewOf(
     calls: groups.open.map(callViewOf),
     callsCleared: groups.cleared.map((r) => clearedCallViewOf(r, now)),
     ...asksViewOf(coord, now, liveAsk),
+    ...parkedApprovalsView(coord, now),
   };
 }
 

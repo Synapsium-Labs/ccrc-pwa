@@ -1,4 +1,5 @@
-import { TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, type FleetSession, type MailSummary, type MarkerState } from '../../shared/api.js';
+import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { turnSays, turnWordOf, type TurnPolicy } from './sessionReading.js';
 
 /**
@@ -38,7 +39,9 @@ export type SleepHeldRule = (typeof SLEEP_HELD_RULES)[keyof typeof SLEEP_HELD_RU
 
 /** The run clock. `none`: no run is read. `run-close`: the session's newest placed run must be finished — terminal and
  *  closed at least the input's quiet threshold ago, or parked in one of `parkedStates` (whose clock is the marker's quiet
- *  alone). */
+ *  alone) — or, D-8790, in one of `waitingStates`: the run still works but its worker waits, and the
+ *  marker's quiet is its clock as it is a parked run's. A waiting answer says so (`waiting`), so the lane can keep the
+ *  case in shadow apart from the rest of its policy. */
 export const SLEEP_RUN_CLOCKS = { none: 'none', runClose: 'run-close' } as const;
 export type SleepRunClockKind = (typeof SLEEP_RUN_CLOCKS)[keyof typeof SLEEP_RUN_CLOCKS];
 
@@ -49,7 +52,7 @@ export type SleepQuietBoundary = (typeof SLEEP_QUIET_BOUNDARIES)[keyof typeof SL
 
 export type SleepRunClock =
   | { readonly kind: typeof SLEEP_RUN_CLOCKS.none }
-  | { readonly kind: typeof SLEEP_RUN_CLOCKS.runClose; readonly parkedStates: readonly string[] };
+  | { readonly kind: typeof SLEEP_RUN_CLOCKS.runClose; readonly parkedStates: readonly string[]; readonly waitingStates: readonly string[] };
 
 /** One policy row. `W` is the policy's own hold word, typed by its map (`StopDoneHold`, `HibernateHold`). */
 export interface SleepPolicy<W extends string> {
@@ -71,7 +74,7 @@ export interface SleepPolicy<W extends string> {
   /** The turn policy the live word is read through (`turnSays`); `rest` passes, anything else holds `live-word`. */
   readonly liveWord: TurnPolicy;
   /** `recent`: the threshold is the input's `quietMs`, or `parkedMs` (when not null) for a run the run clock reads as
-   *  parked or a sibling parked run (`parkedWorker`). */
+   *  parked or waiting, or a sibling parked run (`parkedWorker`). */
   readonly quiet: { readonly boundary: SleepQuietBoundary; readonly parkedMs: number | null };
 }
 
@@ -80,8 +83,8 @@ export type SleepRow = Pick<FleetSession,
   'archivedAt' | 'bucket' | 'held' | 'unmeasured' | 'statusUnmeasured' | 'dialogPending' | 'background' | 'subagents'
   | 'stranded' | 'swapBlocked' | 'substrate'>;
 
-/** The coordination store's answers. `last` and `parkedWorker` are the run clock's; a lane without one passes `null`
- *  and `false`. */
+/** The coordination store's answers. `last`, `parkedWorker` and `otherOpenWorker` are the run clock's; a lane without
+ *  one passes `null`, `false` and `false`. */
 export type SleepStoreRead =
   | { readonly ok: false; readonly detail: string }
   | {
@@ -89,10 +92,22 @@ export type SleepStoreRead =
     readonly last: { readonly runId: number; readonly state: string; readonly closedAt: number | null } | null;
     readonly openWorker: boolean;
     readonly parkedWorker: boolean;
+    /** D-8790: an ACTIVE run other than `last` names it. Read for `run-worker` in place of
+     *  `openWorker` only when `last` is waiting, whose own active run must not hold it. */
+    readonly otherOpenWorker: boolean;
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;
   };
+
+/** Whether one row of a session's mailbox read (`outstandingMailFor`) holds the session awake: mail the delivery lane
+ *  will still act on. That read also answers the rows a person should look at, among them a delivery this server gave up
+ *  on (`rejected`, the mailbox's "abandoned" rows). No retry, nudge or ack is owed on one, so it holds nothing: counted,
+ *  it kept a session awake, and on its old Claude Code build, for as long as the row existed. A parked row does not hold
+ *  either (D-5838). A state this build cannot name still holds: the gate fails closed. */
+export function mailHoldsSleep(m: Pick<MailSummary, 'state' | 'parkedAt'>): boolean {
+  return !(TERMINAL_DELIVERY_STATES as readonly string[]).includes(m.state) && m.parkedAt == null;
+}
 
 /** The turn marker, as `turnMarkFor` reads it judged against the live process. Any `ok: false` holds `marker`. */
 export type SleepMark =
@@ -140,6 +155,10 @@ export interface SleepInput {
   readonly now: number;
   /** The quiet threshold (and the run clock's grace): run-done's grace, idle-hours' N. */
   readonly quietMs: number;
+  /** D-8791 (review 2887 F2): `$REG/mail-disabled` as the lane's listing read it. The run clock's waiting case holds
+   *  `mail-disabled` unless it reads `clear`: that sleep is told to the run's coordinator, and while mail cannot be sent
+   *  it does not happen. Read by no other case. Absent: not read, as `clear` (a lane with no waiting case). */
+  readonly mailDisabled?: MarkerState;
 }
 
 export type SleepVerdict<W extends string> =
@@ -149,6 +168,9 @@ export type SleepVerdict<W extends string> =
     readonly runId: number | null;
     /** The exact `.hold` text a workspace hold passed with. */
     readonly holdOk?: string;
+    /** D-8790: the run clock read the run as waiting (`waitingStates`), and `since` is when the
+     *  marker's quiet began (its newest stamp). Absent for every other answer. */
+    readonly waiting?: { readonly since: number };
   }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: W };
@@ -186,18 +208,23 @@ export function decideSleep<W extends string>(i: SleepInput, policy: SleepPolicy
   if (!s.ok) return hold('runs-unreadable');
   let runId: number | null = null;
   let parked = false;
+  let waiting = false;
   if (policy.runClock.kind === SLEEP_RUN_CLOCKS.runClose) {
     if (s.last === null) return hold('no-run');
     runId = s.last.runId;
     // D-6092 (F5 (b)): finished is terminal and closed, or parked — whose clock is the marker's quiet alone (below).
     parked = policy.runClock.parkedStates.includes(s.last.state);
-    if (!parked) {
+    // D-8790: or waiting — the run still works, its worker does not; the same clock as parked.
+    waiting = !parked && policy.runClock.waitingStates.includes(s.last.state);
+    if (waiting && (i.mailDisabled ?? 'clear') !== 'clear') return hold(MAIL_DISABLED_MARKER);
+    if (!parked && !waiting) {
       if (!(TERMINAL_RUN_STATES as readonly string[]).includes(s.last.state)) return hold('not-done');
       if (s.last.closedAt === null) return hold('close-unplaced');
       if (i.now - s.last.closedAt < i.quietMs) return hold('grace');
     }
   }
-  if (s.openWorker) return hold('run-worker');
+  // A waiting worker's own run is active, so only a SECOND active run holds it (D-8790).
+  if (waiting ? s.otherOpenWorker : s.openWorker) return hold('run-worker');
   if (s.openClaimant) return hold('run-claimant');
   if (s.claim) return hold('claim');
   if (s.mail) return hold('mail');
@@ -220,10 +247,13 @@ export function decideSleep<W extends string>(i: SleepInput, policy: SleepPolicy
   if (m.crons !== 0) return hold('scheduled');
   const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
   if (stamps.length === 0) return hold('recent');
-  const idleMs = i.now - Math.max(...stamps);
+  const since = Math.max(...stamps);
+  const idleMs = i.now - since;
   // sibling-parked-run-takes-parked-clock: an older parked run beside a newer done one keeps the parked clock.
-  const threshold = policy.quiet.parkedMs !== null && (parked || s.parkedWorker) ? policy.quiet.parkedMs : i.quietMs;
+  const threshold = policy.quiet.parkedMs !== null && (parked || waiting || s.parkedWorker) ? policy.quiet.parkedMs : i.quietMs;
   const recent = policy.quiet.boundary === SLEEP_QUIET_BOUNDARIES.atMost ? idleMs <= threshold : idleMs < threshold;
   if (recent) return hold('recent');
-  return r.held === null ? { act: 'hibernate', idleMs, runId } : { act: 'hibernate', idleMs, runId, holdOk: r.held };
+  return {
+    act: 'hibernate', idleMs, runId, ...(r.held === null ? {} : { holdOk: r.held }), ...(waiting ? { waiting: { since } } : {}),
+  };
 }

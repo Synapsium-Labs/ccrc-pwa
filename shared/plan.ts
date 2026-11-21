@@ -25,7 +25,9 @@ export type PlanEndOutcome = (typeof PLAN_END_OUTCOMES)[number];
 /** What a Linear binding binds a plan object to. */
 export const BINDING_KINDS = ['programme', 'epic', 'checkpoint', 'ticket'] as const;
 export type BindingKind = (typeof BINDING_KINDS)[number];
-export const BINDING_STATES = ['pending', 'bound', 'failed'] as const;
+/** `retired` (review 2892 F5, design §4.2, §10.3 step 5): a binding the migration set aside with its put-back ticket, kept as a
+ *  row (nothing is deleted) and holding its issue for no reader, so the issue reaches the team's Linear owner as inbound. */
+export const BINDING_STATES = ['pending', 'bound', 'failed', 'retired'] as const;
 export type BindingState = (typeof BINDING_STATES)[number];
 export const MIGRATION_STATES = ['proposing', 'proposed', 'approved', 'applying', 'applied', 'put-back', 'failed'] as const;
 export type MigrationState = (typeof MIGRATION_STATES)[number];
@@ -37,8 +39,11 @@ export type InboundState = (typeof INBOUND_STATES)[number];
  *  team's Upkeep epic, close it with a reason, or raise it to the operator. */
 export const TRIAGE_DECISIONS = ['hand', 'upkeep', 'close', 'raise'] as const;
 export type TriageDecision = (typeof TRIAGE_DECISIONS)[number];
-/** A project's place in the per-team migration, as its row in the console says it. */
-export const HIERARCHY_STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back'] as const;
+/** A project's place in the per-team migration, as its row in the console says it. `unmeasured` is a row that cannot be measured
+ *  (D-8808): an unpinned row whose routing cannot be read (no listing, or an unreadable slot that could hold its key), a pinned
+ *  row outranked by such a row, or a pinned row whose own workspace cannot be measured (its slot unreadable, or no listing).
+ *  Never "not-migrated", and no Reshape for it. */
+export const HIERARCHY_STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back', 'unmeasured'] as const;
 export type HierarchyState = (typeof HIERARCHY_STATES)[number];
 /** What a phase reference names: a whole epic or one ticket (programme work map, WM0, D14). */
 export const PHASE_REF_KINDS = ['epic', 'ticket'] as const;
@@ -88,9 +93,9 @@ export type PlanRefusal = (typeof PLAN_REFUSALS)[number];
 let planKebab: ReadonlySet<string> | null = null;
 export const isPlanKebab = (tok: string): boolean => (planKebab ??= new Set<string>([
   LINEAR_SYNC_PROGRAMME, ...PLAN_REFUSALS, ...EPIC_STATES, ...CHECKPOINT_KINDS, ...CHECKPOINT_STATES, ...TICKET_KINDS,
-  ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES,
+  ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES, ...MIGRATION_WAITING_WHY, MIGRATION_PLAN_BY,
   ...HIERARCHY_STATES, ...INBOUND_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
-  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, WORK_READ_FAILED,
+  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, WORK_READ_FAILED, ...MAP_CLASSES,
 ])).has(tok);
 
 // ── Wire types ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -283,7 +288,8 @@ export interface WorkMapView {
 export type WorkAnswer = WorkMapView | { unreadable: WorkUnreadable };
 export interface HierarchyProjectRow {
   project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null;
-  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string; ifUnnamed?: { id: string | null; live: boolean } };
+  /** `unmeasured` distinguishes unknown team ownership from a measured lack of an owner; absent on older servers. */
+  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; unmeasured?: true; project?: string; ifUnnamed?: { id: string | null; live: boolean } };
   ownsTeam: boolean; state: HierarchyState; stateAt: number | null; itemId: number | null; inboundWaiting: number;
 }
 export interface HierarchyAnswer {
@@ -297,6 +303,51 @@ export interface MapEntry {
   issue: string;
   identifier: string;
   class: MapClass;
-  target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind };
+  /** `pr` and `reason` are a `finished` entry's evidence (review 2892 F7, design §10.3; D-8801): the merged pull request as
+   *  `<owner>/<repo>#<number>`, or, when there is none, one line saying why. */
+  target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind; pr?: string; reason?: string };
 }
+/** The `planBy` of the plan rows a migration's map declares for a programme with no plan of its own (D-8186): told apart from a
+ *  coordinator's own declaration by the apply (the map's rule judged again) and by put back (review 2892 F1). */
+export const MIGRATION_PLAN_BY = 'ccrc-migration';
+/** Why a listed issue still waits in a migration's report (review 2892 F3): its live programme's wave boundary, or the Linear
+ *  object it is placed under (its epic's project, or the project's Upkeep epic) not created yet; and for a replaced level, a
+ *  ticket under it still to be placed or whose write has not settled yet, so its close can relate to the first one placed; a
+ *  level with none placed (each skipped, or taken by the Linear owner) closes with no relation (review 2918 F2, review 2955 A3). */
+export const MIGRATION_WAITING_WHY = ['live-programme', 'epic-not-in-linear', 'upkeep-not-in-linear', 'placed-ticket-not-applied'] as const;
+export type MigrationWaitingWhy = (typeof MIGRATION_WAITING_WHY)[number];
 export interface MapCounts { created: number; moved: number; closed: number; left: number; skipped: number }
+/** An open issue as the map's draft read it (design §10.3): its state TYPE, its team KEY, the ids of its project, parent
+ *  and milestone, and its title and description. Linear text: read only under `untrusted`. */
+export interface IssueSnapshot {
+  state: string; team: string; project: string | null; parent: string | null; milestone: string | null; title: string; description: string;
+}
+/** A team's migration map (D-8186, Task 7.1): every open issue of `team` once in `entries`; `backlog` the new paused
+ *  programmes it proposes, `epics` the structure it declares for a done programme that has no plan and no live run (§10.1);
+ *  `snapshot` each listed issue as read when the map was stored, by its UUID (the server fills it, never the owner). */
+export interface MapBody {
+  team: string;
+  backlog?: { slug: string; title: string; epics: PlanEpicBody[] }[];
+  epics?: { programme: string; epics: PlanEpicBody[] }[];
+  entries: MapEntry[];
+  snapshot: Record<string, IssueSnapshot>;
+}
+/** One programme's epics and checkpoints as a map item shows them (§11.3; D-8737's handover): those the map declares, and for a
+ *  programme it places issues into, those its plan holds. `backlog` marks a programme the map proposes (created `paused`). */
+export interface MigrationStructure {
+  programme: string; title: string | null; backlog: boolean; declared: boolean;
+  epics: { key: string; title: string; checkpoints: { key: string; title: string }[] }[];
+}
+/** `GET /api/migrations/:id` (D-8186): a migration's map or report, for its item's body. `counts` are the map's before the apply
+ *  and the report's after it; `report` lists what the move rows do not (skipped as changed, waiting, and after put back the issues
+ *  moved since and the milestones left under their canceled project). Every title and identifier is Linear text or plan text. */
+export interface MigrationView {
+  ok: true; id: number; team: string; state: MigrationState; counts: MapCounts; entries: MapEntry[]; structure: MigrationStructure[];
+  report: {
+    skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[]; waitingWhy?: Record<string, MigrationWaitingWhy>;
+    /** The replaced levels closed with no relation, as no ticket was placed under them (review 2918 F2). */
+    unrelated?: string[];
+    /** The issues a live binding holds, taken by the team's Linear owner through inbound, which leave the migration (review 2955 F2, A1). */
+    taken?: string[];
+  } | null;
+}

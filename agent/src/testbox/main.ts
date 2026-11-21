@@ -14,8 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { isReleaseTag } from '../../../shared/api.js';
 import { readTestboxFrame } from '../../../shared/testbox.js';
+import { startedAsProgram } from './entry.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
-import { reflinkProbe } from './fsprobe.js';
+import { reflinkProbe, reflinkProbeDir } from './fsprobe.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from './hello.js';
 import { gitEnv, mirrorOps, realGit, runTreeFiles } from './mirror.js';
 import { pristineSettings } from './pristine.js';
@@ -187,7 +188,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
   const settings = { ...cfg, get toolsBin(): string { return tools.bin(); } };
   const svc = new TestboxService({
     settings, rows: readRepoRows(cfg.repos), sys,
-    probe: () => reflinkProbe(cfg.root, short), mirror: mirrorOps(git),
+    probe: () => reflinkProbe(reflinkProbeDir(cfg.root), short), mirror: mirrorOps(git),
     // TB6 (spec §2.10): `<tools>/current/chrome` resolved when each prepare starts, so the next prepare picks the new set.
     now: () => Date.now(), get chrome(): string { return tools.chrome(); }, release: facts.release, serviceVersion: facts.serviceVersion,
     // TB6: the box's measured tool versions are the current set's.
@@ -252,7 +253,7 @@ async function main(): Promise<void> {
   }
 }
 
-const invoked = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const invoked = startedAsProgram(process.argv[1], import.meta.url);
 if (invoked) {
   process.on('unhandledRejection', (reason) => { console.error('ccrc-testbox: unhandled rejection (ignored):', reason); });
   main().catch((e: unknown) => {

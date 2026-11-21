@@ -128,7 +128,8 @@ const DOORS: Door[] = [
 describe('the six doors and the table agree (a door this file does not drive would be a gap)', () => {
   it('every overlord row is one of the six doors driven here, card-record being the card door\'s second page', () => {
     const rows = Object.entries(OVERLORD_DOORS).filter(([, r]) => r.group === 'overlord').map(([k]) => k);
-    expect(rows.sort()).toEqual([...DOORS.map((d) => d.key), 'card-record'].sort());
+    // D-8809: `link-team` (POST /api/linking/confirm) is driven through the real gate in `linking-overlord-confirm.test.ts`.
+    expect(rows.sort()).toEqual([...DOORS.map((d) => d.key), 'card-record', 'link-team'].sort());
   });
 });
 

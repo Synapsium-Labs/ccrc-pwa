@@ -22,13 +22,15 @@ import { parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { readHookStateRawMeasured, type HookStateRawRead } from './hookstate.js';
+import { orderHelperHook, type HelperHookReading } from './workflows/model.js';
 
 /** How old a published pane or hookstate may be and still be the reading, counted from when the watcher's capture or
  *  read RETURNED (`doneAt`, `at`): counted from its start, a capture the remote tmux timeout (10 s) ended would always
  *  arrive stale, and the feed would capture again exactly when the link is slow. The watcher publishes every tick
  *  (2 s); past this the watcher is not publishing for this session (not registered yet, a stalled tick) and the feed
- *  looks itself. */
-const PUBLISHED_FRESH_MS = 10_000;
+ *  looks itself. It is also the most a reading's hook read can lag the last one, which bounds the helper roster's order
+ *  (`model.ts#orderHelperHook`, session helpers H1c, D-8873). */
+export const PUBLISHED_FRESH_MS = 10_000;
 /** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
  *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
 export const FAILED_CAPTURES_CLEAR = 3;
@@ -61,6 +63,9 @@ export interface FeedReading {
   readonly dialog: DialogReading;
   readonly tasks: FeedTasks | null;
   readonly hook: HookStateRawRead | null;
+  /** The helper decision's ordered roster read (D-8862): its `at` is when the watcher or fallback read returned.
+   *  The hook ask and other consumers use `hook` above, without the roster's order guard. */
+  readonly helperHook: HelperHookReading | null;
   readonly mail: FeedMail | null;
 }
 
@@ -93,6 +98,8 @@ export class SessionFeed {
   /** The watcher's latest look at the pane and read of the hookstate, as published. */
   private pane: PaneReading | null = null;
   private hookPub: HookReading | null = null;
+  /** The last ordered helper roster read, shared by this feed's subscribers (reviews 2961 F7 and 3014 F3). */
+  private lastHelperHook: HelperHookReading | null = null;
   /** When the last answer was handled: a pane captured before it is older than what the client was told. */
   private answeredAt = 0;
   private inflight: Promise<FeedReading> | null = null;
@@ -202,8 +209,9 @@ export class SessionFeed {
     const { io } = this.deps;
     const tasks = facts === null ? null : await readTasks(io, facts.cfgDir, facts.uuid, { touchedAt: true });
     const hook = facts === null ? null : await this.hookRead(facts.uuid, startedAt);
+    const helperHook = hook === null ? null : (this.lastHelperHook = orderHelperHook(this.lastHelperHook, hook, PUBLISHED_FRESH_MS));
     const mail = facts === null || !this.deps.coord ? null : this.deps.coord.outstandingMailFor(this.id, MAIL_LIMIT);
-    return { startedAt, gen, dialog, tasks, hook, mail };
+    return { startedAt, gen, dialog, tasks, hook: hook?.raw ?? null, helperHook, mail };
   }
 
   /** The pane as the watcher published it, when that is fresh and was captured after the last answer; otherwise a
@@ -219,11 +227,13 @@ export class SessionFeed {
     return { pane: await this.deps.tmux.capture(this.id), counted: false };
   }
 
-  /** The raw hookstate as the watcher published it for this identity, when fresh; otherwise our own read. */
-  private async hookRead(uuid: string, now: number): Promise<HookStateRawRead> {
+  /** The raw hookstate as the watcher published it for this identity, when fresh; otherwise our own read, stamped when it
+   *  returned. */
+  private async hookRead(uuid: string, now: number): Promise<HookReading> {
     const h = this.hookPub;
-    if (h !== null && h.uuid === uuid && now - h.at <= PUBLISHED_FRESH_MS) return h.raw;
-    return readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
+    if (h !== null && h.uuid === uuid && now - h.at <= PUBLISHED_FRESH_MS) return h;
+    const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
+    return { at: Date.now(), uuid, raw };
   }
 
   /** Read what menu `pane` (null: the capture failed) holds, enriched from the transcript `file` while the menu is

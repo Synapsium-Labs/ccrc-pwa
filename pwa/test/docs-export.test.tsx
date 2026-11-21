@@ -160,7 +160,7 @@ function leafAt(url: string): Leaf {
 function provenanceAt(tree: DocsTreeOk, url: string, show: DocsShowOk | null = null): ExportProvenance {
   const page = leafAt(url);
   const pin = pinFor(tree, page);
-  if (pin === null) throw new Error(`fixture: ${url} opens nothing`);
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error(`fixture: ${url} opens nothing`);
   return exportProvenance({ tree, page, pin, show, exportedAt: NOW, readAt: NOW - 1000, plainView: true });
 }
 
@@ -503,7 +503,7 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     const url = '/docs/demo/specs/a.md?ref=main';
     const page = leafAt(url);
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
     const provenance = exportProvenance({ tree, page, pin, show: null, exportedAt: NOW, readAt: NOW, plainView: true });
     const { doc, text } = await built(inputOf(treeBody(HOSTILE, tree, url), { provenance, title: HOSTILE_H1 }), WIDE);
     for (const tag of ['script', 'iframe', 'object', 'embed', 'base', 'form', 'button', 'svg', 'link']) {
@@ -782,14 +782,15 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     const page = leafAt(url);
     const pin = pinFor(tree, page);
     const xPin = pinFor(tree, leafAt('/docs/demo/specs/x.png?ref=main'));
-    if (pin === null || xPin === null) throw new Error('fixture');
+    if (pin === null || xPin === null || (pin.kind === 'draft' && pin.fp === null)
+      || (xPin.kind === 'draft' && xPin.fp === null)) throw new Error('fixture');
     expect(xPin.kind).toBe('draft');
     const provenance = exportProvenance({ tree, page, pin, show: null, exportedAt: NOW, readAt: NOW, plainView: true });
     const assets = createExportAssets();
     const raster = { s: 'loaded', asset: { kind: 'raster', bytes: PNG, mime: 'image/png' } } as const;
     assets.track(docsApi.file('demo', xPin)).report(raster);
     const yPin = pinFor(tree, leafAt('/docs/demo/specs/y.png?ref=main'));
-    if (yPin === null) throw new Error('fixture');
+    if (yPin === null || (yPin.kind === 'draft' && yPin.fp === null)) throw new Error('fixture');
     assets.track(docsApi.file('demo', yPin)).report(raster);
     const { doc } = await built(inputOf(treeBody('![x](x.png) ![y](y.png)\n', tree, url), { provenance, assets }), WIDE);
     expect(doc.querySelectorAll('article img')).toHaveLength(2);
@@ -883,7 +884,7 @@ async function mockupRequest(html: string, files: MockupFiles = {}, o: MockupOpt
   const tree = treeOk({ entries, drafts: holder() });
   const page = leafAt(o.draftPage === true ? '/docs/demo/specs/m.html?ref=main' : '/docs/demo/specs/m.html');
   const pin = pinFor(tree, page);
-  if (pin === null) throw new Error('fixture');
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
   const plan = planMockupAssets(extractMockupRefs(parsed.doc, 'specs/m.html').refs, { project: 'demo', pin, tree });
   const reader: MockupAssetReader = {
     read: async (p) => {
@@ -1270,7 +1271,7 @@ describe('exportStateFor for a mockup, class html (spec 4.17 "When it is offered
   const assets = { plan: {} as never, settled: Promise.resolve<MockupLoadEnd>({ s: 'ended' }), now: (): never => { throw new Error('not read here'); } };
   const page = leafAt('/docs/demo/specs/m.html');
   const pin = pinFor(tree, page);
-  if (pin === null) throw new Error('fixture');
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
   const file = (over: Partial<FileSlot> = {}): FileSlot =>
     ({ s: 'ok', pin, answer: { ...fileResponse(HTML), contentClass: 'html' }, receivedAt: 0, ...over }) as FileSlot;
   const state = (body: ExportBody | null, p = page, t = tree, f: FileSlot = file()) =>
@@ -1313,7 +1314,7 @@ describe('exportStateFor for a mockup, class html (spec 4.17 "When it is offered
     expect(state(mockup, page, moved)).toMatchObject({ s: 'updating', to: COMMIT_B });
     const version = leafAt(`/docs/demo/specs/m.html?at=${COMMIT_B}`);
     const versionPin = pinFor(tree, version);
-    if (versionPin === null) throw new Error('fixture');
+    if (versionPin === null || (versionPin.kind === 'draft' && versionPin.fp === null)) throw new Error('fixture');
     expect(state(mockup, version, tree, file({ pin: versionPin }))).toMatchObject({ s: 'ready', source: { kind: 'mockup', pin: { commit: COMMIT_B } } });
     expect(state(mockup, version)).toMatchObject({ s: 'updating' });
   });

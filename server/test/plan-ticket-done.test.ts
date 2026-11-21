@@ -70,15 +70,16 @@ const landPr = (c: CoordStore, pr: number, project = 'project-a'): void => {
 /** A work run of prog-a in `wave` that carried pull request `pr`: pinned at merging, landed on project-a's line, then
  *  closed done. The landing entry names this run. With no `ticket` named its own ticket is the auto ticket `run-<id>`;
  *  with `close: false` it stays at merging, holding its ticket (review 2712 F1). */
-const landedRun = async (x: CharWorld, pr: number, wave = 1, o: { ticket?: string; close?: boolean } = {}): Promise<number> => {
-  const r = await openRun(x, { ...BASE, wave, ...(o.ticket === undefined ? {} : { ticket: o.ticket }) });
+const landedRun = async (x: CharWorld, pr: number, wave = 1, o: { ticket?: string; close?: boolean; project?: string } = {}): Promise<number> => {
+  const project = o.project ?? 'project-a';
+  const r = await openRun(x, { ...BASE, project, wave, ...(o.ticket === undefined ? {} : { ticket: o.ticket }) });
   expect(r.statusCode, r.body).toBe(200);
   const id = idOf(r);
-  x.coord.setSession(id, `project-a-ws${pr}`);
+  x.coord.setSession(id, `${project}-ws${pr}`);
   step(x.coord, id, 'dispatched', 'working', 'awaiting-review');
   const pin = x.coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: { kind: 'pin', head: HEAD, pr, mode: 'off', handoffCommit: HC } });
   if (!pin.ok) throw new Error('fixture pin refused');
-  const land = x.coord.advanceLanding({ kind: 'land', project: 'project-a', pr, by: 'reader', at: 5000, outcome: MERGED, expect: null });
+  const land = x.coord.advanceLanding({ kind: 'land', project, pr, by: 'reader', at: 5000, outcome: MERGED, expect: null });
   if (!land.ok) throw new Error('fixture land refused');
   if (o.close !== false) step(x.coord, id, 'closing', 'done');
   return id;
@@ -264,6 +265,24 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     step(x.coord, r, 'closing', 'done');
     expect(factsOf(x, 'w0-t1')!.evidence).toEqual({ runId: r });
     expect(factsOf(x, 'w0-t2')!.evidence).toBeNull();
+  });
+
+  // Review 2740 F1: a `{ runId }` reads the landing line of each project whose ticket stores a `{ pr }`, so a run of another
+  // project that landed that pull request is seen. Reading the ticket's own project's line alone would miss it.
+  it('a run of project-b and the pull request it landed close one ticket across projects: T4 of project-b stores { pr: N }, T2 of project-a with { runId: R } is refused (review 2740 F1)', async () => {
+    const x = await world([], true);
+    await planVerb(x, 'prog-a', '', { home: 'project-a', epics: [
+      { key: 'ea', title: 'A', summary: 'a', waves: [1], checkpoints: [], tickets: [{ key: 'ta1', kind: 'work', title: 'ta1' }, { key: 'ta2', kind: 'work', title: 'ta2' }] },
+      { key: 'eb', title: 'B', summary: 'b', project: 'project-b', waves: [2], checkpoints: [], tickets: [{ key: 'tb3', kind: 'work', title: 'tb3' }, { key: 'tb4', kind: 'work', title: 'tb4' }] },
+    ] });
+    expect(ticketIn(await show(x), 'tb4')).toMatchObject({ project: 'project-b' });
+    const r = await landedRun(x, 12, 2, { project: 'project-b' });
+    expect((await done(x, { ticket: 'tb4', evidence: { pr: 12 } })).statusCode).toBe(200);
+    expect(factsOf(x, 'tb4')!.evidence).toEqual({ pr: 12 });
+    const byRun = await done(x, { ticket: 'ta2', evidence: { runId: r } });
+    expect(refusal(byRun)).toEqual([409, 'evidence-unverified']);
+    expect((byRun.json() as { detail: string }).detail).toContain('tb4');
+    expect(factsOf(x, 'ta2')!.evidence).toBeNull();
   });
 
   it('refuses evidence while another ticket stores evidence that cannot be read (review 2712 F3)', async () => {

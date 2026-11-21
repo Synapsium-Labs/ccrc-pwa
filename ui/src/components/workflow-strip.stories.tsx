@@ -1,55 +1,75 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import type { WorkflowView } from '../../../shared/workflows';
-import { WorkflowStrip } from './workflow-strip';
+import { AGENT_HELPER_STATE_WORDS, HELPER_CUT_NOTE, HELPER_FOLD_LABEL, type AgentHelperView, type WorkflowView } from '../../../shared/workflows';
+import { HelpersStrip, type HelperItem, type HelpersView } from './workflow-strip';
 
-const agents = (n: number, phase: string, done: number, failed = 0): WorkflowView['agents'] =>
-  Array.from({ length: n }, (_, i) => ({
-    label: `${phase.toLowerCase()}-${i + 1}`,
-    phase,
-    state: i < done ? 'done' : i < done + failed ? 'failed' : 'running',
-  }));
-
-const START = Date.parse('2026-01-01T00:00:00Z');
-
-const RUNNING: WorkflowView = {
-  id: 'wf_00000000-aaa', name: 'example-flow', state: 'running', done: 19, failed: 0, total: 20,
-  phase: 'Review', phases: ['Build', 'Review', 'Land'], startedAt: START, endedAt: null,
-  tokens: 2_500_000, tokensUnmeasured: 0, agents: [...agents(16, 'Build', 16), ...agents(4, 'Review', 3)], agentsOmitted: 0,
+// Session helpers H2 (D-8872): the Helpers section, which replaced the workflow strip in place. Its head words and lists
+// come from the PWA's words module; these stories hand them in as it would. Invented data, neutral names.
+const NOW = Date.now();
+const agent = (id: string, o: Partial<AgentHelperView> = {}): HelperItem => {
+  const view: AgentHelperView = {
+    id, description: `Measure the ${id} sources`, agentType: 'general-purpose', model: 'Sonnet', effort: 'high', state: 'running',
+    startedAt: NOW - 725_000, endedAt: null, lastActivityAt: NOW - 20_000, tokens: 41_000, summary: null, hasReport: false, ...o,
+  };
+  return { kind: 'agent', id, agent: view, stateWord: AGENT_HELPER_STATE_WORDS[view.state] };
 };
-const FAILING: WorkflowView = {
-  id: 'wf_00000000-bbb', name: 'second-flow', state: 'running', done: 2, failed: 1, total: 7,
-  phase: 'Verify', phases: null, startedAt: START, endedAt: null, tokens: 412_300, tokensUnmeasured: 2,
-  agents: [...agents(3, 'Measure', 2, 1), ...agents(4, 'Verify', 0)], agentsOmitted: 0,
-};
-const FINISHED: WorkflowView = {
-  ...RUNNING, id: 'wf_00000000-ccc', name: 'third-flow', state: 'completed', done: 6, total: 6,
-  endedAt: START + 300_000, tokens: 98_000, agents: agents(6, 'Build', 6), phases: ['Build'],
+const WORDS = { cutNote: HELPER_CUT_NOTE, foldLabel: HELPER_FOLD_LABEL };
+const workflow = (id: string, o: Partial<WorkflowView> = {}): HelperItem => ({
+  kind: 'workflow', id,
+  workflow: {
+    id, name: 'review-panel', state: 'running', done: 7, failed: 0, total: 12, phase: 'Verify', phases: ['Build', 'Verify'],
+    startedAt: NOW - 362_000, endedAt: null, tokens: 2_500_000, tokensUnmeasured: 0,
+    agents: [{ label: 'build', phase: 'Build', state: 'done' }, { label: 'verify-1', phase: 'Verify', state: 'running' }],
+    agentsOmitted: 0, lastActivityAt: NOW - 4_000, ...o,
+  },
+});
+
+const RUNNING: HelpersView = {
+  count: '3 running · 2 finished', notes: [], ...WORDS,
+  main: [agent('server'), agent('transcript', { lastActivityAt: NOW - 11 * 60_000, tokens: 63_000 }), workflow('wf_00000000-aaa')],
+  finished: [
+    agent('panel', { state: 'done', startedAt: NOW - 400_000, endedAt: NOW - 148_000, summary: 'header facts only', hasReport: true }),
+    agent('mockup', { state: 'failed', startedAt: NOW - 200_000, endedAt: NOW - 137_000, summary: 'headless browser not found' }),
+  ],
 };
 
 const meta = {
-  title: 'Components/WorkflowStrip',
-  component: WorkflowStrip,
-  args: { workflows: [RUNNING] },
-} satisfies Meta<typeof WorkflowStrip>;
+  title: 'Components/HelpersStrip',
+  component: HelpersStrip,
+  args: {
+    view: RUNNING,
+    reports: { panel: { report: 'one\ntwo\nthree\nfour\nfive\nsix', cut: false } },
+    onReport: () => undefined,
+  },
+} satisfies Meta<typeof HelpersStrip>;
 export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-/** One running workflow, collapsed. CHECK the line reads like Claude Code's
- *  own row — name, the bar, `19/20 · <elapsed> · ↓ 2.5m tokens` — and that the
- *  head is a sentence, not a count. */
+/** Two subagents and a workflow running, two finished. CHECK the head says each count once; collapsed, line 1 of the first
+ *  two running rows with `running` kept visible; open, the finished fold closed by default, and the done row opening to the
+ *  first four lines of its report, then Show all and Copy. */
 export const Running: Story = {};
 
-/** Two running and one finished inside its 30 s. CHECK the failed agent turns
- *  the second bar amber and adds `· 1 failed`, the `+` on a token floor, and
- *  the finished row's last word `· done`. Open it: phases in script order, the
- *  current one marked `now`, done agents folded. */
-export const Several: Story = { args: { workflows: [RUNNING, FAILING, FINISHED] } };
-
-/** The source could not be read. CHECK it says so — no `0/0`, no `0 tokens`. */
-export const Unreadable: Story = {
+/** A stale roster, said once in the head; the rows carry no state and draw the neutral glyph, never the running one. */
+export const Stale: Story = {
   args: {
-    workflows: [{ ...FAILING, name: null, done: null, failed: null, total: null, tokens: null, startedAt: null, agents: [] }],
-    unreadable: true,
+    view: {
+      count: '2 helpers', notes: ['live state not known: no news from the session for 41m'], ...WORDS,
+      main: [agent('fixtures', { state: 'unmeasured' }), agent('release note', { state: 'unmeasured' })], finished: [],
+    },
+  },
+};
+
+/** A fresh roster with a no-longer-listed row in the main list, and stopped and finished rows in the fold. */
+export const States: Story = {
+  args: {
+    view: {
+      count: '1 running · 2 finished', notes: [], ...WORDS,
+      main: [agent('fixtures', { agentType: 'Explore', model: 'Haiku', effort: null }), agent('release note', { state: 'unlisted', lastActivityAt: NOW - 180_000 })],
+      finished: [
+        agent('migration order', { state: 'stopped', startedAt: NOW - 30_000, endedAt: NOW - 8_000 }),
+        agent('failing suites', { state: 'finished', startedAt: NOW - 400_000, endedAt: NOW - 40_000 }),
+      ],
+    },
   },
 };

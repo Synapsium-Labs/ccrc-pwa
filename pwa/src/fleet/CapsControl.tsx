@@ -36,6 +36,7 @@ import type { ReactNode } from 'react';
 import { Button, ControlRow, CONTROL_ROW_NOTE } from '@ccrc/ui';
 import type { CoordCaps, CoordCapsView } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
+import { capsUsageWords } from './capsWords';
 import './fleet.css';
 
 /** What the operator has typed but not yet saved, per field. `null` means
@@ -162,7 +163,7 @@ export function CapsControl({
   };
 
   const field = (
-    label: string, id: string, value: string, used: number, cap: number,
+    label: string, id: string, value: string, usage: string,
     onChange: (v: string) => void,
   ): ReactNode => (
     <span className="caps-field">
@@ -172,8 +173,9 @@ export function CapsControl({
         value={value} disabled={busy} onChange={(e) => onChange(e.target.value)}
       />
       {/* Usage against the cap, as one reading — the number an operator acts
-          on is the pair, never either half alone. */}
-      <span className="caps-usage">{used} / {cap}</span>
+          on is the pair, never either half alone. With the server's waiting
+          count (D-8792) it also says how many wait, in `capsUsageWords`. */}
+      <span className="caps-usage">{usage}</span>
     </span>
   );
 
@@ -181,7 +183,7 @@ export function CapsControl({
     <ControlRow className="caps-control" role="group" aria-label="coordination caps">
       {field('workers', 'caps-workers',
         draft.workers ?? String(view.caps.maxConcurrentWorkers),
-        view.usage.running, view.caps.maxConcurrentWorkers,
+        capsUsageWords(view.usage, view.caps.maxConcurrentWorkers),
         (v) => setDraft((d) => ({ ...d, workers: v })))}
       <Button
         variant="quiet"

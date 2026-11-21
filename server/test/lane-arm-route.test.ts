@@ -135,6 +135,12 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
       lane: 'launch-profile', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }, {
       lane: 'anchor-slot', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }, {
+      lane: 'approval-park', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }, {
+      lane: 'working-idle-sleep', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }, {
+      lane: 'cap-counts-working', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }], quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] } } });
   });
 
@@ -201,10 +207,19 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(confirmed.statusCode).toBe(200);
     expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'live' });
     expect((await post(app, { lane: 'continuity', choice: 'shadow' })).statusCode).toBe(200);
-    // The gate mechanism stays for a row that needs one; today no row has one.
-    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot'] as const) expect(laneArmGate(lane)).toBeNull();
+    // The gate mechanism stays for a row that needs one; approvals PR 3's park row has one until PR 3v.
+    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot', 'working-idle-sleep', 'cap-counts-working'] as const) expect(laneArmGate(lane)).toBeNull();
+    expect(laneArmGate('approval-park')).not.toBeNull();
     expect(LANE_ARM_REFUSALS).toContain('lane-gated');
     expect(REFUSAL_STATUS['lane-gated']).toBe(409);
+  });
+
+  it('approvals PR 3: Live on the park row is refused lane-gated while its gate stands, and nothing is written', async () => {
+    const { app, coord } = await setup();
+    const res = await post(app, { lane: 'approval-park', choice: 'live' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'lane-gated' });
+    expect(coord.laneArmSetting('approval-park')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
   });
 
   it('a Live stored on the continuity row reads live in the view, as the roster card\'s does; a gate, where one stands, keeps a stored Live shadow (review 2006 N1)', async () => {
@@ -315,11 +330,13 @@ describe('arming a W1a lane waits for the quiz baseline (W0-28)', () => {
     }
   });
 
-  it('a lane that is not a W1a row (roster-card) is unaffected', () => {
-    expect(W1A_ARM_ROWS).not.toContain('roster-card');
-    for (const b of [MISSING, { ok: false, detail: 'x' } as const]) {
-      expect(decide('roster-card', 'live', b)).toMatchObject({ kind: 'confirm' });
-      expect(decide('roster-card', 'live', b, 'roster-card:shadow:0')).toEqual({ kind: 'write', lane: 'roster-card', choice: 'live' });
+  it('a lane that is not a W1a row (roster-card, working-idle-sleep, cap-counts-working) is unaffected', () => {
+    for (const lane of ['roster-card', 'working-idle-sleep', 'cap-counts-working'] as const) {
+      expect(W1A_ARM_ROWS).not.toContain(lane);
+      for (const b of [MISSING, { ok: false, detail: 'x' } as const]) {
+        expect(decide(lane, 'live', b)).toMatchObject({ kind: 'confirm' });
+        expect(decide(lane, 'live', b, `${lane}:shadow:0`)).toEqual({ kind: 'write', lane, choice: 'live' });
+      }
     }
   });
 

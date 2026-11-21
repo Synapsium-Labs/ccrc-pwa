@@ -4057,6 +4057,186 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE continuity_witness_checks (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, generationId INTEGER NOT NULL, witnessKey TEXT,
     witnessId INTEGER UNIQUE, outcome TEXT NOT NULL, why TEXT, at INTEGER NOT NULL);
   `,
+
+  // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
+  // The waiting workers' sleep (waiting workers spec 2026-11-19, Part 2; D-8790): the seed row `working-idle-sleep` =
+  // `shadow` adds the case's switch to the Shadow lanes card. Shadow, the run-done sleep lane logs a dispatched worker on a
+  // `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else, and `OR IGNORE`: a file that already carries the row (a database rolled back below this
+  // entry with its rows kept, as a test rebuilds one) keeps the stored choice and migrates, where a plain INSERT would
+  // refuse to start on the lane's primary key. An older build opening a file at this entry's version takes rule 3 (it
+  // warns, reads as-is and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`; door B1 took 110 first, so this entry moved up to
+  // 111; approvals PR 3 builds on the slots after 110 too, so whoever lands second moves up. RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  `,
+
+  // ── 112: user_version 111 -> 112 ──────────────────────────────────────────
+  // The dispatch cap counts only working workers (waiting workers spec 2026-11-19, Part 3; D-8792): the seed row
+  // `cap-counts-working` = `shadow` adds the cap's switch to the Shadow lanes card. Shadow, the cap counts every active run
+  // as before and the caps view reports how many have a worker measured waiting; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, leaves those runs out of the count. The merge arms nothing, and shadow is its off switch.
+  //
+  // `OR IGNORE`: a file that already holds the row (a replay over a database rolled back one version, as
+  // decision-model-records.test.ts does) keeps the operator's choice, and the entry is a no-op there rather than a refusal.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
+  // and migrates nothing), reads the `cap-counts-working` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`: door B1 took 110 and capacity Task 2 took 111 first, so this
+  // entry moved up to 112; approvals PR 3 builds on the slots after 111 too, so whoever lands second moves up (the
+  // coordinator's standing license). RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'shadow', 0);
+  `,
+
+  // ── 113: user_version 112 -> 113 ──────────────────────────────────────────
+  // The admission wait (D-6095, fleet-capacity W1-4): a coordinator whose dispatch, or send-back of a parked run, the
+  // concurrency cap refused is mailed when the cap has room again. `admissionWaitSince` is the OLDEST refusal and only
+  // orders the queue; `lastRefusedAt` is the newest refusal and re-arms the wake; `admissionWokenAt` is when the
+  // `admissionWake` lane last mailed for it. The writers are `CoordStore`'s `stampAdmissionWait` (the first two),
+  // `markAdmissionWoken` (the third) and `clearAdmissionWait`, which `advanceInner` calls on every state move, so a
+  // dispatched, sent-back, closed or abandoned run is never mailed.
+  //
+  // THREE NULLABLE COLUMNS, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at this `user_version`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names them, and boots. Every earlier entry is frozen.
+  // The slot is POSITIONAL: the next free one after capacity Task 3's seed (112), which this branch stacks on; door B1 took
+  // 110 and capacity Task 2 took 111 (the stack took 52, the draft 107, and this entry 111 before them); whoever lands
+  // second renumbers (the coordinator's standing license).
+  // RE-MEASURE the slot before the PR and before merge (with Task 3 landed it must print 112 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN admissionWaitSince INTEGER;
+  ALTER TABLE runs ADD COLUMN lastRefusedAt INTEGER;
+  ALTER TABLE runs ADD COLUMN admissionWokenAt INTEGER;
+  `,
+
+  // ── 114: user_version 113 -> 114 ──────────────────────────────────────────
+  // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186, D-8800), four nullable columns on
+  // `linear_migrations` (migration 95's table, which no build before this one writes): `project`, the ccrc project whose team
+  // this migration reshapes (its Linear owner proposes the map, and the console's row reads its state); `report`, what the report
+  // lists beyond the move rows, as JSON (issues skipped as changed, issues of a live programme still waiting, and after put back
+  // the issues that moved since and the milestones left under their canceled project); `putBackAskedAt`, when the operator asked
+  // for put back (the migration lane runs it, never the act); `reportDoneAt`, when the operator closed the report (the next team
+  // may start only then, §10.2). One writer, `planStore.ts#setMigration`. FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build
+  // opening a file at this `user_version` takes rule 3 and never names them. The slot is the next free one by position: the
+  // admission wait's columns (113) are the last on main, so this is 114, renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 113 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE linear_migrations ADD COLUMN project TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN report TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN putBackAskedAt INTEGER;
+  ALTER TABLE linear_migrations ADD COLUMN reportDoneAt INTEGER;
+  `,
+
+  // ── 115: user_version 114 -> 115 ──────────────────────────────────────────
+  // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
+  // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
+  // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
+  // canonical `[tool_name, cwd, tool_input]`), `fetchedAt` (the ruling read's first serve of a ruling, F8-c) and `wouldPark`
+  // (the shadow's record, 1 when a `shadow` row lapsed where a `live` one would have parked). `approval_parks`, one row per
+  // key, written only through `approvalParkStore.ts` from the questions owner: the slots its `live` rows reserve at mint
+  // (at most three), its retries, its first park and horizon (`state` `open` or `void`), a principal's ruling and its one
+  // use (`rulingUses` 0 or 1), and the coordinator's verdicts on the key (F3). The Shadow lanes card's `approval-park` row,
+  // seeded `shadow`, gated in this build until PR 3v (`lane-arm.ts`).
+  // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
+  // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
+  // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108, Overlord gates B (#3076) 109, door
+  // process B1 (#3099) 110, the waiting workers' sleep (#3101) 111, the dispatch cap's switch (#3103) 112, capacity Task 4
+  // (#3117) 113 and the per-team Linear migration (#3109) 114 first, so this is 115. RE-MEASURE the slot before merge (it
+  // must print 114 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN parkWord TEXT;
+  ALTER TABLE approvals ADD COLUMN parkKey TEXT;
+  ALTER TABLE approvals ADD COLUMN fetchedAt INTEGER;
+  ALTER TABLE approvals ADD COLUMN wouldPark INTEGER;
+  CREATE INDEX approvals_by_park_key ON approvals(parkKey) WHERE parkKey IS NOT NULL;
+  CREATE TABLE approval_parks (
+    parkKey TEXT PRIMARY KEY, childId TEXT NOT NULL, runId INTEGER NOT NULL,
+    slots INTEGER NOT NULL DEFAULT 0, retries INTEGER NOT NULL DEFAULT 0,
+    firstRowId INTEGER, parkedAt INTEGER, horizon INTEGER, state TEXT NOT NULL DEFAULT 'open',
+    rulingVerdict TEXT, rulingAuthority TEXT, rulingBy TEXT, rulingReason TEXT, rulingClass TEXT, rulingRowId INTEGER,
+    rulingAt INTEGER, rulingUses INTEGER NOT NULL DEFAULT 0,
+    coordDeclined INTEGER NOT NULL DEFAULT 0, coordDenied INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL
+  );
+  CREATE INDEX approval_parks_by_horizon ON approval_parks(horizon);
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
+  `,
+
+  // ── 116: user_version 115 -> 116 ──────────────────────────────────────────
+  // The project row names its Linear workspace and carries two linking facts (Linear hierarchy wave 8, D-8808 and D-8809,
+  // plan Tasks 8.1, 8.4 and 8.5), three columns on `project_linking`: `teamWorkspace` is the slot id (a workspace id) the
+  // row's team key resolves in, so a key two connected workspaces share never answers `team-ambiguous` for the project (NULL:
+  // none set, the key resolves as before); `teamSuggestions` holds the coordinators' suggestions; `teamCallId` names the call
+  // that recorded the Overlord's link. THREE NULLABLE COLUMNS, no default, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 and never names them. This is the next free slot by position on `main`: door B1 took 110, the
+  // waiting workers' sleep 111, the cap-counts-working seed 112, the admission wait 113, wave 7's per-team migration 114 and
+  // the approvals park (#3106) 115 first, so this entry moved up to 116; whoever lands second renumbers (the coordinator's
+  // standing license). RE-MEASURE the slot before the PR and before merge (it must print 115, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE project_linking ADD COLUMN teamWorkspace TEXT;
+  -- Task 8.4: the coordinators' suggestions, a JSON array, one element per suggesting session; NULL: none. A candidate
+  -- only: nothing in the pass or the decider reads it, and every writer that sets a key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamSuggestions TEXT;
+  -- Task 8.5 (D-8809): the call that recorded the Overlord's link (a coordinator_calls id); NULL: none. Migration 64's CHECK on
+  -- teamSource cannot widen without a table rebuild, so the Overlord's link is stored as teamSource 'auto' with this id set, and
+  -- ONE reader derives its source (linkingStore.ts's linkSourceOf). Every writer that sets or changes the key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamCallId INTEGER;
+  `,
+  // ── 117: user_version 116 -> 117 ─────────────────────────────────────────────
+  // The in-place bind (D-6096, fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave
+  // as the run's own worker, in a sibling worktree. `inPlace` is 1 for such a run and NULL for every other; its one writer
+  // is `CoordStore.bindInPlace`, and its readers decide what an in-place run does NOT do: it starts no process, so it is
+  // charged to neither cap (`dispatchedAt` stays NULL), and its close and abandon compose no `ws-*` verb on the claimant,
+  // whose workspace is the coordinator's own (`closeDecide.ts`).
+  //
+  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 117` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names it, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 116 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN inPlace INTEGER;
+  `,
+
+  // ── 118: user_version 117 -> 118 ──────────────────────────────────────────
+  // What a broker activity's end rests on (session helpers S1, D-8830; spec 2026-11-19-session-helpers-design.md §7.1,
+  // Table 9): `endBasis` is `observed`, `task-report` (an Agent's final task notification) or `backfill-unmeasured` (S2's
+  // one-time pass). NULL means `observed`: every row written before this entry, and every row the fold ends observed (it
+  // writes the basis as absence). The CHECK holds the three words and Table 9's two rules, which
+  // `delegation-end-basis.ts#endBasisDefect` mirrors for the checkpoint: a task report has an `endedAt`, a backfill has none.
+  // ONE NULLABLE COLUMN, nothing else: SQLite tests an added column's CHECK against every row, and every row is NULL here.
+  // An older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing); its
+  // reads and writes name their columns and never this one. The slot is the next free one by position on `main`
+  // (66c63606c3 holds 117; this entry took 112 at d0b7467b9 and 116 at 5041cf1733, and moved up each time other entries
+  // landed first); whoever lands second renumbers (the coordinator rules a collision at landing). RE-MEASURE the slot
+  // before merge (it must print 117, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE delegation_activities ADD COLUMN endBasis TEXT CHECK (
+    endBasis IS NULL
+    OR endBasis = 'observed'
+    OR (endBasis = 'task-report' AND endedAt IS NOT NULL)
+    OR (endBasis = 'backfill-unmeasured' AND endedAt IS NULL)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

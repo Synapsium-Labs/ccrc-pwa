@@ -60,14 +60,15 @@
 set -uo pipefail
 
 PROG="ccrc-models-probe"
-# The FLOOR of the client version the Codex catalogue endpoint is asked for.
+# The FLOOR of the client version the Codex catalogue endpoint is asked for is
+# the auth library's `CLIENT_VERSION_FLOOR` (ccd/ccgpt-auth.py), its one home
+# since usage-user-agent, because the usage poll says the same version.
 # OpenAI's backend keys what it advertises on that version, so a version set by
 # hand withholds every model a newer client may use, and falls behind at every
 # Codex release. Since D-8743 (model-class-advance wave 2, reversing the
 # registry spec's "bumped deliberately" rule under the owner's rule of
 # 2026-10-07) the arm asks as the greater of the published Codex CLI release
-# (`_codex_release_lookup_program`, below) and this constant, which is never undercut.
-CODEX_CLIENT_VERSION="0.170.0"
+# (`_codex_release_lookup_program`, below) and that floor, which is never undercut.
 # `shared/roster.ts`'s ID_RE, in bash. An account id becomes a filename here.
 ID_RE='^[a-z][a-z0-9-]{0,31}$'
 
@@ -173,7 +174,7 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 
 # ── the Codex client version (D-8743) ─────────────────────────────────────
 # The version the Codex arm asks as: the greater of the published Codex CLI
-# release and the floor above. The release is npm's registry answer for
+# release and the auth library's floor (above). The release is npm's registry answer for
 # `@openai/codex` at its `latest` dist-tag, and only its `version` is read: a
 # plain X.Y.Z of decimal numbers, nothing else (a prerelease, a build suffix, a
 # leading zero, an oversized number, an answer over CAP bytes, or an answer
@@ -192,14 +193,17 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # owner of that rule), so the version asked as is never below it whatever the
 # child answers, and the floor is asked as when the child fails or is late.
 #
-# ONE FILE FOR THE BOX, `~/.ccrc/codex-client-release.json` (0600, temp and
-# rename in its own directory): `version` and `readAt`, the last good release and
+# ONE FILE FOR THE BOX, in `~/.ccrc`, named by the auth library's
+# `CLIENT_RELEASE_NAME` (0600, temp and rename in its own directory): `version` and `readAt`, the last good release and
 # when it was read; `triedAt`, the last try, good or not; `lastError`, the last
 # failure's reason, and `failingSince`, the first try of the failures since the
-# last success (programme wave 3: doctor's `model-release-lookup` check), both
-# gone after a success. A cache file that cannot be read or
-# parsed (a deeply nested one included) is ABSENT, so the next lookup rewrites
-# it. A lookup runs only when `triedAt` is an hour old, absent or unreadable, or
+# last success (doctor's `model-release-lookup` check), both gone after a
+# success. This program is its one WRITER; its READING, here and in the usage
+# poll, is the auth library's (`read_client_release`, handed as the program's
+# third argument, with the version's grammar, `CLIENT_VERSION_RE`;
+# usage-user-agent). A cache file that cannot be read or parsed (a deeply
+# nested one included) is ABSENT, so the next lookup rewrites it. A lookup
+# runs only when `triedAt` is an hour old, absent or unreadable, or
 # stamped more than SKEW seconds ahead of this box's clock; a stamp up to SKEW
 # ahead is trusted as clock skew between writers (review A6). So lanes
 # refreshed one after another share one lookup an hour, and a failing npm is
@@ -238,11 +242,10 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # plain X.Y.Z and floor rules.
 _codex_release_lookup_program() {
   cat <<'RELEASE_PY'
-import fcntl, json, os, re, signal, subprocess, sys, tempfile, time
+import fcntl, importlib.util, json, os, signal, subprocess, sys, tempfile, time
 
-CACHE, ANSWER = sys.argv[1], sys.argv[2]
+CACHE, ANSWER, AUTH_LIB = sys.argv[1], sys.argv[2], sys.argv[3]
 URL = "https://registry.npmjs.org/@openai/codex/latest"
-PLAIN = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
 CAP = 262144         # bytes of npm's answer; the `latest` manifest is a few KiB
 HOUR = 3600          # one lookup an hour for the box
 SKEW = 60            # a try stamped up to this far ahead is clock skew; further ahead is not trusted
@@ -251,8 +254,25 @@ LATE_S = 3           # the alarm's margin past curl's bound
 LOCK_S = 15          # how long a probe waits for another's lookup
 
 
+def load_auth_library():
+    """The auth library, by the path the request program checked and loaded itself, with the two names this program
+    reads; no bytecode is written beside it. Called inside the catch-all below, so one that does not load, or lacks a
+    name, is a failed try like any other (review 2825 F2)."""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("ccgpt_auth", AUTH_LIB)
+    lib = importlib.util.module_from_spec(spec)
+    sys.modules["ccgpt_auth"] = lib
+    spec.loader.exec_module(lib)
+    for name in ("read_client_release", "CLIENT_VERSION_RE"):
+        getattr(lib, name)
+    return lib
+
+
+LIB = None  # the auth library, once the catch-all below has loaded it
+
+
 def plain(v):
-    return isinstance(v, str) and PLAIN.fullmatch(v) is not None
+    return LIB is not None and isinstance(v, str) and LIB.CLIENT_VERSION_RE.fullmatch(v) is not None
 
 
 def stamp(v):
@@ -260,17 +280,9 @@ def stamp(v):
 
 
 def read_cache():
-    """The cache as an object. Unreadable, over CAP, unparseable (a deeply nested file included) or not an object:
-    ABSENT, so the next lookup rewrites it."""
-    try:
-        with open(CACHE, "rb") as f:
-            data = f.read(CAP + 1)
-        if len(data) > CAP:
-            return {}
-        c = json.loads(data.decode("utf-8"))
-    except Exception:
-        return {}
-    return c if isinstance(c, dict) else {}
+    """The cache as an object, read by the auth library (usage-user-agent): unreadable, over its cap, unparseable (a
+    deeply nested file included) or not an object is ABSENT, so the next lookup rewrites it."""
+    return LIB.read_client_release(CACHE)
 
 
 def due(c, now):
@@ -410,10 +422,18 @@ def refresh(c):
         os.close(lock)
 
 
+c = {}
 try:
-    c = read_cache()
-    if due(c, int(time.time())):
-        c = refresh(c)
+    try:
+        LIB = load_auth_library()
+    except (Exception, SystemExit) as e:
+        # Nothing reads the cache without its reader, so the try is recorded over it, without the cached release (a
+        # library swapped between the request program's load and this one's); the request asks as the floor.
+        c = failed({}, f"the auth library could not be loaded ({type(e).__name__})")
+    else:
+        c = read_cache()
+        if due(c, int(time.time())):
+            c = refresh(c)
 except Exception as e:
     # Anything nothing above foresaw is a failed try too: recorded, and never a crash that would leave every lane
     # asking again and the box on the floor.
@@ -498,12 +518,11 @@ _fetch_codex_lane() {
     for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
     unset CCRC_CODEX_PYTHON
     export CHATGPT_TOKEN_DIR="$token_dir" LITELLM_LOCAL_MODEL_COST_MAP=True CCRC_MODELS_AUTH_LIB="$lib" \
-      CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG" \
-      CCRC_PROBE_RELEASE_LOOKUP="$TMPD/release-lookup.py" CCRC_PROBE_RELEASE_CACHE="$HOME/.ccrc/codex-client-release.json" \
+      CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG" CCRC_PROBE_RELEASE_LOOKUP="$TMPD/release-lookup.py" \
       CCRC_PROBE_RELEASE_ANSWER="${CCRC_MODELS_PROBE_RELEASE_FIXTURE:-}" CCRC_PROBE_VERSION_OUT="$TMPD/client-version"
     exec "$py" -I -
   ) > "$RAW" <<'PY'
-import os, re, subprocess, sys, traceback, urllib.request
+import os, subprocess, sys, traceback, urllib.request
 
 PROG = os.environ["CCRC_PROBE_PROG"]
 ACCOUNT = os.environ["CCRC_PROBE_ACCOUNT"]
@@ -532,7 +551,9 @@ def load_auth_library():
         lib = importlib.util.module_from_spec(spec)
         sys.modules["ccgpt_auth"] = lib
         spec.loader.exec_module(lib)
-        for name in ("read", "read_status", "expired", "bars"):
+        # The last four since usage-user-agent (review 2825 F1): an older library is this refusal, never a traceback.
+        for name in ("read", "read_status", "expired", "bars", "client_release_path", "client_version",
+                     "client_user_agent", "CLIENT_VERSION_RE"):
             getattr(lib, name)
         return lib
     except (Exception, SystemExit) as e:
@@ -580,27 +601,25 @@ if lib.expired(r):
 # D-8743: the client version this request asks as, in its URL and its user-agent. Learned only here, past every
 # refusal above (review A8), so a run that sent nothing asked npm for nothing. The lookup runs as its own program
 # (`_codex_release_lookup_program`); whatever it prints, late, failed or malformed, the version is never below the
-# floor (`CODEX_CLIENT_VERSION`), and the floor is what a failure asks as. Its stderr is discarded: this program's
-# stderr opens with its refusals' remedies. The normaliser records the version as the catalogue's `clientVersion`.
-PLAIN_VERSION = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
+# floor, and the floor is what a failure asks as. The floor, its application and the cache's path are the auth
+# library's (`client_version`, `client_release_path`; usage-user-agent), so this probe and the usage poll say one
+# version. Its stderr is discarded: this program's stderr opens with its refusals' remedies. The normaliser records
+# the version as the catalogue's `clientVersion`.
 LOOKUP_WAIT_S = 40   # the lookup's own worst case, its lock wait included, is about 30 s
 
 
 def client_version():
-    floor = os.environ["CODEX_CLIENT_VERSION"]
     v = ""
     try:
-        r = subprocess.run([sys.executable, "-I", os.environ["CCRC_PROBE_RELEASE_LOOKUP"],
-                            os.environ["CCRC_PROBE_RELEASE_CACHE"], os.environ["CCRC_PROBE_RELEASE_ANSWER"]],
+        r = subprocess.run([sys.executable, "-I", os.environ["CCRC_PROBE_RELEASE_LOOKUP"], lib.client_release_path(),
+                            os.environ["CCRC_PROBE_RELEASE_ANSWER"], AUTH_LIB],
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                            timeout=LOOKUP_WAIT_S)
         v = r.stdout.decode("ascii", "replace").strip()
     except Exception:
         pass
-    as_key = lambda x: tuple(int(n) for n in x.split("."))
-    # THE ONE PLACE the floor is applied: the lookup prints the last good release or nothing.
-    if not (PLAIN_VERSION.fullmatch(v) and PLAIN_VERSION.fullmatch(floor) and as_key(v) > as_key(floor)):
-        v = floor
+    # The lookup prints the last good release or nothing; the library applies the floor.
+    v = lib.client_version(v)
     try:
         with open(os.environ["CCRC_PROBE_VERSION_OUT"], "w") as f:
             f.write(v + "\n")
@@ -618,8 +637,8 @@ version = client_version()
 headers = {
     "Authorization": f"Bearer {r.access_token}",
     "originator": "codex_cli_rs",
-    # The same version as `client_version` below (D-8743): a real client says its own.
-    "user-agent": f"codex_cli_rs/{version} (Unknown 0; unknown) unknown",
+    # The same version as `client_version` below (D-8743), in the library's form, which the usage poll sends too.
+    "user-agent": lib.client_user_agent(version),
     "session_id": "00000000-0000-0000-0000-000000000000",
 }
 if r.account_id:
@@ -910,7 +929,9 @@ catalogue = {
     "stale": False,
 }
 # D-8743: the client version a Codex catalogue was fetched as, a plain X.Y.Z, when the arm asked as one; absent
-# otherwise, never null. The same bound as the release lookup's and shared/models.mjs's `isPlainVersion`.
+# otherwise, never null. The same bound as the auth library's `CLIENT_VERSION_RE` and shared/models.mjs's
+# `isPlainVersion`, spelled here because this normaliser runs on the box's python3 and loads no library: it checks
+# the value it is handed (review 2825 F4).
 if probe == "codex" and re.fullmatch(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", client_version):
     catalogue["clientVersion"] = client_version
 catalogue["models"] = ARMS[probe](raw)

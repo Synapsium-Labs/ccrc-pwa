@@ -449,6 +449,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'bad-team-key': 400, 'bad-override': 400, 'no-project': 404,
   'repo-public': 409, 'repo-unmeasured': 409, 'template-exists': 409, 'no-team-key': 409, 'tracker-id-public': 409,
   'ticket-slug-public': 409, 'override-private-public': 409,
+  // D-8808: a suggestion for a project that already has a team: nothing to suggest.
+  'team-set': 409,
+  // D-8808 (review 2971 F7): a suggestion from a session that claims no open run, so is no programme's coordinator. 403: who
+  // the caller is, as `not-your-programme`; it is a role, so it can change (the session opens or takes a run).
+  'not-a-coordinator': 403,
   // 502: the template pull request's ccd act failed (a fetch, a push or a create), with ccd's stderr beside the word.
   'template-failed': 502,
   // 400
@@ -496,6 +501,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // Approvals PR 0: an allow of a row whose child runs under older deny rules than the box's. CHOSEN: the conflict
   // status of the approval routes' other refusals.
   'deny-not-current': 409,
+  // Approvals PR 3: a second principal's ruling on a park that holds an unspent one, and an allow on a key whose park
+  // records the coordinator's deny. CHOSEN: the conflict status of the approval routes' other refusals.
+  'park-ruled': 409, 'coordinator-denied': 409,
   // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
   'not-coordinator': 409, 'digest-unreadable': 503, 'unknown-call': 404,
   // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed

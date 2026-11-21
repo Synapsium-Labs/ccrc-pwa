@@ -187,8 +187,10 @@ export const STATUS_CASES: WorkMapCase[] = [
     expect([item(v, 't1').status, item(v, 't1').group]).toEqual(['not-started', 'not-started']);
   } },
   { name: 'a failed run\'s ticket reads not-started with lastFailedRunId, the newest failed run', run: (m) => {
-    const v = map(m, { epics: [ep('e1', [tk('t1')])], runs: [run(4, 'failed', { ticketKey: 't1' }), run(6, 'failed', { ticketKey: 't1' }), run(5, 'failed', { ticketKey: 't2' })] });
+    const v = map(m, { epics: [ep('e1', [tk('t1'), tk('t3')])], runs: [run(4, 'failed', { ticketKey: 't1' }), run(6, 'failed', { ticketKey: 't1' }), run(5, 'failed', { ticketKey: 't2' })] });
     expect([item(v, 't1').status, item(v, 't1').lastFailedRunId]).toEqual(['not-started', 6]);
+    // Review 2815 F5: an open ticket no run ever held reads no failed run, whatever another ticket's failed runs are.
+    expect([item(v, 't3').status, item(v, 't3').lastFailedRunId]).toEqual(['not-started', null]);
   } },
   { name: 'a ticket with a run carries the run, its wave and its last move', run: (m) => {
     const v = map(m, { epics: [ep('e1', [tk('t1', { state: 'started', runId: 7 })])], runs: [run(7, 'working', { ticketKey: 't1', wave: 12, lastMoveAt: 4_000 })] });
@@ -409,6 +411,18 @@ export const PHASE_CASES: WorkMapCase[] = [
     });
     expect([phase(v, 'pa').items, nz(phase(v, 'pa').counts), v.notInPhase]).toEqual([['t1'], ['done:1'], []]);
   } },
+  // Review 2815 F4: a carry recorded on the folded auto ticket's raw key still reads as the declared ticket's carry.
+  { name: 'a carry recorded on a folded auto ticket\'s key is the declared ticket\'s carry, through the canonical key (review 2815 F4)', run: (m) => {
+    const v = map(m, {
+      epics: [ep('e1', [tk('d1', { state: 'done' }), tk('run-5', { state: 'done', runId: 5, source: 'worker' })])],
+      runs: [run(5, 'done', { ticketKey: 'run-5' })],
+      done: [['d1', { at: 500, evidence: { runId: 5 } }], ['run-5', { at: 500, evidence: { runId: 5 } }]],
+      evidence: [['d1', HOLDS], ['run-5', HOLDS]],
+      phases: [ph('pa', [tref('run-5', 'pb', 300)]), ph('pb', [tref('d1')])],
+    });
+    expect([phase(v, 'pa').carried, phase(v, 'pa').carriedOut, phase(v, 'pa').finish]).toEqual([1, ['d1'], { at: 300 }]);
+    expect(item(v, 'd1').phases.map((p) => [p.key, p.carriedTo?.key ?? null])).toEqual([['pa', 'pb'], ['pb', null]]);
+  } },
 ];
 
 // ── The strip, the four plan states and the fallback ─────────────────────────────────────────────────────────────────
@@ -478,6 +492,17 @@ export const VIEW_CASES: WorkMapCase[] = [
     // A tie that could not be read, or a run holding no auto ticket, folds nothing.
     expect(map(m, { ...base, prLinks: [['d1', { kind: 'unreadable', detail: 'x' }]] }).items.map((i) => i.key)).toEqual(['d1', 'run-8']);
     expect(map(m, { ...base, prLinks: [['d1', { kind: 'read', pairs: [pair(8, null)] }]] }).items.map((i) => i.key)).toEqual(['d1', 'run-8']);
+  } },
+  // Review 2815 M6: the fold names the ticket the carrier HOLDS (the F1 shape on the F2 path), never the key minted from its run id.
+  { name: 'a pull request\'s carrier folds by the ticket it holds, not the key minted from its run id: run 8 holds run-3 (review 2815 M6)', run: (m) => {
+    const v = map(m, {
+      epics: [ep('e1', [tk('d1', { state: 'done' }), tk('run-3', { state: 'done', runId: 8, source: 'worker' })])],
+      runs: [run(3, 'failed', { ticketKey: 'run-3' }), run(8, 'done', { ticketKey: 'run-3' })],
+      done: [['d1', { at: 500, evidence: { pr: 12 } }], ['run-3', { at: 400, evidence: { runId: 8 } }]],
+      evidence: [['d1', HOLDS], ['run-3', HOLDS]],
+      prLinks: [['d1', { kind: 'read', pairs: [{ project: 'project-a', pr: 12, runId: 8, holder: { ticketId: 3, key: 'run-3' } }] }]],
+    });
+    expect([v.items.map((i) => i.key), v.counts.done]).toEqual([['d1'], 1]);
   } },
   { name: 'an ended plan\'s strip leaves a left-open ticket out of its total, as the headline does', run: (m) => {
     const v = map(m, doneT(HOLDS, { end: ENDED, epics: [ep('e1', [tk('t1', { state: 'done', runId: 5 }), tk('t2')])] }));

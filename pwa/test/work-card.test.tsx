@@ -6,11 +6,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { WORK_COUNTED_GROUPS, WORK_GROUPS, WORK_STATUSES, type WorkAnswer, type WorkEpicView, type WorkGroup, type WorkItemView, type WorkMapView, type WorkPhaseView, type WorkStatus } from '../../shared/plan';
+import { WORK_APART_GROUPS, WORK_COUNTED_GROUPS, WORK_GROUPS, WORK_STATUSES, type WorkEpicView, type WorkGroup, type WorkItemView, type WorkMapView, type WorkPhaseView, type WorkStatus } from '../../shared/plan';
 import { WorkCard } from '../src/ledgers/WorkCard';
+import type { WorkCardAnswer } from '../src/ledgers/workMapWords';
 import {
-  NOTES, carriedWords, carriedTargetsOf, doneWhenLine, epicChip, foldLabel, headline, initiativeNote, outstandingLine, phaseLine, sourceLine, statusWord,
-  unreadableNote, untitledWords, wholeEpicLine,
+  NOTES, carriedWords, carriedTargetsOf, checkpointFacts, doneWhenLine, epicChip, foldLabel, headline, initiativeNote, outstandingLine, phaseLine, sourceLine, statusWord,
+  readFailedNote, unreadableNote, untitledWords, wholeEpicLine,
 } from '../src/ledgers/workMapWords';
 import { effectiveValue, stripComments } from './cssRule';
 
@@ -51,8 +52,8 @@ const view = (over: Partial<WorkMapView> = {}): WorkMapView => ({
 const runHref = (id: number): string => `/runs/${id}`;
 const itemHref = (id: number): string | null => (id === 404 ? null : `/waiting/${id}`);
 const epicHref = (key: string): string => `/programmes/prog-a/epics/${key}`;
-function draw(work: WorkAnswer | (WorkAnswer & { last?: WorkMapView | null }), readAt = NOW - MIN, withEpicHref = false) {
-  return render(<WorkCard work={work as WorkAnswer} readAt={readAt} runHref={runHref} itemHref={itemHref} epicHref={withEpicHref ? epicHref : undefined} />);
+function draw(work: WorkCardAnswer, readAt = NOW - MIN, withEpicHref = false) {
+  return render(<WorkCard work={work} readAt={readAt} runHref={runHref} itemHref={itemHref} epicHref={withEpicHref ? epicHref : undefined} />);
 }
 
 /** A phased plan: phase 1 finished, phase 2 holds an outstanding ticket and one carried to phase 3, phase 3 takes epic B whole. */
@@ -178,7 +179,7 @@ describe('the plan states of spec 5.1', () => {
   });
 
   it('an unreadable answer draws its note over the view the page passes in', () => {
-    draw({ unreadable: 'run-unreadable', last: phased() } as WorkAnswer);
+    draw({ unreadable: 'run-unreadable', last: phased() });
     expect(screen.getByRole('alert').textContent).toMatch(/^The work could not be read: /);
     expect(screen.getByText('1 of 4 done')).toBeTruthy();
   });
@@ -606,11 +607,154 @@ describe('the layout rows of the plan table', () => {
   const css = stripComments(readFileSync(path.join(__dirname, '../src/ledgers/ledgers.css'), 'utf8'));
   it('a row is one column at 360 and 390, and one row from the wide layouts', () => {
     expect(css).toMatch(/\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
-    expect(css).toMatch(/@container work \(min-width: 34rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:[^}]*minmax\(0, 1fr\)/);
+    // Two steps (WM4, D-8823 `card-width-steps`, fix round 1): two columns from 26rem with the facts under the title, three from 43rem.
+    expect(css).toMatch(/@container work \(min-width: 26rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*6\.75rem minmax\(0, 1fr\);[^@]*\.wk-card \.wk-facts\s*\{\s*grid-column:\s*2;/);
+    expect(css).toMatch(/@container work \(min-width: 43rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*7\.5rem minmax\(0, 1fr\) minmax\(0, 14rem\)/);
+    // The facts go back into the third track from that step: without `grid-column: auto` they stay in column 2, under the title, and the
+    // third track stays empty on every card of 43rem or wider (review 2956 F5).
+    expect(css).toMatch(/@container work \(min-width: 43rem\)\s*\{[^@]*\.wk-card \.wk-facts\s*\{[^}]*grid-column:\s*auto/);
+    // The step keeps a title at least the room a phone gives it (review 2956 F2): the card's width at the step less the three tracks and the chrome
+    // (21 + 16 + 120 + 224 = 381px at 16px a rem) is no less than the phone's 318 - 21 = 297px.
+    const step = Number(/@container work \(min-width: (\d+)rem\)\s*\{[^@]*7\.5rem minmax/.exec(css)![1]);
+    expect(step * 16 - 381, 'a title keeps its phone room at the three-column step').toBeGreaterThanOrEqual(297);
     expect(effectiveValue(css, '.wk-card .wk-strip', 'flex-wrap')).toBe('wrap');
   });
   it('colours are tokens only', () => {
     const own = css.slice(css.indexOf('.wk-card'));
     expect(own).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+  });
+});
+
+// Review 2891 F1: five words and guards whose mutants survived the suite at the first push of WM3, each pinned here and red under
+// its mutant (the task note `wm4.md` names each mutant and what it reddened). F5: the apart words are derived, not re-spelt.
+describe('review 2891 F1: the pins the survivors needed', () => {
+  it('(a) the no-plan source line reads From the work runs so far, and never From the plan', () => {
+    const noPlan = view({ source: 'runs', counts: zero({ done: 1 }), runs: { items: [item('run-1', 'done', { epic: null })], waves: { from: 1, to: 1 } } });
+    expect(sourceLine(noPlan, NOW - MIN, NOW)).toBe('From the work runs so far · read 1m ago');
+    const { container } = draw(noPlan);
+    expect(container.querySelector('.wk-source')?.textContent).toBe('From the work runs so far · read 1m ago');
+    expect(container.querySelector('.wk-source')?.textContent).not.toMatch(/From the plan/);
+  });
+
+  it('(b) an abandoned plan with no reason reads its date alone, never a null or an empty reason', () => {
+    for (const why of [null, '']) {
+      const v = view({ source: 'ended', end: { outcome: 'abandoned', why, at: DAY_ONE }, counts: zero({ done: 1, 'left-open': 1 }) });
+      expect(headline(v)).toBe('Plan abandoned on 2026-11-02 · 1 done · 1 left open');
+    }
+    const { container } = draw(view({ source: 'ended', end: { outcome: 'abandoned', why: null, at: DAY_ONE }, counts: zero({ done: 1 }) }));
+    expect(container.querySelector('.wk-headline')?.textContent).toBe('Plan abandoned on 2026-11-02 · 1 done');
+  });
+
+  it('(c) an open checkpoint reads open, and a met one its date, kind and evidence, in their own rows', () => {
+    draw(phased());
+    fireEvent.click(screen.getByRole('button', { name: /Epic A/ }));
+    const cps = screen.getByRole('group', { name: /Checkpoints of Epic A/ });
+    const rows = [...cps.querySelectorAll('.wk-cp')].map((r) => r.querySelector('.wk-cp-facts')?.textContent);
+    expect(rows).toEqual(['acceptance · met 2026-11-02 · PR #88', 'operator act · open']);
+  });
+
+  it('(d) a held filter naming an epic the view no longer holds filters nothing, and leaves no phase empty', () => {
+    const { container, rerender } = draw(phased());
+    fireEvent.click(screen.getByRole('button', { name: /Epic B/ }));
+    expect(container.querySelector('[data-ticket="t-2"]')).toBeNull();
+    const gone = phased();
+    gone.epics = gone.epics.filter((e) => e.key !== 'epic-b');
+    rerender(<WorkCard work={gone} readAt={NOW - MIN} runHref={runHref} itemHref={itemHref} />);
+    expect(screen.queryByRole('button', { pressed: true })).toBeNull();
+    expect(container.querySelector('[data-ticket="t-2"]')).not.toBeNull();
+    expect(container.querySelector('[data-phase="p2"]')).not.toBeNull();
+    expect(container.querySelector('[data-phase="p1"]')).not.toBeNull();
+  });
+
+  it('(d) a plan with no phases groups by epic, and a chip tap keeps that epic\'s group alone', () => {
+    const t1 = item('t-1', 'working', { runId: 3 });
+    const t2 = item('t-2', 'not-started', { epic: EPIC_B });
+    const { container } = draw(view({
+      counts: zero({ 'in-progress': 1, 'not-started': 1 }), items: [t1, t2],
+      epics: [epic(EPIC_A, { total: 1, items: ['t-1'] }), epic(EPIC_B, { total: 1, items: ['t-2'] })],
+    }));
+    expect([...container.querySelectorAll('[data-epic]')].map((e) => e.getAttribute('data-epic'))).toEqual(['epic-a', 'epic-b']);
+    expect(screen.getByText(NOTES.noPhases)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Epic B/ }));
+    expect([...container.querySelectorAll('[data-epic]')].map((e) => e.getAttribute('data-epic'))).toEqual(['epic-b']);
+    expect(container.querySelector('[data-ticket="t-1"]')).toBeNull();
+    expect(container.querySelector('[data-ticket="t-2"]')).not.toBeNull();
+  });
+
+  it('(e) every status word is its text in spec Table 6, keyed by WORK_STATUSES', () => {
+    const TABLE_6: Record<WorkStatus, string> = {
+      dropped: 'dropped', closed: 'closed', done: 'done', 'done-unverified': 'marked done, but', 'left-open': 'left open',
+      'waiting-on-you': 'waiting on you', stuck: 'stuck', blocked: 'blocked', working: 'working', 'state-unknown': 'state unknown',
+      'in-review': 'in review', merging: 'merging', queued: 'queued', 'not-started': 'not started', failed: 'failed',
+    };
+    expect(Object.keys(TABLE_6).sort()).toEqual([...WORK_STATUSES].sort());
+    for (const st of WORK_STATUSES) expect(statusWord(st), st).toBe(TABLE_6[st]);
+  });
+});
+
+describe('review 2891 F5: the apart words are derived from WORK_APART_GROUPS', () => {
+  it('the headline writes every apart group but dropped, in the list\'s order, each left out at zero', () => {
+    const all = zero({ done: 3, 'not-started': 1, dropped: 4, closed: 1, 'left-open': 2, failed: 5 });
+    expect(headline(view({ counts: all }))).toBe('3 of 4 done · 1 closed · 2 left open · 5 failed');
+    expect(WORK_APART_GROUPS.filter((g) => g !== 'dropped')).toEqual(['closed', 'left-open', 'failed']);
+    expect(headline(view({ counts: zero({ done: 3, dropped: 4 }) }))).toBe('3 of 3 done');
+  });
+
+  it('a phase line writes the same apart groups, in the same order, with the same words', () => {
+    const p = phase('p', 1, { counts: zero({ done: 2, 'in-progress': 1, closed: 1, 'left-open': 2, failed: 3 }) });
+    expect(phaseLine(p, [])).toBe('2 of 3 done · 1 closed · 2 left open · 3 failed');
+  });
+
+  it('the outstanding line reads the status words for the groups that are statuses', () => {
+    expect(outstandingLine(view({ counts: zero({ 'in-progress': 1, 'waiting-on-you': 2, held: 3, 'not-started': 4 }) }))).toBe(
+      `1 in progress · 2 ${statusWord('waiting-on-you')} · 3 held · 4 ${statusWord('not-started')}`);
+  });
+});
+
+describe('the page\'s failed read (WM4, D-8823 failed-read-arm)', () => {
+  it('draws the refusal\'s word alone when no view is held', () => {
+    const { container } = draw({ readFailed: 'plan-store-down' });
+    expect(screen.getByRole('alert').textContent).toBe('The work could not be read: plan-store-down');
+    expect(container.querySelector('.wk-headline')).toBeNull();
+  });
+
+  it('draws the note over the last view the page holds, and the view\'s own words as before', () => {
+    draw({ readFailed: 'offline', last: phased() });
+    expect(screen.getByRole('alert').textContent).toBe('The work could not be read: offline');
+    expect(screen.getByText('1 of 4 done')).toBeTruthy();
+  });
+
+  it('spells the sentence once for the server\'s word and the page\'s', () => {
+    expect(readFailedNote('x')).toBe('The work could not be read: x');
+    expect(unreadableNote('read-failed')).toBe(readFailedNote('a read failed'));
+  });
+});
+
+// Review 2873 F15: every word the server sends is looked up in a table of this build's words, and one this build does not know (a
+// newer server's) reads as itself, never as "undefined".
+describe('a word from a newer server reads as itself (review 2873 F15)', () => {
+  it('a ticket status this build has no word for is drawn as the server wrote it', () => {
+    const t = item('t-1', 'not-started', { status: 'newly-added' as WorkStatus });
+    const { container } = draw(view({ counts: zero({ 'not-started': 1 }), items: [t], epics: [epic(EPIC_A, { total: 1, items: ['t-1'] })] }));
+    expect(container.querySelector('.wk-row .wk-status')!.textContent).toBe('newly-added');
+    expect(container.textContent).not.toContain('undefined');
+    expect(statusWord('constructor' as WorkStatus)).toBe('constructor');
+    expect(statusWord('working')).toBe('working');
+  });
+
+  it('a carried row keeps an unknown status now as the server wrote it', () => {
+    expect(carriedWords.now('newly-added' as WorkStatus)).toBe('now newly-added');
+    expect(carriedWords.now('working')).toBe('now working');
+  });
+
+  it('a checkpoint kind this build has no word for is written as the server wrote it', () => {
+    expect(checkpointFacts({ kind: 'new-kind' as never, state: 'open', metAt: null, evidence: null })).toBe('new-kind · open');
+    expect(checkpointFacts({ kind: 'operator-act', state: 'open', metAt: null, evidence: null })).toBe('operator act · open');
+  });
+
+  it('an unreadable word this build has no phrase for is written as the server wrote it, on the note and on the card', () => {
+    expect(unreadableNote('new-word' as never)).toBe('The work could not be read: new-word');
+    draw({ unreadable: 'new-word' as never });
+    expect(screen.getByRole('alert').textContent).toBe('The work could not be read: new-word');
   });
 });

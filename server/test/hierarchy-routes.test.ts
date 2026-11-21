@@ -8,7 +8,9 @@ import { planStorePort } from '../src/coord/planStore.js';
 import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
 import type { CoordinatorPresence } from '../../shared/ledgers.js';
 import type { DatabaseSync } from 'node:sqlite';
+import { readLinearStore } from '../src/linear/store.js';
 import { seedLegacyProgramme } from './helpers/plan.js';
+import { seedSlot, WS } from './linearProxyRig.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let home: string;
@@ -26,8 +28,11 @@ beforeEach(async () => {
   db = openCoordDb(path.join(home, 'coord.db'));
   presence = {};
   app = Fastify();
+  const ccrcDir = path.join(home, '.ccrc');
+  await seedSlot(ccrcDir, 'a');
   registerHierarchyRoutes(app, {
     plan: planStorePort(db), serial: (fn) => fn(), presenceOf: (id) => presence[id] ?? 'unmeasured', by: () => 'device-a', now: () => 7,
+    readLinearStore: () => readLinearStore(ccrcDir),
   });
   await app.ready();
 });
@@ -90,6 +95,43 @@ describe('hierarchy routes', () => {
     expect(rows.map((r) => [r.project, r.ownerNow.id])).toEqual([['project-a', 'sess-2'], ['project-b', 'sess-2']]);
     // No row is marked, so the lowest order (project-b set the key first) decides: both rows name project-b.
     expect(rows.map((r) => (r as unknown as { ownerNow: { project: string } }).ownerNow.project)).toEqual(['project-b', 'project-b']);
+  });
+
+  it('the pinned row displays the lower-order unpinned owner when the key routes uniquely to its workspace', async () => {
+    claim('prog-a', 'project-a', 'sess-1', 1);
+    claim('prog-b', 'project-b', 'sess-2', 2);
+    db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-a', 'AAA')").run();
+    db.prepare("INSERT INTO project_linking (project, teamKey, teamWorkspace) VALUES ('project-b', 'AAA', ?)").run(WS.a.id);
+    presence['sess-1'] = 'alive';
+    const res = await get();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().projects.find((r: { project: string }) => r.project === 'project-b').ownerNow).toEqual({
+      id: 'sess-1', source: 'default', live: true, project: 'project-a', ifUnnamed: { id: 'sess-2', live: false },
+    });
+  });
+
+  it('round 2: owner display does not substitute a pinned owner on an unreadable slot record', async () => {
+    claim('prog-a', 'project-a', 'sess-1', 1);
+    claim('prog-b', 'project-b', 'sess-2', 2);
+    db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-a', 'AAA')").run();
+    db.prepare("INSERT INTO project_linking (project, teamKey, teamWorkspace) VALUES ('project-b', 'AAA', ?)").run(WS.a.id);
+    const prior = app;
+    app = Fastify();
+    await prior.close();
+    registerHierarchyRoutes(app, {
+      plan: planStorePort(db), serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive',
+      readLinearStore: async () => {
+        const store = await readLinearStore(path.join(home, '.ccrc'));
+        if (store.kind !== 'listed') throw new Error('fixture store not listed');
+        return { ...store, slots: store.slots.map((slot) => ({ ...slot, record: { kind: 'unreadable', code: 'EIO' } })) };
+      },
+    });
+    const result = await get();
+    expect(result.statusCode).toBe(200);
+    expect(result.json().projects.map((row: { ownerNow: unknown }) => row.ownerNow)).toEqual([
+      expect.objectContaining({ id: null, source: 'none', live: false, unmeasured: true }),
+      expect.objectContaining({ id: null, source: 'none', live: false, unmeasured: true }),
+    ]);
   });
 
   it('ifUnnamed is the coordinator the default rule gives with no named owner: for a named row not the named one, for none null, for a shared-key sibling its own default', async () => {

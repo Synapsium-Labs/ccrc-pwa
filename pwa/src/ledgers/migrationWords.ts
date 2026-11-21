@@ -1,7 +1,7 @@
 // The words of the five hierarchy items' controls and of the map and report body (Linear hierarchy design §11.3 and §11.4,
 // D-8184, D-8737). L1: pure, no I/O. The sentences a refusal says are `refusalWords.ts`'s (`linearItemErrorText`).
 import type { LinearActionVerb } from '../../../shared/ledgers';
-import { MAP_CLASSES, type MapClass, type MapCounts, type MapEntry } from '../../../shared/plan';
+import { MAP_CLASSES, type MapClass, type MapCounts, type MapEntry, type MigrationView, type MigrationWaitingWhy } from '../../../shared/plan';
 
 /** The controls' labels, once. `hand` is `ITEM_DOOR_WORDS['hand-to-coordinator']`, which `LinearItemControls` reads. */
 export const LINEAR_ITEM_TEXT = {
@@ -25,7 +25,35 @@ export const LINEAR_GROUP_WORDS: Readonly<Record<LinearActionVerb, string>> = {
 };
 
 /** The map and report body's own sentences: its two region names and its table's three headers. */
-export const MIGRATION_BODY_TEXT = { map: 'The map', report: 'The report', issue: 'Issue', class: 'Class', target: 'Target' } as const;
+export const MIGRATION_BODY_TEXT = {
+  map: 'The map', report: 'The report', issue: 'Issue', class: 'Class', target: 'Target',
+  structure: 'Programmes and epics', backlog: 'new, paused', declared: 'declared by this map', noEpics: 'No epics listed',
+  checkpoints: 'Checkpoints',
+  /** The quiet note when the migration could not be read: the item keeps its why, how and controls (D-8186). */
+  unread: 'The map could not be read just now, so its body is not shown. Reload the item to try again.',
+} as const;
+
+/** The report's lists in the order they read, each only when it holds something (design §11.4): the issues skipped because they
+ *  had changed, those the team's Linear owner took through inbound, which left the migration (review 2955 F2, A1), those still
+ *  waiting, the replaced levels closed with no ticket placed under them (review 2918 F2), and after a put back the issues moved
+ *  since and the milestones left under the canceled project. */
+export const REPORT_LISTS = [
+  { key: 'skipped', title: 'Skipped as changed' }, { key: 'taken', title: 'Taken by the Linear owner' }, { key: 'waiting', title: 'Still waiting' },
+  { key: 'unrelated', title: 'Closed with no ticket placed under them' },
+  { key: 'movedSince', title: 'Moved since' }, { key: 'milestonesLeft', title: 'Milestones left' },
+] as const;
+/** Why a waiting issue waits, as the report says it (review 2892 F3). */
+export const WAITING_WHY_WORDS: Readonly<Record<MigrationWaitingWhy, string>> = {
+  'live-programme': 'its programme is mid-wave; it moves at the wave boundary',
+  'epic-not-in-linear': 'its epic is not in Linear yet',
+  'upkeep-not-in-linear': 'the project\'s Upkeep epic is not in Linear yet',
+  'placed-ticket-not-applied': 'a ticket under it is still to be placed, or placed and not settled yet; it closes related to the first one placed, or with no relation if none is placed (each skipped, or taken by the Linear owner)',
+};
+export const reportLists = (r: NonNullable<MigrationView['report']> | null | undefined): { key: (typeof REPORT_LISTS)[number]['key']; title: string; items: string[] }[] =>
+  r === null || r === undefined ? [] : REPORT_LISTS.map((l) => ({
+    key: l.key, title: l.title,
+    items: l.key === 'waiting' ? r.waiting.map((id) => { const why = r.waitingWhy?.[id]; return why === undefined ? id : `${id}: ${WAITING_WHY_WORDS[why]}`; }) : r[l.key] ?? [],
+  })).filter((l) => l.items.length > 0);
 
 export const nameConsequence = (project: string, id: string): string => `${id} becomes the Linear owner of ${project}.`;
 

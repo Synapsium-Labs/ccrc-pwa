@@ -223,7 +223,8 @@ describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () 
     s.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own);
     expect(s.bindingRunsOf('demo-w').ok).toBe(false);
     const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN);
-    expect(verdict).toEqual({ kind: 'released', parent: 'coord-1', runId: a, reason: 'parent-not-live' });
+    // No binding run when the series cannot be represented (approvals PR 3, review 2889 F2): the park takes no step then.
+    expect(verdict).toEqual({ kind: 'released', parent: 'coord-1', runId: a, bindingRunId: null, reason: 'parent-not-live' });
   });
 
   // As on main: with no parent proven the parent is null and heldFor goes on to the sibling check, which finds no open run
@@ -250,7 +251,8 @@ describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () 
     s.db.prepare("UPDATE runs SET id = ?, state = 'done' WHERE id = ?").run(2n ** 53n + 1n, big);
     expect(s.bindingRunsOf('demo-w').ok).toBe(false);
     const verdict = await heldFor({ coord: s } as never, 'demo-w', { kind: 'child', runId: a } as never, [], BORN);
-    expect(verdict).toEqual({ kind: 'released', parent: 'coord-1', runId: a, reason: 'parent-not-live' });
+    // No binding run when the series cannot be represented (approvals PR 3, review 2889 F2): the park takes no step then.
+    expect(verdict).toEqual({ kind: 'released', parent: 'coord-1', runId: a, bindingRunId: null, reason: 'parent-not-live' });
   });
 });
 

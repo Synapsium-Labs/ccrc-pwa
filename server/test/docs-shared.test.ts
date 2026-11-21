@@ -189,6 +189,10 @@ describe('docs failure vocabulary', () => {
     ['untrusted-worktree', 'ccd', 'none'],
     ['worktree-moved', 'ccd', 'auto'],
     ['draft-changed', 'ccd', 'auto'],
+    // Range reads (X2 P1.2)
+    ['snapshot-gone', 'ccd', 'auto'],
+    ['range-too-large', 'ccd', 'none'],
+    ['prepare-busy', 'ccd', 'manual'],
     // Fetch
     ['remote-absent', 'ccd', 'none'],
     ['remote-branch-absent', 'ccd', 'none'],
@@ -227,11 +231,11 @@ describe('docs failure vocabulary', () => {
   const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
   describe('DOCS_FAILURES and DOCS_FAILURE_RETRY (row 53, L0 half)', () => {
-    it('the hand table is whole: 58 distinct words, 42 ccd and 16 server', () => {
+    it('the hand table is whole: 61 distinct words, 45 ccd and 16 server', () => {
       const words = SPEC_WORDS.map(([w]) => w);
-      expect(new Set(words).size).toBe(58);
-      expect(words).toHaveLength(58);
-      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(42);
+      expect(new Set(words).size).toBe(61);
+      expect(words).toHaveLength(61);
+      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(45);
       expect(SPEC_WORDS.filter(([, o]) => o === 'server')).toHaveLength(16);
     });
 
@@ -269,10 +273,10 @@ describe('docs failure vocabulary', () => {
   });
 
   describe('DOCS_CCD_FAILURES', () => {
-    it('is exactly the 42 ccd words of the hand table, each once', () => {
+    it('is exactly the 45 ccd words of the hand table, each once', () => {
       const ccd = SPEC_WORDS.filter(([, o]) => o === 'ccd').map(([w]) => w);
-      expect(DOCS_CCD_FAILURES).toHaveLength(42);
-      expect(new Set(DOCS_CCD_FAILURES).size).toBe(42);
+      expect(DOCS_CCD_FAILURES).toHaveLength(45);
+      expect(new Set(DOCS_CCD_FAILURES).size).toBe(45);
       expect(sorted(DOCS_CCD_FAILURES)).toEqual(sorted(ccd));
     });
 
@@ -921,46 +925,55 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
   const fileSide = (c: Case): boolean => c.committed === 'file' || c.committed === 'exec';
   const kindOf = (c: Case): docsH.EntryView['committedKind'] => (c.committed === 'none' ? null : c.committed);
   const sideOpens = (c: Case): docsH.EntryView['opens'] => (fileSide(c) ? 'committed' : 'none');
+  // X2 P1: the pin the opened bytes are read by. The matrix's entries carry no `mtimeNs`, so a draft with `fp: null`
+  // stays withheld (row 8), as an older ccd's does; the stat pin is pinned by its own cases below.
+  const BLOB_PIN: docsH.DocsRangePin = { kind: 'blob', sha: 'b'.repeat(40) };
+  const FP_PIN: docsH.DocsRangePin = { kind: 'fp', sha: 'f'.repeat(64) };
+  const sidePin = (c: Case): docsH.DocsRangePin | null => (fileSide(c) ? BLOB_PIN : null);
   const notDelTc = (d: NonNullable<Case['draft']>): boolean => d.state !== 'deleted' && d.state !== 'typechange';
   const withheldRow = (c: Case, why: docsH.WithheldReason): docsH.EntryView => ({
     listed: c.committed !== 'none' || has(c, (d) => d.state === 'added' || d.state === 'untracked'),
-    opens: sideOpens(c), badge: 'withheld', withheld: why, offersCommitted: false, committedKind: kindOf(c),
+    opens: sideOpens(c), badge: 'withheld', withheld: why, offersCommitted: false, committedKind: kindOf(c), pin: sidePin(c),
   });
   const ROWS: readonly { row: string; when: (c: Case) => boolean; view: (c: Case) => docsH.EntryView }[] = [
     {
       row: '1 no overlay, committed file/exec',
       when: (c) => !overlay(c) && fileSide(c),
-      view: (c) => ({ listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c) }),
+      view: (c) => ({
+        listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c), pin: BLOB_PIN,
+      }),
     },
     {
       row: '2 no overlay, committed symlink/submodule',
       when: (c) => !overlay(c) && (c.committed === 'symlink' || c.committed === 'submodule'),
-      view: (c) => ({ listed: true, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c) }),
+      view: (c) => ({ listed: true, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c), pin: null }),
     },
     {
       row: '3 no overlay, no committed entry',
       when: (c) => !overlay(c) && c.committed === 'none',
-      view: () => ({ listed: false, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: null }),
+      view: () => ({ listed: false, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: null, pin: null }),
     },
     {
       row: '4 overlay, modified/conflicted, file with fp',
       when: (c) => overlay(c) && has(c, (d) => (d.state === 'modified' || d.state === 'conflicted') && d.kind === 'file' && d.fp),
       view: (c) => ({
         listed: true, opens: 'draft', badge: c.draft?.state === 'conflicted' ? 'conflicted' : 'modified', withheld: null,
-        offersCommitted: fileSide(c), committedKind: kindOf(c),
+        offersCommitted: fileSide(c), committedKind: kindOf(c), pin: FP_PIN,
       }),
     },
     {
       row: '5 overlay, added/untracked, file with fp',
       when: (c) => overlay(c) && has(c, (d) => (d.state === 'added' || d.state === 'untracked') && d.kind === 'file' && d.fp),
-      view: (c) => ({ listed: true, opens: 'draft', badge: 'new', withheld: null, offersCommitted: fileSide(c), committedKind: kindOf(c) }),
+      view: (c) => ({
+        listed: true, opens: 'draft', badge: 'new', withheld: null, offersCommitted: fileSide(c), committedKind: kindOf(c), pin: FP_PIN,
+      }),
     },
     {
       row: '6 overlay, deleted',
       when: (c) => overlay(c) && has(c, (d) => d.state === 'deleted'),
       view: (c) => ({
         listed: c.committed !== 'none', opens: sideOpens(c), badge: 'deleted', withheld: null, offersCommitted: false,
-        committedKind: kindOf(c),
+        committedKind: kindOf(c), pin: sidePin(c),
       }),
     },
     {
@@ -968,7 +981,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       when: (c) => overlay(c) && has(c, (d) => d.state === 'typechange'),
       view: (c) => ({
         listed: c.committed !== 'none', opens: sideOpens(c), badge: 'typechange', withheld: null, offersCommitted: false,
-        committedKind: kindOf(c),
+        committedKind: kindOf(c), pin: sidePin(c),
       }),
     },
     {
@@ -987,7 +1000,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       view: (c) => withheldRow(c, 'not-a-file'),
     },
   ];
-  const VIEW_KEYS = ['listed', 'opens', 'badge', 'withheld', 'offersCommitted', 'committedKind'] as const;
+  const VIEW_KEYS = ['listed', 'opens', 'badge', 'withheld', 'offersCommitted', 'committedKind', 'pin'] as const;
 
   describe('the entryView matrix against the spec 4.6 oracle (row 53, L0 half)', () => {
     it('generates the whole matrix: 109 drafts x 8 drafts facts x 2 modes x 5 committed sides', () => {
@@ -1017,7 +1030,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
         if (row === undefined) { wrong.push(`${label(c)}: no oracle row`); continue; }
         const want = row.view(c);
         const got = docsH.entryView(entryOf(c), factsOf(c), c.mode);
-        const fields = VIEW_KEYS.filter((k) => got[k] !== want[k]);
+        const fields = VIEW_KEYS.filter((k) => JSON.stringify(got[k]) !== JSON.stringify(want[k]));
         const keys = Object.keys(got).sort().join(',');
         if (fields.length > 0 || keys !== [...VIEW_KEYS].sort().join(',')) {
           wrong.push(`${label(c)} [${row.row}]: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
@@ -1039,12 +1052,14 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
     it('a deleted draft with kind absent and fp null is badge deleted, not withheld', () => {
       expect(docsH.entryView(at(FILE, d('deleted', 'absent', null)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'committed', badge: 'deleted', withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
     });
 
     it('a typechange to a symlink is badge typechange, not withheld; the committed bytes open', () => {
       expect(docsH.entryView(at(FILE, d('typechange', 'symlink', null)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'committed', badge: 'typechange', withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
     });
 
@@ -1054,6 +1069,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       });
       expect(docsH.entryView(at(null, d('untracked', 'file', null)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'none', badge: 'withheld', withheld: 'too-large', offersCommitted: false, committedKind: null,
+        pin: null,
       });
     });
 
@@ -1073,6 +1089,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
     it('the default view never overlays, even over a trusted holder at the served commit', () => {
       expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(true), 'default')).toEqual({
         listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
       expect(docsH.entryView(at(null, d('untracked', 'file', FP)), holder(true), 'default').listed).toBe(false);
     });
@@ -1080,12 +1097,14 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
     it('baseEqual false never overlays, even in a ref view', () => {
       expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(false), 'ref')).toEqual({
         listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
     });
 
     it('a modified file with an fp opens the draft and offers the committed version; an exec does too', () => {
       expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'draft', badge: 'modified', withheld: null, offersCommitted: true, committedKind: 'file',
+        pin: { kind: 'fp', sha: FP },
       });
       const exec: Entry['committed'] = { kind: 'exec', blob: 'b'.repeat(40), size: 10 };
       expect(docsH.entryView(at(exec, d('conflicted', 'file', FP)), holder(true), 'ref')).toMatchObject({
@@ -1654,4 +1673,119 @@ describe('the docs-log caps and the framed size of a worst-case history answer (
       expect(framedLen(worst(THREE, hex))).toBeLessThanOrEqual(DOCS_LOG_MAX_WIRE_BYTES);
       expect(framedLen(worst(FOUR, hex)), 'four-byte text answers too-many-entries, never a list').toBeGreaterThan(DOCS_LOG_MAX_WIRE_BYTES);
     });
+});
+
+// ===== X2 P1 Task P1.1: range ceilings and vocabulary (X2 spec section 4.3; plan Task P1.1) =====
+// Each ceiling is one constant in shared/docs.ts, its own integer literal (the caps block's rule), at the value the
+// spec's table and the plan's Global Constraints give. DOCS_RANGE_PREPARE_BUDGET_MS is set from lab RANGE-L1 (the
+// plan's Results). An import declaration is hoisted, so this one may sit at the end of the file.
+import * as docsR from '../../shared/docs.js';
+describe('X2 P1: the range ceilings, the stat pin and the range wire types', () => {
+  const RANGE_CEILINGS = {
+    DOCS_RANGE_FRAME_BYTES: 524288,
+    DOCS_RANGE_MAX_BYTES: 67108864,
+    DOCS_PDF_INLINE_MAX_BYTES: 4194304,
+    DOCS_IMAGE_VIEW_MAX_PIXELS: 67108864,
+    DOCS_IMAGE_VIEW_MAX_SIDE: 16384,
+    DOCS_RANGE_PREPARE_BUDGET_MS: 10000,
+  } as const;
+
+  it('range ceilings are their own literals: each holds its spec value, declared once as an integer literal, never an alias', () => {
+    const src = readFileSync(DOCS, 'utf8');
+    for (const [name, value] of Object.entries(RANGE_CEILINGS)) {
+      expect((docsR as Record<string, unknown>)[name], name).toBe(value);
+      const decl = src.match(new RegExp(`^export const ${name} = (.+);$`, 'm'));
+      expect(decl, `${name} is declared on one line`).not.toBeNull();
+      expect(decl![1], `${name} is an integer literal, not an alias of another constant`).toMatch(/^[1-9][0-9]*$/);
+      expect(src.match(new RegExp(`\\bexport const ${name}\\b`, 'g'))?.length, `${name} is declared once`).toBe(1);
+    }
+  });
+
+  it('a base64 frame plus the envelope fits the show guard; the range ceiling is a whole number of frames, and above the ccd ceiling, which stays 4 MiB', () => {
+    expect(4 * Math.ceil(docsR.DOCS_RANGE_FRAME_BYTES / 3) + docsR.DOCS_ENVELOPE_RESERVE).toBeLessThanOrEqual(docsR.DOCS_MAX_ANSWER_BYTES);
+    expect(docsR.DOCS_RANGE_FRAME_BYTES).toBeLessThan(docsR.DOCS_MAX_DOC_BYTES);
+    expect(docsR.DOCS_RANGE_MAX_BYTES).toBeGreaterThan(DOCS_MAX_FILE_BYTES);
+    expect(DOCS_MAX_FILE_BYTES).toBe(4194304);
+    expect(docsR.DOCS_RANGE_MAX_BYTES % docsR.DOCS_RANGE_FRAME_BYTES).toBe(0);
+  });
+
+  it('statPin: a whole byte count and a decimal mtimeNs give a stat pin', () => {
+    expect(docsR.statPin(5242880, '1795125141216123456')).toEqual({ kind: 'stat', size: 5242880, mtimeNs: '1795125141216123456' });
+    expect(docsR.statPin(0, '0')).toEqual({ kind: 'stat', size: 0, mtimeNs: '0' });
+    expect(docsR.statPin(Number.MAX_SAFE_INTEGER, '9'.repeat(19))).toEqual({ kind: 'stat', size: Number.MAX_SAFE_INTEGER, mtimeNs: '9'.repeat(19) });
+  });
+
+  it('statPin: an absent, empty or non-decimal mtimeNs, or a size that is not a whole byte count, gives null', () => {
+    expect(docsR.statPin(10, undefined)).toBeNull();
+    for (const bad of ['', '-1', '1.5', '01', ' 1', '1e9', '0x10', '1'.repeat(20), '١٢٣',
+      123 as unknown as string, ['123'] as unknown as string]) {
+      expect(docsR.statPin(10, bad), JSON.stringify(bad)).toBeNull();
+    }
+    for (const size of [null, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(docsR.statPin(size, '123'), String(size)).toBeNull();
+    }
+  });
+
+  it('the range wire types hold canned answers, and each survives the wire as JSON unchanged', () => {
+    const prepared: docsR.DocsRangePrepared = { snapshot: 's'.repeat(32), size: 5242880, digest: 'd'.repeat(64) };
+    const frame: docsR.DocsRangeFrame = { snapshot: 's'.repeat(32), offset: 0, bytesB64: 'AA==', digest: 'e'.repeat(64), total: 5242880 };
+    const pins: docsR.DocsRangePin[] = [
+      { kind: 'blob', sha: 'b'.repeat(40) }, { kind: 'fp', sha: 'f'.repeat(64) }, { kind: 'stat', size: 1, mtimeNs: '2' },
+    ];
+    const draft: NonNullable<docsR.DocsEntry['draft']> = {
+      state: 'modified', kind: 'file', size: 5242880, fp: null, trust: 'status', mtimeNs: '1795125141216123456',
+    };
+    expect(JSON.parse(JSON.stringify({ prepared, frame, pins, draft }))).toEqual({ prepared, frame, pins, draft });
+  });
+
+  // X2 P1 Task P1.5 (spec 4.3, "The overlay cap"): a draft above the hash ceiling opens through its snapshot.
+  const MTIME = '1795125141216123456';
+  const HOLDER: docsR.DraftsFacts = {
+    state: 'holder', branch: 'ws/a', worktree: { path: '/srv/worktrees/demo-a', head: 'c'.repeat(40), class: 'workspace' },
+    baseEqual: true, base: null, caveats: [], opaque: [],
+  };
+  const bigDraft = (size: number, mtimeNs: string | undefined, state: 'modified' | 'untracked' = 'modified'): docsR.DocsEntry => ({
+    section: 'specs', path: '2026-01-01-big.md',
+    committed: state === 'untracked' ? null : { kind: 'file', blob: 'b'.repeat(40), size: 1000 },
+    draft: { state, kind: 'file', size, fp: null, trust: 'status', ...(mtimeNs === undefined ? {} : { mtimeNs }) },
+  });
+
+  it('entryView: a 5 MiB draft opens through its snapshot', () => {
+    expect(docsR.entryView(bigDraft(5242880, MTIME), HOLDER, 'ref')).toEqual({
+      listed: true, opens: 'draft', badge: 'modified', withheld: null, offersCommitted: true, committedKind: 'file',
+      pin: { kind: 'stat', size: 5242880, mtimeNs: MTIME },
+    });
+    expect(docsR.entryView(bigDraft(docsR.DOCS_RANGE_MAX_BYTES, MTIME, 'untracked'), HOLDER, 'ref')).toMatchObject({
+      opens: 'draft', badge: 'new', pin: { kind: 'stat', size: docsR.DOCS_RANGE_MAX_BYTES, mtimeNs: MTIME },
+    });
+  });
+
+  it('entryView: a 65 MiB draft stays withheld too-large', () => {
+    expect(docsR.entryView(bigDraft(docsR.DOCS_RANGE_MAX_BYTES + 1, MTIME), HOLDER, 'ref')).toEqual({
+      listed: true, opens: 'committed', badge: 'withheld', withheld: 'too-large', offersCommitted: false, committedKind: 'file',
+      pin: { kind: 'blob', sha: 'b'.repeat(40) },
+    });
+    expect(docsR.entryView(bigDraft(68157440, MTIME, 'untracked'), HOLDER, 'ref')).toMatchObject({ opens: 'none', withheld: 'too-large', pin: null });
+  });
+
+  it('entryView: a draft without mtimeNs stays withheld (an older ccd)', () => {
+    for (const m of [undefined, '', '-1', 'x']) {
+      expect(docsR.entryView(bigDraft(5242880, m), HOLDER, 'ref'), String(m)).toMatchObject({ badge: 'withheld', withheld: 'too-large' });
+    }
+  });
+
+  it('entryView: the default view never opens a stat-pinned draft', () => {
+    expect(docsR.entryView(bigDraft(5242880, MTIME), HOLDER, 'default')).toMatchObject({ opens: 'committed', badge: null, pin: { kind: 'blob' } });
+  });
+
+  it('docListPinKey: the one key of a listing pin; a stat-pinned draft is keyed by docsRangePinText\'s stat form, never as a fingerprint (X2 P1, review F2)', () => {
+    const place = { kind: 'draft', branch: 'ws/a', head: 'a'.repeat(40), section: 'specs', path: 'a.md' } as const;
+    const stat = { size: 5242880, mtimeNs: MTIME };
+    const key = docsR.docListPinKey({ ...place, fp: null, stat });
+    expect(key).toContain(docsR.docsRangePinText({ kind: 'stat', ...stat }));
+    expect(key).not.toBe(docsR.docListPinKey({ ...place, fp: 'f'.repeat(64), stat }));
+    expect(docsR.docListPinKey({ ...place, fp: 'f'.repeat(64) })).toContain('f'.repeat(64));
+    expect(docsR.docListPinKey({ kind: 'committed', commit: 'c'.repeat(40), servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' }))
+      .toContain('c'.repeat(40));
+  });
 });

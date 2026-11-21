@@ -21,7 +21,7 @@ import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { navigate } from '../src/lib/router';
-import { fakeLoaders, fileResponse, pageAt, treeOk, treeResponse } from './docsFixtures';
+import { NO_RANGE_VISIT, fakeLoaders, fileResponse, pageAt, treeOk, treeResponse } from './docsFixtures';
 
 vi.mock('../src/lib/router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/lib/router')>()),
@@ -177,7 +177,7 @@ function Host(p: { readonly r: Rig; readonly show?: DocsShowOk }): ReactNode {
     tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
     file: { s: 'ok', pin: headPin(), answer: { ...fileResponse(show.text ?? ''), show }, receivedAt: Date.now() },
     freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-    retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
   };
   return (
     <DocsAssetContext value={p.r.assets}>

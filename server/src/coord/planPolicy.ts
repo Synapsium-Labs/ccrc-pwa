@@ -9,6 +9,7 @@ import {
   type PlanTicketDoneBody, type TicketDoneEvidence, type TicketState, type TriageDecision,
 } from '../../../shared/plan.js';
 import { isLinearIdentifier } from '../linear/ops.js';
+import { measuredProjectTeam, type TeamRoutes } from '../linear/route.js';
 import { requestIdOf } from '../linear/planSyncPolicy.js';
 import type {
   BindingRow, Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
@@ -259,6 +260,21 @@ export function parsePlanTicketMove(body: unknown):
     return verbBad('the body moves nothing and drops nothing');
   }
   return { ok: true, move: out };
+}
+
+/** Wave 6 review round 3 F4, carried to wave 7 (design §12, D-8186): a worker's follow-up ticket (`plan ticket-add` filed by
+ *  anyone but the programme's coordinator, stored with source `worker`) is told to that coordinator once, by mail naming the
+ *  ticket's key, title and epic, and that it may move or drop it. The coordinator's own ticket-add, or a programme with no
+ *  coordinator, tells nobody: null. One mail per ticket, since a ticket key is added once. */
+export function followUpTicketMail(t: { slug: string; key: string; title: string; epic: string; caller: string; owner: string | null }):
+  { to: string; subject: string; body: string } | null {
+  if (t.owner === null || t.caller === t.owner) return null;
+  return {
+    to: t.owner,
+    subject: `follow-up ticket ${t.key} filed in ${t.slug}`,
+    body: `${t.caller} filed a follow-up ticket in your plan of ${t.slug}: ${t.key}, "${t.title}", in epic ${t.epic}. It is yours `
+      + `to keep, move to another epic or checkpoint, or drop with a reason (\`plan ticket-move\`).`,
+  };
 }
 
 /** `plan phase-ref`: `{ op: 'add' | 'remove', phase, ref: { kind, key } }` or `{ op: 'carry', from, to, ticket }` (D17). The
@@ -783,42 +799,94 @@ export function linearOwnerOf(project: string, f: OwnerFacts):
   return { id, source: f.named !== null ? 'named' : 'default', live: p === 'alive', gone: p === 'dead' || p === 'absent' };
 }
 
-/** D-8183 (§7.5, design call): the project whose Linear owner applies to a team key: the one marked `ownsTeam` among those with
- *  that key (compared upper-case), else the one that set the key first (the lowest `order`), else, when none has an order, the
- *  only holder; null when no project holds the key. The ONE place the rule is written: the hierarchy routes' `ownerNow`, the
- *  triage route and the drift pass all ask it. */
-export function teamOwnerProject(teamKey: string, rows: readonly HierarchyProjectFacts[]): string | null {
-  const key = teamKey.toUpperCase();
-  const holders = rows.filter((r) => r.teamKey !== null && r.teamKey.toUpperCase() === key);
-  const marked = holders.find((r) => r.ownsTeam);
-  if (marked !== undefined) return marked.project;
-  const ordered = holders.filter((r) => r.order !== null).sort((x, y) => (x.order as number) - (y.order as number));
-  return (ordered[0] ?? holders[0])?.project ?? null;
+/** D-8183 (§7.5): the marked holder, else the one that set the key first, else the first holder without an order. */
+function rankHolders(holders: readonly HierarchyProjectFacts[]): HierarchyProjectFacts | undefined {
+  return holders.find((r) => r.ownsTeam)
+    ?? holders.filter((r) => r.order !== null).sort((x, y) => x.order! - y.order!)[0]
+    ?? holders[0];
 }
 
-/** What the owner rule reads of the world (the latest programme's coordinator, and a session's standing): `OwnerFacts` less the
- *  named owner and the shared-team project, which the rows decide. */
+const teamHolders = (team: string, rows: readonly HierarchyProjectFacts[]) => rows.filter((r) => r.teamKey?.toUpperCase() === team.toUpperCase());
+const NO_HOLDER = { kind: 'none', reason: null } as const;
+type NoTeamOwner = { kind: 'none'; reason: 'team-ambiguous' | null };
+type ProjectPick = { kind: 'owner'; row: HierarchyProjectFacts } | NoTeamOwner | { kind: 'unmeasured'; possible: readonly HierarchyProjectFacts[] };
+
+/** The one workspace-qualified owner rule (D-8808). A holder pinned to this workspace that outranks every row naming the key is the
+ *  owner whatever the routing says (a failed listing and an unreadable slot answer alike); the answer is unmeasured only when an
+ *  unpinned row that outranks it exists and its routing cannot be read. The candidates on `unmeasured` are for refusals only. */
+export function teamOwnerProject(team: string, rows: readonly HierarchyProjectFacts[], workspace: string, routes: TeamRoutes | null): ProjectPick {
+  const holders = teamHolders(team, rows).filter((r) => r.workspaceId == null || r.workspaceId === workspace);
+  const best = rankHolders(holders);
+  if (best === undefined) return NO_HOLDER;
+  const pinned = rankHolders(holders.filter((r) => r.workspaceId === workspace));
+  const unmeasured = (): ProjectPick => ({ kind: 'unmeasured', possible: pinned === undefined || pinned === best ? [best] : [best, pinned] });
+  const own = best.workspaceId == null ? measuredProjectTeam(routes, { teamKey: team, workspaceId: null }) : null;
+  if (pinned === undefined && own?.kind === 'refused' && own.word === 'team-ambiguous') return { kind: 'none', reason: 'team-ambiguous' };
+  if (own === null) return { kind: 'owner', row: best };
+  if (own.kind === 'unmeasured') return unmeasured();
+  if (own.kind === 'slot' && own.slot.workspaceId === workspace) return { kind: 'owner', row: best };
+  return pinned === undefined ? NO_HOLDER : { kind: 'owner', row: pinned };
+}
+
+/** What the owner rule reads beyond the rows: the latest programme coordinator and a session's standing. */
 type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
+type Owner = ReturnType<typeof linearOwnerOf> & { kind: 'owner'; project: string };
+export type TeamOwner = Owner | NoTeamOwner | { kind: 'unmeasured'; possibleIds: readonly string[] };
 
-/** The Linear owner of a team (`teamOwnerProject`'s project, then `linearOwnerOf` with that project's own named owner), with the
- *  project it was decided for; null when no project holds the key. */
-export function linearOwnerOfTeam(
-  teamKey: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
-): (ReturnType<typeof linearOwnerOf> & { project: string }) | null {
-  const project = teamOwnerProject(teamKey, rows);
-  if (project === null) return null;
-  const row = rows.find((r) => r.project === project)!;
-  return { ...linearOwnerOf(project, { named: row.linearOwner, ownsTeamProject: null, ...f }), project };
+const ownerFor = (project: string, named: string | null, f: OwnerReads): Owner =>
+  ({ kind: 'owner', project, ...linearOwnerOf(project, { named, ownsTeamProject: null, ...f }) });
+const resolvePick = (pick: ProjectPick, f: OwnerReads): TeamOwner => {
+  if (pick.kind === 'owner') return ownerFor(pick.row.project, pick.row.linearOwner, f);
+  if (pick.kind === 'none') return pick;
+  return { kind: 'unmeasured', possibleIds: pick.possible.flatMap((r) => {
+    const id = r.linearOwner ?? f.latestProgrammeCoordinator(r.project);
+    return id === null ? [] : [id];
+  }) };
+};
+
+/** The key-only diagnostic for a door with no workspace to act on. It can never authorize an issue read or write. */
+export function teamOwnerDiagnostic(team: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads): Owner | NoTeamOwner {
+  const row = rankHolders(teamHolders(team, rows));
+  return row === undefined ? NO_HOLDER : ownerFor(row.project, row.linearOwner, f);
 }
 
-/** The Linear owner that applies to one project (design §7.5): its team's owning project's (`linearOwnerOfTeam`) when it holds a
- *  key, else its own named owner or its latest programme's coordinator; with the project the owner was decided for. */
-export function linearOwnerOfProject(
-  project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
-): ReturnType<typeof linearOwnerOf> & { project: string } {
+export function linearOwnerOfTeam(team: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, workspace: string, routes: TeamRoutes | null): TeamOwner {
+  return resolvePick(teamOwnerProject(team, rows, workspace, routes), f);
+}
+
+/** Read a project's team owner, and its workspace for waiting-issue checks, without a project fallback. */
+function projectTeamOwner(row: Pick<HierarchyProjectFacts, 'teamKey' | 'workspaceId'> | undefined, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): { pick: ProjectPick; workspace: string | null } {
+  if (row === undefined || row.teamKey === null) return { pick: NO_HOLDER, workspace: null };
+  const pin = row.workspaceId ?? null;
+  if (pin !== null) return { pick: teamOwnerProject(row.teamKey, rows, pin, routes), workspace: pin };
+  const route = measuredProjectTeam(routes, { teamKey: row.teamKey, workspaceId: null });
+  if (route.kind === 'unmeasured') return { pick: { kind: 'unmeasured', possible: [] }, workspace: null };
+  if (route.kind === 'refused') return { pick: route.word === 'team-ambiguous' ? { kind: 'none', reason: route.word } : NO_HOLDER, workspace: null };
+  return { pick: teamOwnerProject(row.teamKey, rows, route.slot.workspaceId, routes), workspace: route.slot.workspaceId };
+}
+
+/** Whether a project row's team owner is not measured: the one pick the hierarchy card's owner display reads, so the console's
+ *  migration state and Reshape cannot disagree with it (D-8186, D-8808). */
+export function teamOwnerUnmeasured(row: Pick<HierarchyProjectFacts, 'teamKey' | 'workspaceId'>, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): boolean {
+  return projectTeamOwner(row, rows, routes).pick.kind === 'unmeasured';
+}
+
+/** The project fallback is for display and handoff only, and applies only on a measured `none`. */
+export function linearOwnerOfProject(project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, routes: TeamRoutes | null): Owner | Extract<TeamOwner, { kind: 'unmeasured' }> {
   const row = rows.find((r) => r.project === project);
-  const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f);
-  return viaTeam ?? { ...linearOwnerOf(project, { named: row?.linearOwner ?? null, ownsTeamProject: null, ...f }), project };
+  const owner = resolvePick(projectTeamOwner(row, rows, routes).pick, f);
+  return owner.kind === 'none' ? ownerFor(project, row?.linearOwner ?? null, f) : owner;
+}
+
+/** An owner item cannot settle on the project fallback or with an issue for its current team still waiting. */
+export function ownerItemReady(
+  project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, routes: TeamRoutes | null,
+  waiting: readonly { teamKey: string; workspaceId: string }[],
+): boolean {
+  const row = rows.find((r) => r.project === project);
+  const { pick, workspace } = projectTeamOwner(row, rows, routes);
+  const owner = resolvePick(pick, f);
+  return owner.kind === 'owner' && owner.live && !waiting.some((issue) => workspace === issue.workspaceId && row?.teamKey?.toUpperCase() === issue.teamKey.toUpperCase());
 }
 
 // ── The inbound path's bodies and verdict (Task 4.3) ──
@@ -884,11 +952,12 @@ export function parsePlanTake(body: unknown): { ok: true; take: PlanTakeBody } |
 }
 
 /** Who may triage which issue: only the team's Linear owner (`not-linear-owner`, judged first), and only an issue that is
- *  inbound and still waiting or mailed (`issue-not-inbound`). */
+ *  inbound and still waiting or mailed (`issue-not-inbound`). When workspace ownership is unmeasured, the key-only owner
+ *  can learn the retry word, but that diagnostic can never authorize an act. */
 export function triageVerdict(
-  caller: string, owner: { id: string | null }, row: Pick<InboundRow, 'state'> | null,
-): { ok: true } | { ok: false; word: 'not-linear-owner' | 'issue-not-inbound' } {
-  if (owner.id === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner' };
+  caller: string, owner: { id: string | null }, row: Pick<InboundRow, 'state'> | null, possibleOwnerIds: readonly string[] = [],
+): { ok: true } | { ok: false; word: 'not-linear-owner' | 'issue-not-inbound' | 'unreachable' } {
+  if (owner.id !== caller) return { ok: false, word: possibleOwnerIds.includes(caller) ? 'unreachable' : 'not-linear-owner' };
   if (row === null || (row.state !== 'waiting' && row.state !== 'mailed')) return { ok: false, word: 'issue-not-inbound' };
   return { ok: true };
 }

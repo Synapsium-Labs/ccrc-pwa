@@ -23,7 +23,7 @@ import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import {
-  BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, SERVED, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, holder,
+  BLOB_2, COMMIT_A, COMMIT_B, FP_1, NO_RANGE_VISIT, RAN, SERVED, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, holder,
   okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 
@@ -48,7 +48,7 @@ function visitOf(tree: DocsTreeOk, over: Partial<DocsVisit> = {}, receivedAt = N
   return {
     tree: { s: 'ok', answer: treeResponse(tree), receivedAt },
     file: { s: 'none' }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-    retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     ...over,
   };
 }
