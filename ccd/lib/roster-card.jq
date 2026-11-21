@@ -14,13 +14,25 @@
 #
 # Data for jq, never executed: installed 0644 at `~/.cc-sessions/lib/roster-card.jq` by deploy.sh's agent lane and by
 # `ccrc install`. A missing file is a jq that fails to load, which the hook answers as "no card" (fail open).
+#
+# D-8126 (autonomy plan A9-1, spec §9.2): the card's second line is `roster_autonomy_line`, a LITERAL of this file, so no
+# server byte reaches it: it re-states coordinator clause 21 to a context a compaction emptied. THE CAP IS STRUCTURAL: the
+# header, that line, the collapse line at its longest and the awaiting-you line are reserved before any run line is
+# admitted; the awaiting-you list collapses into "+N more" under what is left; and the joined card is clipped at `$max`
+# last, so no reply, however long its fields or however many its runs, makes the card longer than `$max` or cuts the
+# autonomy line (the header and the line together are about 330 characters).
+def roster_autonomy_line: "ccrc-autonomy: before asking the operator, read your goals (`ccrc-api goals show <slug>`), decide, record (`ccrc-api calls record`), continue; stop only for an operator-only act or a physical block (coordinator clause 21).";
 def roster_card($me; $now; $max):
   def s: tostring | gsub("[^A-Za-z0-9._:/-]"; "") | .[0:40]; def n: if type == "number" then floor else 0 end;
   def age($t): (($now - $t) / 1000 | floor) as $x | if $x < 3600 then "\(($x / 60 | floor))m" elif $x < 172800 then "\(($x / 3600 | floor))h" else "\(($x / 86400 | floor))d" end;
   [.runs[]? | select(.claimedBy == $me and (.state | IN("done", "failed") | not))] as $r |
   if ($r | length) == 0 then empty else [$r[] | "#\(.id | n) \(.program | s) w\(.wave | n)\(if .waveOf then "/\(.waveOf | n)" else "" end) \(.state | s) worker=\(.sessionId // "none" | s) \(age(.dispatchedAt // .openedAt)) unread=\(.unreadMail | n)"] as $l |
     ([$r[] | select(.state == "awaiting-review") | "review #\(.id | n)"] + [$r[] | select((.health.mailParked | n) > 0) | "parked mail #\(.id | n) (\(.health.mailParked | n))"]) as $w |
-    ("awaiting you: " + (if ($w | length) > 0 then ($w | join("; ")) else "nothing" end)) as $f |
     "ccrc-roster: \($r | length) open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`." as $h |
-    (reduce $l[] as $x ({o: [], n: 0}; if ([$h] + .o + [$x, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
-    ([$h] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") end;
+    roster_autonomy_line as $a |
+    "+\($l | length) more open runs: ccrc-api runs list" as $m |
+    ($max - ([$h, $a, $m] | join("\n") | length) - 1) as $fb |
+    (reduce $w[] as $x ({o: [], n: 0}; if ("awaiting you: " + (.o + [$x, "+\($w | length) more"] | join("; ")) | length) <= $fb then .o += [$x] else .n += 1 end)) as $q |
+    ("awaiting you: " + (if ($w | length) > 0 then ($q.o + (if $q.n > 0 then ["+\($q.n) more"] else [] end) | join("; ")) else "nothing" end)) as $f |
+    (reduce $l[] as $x ({o: [], n: 0}; if ([$h, $a] + .o + [$x, $m, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
+    ([$h, $a] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") | .[0:$max] end;
