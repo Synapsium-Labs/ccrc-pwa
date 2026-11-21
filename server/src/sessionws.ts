@@ -582,6 +582,14 @@ export class SessionStream implements FeedSubscriber {
     this.send(frame);
   }
 
+  /** H2 (D-8872; spec §4.3, §8): answer the client's `helper-report` request with that one report, which the reader holds
+   *  for the rows it drew (`model.ts#reportAnswer` decides). A stream whose reader has not read yet sends nothing: it read no
+   *  id, so it cannot say one was lost, and the PWA asks again after this stream's first frame (review 3072 F4). */
+  helperReport(id: string): void {
+    const answer = this.workflows?.reportOf(id) ?? null;
+    if (answer !== null) this.send(answer);
+  }
+
   /**
    * This session's own outstanding mail (Build 7 Task 6, PR J) — read
    * directly off `CoordStore.outstandingMailFor`, the SAME in-process call

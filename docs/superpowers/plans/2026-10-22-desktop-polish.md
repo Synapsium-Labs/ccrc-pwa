@@ -5058,6 +5058,121 @@ goes red or its disposition is recorded in the note, `tsc` passes for `server`, 
 **Rollback.** A plain revert: the frame's new members are additive (an older PWA ignores them), and the roster's `id` never
 leaves the server.
 
+### Task H2: the Helpers section in the session panel (D-8872) — now
+
+**What.** C49's H2 row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4, §5, §8 Table 11, §10 and
+Table 13's H2 row), plus the helper report moved here from H1b (the coordinator's split on review 2900 F14). The operator's
+words of 2026-11-19: "inside the session in the right hand panel I still want to see actual information about any running
+workflows and subagents, for the session i'm inside of, in a useful way though please". H2 draws the Helpers section from
+what H1a and H1b put on the frame. Built red first: the branch's first commit holds the tests, each failing on `main`
+except five labelled characterization pins.
+
+- `ui/src/components/workflow-strip.tsx` (the design system), extended in place: the workflow strip of D-5560 becomes the
+  Helpers section. `HelpersStrip` under the transcript (a head, a glance of two running rows, then the rows and the
+  finished fold) and `HelpersPanel` in a column of its own; a row's facts per Tables 5 and 6, each measured or left out;
+  each state's glyph (review 2900 F16); a finished row with a report opens to its first four lines, Show all and Copy.
+  `workflow-strip.css` holds the styles (the fold toggle, the opening row and the report's links at `--tap-min`, review
+  2900 F18; tokens left out of a section under 480 px wide).
+- `pwa/src/session/helpersWords.ts` (L1, C3, new): the head's counts and its "not known" lines (Table 4), said once and only
+  while a row they concern is drawn, and the main list and the finished fold. Absence draws nothing (review 3014 F13).
+- `pwa/src/inspector/HelpersSection.tsx` (L4, C3, new): the rail's section at 1600 px and up, and the column's strip, which
+  `SessionScreen` draws only while the rail does not hold it (the mail and task strips' rule, so a hidden rail brings it
+  back). `InspectorSections` and Refined's `InspectorRail` place it after Mail.
+- `pwa/src/stores/session.ts` (L4, C3): `requestHelperReport(id)` sends the request; the reducer applies the answer into
+  `reports`, keeps only the ids the frame still carries, and the three reset sites clear it.
+- `server/src/workflows/model.ts` (L1, C3): `keepWorkflows` replaces `selectRows` and asks `isFinishedKept`, the keep's one
+  clock (review 2900 F5); `holdReports`, `boundReports` and `reportAnswer`. `shared/workflows.ts`: `HelperReportRequest`,
+  `HelperReportAnswer`; `WORKFLOW_EVICT_MS` retired with its pins.
+- `server/src/workflows/read.ts` (L3, C3): `finishedView` asks `isFinishedKept`; a kept finished run is held as read and
+  left quiet (no stat per reading); `SessionHelpers` holds the reports and answers `reportOf`.
+- `server/src/sessionws.ts` (L4, C3): `helperReport(id)` sends the answer, one method. `server/src/server.ts`:
+  `asSessionClientMsg` reads the request (an agent id by `isHelperId`, else null) and the socket handler routes it, by
+  co-edit with the holder of its claim (consents of 2026-11-21, below).
+- `shared/api.ts`: the import line, `SessionClientMsg` and the frame's union edited in place, zero net code lines (it
+  stands at 5110 of its 5140 cap here; #3134 takes it to 5140), by co-edit with the holder of its claim.
+
+**The carries, each taken.** Review 2900: F5 (the keep's one owner, and a kept finished run costs no stat per reading), F7
+and F15 (a report masked, then cut at 16 KiB with `cutAt`'s back-off, at parse time since H1a; held and answered here, with
+its `cut`), F14 (the report request, on all three layers), F16 (each state's glyph: only `running` draws the filled diamond
+in the running ink; `launched`, `no longer listed`, `session ended` and a state left out draw the hollow diamond in a
+neutral ink; `done` ✓ done ink, `failed` ✗ dead ink, `stopped` ■ and `finished` ✓ neutral; a workflow ▣ running, ✓, ✗, ■;
+the mockup's two stale rows redrawn and its figure re-rendered), F18 (the fold toggle, the opening row and Show all and
+Copy floor at `--tap-min`). Review 2961 F8 (a finished workflow with no readable end time is drawn once: `keepWorkflows`
+applies `noEndShown`'s rule). Review 3014 F13 (the words module says why absence draws nothing).
+
+**Consents.** `shared/api.ts` (claim 6133, run 2958): yes, 2026-11-21, for the import line, `SessionClientMsg` and the
+frame's member with its comment. `server/src/server.ts` (claim 6166, run 3027): yes, 2026-11-21, for the parser and the
+socket handler, and then for the one `isHelperId` import line; the hierarchy route registration is untouched. H1c (run
+3044): its call site is in `SessionWorkflows.readAll`, not inside `SessionHelpers.read`; I said yes, 2026-11-21, to its
+lines in `read.ts`, `model.ts` and `sessionws.ts` and named mine, which do not overlap.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8872** — `helpers-section-drawn`: Task H2, issued on 2026-11-21. The Helpers section is drawn from the frame, the
+  workflow keep is the helpers' ten minutes, and a finished helper's report travels on request. It departs from the spec in
+  these places:
+  - `reports-held-for-drawn-rows`: the reader holds the reports of the fold's own end facts: every report of a row drawn
+    with `hasReport`, and the newest `HELPER_KEPT_MAX` of the rest by end time (so at most 40 of at most 16 KiB each), and
+    answers a report only for a row the last reading drew with `hasReport`; §8 says only that a report is at most 16 KiB.
+  - `report-answer-null`: an unknown or evicted id is answered `report: null`, which the row says as "This report is no
+    longer held"; an older server never answers, and the row then shows nothing, never that there is none.
+  - `keep-workflows-replaces-select-rows`: `selectRows` retires; `keepWorkflows` is the workflow arm's keep, which also
+    applies the 20-row cap and the 40-agent cut that H1a named for H2. A finished workflow with no readable end time cannot
+    arise from today's reader (`summaryView` always gives the summary's file time), so its draw-once rule guards the type's
+    null.
+  - `finished-view-gates-on-the-summary-time`: `finishedView` asks `isFinishedKept` of the summary's mtime, which is never
+    earlier than the end it records, before it reads the summary; `keepWorkflows` rules on the row's own end time.
+  - `kept-run-quiet-from-first-read`: a kept finished run is re-stat'ed every `RESTAT_EVERY` readings (about 30 s), like a
+    dropped one, so a resume in place of a run inside its keep shows up to 30 s later than before.
+  - `head-counts`: the head counts `N running` (Agent helpers and workflows), else `N helpers` for the main list, then
+    `M finished`; a `no longer listed` or `session ended` row is in the main list and not counted as running.
+  - `workflow-unreadable-in-the-head`: the old strip's two unreadable sentences move to the head, as `workflow state could
+    not be read` and `workflow state not re-read: showing the last read`; Table 4 does not list them.
+  - `rail-panel-always-open`: in the rail the section is always open, with its counts and notes as one line under the
+    rail's own heading; the rail places it after Mail.
+  - `tokens-follow-the-section-width`: line 2 leaves the tokens out whenever the section is under 480 px wide (a container
+    query), so in the 320 px rail too, not only on a phone.
+  - `workflow-row-opens-its-phases`: a workflow row, running or finished, opens by its line 1 to the phases and agents the
+    old strip showed, with its done-agents fold; Table 6 names only finished workflows.
+  - `glance-at-every-width`: the collapsed glance (line 1 of the first two running rows) is the same at every width; §10
+    describes it for the phone.
+  - `finished-time-is-the-duration`: a finished row's time is its duration (end less start) in the shared formatter, so
+    Table 6's `finished · 6m` reads `finished · 6m0s`.
+
+Spec corrections for the coordinator to fold: §4.3 and §8 (the held reports, their bound, and the null answer); §4.1's
+Table 4 (the workflow-unreadable lines); §4.2's Table 5 and §10 (tokens by the section's width); §4.3's Table 6 (a running
+workflow opens too); Table 12 (`HelpersSection.tsx` also exports the column's strip; the design system's `HelpersPanel`).
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H1a's and H1b's: each
+TypeScript file held as a Python module's text, each mutant written into a scratch copy of the tree outside the work tree,
+removed after the run, its test files run once through `ccrc test`): 77 mutants at the tip, 73 killed and 4 accepted (two change only what the stream holds in memory, never an
+answer; one is a branch the reader cannot reach; the fourth, `bound-shown-without-report`, does change an answer and became
+the code in fix round 1, review 3072 F5). The first pass found one defect, fixed here (a notification that is no row's could
+evict a drawn row's report: `boundReports`), and seven missing cases, each added. Fix round 1 ran 44 mutants of the branches
+it changed: 44 killed. The tables are in `docs/superpowers/programs/desktop-polish/h2.md`.
+
+**Looked at in the real app.** The production build, through the browser harness, at 360, 1280 and 1600 px, in Refined and
+Instrument, dark (Phosphor) and light, the strip collapsed and open, the fold open and a report expanded: the screenshots are
+in the note and under `docs/design/2026-11-19-session-helpers-design/h2/`. The first look found a defect, fixed in this
+task: at 360 px the glance cut line 1 to one letter (the row glyph's grid area leaked into the glance's grid); the
+real-Chrome test now checks the glance's order, room and line. Fix round 1 retook every image, and its look found the narrow
+rail clipping a too-long state group, fixed there.
+
+**Fix round 1 (review 3072).** F1 (the meter-ring block of `lanes-row.browser.test.ts` selects the Helpers row's meter), F2
+(an answer is kept with its row's end), F3 (a state outside the vocabulary draws the neutral glyph), F4 (no answer before the
+stream's first reading; the store owns the ask and asks again after a stream's first frame; no wire change), F5, F6 (spec §10
+followed: at the phone width elapsed is in line 2), F7, F8, F11, F12, F13 and F14's separators, each with its case; F9, F10
+and the rest of F14 are records in the note. **The matrix that binds H2 is its brief's** (360, 1280 and 1600 px, both skins,
+light and dark, the fold open and closed, a report expanded); the "Acceptance (the matrix, per PR)" section below, with 390
+and 1920, is the programme's final gate, not this task's.
+
+**Acceptance.** The new suites pass (server 2 files, PWA 4 files and the real-Chrome file), every suite that imports a
+changed module passes, every mutant of a new decision branch goes red or its disposition is recorded in the note, `tsc`
+passes for `server`, `pwa` and `ui`, and the PWA builds.
+
+**Rollback.** A plain revert: the request is additive (an older server ignores it) and the answer is a new frame an older
+PWA's reducer ignores; the keep reverts to 30 s with the old constant.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
