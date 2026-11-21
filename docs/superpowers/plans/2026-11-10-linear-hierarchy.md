@@ -487,11 +487,11 @@ number from `POST /api/ledger/deviations`.
   project ownership: a coordinator suggests for any keyless project its programme files into, and the console shows who
   suggested; the Overlord's call says only "suggested by a coordinator" (review 2971 F6, F7). The README's
   machine-lane count word moves (ninety-six after the absorbs) under the packet terms of the run that holds README.md. The wave's one
-  migration took slot 116 after the absorbs of main (wave 7 took 114, the approvals park 115). One bend of the rings rule is stated
-  here, not hidden: the choice of which inbound row a `plan triage` acts on (searching every workspace that holds the key,
-  preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
-  another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
-  it into the policy. The migration lane (wave 7's code) and the plan-map route resolve a team through the project row's
+  migration took slot 116 after the absorbs of main (wave 7 took 114, the approvals park 115). The choice of which inbound row a
+  `plan triage` acts on (searching every workspace that holds the key, preferring the caller's) decides in `planPolicy.ts`,
+  as the pure `triageLookup` and `triageChoice` beside `triageVerdict`, since run 3155 (`w8-triage-l1`) moved it out of
+  `planRoutes.ts`, where it had stayed as a stated bend of the rings rule while `planPolicy.ts` was held by another wave; the
+  route reads and acts only, and the verdict still requires the chosen row's owner to be the caller. The migration lane (wave 7's code) and the plan-map route resolve a team through the project row's
   workspace since run 3027 built `w8-migration-workspace` (reviews 2997 and 3038). The start, open-issue read and console
   state never select the first workspace holding a key. Reshape returns the routing refusal before checking migration state:
   a shared key on a row with no workspace is `team-ambiguous`, even when another workspace has already migrated it. For a
@@ -526,9 +526,10 @@ number from `POST /api/ledger/deviations`.
   programme whose membership cannot be measured. Ambiguous inbound with no owner still waits quietly and counts in the console.
   Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
-  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill`, `w8-triage-l1` and
+  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and
   `w8-ambiguous-notice` (after the pilot);
-  `w8-write-ambiguous` was built in the review's fix round and dropped, and `w8-migration-workspace` by run 3027. Record: the
+  `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027, and
+  `w8-triage-l1` by run 3155. Record: the
   wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,

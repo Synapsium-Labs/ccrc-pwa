@@ -806,7 +806,7 @@ function rankHolders(holders: readonly HierarchyProjectFacts[]): HierarchyProjec
     ?? holders[0];
 }
 
-const teamHolders = (team: string, rows: readonly HierarchyProjectFacts[]) => rows.filter((r) => r.teamKey?.toUpperCase() === team.toUpperCase());
+export const teamHolders = (team: string, rows: readonly HierarchyProjectFacts[]) => rows.filter((r) => r.teamKey?.toUpperCase() === team.toUpperCase());
 const NO_HOLDER = { kind: 'none', reason: null } as const;
 type NoTeamOwner = { kind: 'none'; reason: 'team-ambiguous' | null };
 type ProjectPick = { kind: 'owner'; row: HierarchyProjectFacts } | NoTeamOwner | { kind: 'unmeasured'; possible: readonly HierarchyProjectFacts[] };
@@ -829,7 +829,7 @@ export function teamOwnerProject(team: string, rows: readonly HierarchyProjectFa
 }
 
 /** What the owner rule reads beyond the rows: the latest programme coordinator and a session's standing. */
-type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
+export type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
 type Owner = ReturnType<typeof linearOwnerOf> & { kind: 'owner'; project: string };
 export type TeamOwner = Owner | NoTeamOwner | { kind: 'unmeasured'; possibleIds: readonly string[] };
 
@@ -949,6 +949,40 @@ export function parsePlanTake(body: unknown): { ok: true; take: PlanTakeBody } |
   const text = arm[field];
   if (!textOk(text, PLAN_BOUNDS.reasonChars, false) || text.trim() === '') return verbBad(`${field} is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
   return { ok: true, take: arms[0] === 'close' ? { issue, close: { why: text } } : { issue, return: { note: text } } };
+}
+
+/** `plan triage`'s lookup (D-8808): the workspaces whose inbound row under the identifier the route reads — each holder's resolved
+ *  workspace, every workspace the listing could not read, every slot listing the key while an unpinned holder's routing is unmeasured,
+ *  and each pinned holder's workspace whose routing is unmeasured (a stored pin can name an unmeasured legacy workspace). With no
+ *  workspace candidate it answers `[null]`: an identifier unique across workspaces. `team` must be upper-cased, as the route
+ *  passes it: a slot's `teamKeys`, upper-cased when listed, are compared to it exactly. */
+export function triageLookup(
+  team: string, rows: readonly HierarchyProjectFacts[], ws: ReadonlyMap<string, string | null>, routes: TeamRoutes | null,
+): readonly (string | null)[] {
+  const holders = teamHolders(team, rows);
+  const unpinnedUnmeasured = holders.some((r) => r.workspaceId == null)
+    && measuredProjectTeam(routes, { teamKey: team, workspaceId: null }).kind === 'unmeasured';
+  const where = [...new Set([
+    ...holders.map((r) => ws.get(r.project)).filter((w): w is string => w != null),
+    ...(routes?.unreadableWorkspaces ?? []),
+    ...(unpinnedUnmeasured ? (routes?.slots ?? []).filter((s) => s.teamKeys.includes(team)).map((s) => s.workspaceId) : []),
+    ...holders.flatMap((r) => r.workspaceId != null && routes !== null
+      && measuredProjectTeam(routes, { teamKey: team, workspaceId: r.workspaceId }).kind === 'unmeasured' ? [r.workspaceId] : []),
+  ])];
+  return where.length === 0 ? [null] : where;
+}
+
+/** `plan triage`'s row choice (D-8808): among the rows the lookup found for the key, the one whose owner in its own workspace is the caller,
+ *  else one the caller may own while that ownership is unmeasured, else the first; with none, the key-only diagnostic, which can never
+ *  authorize a read or write. */
+export function triageChoice<R extends Pick<InboundRow, 'teamKey' | 'workspaceId'>>(
+  team: string, caller: string, found: readonly R[], rows: readonly HierarchyProjectFacts[], f: OwnerReads, routes: TeamRoutes | null,
+): { row: R | null; owner: TeamOwner } {
+  const each = found.filter((r) => r.teamKey.toUpperCase() === team.toUpperCase())
+    .map((row) => ({ row, owner: linearOwnerOfTeam(team, rows, f, row.workspaceId, routes) }));
+  return each.find((x) => x.owner.kind === 'owner' && x.owner.id === caller)
+    ?? each.find((x) => x.owner.kind === 'unmeasured' && x.owner.possibleIds.includes(caller))
+    ?? each[0] ?? { row: null, owner: teamOwnerDiagnostic(team, rows, f) };
 }
 
 /** Who may triage which issue: only the team's Linear owner (`not-linear-owner`, judged first), and only an issue that is
