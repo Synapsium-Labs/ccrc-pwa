@@ -466,24 +466,38 @@ export function cardFacts(f: SessionFactSet): CardFacts {
   };
 }
 
-/** Whether the header's meta row (`SessionMeta`, header mode) draws ANY cell for these facts: one reading of its cells' own
- *  conditions, so the details row can be decided from the facts (`detailsHaveFacts`, desktop polish C51 review 2963 F3 to F6)
- *  rather than from a stylesheet's reading of what rendered. The cells, in `SessionMeta`'s order: the hold (unless the context
- *  is the programme, which the coordination row names), the child marker, the last spawn, the ask-state chip, the cleanup
- *  facts, the task tally, the graph counter, the current build, and every marker but
- *  the spawn and the restart (the header draws those as chips of its own). `header-details-facts.test.tsx` renders
- *  `SessionMeta` for each cell alone and requires this to agree with whether it drew one. */
-export function headerMetaHasCells(f: SessionFactSet): boolean {
+/** One cell of the header's meta row (`SessionMeta`, header mode): which fact it draws, and for a marker or a cleanup fact,
+ *  which one. */
+export type HeaderMetaCell =
+  | { readonly key: 'hold' | 'child' | 'spawn' | 'ask-state' | 'tasks' | 'graph' | 'build' }
+  | { readonly key: 'cleanup'; readonly text: string; readonly at: number }
+  | { readonly key: 'marker'; readonly fact: Fact };
+
+/** The header's meta row, cell by cell, in `SessionMeta`'s order: the ONE reading of which cells it draws (desktop polish HF2,
+ *  D-8877; review 2995 F3). `SessionMeta` draws exactly these, and `headerMetaHasCells` asks whether there is one, so the
+ *  details row is decided from the facts (`detailsHaveFacts`, desktop polish C51 review 2963 F3 to F6) and never from a
+ *  second reading of the row's conditions. The cells: the hold (unless the context is the programme, which the coordination
+ *  row names), the child marker (its hedge, when no held run names it), the last spawn, the ask-state chip, the cleanup
+ *  facts, the task tally, the graph counter, the current build, and every marker but the spawn and the restart (the header
+ *  draws those as chips of its own). No subagent and no delegated cell (session helpers H3, D-8875). */
+export function headerMetaCells(f: SessionFactSet): readonly HeaderMetaCell[] {
   const ctx = contextFact(f);
-  return (f.session.held !== null && ctx?.key !== 'programme')
-    || (ctx?.key === 'child-marker' && f.childOf !== null && f.heldRun === null)
-    || f.spawn !== null
-    || f.askState !== null
-    || f.cleanup.length > 0
-    || f.tasks !== null
-    || f.graph !== null
-    || f.build.kind === 'current'
-    || markers(f).some((m) => m.key !== 'spawn' && m.key !== 'restarted');
+  const out: HeaderMetaCell[] = [];
+  if (f.session.held !== null && ctx?.key !== 'programme') out.push({ key: 'hold' });
+  if (ctx?.key === 'child-marker' && f.childOf !== null && f.heldRun === null) out.push({ key: 'child' });
+  if (f.spawn !== null) out.push({ key: 'spawn' });
+  if (f.askState !== null) out.push({ key: 'ask-state' });
+  f.cleanup.forEach((text, at) => { out.push({ key: 'cleanup', text, at }); });
+  if (f.tasks !== null) out.push({ key: 'tasks' });
+  if (f.graph !== null) out.push({ key: 'graph' });
+  if (f.build.kind === 'current') out.push({ key: 'build' });
+  for (const m of markers(f)) if (m.key !== 'spawn' && m.key !== 'restarted') out.push({ key: 'marker', fact: m });
+  return out;
+}
+
+/** Whether the header's meta row draws ANY cell for these facts (`headerMetaCells`, its one reading). */
+export function headerMetaHasCells(f: SessionFactSet): boolean {
+  return headerMetaCells(f).length > 0;
 }
 
 /** What the HEADER shows: every fact, in reading order. A superset of `cardFacts`. */

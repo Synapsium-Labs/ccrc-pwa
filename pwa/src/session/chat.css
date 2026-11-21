@@ -117,8 +117,21 @@
 .chat-facts .sess-worktrees { flex-basis: 100%; min-width: 0; padding: var(--sp-1); }
 /* H3 (D-8875): a row's free-text part is its path, which is long and often one unbroken run. Cut to one line, its text still
    sized Instrument's phone header to the whole path (measured: 42 and 72 px of sideways scroll at 360 and 390); here it wraps,
-   anywhere, so the path is drawn whole on every width and no header grows past the screen. */
+   so the path is drawn whole on every width and no header grows past the screen. HF2 (D-8877; review 3123 F3): each of its
+   pieces (`pathBreaks`: cut after each `/`) is an inline box, which a line breaks after, so the path breaks after a `/` and
+   inside a piece only when the piece is wider than the line, where `anywhere` breaks it (and lets the path's min-content
+   shrink to a character, so it never sizes the header). Plain text broke at a hyphen inside a piece first. */
 .chat-facts .sess-worktrees .proj-work-name-text { white-space: normal; overflow-wrap: anywhere; }
+.chat-facts .sess-worktrees .proj-work-seg { display: inline-block; max-width: 100%; }
+/* HF2 (D-8877; review 3123 F3): below the desk the path takes a line of its own, the row's full width, drawn after the row's
+   short words (what made it, `via` and the disposition), which share the first line. Before, it sat in a narrow middle column
+   between them and broke inside its segments. At a desk it stays in the line. */
+@media (max-width: 899px) {
+  .chat-facts .sess-worktrees .proj-work-name { flex: 1 1 100%; max-width: none; order: 1; }
+}
+/* HF2 (review 3123 F6): a raw worktree's two chips, `inferred` and the `Bash call …` that made it, are one box, so the row
+   wraps them together: D-6999 has them side by side wherever the row is drawn. */
+.chat-facts .sess-worktrees .proj-work-chips { display: inline-flex; flex: none; gap: var(--sp-1); }
 /* The padding is the focus ring's room: the controls' box draws a ring 4px outside itself (2px outline, 2px offset), and
    Refined's phone rail scrolls sideways, so it clips whatever it holds at its own edge: a ring on a box flush with that edge
    was cut (measured in a real Chrome at 360 and 390, review 2864 F4). */
@@ -1962,12 +1975,26 @@ button.metachip:active {
  *  and the key hints.                                                 *
  * ------------------------------------------------------------------ */
 /* The mail, workflow and task strips in ONE container under the transcript,
-   in both skins, until S8 and S12 place them by width. Layout only. */
+   in both skins, until S8 and S12 place them by width. Layout only.
+   HF2 (D-8877; review 3123 F5 and F7): the strips give way before the
+   composer does. With the header's details and the Helpers section both open,
+   the header, the open section (at most half the viewport, H2) and the
+   composer were taller than the pane, the transcript already at nothing: at a
+   desk the chat's `overflow: hidden` cut the composer's key-hint row at the
+   pane's foot, under Instrument's status bar (measured: 22 px at 1280 and
+   1600), and on a phone the composer fell below the window (82 px at 360).
+   The container may shrink, and the Helpers section in it, whose rows are a
+   scroll body, never below its head; every other strip keeps its height. */
 .chat-strips {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+.chat-strips .helpers-strip {
+  flex-shrink: 1;
+  min-height: calc(var(--tap-min) + 2px);
 }
 /* THE READING COLUMN. From 900 the transcript's rows, the strips and the
    composer sit in one column of the skin's measure (`--measure-chat`: 1200 in

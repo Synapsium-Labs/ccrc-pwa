@@ -26,12 +26,13 @@
 // The classes stay `sess-*`. fleet.css grounds them there and `.sess-meta >
 // *:not(:first-child)::before` punctuates this row's cells from the parent
 // rule — the shape moves, the ground stays.
-import type { CSSProperties, ReactNode } from 'react';
+import { Fragment, type CSSProperties, type ReactNode } from 'react';
 import { RoleBadge, WARN_GLYPH } from '@ccrc/ui';
 import { programmeWaveTail, type ChildRunContext } from './runWords';
 import { GraphChip, LastSpawnChip } from './chips';
 import {
-  COORDINATOR_BADGE, PROGRAMME_BUDGET, cardFacts, heldWords, markers, shortenByToken, type Fact, type MarkerKey, type SessionFactSet,
+  COORDINATOR_BADGE, PROGRAMME_BUDGET, cardFacts, headerMetaCells, heldWords, shortenByToken, type Fact, type MarkerKey,
+  type SessionFactSet,
 } from './sessionFacts';
 import { buildText } from './buildWords';
 import './fleet.css';
@@ -175,39 +176,40 @@ export function SessionMeta({
     );
   }
 
+  // The header draws exactly the cells `headerMetaCells` names, in its order (desktop polish HF2, D-8877; review 2995 F3): that
+  // list is the one reading of which cells this row has, and `detailsHaveFacts` asks it too. The programme and wave are the
+  // coordination row's link in the header (`SessionCoordination`), so the hold cell is listed only for a hold no run explains,
+  // and the child cell only for its hedge. No subagent and no delegated cell (session helpers H3, D-8875): the Helpers section
+  // lists and counts them.
   return (
     <span className="sess-meta" style={metaStyle}>
-      {/* The programme and wave are the coordination row's link in the header (`SessionCoordination`), so here
-          the hold cell renders only for a hold no run explains, and the child cell only for its hedge. */}
-      {ctx?.key === 'programme' ? null : held}
-      {ctx?.key === 'child-marker' ? childCell : null}
-      {/* The last spawn's verdict (spawnWords.ts). */}
-      <LastSpawnChip chip={f.spawn} />
-      {/* Task 19: the ask pre-emption lane's chip (design doc §2.8). Informational only. */}
-      {f.askState !== null && (
-        <span className="sess-ask-state" data-ask-state={f.askState.state} title={f.askState.title}>
-          {f.askState.label}
-        </span>
-      )}
-      {/* The cleanup bucket's merge facts: a merged PR's number and its reclaimable size, as two cells. */}
-      {f.cleanup.map((fact, i) => (
-        <span key={`${session.id}-cleanup-${i}`} className="sess-cleanup-fact">{fact}</span>
-      ))}
-      {f.tasks !== null && (
-        <span className="sess-tally" title="tasks done of total">
-          {f.tasks.done}/{f.tasks.total} tasks
-        </span>
-      )}
-      {/* The read counter (R4) with the gate's suffix (R5, D-1613) — a measured zero is a finding. */}
-      {f.graph !== null && <GraphChip reads={f.graph.reads} gated={f.graph.gated} />}
-      {/* D-8276: the Claude Code build of a session on the newest one (one behind says it in its marker below). */}
-      {f.build.kind === 'current' && <span className="sess-unmeasured" data-build="current">{buildText(f.build.build)}</span>}
-      {/* No subagent and no delegated disclosure (session helpers H3, D-8875): the Helpers section lists and counts them. */}
-      {/* Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
-          above, the header's own restart chip). */}
-      {markers(f).filter((m) => m.key !== 'spawn' && m.key !== 'restarted').map((m) => (
-        <Marker key={m.key} fact={m} full />
-      ))}
+      {headerMetaCells(f).map((c) => {
+        switch (c.key) {
+          case 'hold': return <Fragment key="hold">{held}</Fragment>;
+          case 'child': return <Fragment key="child">{childCell}</Fragment>;
+          // The last spawn's verdict (spawnWords.ts).
+          case 'spawn': return <LastSpawnChip key="spawn" chip={f.spawn} />;
+          // Task 19: the ask pre-emption lane's chip (design doc §2.8). Informational only.
+          case 'ask-state': return f.askState === null ? null : (
+            <span key="ask-state" className="sess-ask-state" data-ask-state={f.askState.state} title={f.askState.title}>
+              {f.askState.label}
+            </span>
+          );
+          // The cleanup bucket's merge facts: a merged PR's number and its reclaimable size, as two cells.
+          case 'cleanup': return <span key={`${session.id}-cleanup-${c.at}`} className="sess-cleanup-fact">{c.text}</span>;
+          case 'tasks': return f.tasks === null ? null : (
+            <span key="tasks" className="sess-tally" title="tasks done of total">{f.tasks.done}/{f.tasks.total} tasks</span>
+          );
+          // The read counter (R4) with the gate's suffix (R5, D-1613) — a measured zero is a finding.
+          case 'graph': return f.graph === null ? null : <GraphChip key="graph" reads={f.graph.reads} gated={f.graph.gated} />;
+          // D-8276: the Claude Code build of a session on the newest one (one behind says it in its marker below).
+          case 'build': return f.build.kind !== 'current' ? null
+            : <span key="build" className="sess-unmeasured" data-build="current">{buildText(f.build.build)}</span>;
+          // Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
+          // above, the header's own restart chip): `headerMetaCells` leaves those two out.
+          case 'marker': return <Marker key={c.fact.key} fact={c.fact} full />;
+        }
+      })}
     </span>
   );
 }

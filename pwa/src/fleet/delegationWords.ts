@@ -36,9 +36,18 @@ export const UNRECOGNISED_WORD = 'unrecognised';
 
 export interface Chip { readonly text: string; readonly title: string }
 
-/** A worktree row's words. `nameAt` is the index of its one free-text part (its path), the only part a narrow row may cut
- *  short; every other part is always drawn whole (D-7783: a phone shows no titles). `null` when the row has no such part. */
+/** A worktree row's words. `nameAt` is the index of its one free-text part, its path (`null` when the row has none). Every
+ *  part is drawn whole (D-7783: a phone shows no titles), the path too since H3 (D-8875): it wraps, at the break points
+ *  `pathBreaks` names, and below the desk on a line of its own (session helpers HF2, D-8877; review 3123 F3 and F8). */
 export interface WorkWords { readonly parts: readonly string[]; readonly title: string; readonly nameAt: number | null }
+
+/** A path cut after each `/`: the row draws each piece as a box of its own, so it breaks between pieces, after a `/`, and inside
+ *  one only when it is wider than its line (review 3123 F3: a hyphen inside a segment is a break a browser takes first when the
+ *  line is filled greedily, so a `<wbr>` alone was not enough, measured). The pieces joined are the path, character for
+ *  character. */
+export function pathBreaks(path: string): readonly string[] {
+  return path.split(/(?<=\/)/).filter((p) => p !== '');
+}
 
 export const WORKTREE_WORD: Readonly<Record<DelegationLeaseSourceKind, string>> = {
   agent: 'agent worktree',
@@ -423,6 +432,13 @@ export const UNOWNED_WORDS = {
   leases: 'Neither session listed',
 } as const;
 
+/** How many of these trees' presence on disk the wire did not measure: only `present` is a measured presence (`workspaceOf`),
+ *  so a newer server's word counts as not measured too. The ONE count the session's worktrees head and the Archive's section
+ *  both say (session helpers HF2, D-8877; review 3123 F14). */
+export function presenceUnmeasured(trees: readonly { readonly workspace: unknown }[]): number {
+  return trees.filter((t) => t.workspace !== 'present').length;
+}
+
 /** The head's one sentence for trees whose presence on disk the wire did not measure; null for none. */
 export function presenceWord(n: number): string | null {
   return n <= 0 ? null : `presence on disk not measured for ${n} tree${n === 1 ? '' : 's'}`;
@@ -495,8 +511,7 @@ export function unownedWork(
     key: l.leaseId, lease: l, project: l.project, where: l.canonicalPath, worktree: l.adminRecord,
     state: worktreeStateParts(l, now), controls: worktreeControls(l, null),
   }));
-  const unmeasured = w.unowned.filter((u) => u.workspace === 'unmeasured').length
-    + leases.filter((r) => r.lease.workspace === 'unmeasured').length;
+  const unmeasured = presenceUnmeasured(w.unowned) + presenceUnmeasured(leases.map((r) => r.lease));
   return { trees, leases, total: trees.length + leases.length, unmeasured };
 }
 
@@ -508,8 +523,10 @@ export function unownedTotal(frame: DelegationProjectionWire | null, sessions: r
 
 /** The fleet foot's one Archived row (review 2966 F5): the same row and the same door (`/archive`) say what is there. The
  *  archived half is the words the row always had (`archived`, null for none); the unowned half is the section's own title
- *  and its count. Null when there is nothing of either. */
-export function archiveDoorWord(archived: string | null, unowned: number): string | null {
-  const parts = [archived, unowned > 0 ? `${UNOWNED_WORDS.title} · ${unowned}` : null].filter((p): p is string => p !== null);
-  return parts.length === 0 ? null : parts.join(' · ');
+ *  and its count. Its halves, in order, joined by ` · ` on the row; none when there is nothing of either, and then no row.
+ *  The row draws each half as one box, so a narrow row breaks between them and never leaves a word of one alone on a line
+ *  (session helpers HF2, review 2988 F8). */
+export function archiveDoorParts(archived: string | null, unowned: number): readonly string[] {
+  return [archived, unowned > 0 ? `${UNOWNED_WORDS.title} · ${unowned}` : null].filter((p): p is string => p !== null);
 }
+

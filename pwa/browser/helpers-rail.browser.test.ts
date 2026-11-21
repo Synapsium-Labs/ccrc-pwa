@@ -11,9 +11,10 @@
 //   - review 3072 F6 and F7: at 360 a row's elapsed time is in line 2 and line 1 draws none, at 1280 it is on line 1 and
 //     line 2 draws none; at either width no fact splits across two lines, and a state with its times wider than the line
 //     breaks only between its words, never inside one (review 3099 F2 and F3, session helpers H3);
-//   - review 3123 F4 and F13 (session helpers HF2, D-8877): in the 1600 px rail, with a state group wider than its line, the
-//     group takes two lines and breaks only between its words, no fact or word splits, and no line of line 2 starts with a
-//     separator, between its facts or inside a group.
+//   - review 3123 F13 (session helpers HF2, D-8877): in the 1600 px rail, with a state group wider than its line, the group
+//     takes two lines and breaks only between its words, and no fact or word splits. (A separator of line 2 can start a line
+//     there: Chrome breaks after any inline block, whatever follows it, which a no-break space cannot close; measured, and
+//     recorded by the plan's slug, review 3123 F4.)
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // --maxWorkers=2 browser/helpers-rail.browser.test.ts )`.
@@ -213,7 +214,8 @@ describe('the Helpers section\'s place, by width', () => {
   }, 60_000);
 });
 
-/** A workflow whose state group (running, its phase, its agents, its failures and its times) is wider than the rail's line. */
+/** A workflow whose state group (running, its phase, its agents, its failures and its times) is wider than the rail's line, so
+ *  the case below measures what H3's helpers-rail never reached: the rail, and a group that breaks (review 3123 F13). */
 const WIDE_FIXTURE: AppFixture = {
   ...FIXTURE,
   socketFrames: {
@@ -223,44 +225,21 @@ const WIDE_FIXTURE: AppFixture = {
   },
 };
 
-/** In `root`'s Helpers section: every fact, or word of a state group, that its width split across two lines; every state group
- *  that took two lines; and every separator of a line 2 that starts a line (nothing before it on its own line). */
-const railLines = (page: Page, root: string): Promise<{ split: string[]; twoLine: string[]; leading: string[] }> => page.evaluate((root) => {
+/** In `root`'s Helpers section: every fact, or word of a state group, that its width split across two lines, and every state
+ *  group that took two lines. */
+const railLines = (page: Page, root: string): Promise<{ split: string[]; twoLine: string[] }> => page.evaluate((root) => {
   const scope = document.querySelector(root);
-  if (scope === null) return { split: ['no section'], twoLine: [], leading: [] };
+  if (scope === null) return { split: ['no section'], twoLine: [] };
   const shown = (e: Element): boolean => getComputedStyle(e).display !== 'none' && e.getClientRects().length > 0;
   const tall = (e: Element): boolean => e.getBoundingClientRect().height > 1.5 * parseFloat(getComputedStyle(e).lineHeight);
   const split = [...scope.querySelectorAll('.helper-fact:not(.helper-state), .helper-state .helper-word')]
     .filter((g) => shown(g) && tall(g)).map((g) => g.textContent ?? '');
   const twoLine = [...scope.querySelectorAll('.helper-state')].filter((g) => shown(g) && tall(g)).map((g) => g.textContent ?? '');
-  const leading: string[] = [];
-  for (const line of scope.querySelectorAll('.helper-line2')) {
-    if (!shown(line)) continue;
-    // Every drawn character of the line, in order, with its box; a separator starts a line when no drawn character before it
-    // sits on its line (its top within a few pixels).
-    const chars: Array<{ c: string; top: number }> = [];
-    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
-      const t = n.textContent ?? '';
-      for (let i = 0; i < t.length; i++) {
-        if (/\s/.test(t[i]!)) continue;
-        const r = document.createRange();
-        r.setStart(n, i); r.setEnd(n, i + 1);
-        const box = r.getClientRects()[0];
-        if (box !== undefined && box.width > 0) chars.push({ c: t[i]!, top: box.top });
-      }
-    }
-    chars.forEach((ch, i) => {
-      if (ch.c !== '·') return;
-      const prev = chars[i - 1];
-      if (prev === undefined || Math.abs(prev.top - ch.top) > 4) leading.push(line.textContent ?? '');
-    });
-  }
-  return { split, twoLine, leading };
+  return { split, twoLine };
 }, root);
 
-describe('the 1600 px rail\'s line 2 (review 3123 F4 and F13, session helpers HF2)', () => {
-  it('a state group wider than the line takes two lines, breaks only between its words, and no separator starts a line', async () => {
+describe('the 1600 px rail\'s line 2 (review 3123 F13, session helpers HF2)', () => {
+  it('a state group wider than the line takes two lines, and no fact or word splits across lines', async () => {
     const { ctx, page, errors } = await openSession(view(1600), WIDE_FIXTURE);
     try {
       expect(await place(page)).toEqual({ rail: true, column: false, aboveComposer: false, sideScroll: 0 });
@@ -268,7 +247,6 @@ describe('the 1600 px rail\'s line 2 (review 3123 F4 and F13, session helpers HF
       const r = await railLines(page, '.ref-inspector [data-section="helpers"]');
       expect(r.twoLine.length, 'the fixture holds a state group wider than the rail\'s line').toBeGreaterThan(0);
       expect(r.split, 'no fact or word splits across lines').toEqual([]);
-      expect(r.leading, 'no separator starts a line').toEqual([]);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();

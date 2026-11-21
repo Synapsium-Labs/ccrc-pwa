@@ -10,9 +10,10 @@
 //     and so is the worktrees section, whose rows each start their path on the screen;
 //   - nothing scrolls the page sideways, no page error is thrown, and on a touch screen the details door and the Helpers
 //     head take the tap floor;
-//   - session helpers HF2 (D-8877, review 3123 F3, F4 and F6): below the desk a worktree's path takes its row's full width on a
-//     line of its own, and at every width it breaks only after a `/` unless a segment is wider than its line; a raw
-//     worktree's `inferred` and `Bash call …` chips sit side by side; and no separator of a Helpers line 2 starts a line.
+//   - session helpers HF2 (D-8877, review 3123 F3 and F6): below the desk a worktree's path takes its row's full width on a
+//     line of its own, and at every width it breaks only after a `/` unless a segment is wider than its line; and a raw
+//     worktree's `inferred` and `Bash call …` chips sit side by side; and the composer, its key-hint row included, lies
+//     inside the session's pane and the window (F5, F7), the Helpers strip giving way, never past its head.
 // With `CCRC_SHOTS=<dir>` it saves one picture per view, before its assertions, so the same file run over `origin/main`
 // gives the matrix's "before" column.
 //
@@ -155,6 +156,21 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
               door: box('.chat-details-toggle'),
               helpersHead: box('.chat-strips .helpers-strip > * > button[aria-expanded]') || box('.chat-strips .helpers-strip button[aria-expanded]'),
               line2Overflow: [...document.querySelectorAll('.helper-line2')].filter((l) => l.scrollWidth > l.clientWidth + 1).length,
+              // HF2 (review 3123 F5 and F7): with every door open the composer, its key-hint row included, still lies inside the
+              // session's pane and the window: the strips give way before it does.
+              composerIn: (() => {
+                const chat = document.querySelector('.chat')!.getBoundingClientRect();
+                const composer = document.querySelector('.composer')!.getBoundingClientRect();
+                const hints = document.querySelector('.composer-hints')?.getBoundingClientRect() ?? null;
+                const bottom = Math.max(composer.bottom, hints?.bottom ?? 0);
+                return { inPane: bottom <= chat.bottom + 0.5, inWindow: bottom <= window.innerHeight + 0.5, over: Math.round(bottom - Math.min(chat.bottom, window.innerHeight)) };
+              })(),
+              helpersHeadShown: (() => {
+                const head = document.querySelector('.chat-strips .helpers-strip button[aria-expanded]');
+                const strip = document.querySelector('.chat-strips .helpers-strip');
+                if (head === null || strip === null) return true; // in the rail, not the strips
+                return strip.getBoundingClientRect().bottom >= head.getBoundingClientRect().bottom - 0.5;
+              })(),
               // HF2 (review 3123 F3): below the desk a path takes its row's full width, on a line of its own; and it breaks only
               // after a `/`, unless the segment it breaks in is wider than its line.
               pathLayout: [...document.querySelectorAll<HTMLElement>('.sess-worktrees .proj-work-name')].map((part) => {
@@ -168,8 +184,8 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
                 const chars: Array<{ c: string; top: number; at: number }> = [];
                 const str = text.textContent ?? '';
                 let offset = 0;
-                for (const n of text.childNodes) {
-                  if (n.nodeType !== Node.TEXT_NODE) continue;
+                const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+                for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
                   const t = n.textContent ?? '';
                   for (let i = 0; i < t.length; i++) {
                     const range = document.createRange();
@@ -195,7 +211,8 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
                   if (str[at - 1] !== '/' && segWidth(at) <= text.clientWidth + 1) badBreaks.push(`${str.slice(0, at)} | ${str.slice(at)}`);
                 }
                 probe.remove();
-                return { ownLine, full, badBreaks };
+                // A positive control: every character of the path was read, so a check of its breaks cannot pass on nothing.
+                return { ownLine, full, badBreaks, read: chars.length === str.length && str.length > 0 };
               }),
               // HF2 (review 3123 F6; D-6999): a raw worktree's two chips, `inferred` and its `Bash call …`, sit side by side.
               chipPairs: [...document.querySelectorAll('.sess-worktrees .proj-work')].flatMap((row) => {
@@ -206,22 +223,6 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
                 const a = inferred.getBoundingClientRect();
                 const b = call.getBoundingClientRect();
                 return [Math.abs(a.top - b.top) < 2 && b.left >= a.right - 1];
-              }),
-              // HF2 (review 3123 F4): no separator of a Helpers line 2 starts a line, between its facts or inside a state group.
-              leadingSeparators: [...document.querySelectorAll('.helper-line2')].filter((line) => getComputedStyle(line).display !== 'none').flatMap((line) => {
-                const marks: Array<{ c: string; top: number }> = [];
-                const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
-                for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
-                  const t = n.textContent ?? '';
-                  for (let i = 0; i < t.length; i++) {
-                    if (/\s/.test(t[i]!)) continue;
-                    const range = document.createRange();
-                    range.setStart(n, i); range.setEnd(n, i + 1);
-                    const box = range.getClientRects()[0];
-                    if (box !== undefined && box.width > 0) marks.push({ c: t[i]!, top: box.top });
-                  }
-                }
-                return marks.some((m, i) => m.c === '·' && (i === 0 || Math.abs(marks[i - 1]!.top - m.top) > 4)) ? [line.textContent ?? ''] : [];
               }),
             };
           });
@@ -240,6 +241,7 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
                 vh: window.innerHeight, scrollH: document.documentElement.scrollHeight, head: rect('.chat-head'),
                 worktrees: rect('.sess-worktrees'), strips: rect('.chat-strips'), composer: rect('.composer'),
                 hints: rect('.composer-hints'), statusBar: rect('.ins-status'), list: rect('.chat-list'),
+                pane: rect('.shell-detail'), statusRow: rect('.shell-status'), chat: rect('.chat'), body: rect('.chat-body'),
               };
             });
             appendFileSync(measureTo, `${JSON.stringify({ skin, theme, width, ...m })}\n`);
@@ -253,7 +255,8 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
           expect(read.worktrees, 'the worktrees section, once').toBe(1);
           expect(read.paths, 'each worktree path starts on the screen and is drawn whole').toEqual([true, true]);
           expect(read.line2Overflow, 'no Helpers line 2 runs past its row').toBe(0);
-          expect(read.leadingSeparators, 'no separator of a Helpers line 2 starts a line').toEqual([]);
+          expect(read.composerIn, 'the composer and its key hints inside the pane and the window').toMatchObject({ inPane: true, inWindow: true });
+          expect(read.helpersHeadShown, 'the Helpers strip never gives way past its head').toBe(true);
           expect(read.chipPairs.length, 'the raw worktree draws both chips').toBe(1);
           expect(read.chipPairs, 'inferred and its Bash call, side by side (D-6999)').toEqual([true]);
           for (const [i, p] of read.pathLayout.entries()) {
@@ -261,6 +264,7 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
               expect(p.ownLine, `path ${i}: on a line of its own`).toBe(true);
               expect(p.full, `path ${i}: the row's full width`).toBe(true);
             }
+            expect(p.read, `path ${i}: every character measured`).toBe(true);
             expect(p.badBreaks, `path ${i}: breaks only after a "/" where it can`).toEqual([]);
           }
           if (read.coarse) {

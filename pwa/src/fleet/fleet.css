@@ -1078,11 +1078,13 @@
 
 /* The two-line block. This is the row's TAP SURFACE and its middle grid
    track; .sess-open below is only the label line inside it. The split is
-   forced by the subagent disclosure: that has to be a real <button> (see
-   SessionLine.tsx), and a <button> inside a <button> is invalid and, worse,
-   flattened away by the button role's children-presentational rule. So the
-   block that everything sits in is a plain div with a click forwarder, and
-   every control on the row is a real, separately reachable button.
+   forced by the row's own controls (the label and the hold are real
+   <button>s, see SessionLine.tsx), and a <button> inside a <button> is
+   invalid and, worse, flattened away by the button role's
+   children-presentational rule. So the block that everything sits in is a
+   plain div with a click forwarder, and every control on the row is a real,
+   separately reachable button. (The subagent disclosure that first forced
+   it left the row with D-8771.)
    min-height and the column centring moved here with that role — the tap
    floor belongs to the surface that gets tapped. */
 .sess-body {
@@ -1164,19 +1166,17 @@
    instead of needing an empty placeholder to hold a track open. */
 /* `overflow: clip` with a MARGIN, not `overflow: hidden`. The clip is a
    horizontal backstop (`.sess-acct` ellipsises itself; this stops any future
-   cell from widening the row), but it also clipped everything the subagent
-   disclosure needs to live OUTSIDE this 15px line box: its ::before tap
-   overlay below, and base.css's blanket :focus-visible ring, drawn 2px wide
-   at 2px offset — 4px past a border box that IS the line, so a keyboard user
-   got the ring's two vertical edges and no top or bottom. A clipped region
-   does not receive pointer events either, so the overlay would have been
-   clipped back to 15px too and bought nothing.
+   cell from widening the row), but a plain clip also cut what a cell draws
+   OUTSIDE this 15px line box: base.css's blanket :focus-visible ring on the
+   hold's button, drawn 2px wide at 2px offset — 4px past a border box that
+   IS the line, so a keyboard user got the ring's two vertical edges and no
+   top or bottom.
 
-   12px is the larger of the two bleeds it has to admit: 11px horizontal
-   (a --tap-min-wide overlay on a ~22px cell) against 4.5px vertical. Where
-   `overflow-clip-margin` is unsupported the declaration is dropped and this
-   degrades to today's `overflow: clip` — the ring is clipped again, nothing
-   is worse. */
+   12px admits it with room; it was sized for the subagent disclosure's tap
+   overlay (11px horizontal), which left the row with D-8771 and the session
+   panel with H3 (D-8875). Where `overflow-clip-margin` is unsupported the
+   declaration is dropped and this degrades to `overflow: clip` — the ring
+   is clipped again, nothing is worse. */
 .sess-meta {
   display: flex;
   align-items: center;
