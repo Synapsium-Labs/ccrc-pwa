@@ -898,22 +898,28 @@ Task WM5 departs under its own number:
   programme page shows what remains"), WM1's `evidence-unverified` row and the work-map verbs out of the reference test's skip lists, and no product
   code. The build departs from the plan's text in these ways, each named by slug: `api-md-already-six`, Step 1 asks for `ticket-required` in
   `references/api.md` and the pin of the plan-added run refusals to go from five to six, and both were already true on `main` (`ticket-required` is
-  WM6's word, D-8780, carried into `api.md` by the Linear hierarchy's wave-4 follow-ups, #3088, and the pin reads six), so the carried wording of
-  `api.md`'s "`runs open` also answers six refusals" list and of `plan.md`'s lead paragraph and refusal list was read against `planGate` and
-  `epicForOpen` and found true; `api-md-ticket-wording` (review 2975 F4), two clauses of that list are brought to what the code does after all:
+  WM1's word, D-8727, and its epic-of-no-waves case WM6's, D-8780, both carried into `api.md` by the Linear hierarchy's wave-4 follow-ups, #3088, and
+  the pin reads six), so the carried wording of `api.md`'s "`runs open` also answers six refusals" list and of `plan.md`'s lead paragraph, ticket
+  sentence and refusal list was read against `planGate` and `epicForOpen` and found true, but for one clause on the ticket sentence ("unless
+  `ticket-required` refuses it (below)", since a run with no ticket is not always given an auto ticket); `api-md-ticket-wording` (review 2975 F4), two clauses of that list are brought to what the code does after all:
   `ticket-required` says "an open ticket with no run attached that is not an auto ticket" (`runMustNameTicket`), in `plan.md` too, and `ticket-unavailable`
-  says "open with none unless `ticket-required` refuses that"; `work-map-verbs-empty`, the brief removes `ticket-done` from `WORK_MAP_VERBS`, and
+  says "open with none unless `ticket-required` refuses that" and lists what `planGate` refuses with that word (done, dropped, held by another run, started or
+  attached to one not yet dispatched, not in this programme's plan, or an Upkeep ticket), in `plan.md` and `api.md` alike (review 3112 F4); `work-map-verbs-empty`, the brief removes `ticket-done` from `WORK_MAP_VERBS`, and
   `phase-ref`, whose row is on `main` and which the same section documents, leaves it too, so the set is empty and the verb check covers both;
-  `closed-table-pin`, `server/test/ccrc-api-closed.test.ts` is named by WM0's and WM1's Test lines and by this task's Step 3, and not by its Files line:
+  `closed-table-pin`, `server/test/ccrc-api-closed.test.ts` is named by WM0's and WM1's Test lines and by this task's Step 3, and by its Files line since fix round 1:
   the sorted list of the corpus's client commands gains `plan.phase-ref` and `plan.ticket-done`, which the new section is the first to run;
   `examples-run-through-the-routes` (review 2975 F1, F2, F6), a parse of an example is not an acceptance of it (the first examples parsed and the
   server refused the `plan put`), so the new `server/test/coordinator-plan-examples.test.ts` sends the section's examples, in order, on the plan the `plan put`
   example at the top of the file leaves, to the real plan routes over a real coord.db, and each must answer 200; the section states that rule, that a put
-  restates what it keeps, before its examples; `section-words-pinned` (F6), `coordinator-plan-reference.test.ts` pins the section's refusal words, its
-  three recovery bullets and the capability sentences inside the section itself, not by a whole-file substring, and parses the one body the back-fill line
-  gives (`plan ticket-move` with a drop); and `step-2-left-open`, Step 2 (the notice to every live coordinator) is the desktop-polish coordinator's after
+  restates what it keeps, before its examples; `section-words-pinned` (F6; review 3112 F3), `coordinator-plan-reference.test.ts` pins the section's refusal words, its
+  recovery bullets and their remedies, the evidence rule and the capability sentences inside the section itself, not by a whole-file substring, and parses the
+  one body the back-fill line gives (`plan ticket-move` with a drop); `examples-keep-their-shape` (review 3112 F2, F5), the examples test replaces only the run
+  number inside the `ticket-done` example and refuses a changed shape, refuses a `"$API" plan` line it cannot parse as an example instead of skipping it, and runs
+  the back-fill's drop body on the final plan; `section-without-list-indents` (F14), the section's examples sit outside list items so that a heredoc's closing
+  `JSON` is at the start of a line when copied; `evidence-read-refusal` (F1), the `evidence-unverified` list names the refusal the route makes before the verdict
+  when a run cannot be read, and the "never record it again" sentence is narrowed to a refusal about a fact; and `step-2-left-open`, Step 2 (the notice to every live coordinator) is the desktop-polish coordinator's after
   this merges, and stays unticked. Held by another's claim, each with that worker's consent by mail on 2026-11-20 for exactly this task's lines:
-  `plan.md`, `coordinator-plan-reference.test.ts` and `ccrc-api-closed.test.ts`, claims 5967 and 5954 (Linear hierarchy wave 7, run 2846). The plan was
+  `plan.md`, `coordinator-plan-reference.test.ts` and `ccrc-api-closed.test.ts`, claims 5967 and 5954 (Linear hierarchy wave 7, run 2846). In fix round 2, `plan.md` and the reference test were held by claim 6298 (Linear hierarchy wave 6, run 3102), whose holder consented on 2026-11-21 and asked that the `ticket-unavailable` bullet take its wording, which it does. The plan was
   held by the ended WM4 session's claim 5899, which lapsed at 15:40Z, then this task's claim 6032. The task note
   (`docs/superpowers/programs/desktop-polish/wm5.md`) gives each carried wording read against the code, the mutants and the test runs.
 
