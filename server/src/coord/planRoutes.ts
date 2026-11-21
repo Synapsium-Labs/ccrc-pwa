@@ -830,7 +830,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const verdict = mapProposerVerdict(who.id, migration.waitingWorkspaces(team), holders.length === 0 ? [null] : holders,
       (ws) => linearOwnerOfTeam(team, rows, ownerFacts(who.plan), ws)?.id ?? null);
     if (!verdict.ok) {
-      if (verdict.word === 'team-ambiguous') return refuseRoute(reply, 'team-ambiguous', { detail: `you own team ${team} in more than one workspace with a map waiting; name the workspace` });
+      if (verdict.word === 'team-ambiguous') return refuseRoute(reply, 'team-ambiguous', { detail: `team ${team} has a migration waiting for a map in more than one workspace you own, so ccrc cannot tell which this map is for (only one team migrates at a time, so the migrations need the operator's look)` });
       return refuse(reply, verdict.word, verdict.word === 'plan-bad-body' ? `no migration of team ${team} is waiting for a map` : `only the Linear owner of team ${team} proposes its map`);
     }
     const open = await migration.readOpen(team, verdict.workspaceId);
