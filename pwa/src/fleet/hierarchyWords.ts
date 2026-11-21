@@ -74,10 +74,10 @@ export const defaultHierarchyRow = (project: string): HierarchyProjectRow => ({
  *  older server, reads as the project's own owner). `pick` is what choosing the empty option gives: `ifUnnamed`, the default rule
  *  with no named owner (D-8738), else, when an older server omits it, the owner now (today's words). */
 export function ownerFrom(row: Pick<HierarchyProjectRow, 'project' | 'ownerNow'>): {
-  project: string; pick: { id: string | null; live: boolean }; now: { id: string | null; live: boolean };
+  project: string; pick: { id: string | null; live: boolean }; now: { id: string | null; live: boolean }; unmeasured: boolean;
 } {
   const now = { id: row.ownerNow.source === 'none' ? null : row.ownerNow.id, live: row.ownerNow.live };
-  return { project: row.ownerNow.project ?? row.project, pick: row.ownerNow.ifUnnamed ?? now, now };
+  return { project: row.ownerNow.project ?? row.project, pick: row.ownerNow.ifUnnamed ?? now, now, unmeasured: row.ownerNow.unmeasured === true };
 }
 
 /** Whether the effective owner comes from another project (the one that owns this project's team key). */
@@ -91,11 +91,12 @@ export function defaultOwnerWords(row: Pick<HierarchyProjectRow, 'project' | 'te
   return pick.id === null ? 'Default: none live' : `Default: ${pick.id} (${pick.live ? 'live' : 'not live'})`;
 }
 
-/** The note under the owner select of a project whose owner comes from another project, or null. It names the owner NOW and whether
- *  it is live (the empty option names the project's own default, `defaultOwnerWords`, which is not the owner meanwhile). */
+/** The note under the owner select when the effective owner is inherited or cannot be measured. The empty option still names
+ *  the project's own default, not the current owner. */
 export function ownerInheritedNote(row: Pick<HierarchyProjectRow, 'project' | 'teamKey' | 'ownerNow'>): string | null {
-  if (!ownerIsInherited(row)) return null;
-  const { project, now } = ownerFrom(row);
+  const { project, now, unmeasured } = ownerFrom(row);
+  if (unmeasured) return 'The current Linear owner could not be measured.';
+  if (project === row.project) return null;
   const tail = `from ${project}, which owns team key ${row.teamKey ?? ''}. This project's own owner setting is not used meanwhile.`;
   return now.id === null ? `No owner is live now. That comes ${tail}` : `The owner now is ${now.id} (${now.live ? 'live' : 'not live'}), ${tail}`;
 }

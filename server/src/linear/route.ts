@@ -71,6 +71,39 @@ export function routableSlots(store: Listed): LinearRouteSlot[] {
   return out;
 }
 
+/** One snapshot for owner decisions. Null means the listing itself failed; a listed slot with an unreadable key or
+ *  team record is not evidence that the workspace has no teams. An unreadable legacy slot has no known workspace. */
+export interface TeamRoutes {
+  slots: readonly LinearRouteSlot[];
+  unreadableWorkspaces: ReadonlySet<string>;
+  unreadableLegacy: boolean;
+}
+
+export function measuredTeamRoutes(store: LinearStoreRead): TeamRoutes | null {
+  if (store.kind !== 'listed') return null;
+  const legacy = store.legacy;
+  return {
+    slots: routableSlots(store),
+    // A usable key may be installed before its record. Until a current record exists, an empty team list is not a measurement.
+    unreadableWorkspaces: new Set(store.slots.filter((s) => s.key.kind === 'unreadable' || (s.key.kind === 'key' && currentDetails(s)?.teamsAt == null)).map((s) => s.id)),
+    unreadableLegacy: legacy !== null && !legacy.superseded && (legacy.key.kind === 'unreadable' || (legacy.key.kind === 'key' && legacy.workspace === null)),
+  };
+}
+
+/** For a project that needs a measured workspace. Once two readable workspaces already hold an unpinned key,
+ *  an unreadable third cannot make it unique. A pin needs to measure only its own slot. */
+export function measuredProjectTeam(routes: TeamRoutes | null, row: { teamKey: string; workspaceId: string | null }): LinearRoute | { kind: 'unmeasured' } {
+  if (routes === null) return { kind: 'unmeasured' };
+  const route = routeProjectTeam(routes.slots, row);
+  if (row.workspaceId !== null) {
+    const pin = row.workspaceId;
+    const possiblyLegacy = routes.unreadableLegacy && !routes.slots.some((s) => s.ref.source === 'file' && s.workspaceId === pin);
+    return routes.unreadableWorkspaces.has(pin) || possiblyLegacy ? { kind: 'unmeasured' } : route;
+  }
+  if (route.kind === 'refused' && route.word === 'team-ambiguous') return route;
+  return routes.unreadableWorkspaces.size > 0 || routes.unreadableLegacy ? { kind: 'unmeasured' } : route;
+}
+
 /** A file slot's record while it describes the key now in the file (the digest rule), else null. */
 export function currentDetails(s: Listed['slots'][number]) {
   return s.key.kind === 'key' && s.record.kind === 'details' && s.record.details.keyDigest === s.key.digest ? s.record.details : null;
@@ -108,6 +141,17 @@ export function routeProjectTeam(slots: readonly LinearRouteSlot[], row: { teamK
   if (slots.length === 0) return { kind: 'refused', word: 'not-configured' };
   const own = slots.find((s) => s.workspaceId === row.workspaceId && holds(s, row.teamKey));
   return own === undefined ? { kind: 'refused', word: 'team-unknown' } : { kind: 'slot', slot: own };
+}
+
+/** Whether a project belongs to a team in a workspace. Pins supply membership directly; unpinned rows need a measurement. */
+export function projectOnTeam(
+  row: { teamKey: string | null; workspaceId: string | null }, team: string, workspaceId: string, routes: TeamRoutes | null,
+): boolean | 'unmeasured' {
+  if (row.teamKey === null || row.teamKey.toUpperCase() !== team.toUpperCase()) return false;
+  if (row.workspaceId !== null) return row.workspaceId === workspaceId;
+  const route = measuredProjectTeam(routes, { teamKey: row.teamKey, workspaceId: null });
+  if (route.kind === 'unmeasured') return 'unmeasured';
+  return route.kind === 'slot' && route.slot.workspaceId === workspaceId;
 }
 
 /** §4.2's table. Total: every ask answers one slot or one refusal word. */

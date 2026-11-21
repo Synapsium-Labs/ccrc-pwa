@@ -207,6 +207,26 @@ run editing D-8796's paragraph while it holds the plan file (its D-8808 only).
 The review's nit on the owner's map reference (`map-incomplete` against `plan-bad-body` when the taken issue was the only skipped
 one) is a rules file and goes to the skill-words ticket `w6-words`, not this pull request.
 
+### Review 3016 and run 3027 (`w7-race`)
+
+Review 3016 read `085a48a14` (round 3, at the cap): two important findings, two advisories, each a window of one awaited read
+with no ask after it. The coordinator ruled them fixed before any team's migration starts and sent them to run 3027, built with
+`w8-migration-workspace` because both edit `migration.ts`. No departure number was needed (the two issued stay unused),
+no file outside the run's claim was edited, so no consent was asked, and
+D-8796's paragraph is amended under the head commit's `Ledger-Edit` trailer, as the brief allowed.
+
+| Item | Built | Test, and what reds it |
+|---|---|---|
+| F1 | put back asks `issueBound` before its read, again after it and again inside `putBackStep`'s flight just before the restoring `issueUpdate`; one helper, `putBackTaken`, lists a held issue taken and marks its row handled, and put back goes on (an adopted row still holds its own binding and is not asked). The F2 row of review 3004 above said put back "asks before it reads or writes"; that is now true of the write too | `migration-putback.test.ts` "a take during put back's read of an issue sends nothing for it …" and "a take that lands as the write's flight starts sends nothing for it …" (each red on `085a48a14`, the second with the in-flight ask alone removed); "a take during put back's read of an issue the owner also reopened is listed taken, not moved since" (red with the after-read ask alone removed) |
+| F2 | step 2's reconcile asks again after its read for a closer: a held one goes to `taken`, its row left unapplied, never listed `unrelated` or counted closed | `migration-apply.test.ts` "F2 (review 3016): a take landing during the reconcile read of a closed-but-unacknowledged issue …" (the reviewer's scenario: the state write reached Linear, its answer was refused, and the take lands during the next tick's read; red with that ask alone removed) |
+| A1 | the put-back held test looks for any ask naming the issue after put back starts, so its read (`issueOwned`, pass `migration`) is caught too | the existing "put back never reads or writes an issue a live binding now holds …": red with the before-read check moved after the read |
+| A2 (closed, small) | the close's stamp (`appliedAt`) and the tick's report with the issue taken are one transaction (`closeIssue` takes the tick's own report save as `persist`, called only for a held issue), and put back's `revertedAt` and its report are one transaction (`putBackTaken`); the reconcile's take has no stamp to pair | `migration-apply.test.ts` "A2 (review 3016): a take found after the state write …" and `migration-putback.test.ts` "A2: a take found by put back is marked handled and listed taken together …": each fails the report save, expects the stamp rolled back, then the next tick lists the issue taken; each red with its transaction alone removed |
+
+Every new test was also mutation-checked by the run: eight mutations of `migration.ts` (four for the workspace half, four for
+this one), each red in the migration suites. In the fix round for review 3038, the plain put-back case also checks that no
+write flight is opened for an issue taken during the read. That case now goes red without the after-read check, even when the
+issue is not reopened.
+
 ## Follow-ups and open points
 
 - **The F3/F5 interaction, built in fix round 1** (wave 3's carry: a bound ticket put back could take its held team off its
@@ -222,5 +242,5 @@ one) is a rules file and goes to the skill-words ticket `w6-words`, not this pul
 - **The suites under load.** `coord-db`, `secret-mask` and `mail-routes` failed only by timeouts (20 s to 235 s per case) in a
   test slice at its memory cap, with OOM kills from other sessions' runs. `hierarchy-routes` and `plan-store` failed the same
   way in one batch and pass alone (73 of 73). CI on the quiet box is the arbiter.
-- The pilot (ccrc's own team) is the operator's, in the console, after this lands: "Reshape in Linear", the owner's map,
-  Approve, the report, before any other team.
+- The pilot (ccrc's own team) is the operator's, in the console, after run 3027 lands (it closes the last findings that held
+  it): "Reshape in Linear", the owner's map, Approve, the report, before any other team.

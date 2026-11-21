@@ -285,7 +285,8 @@ export interface WorkMapView {
 export type WorkAnswer = WorkMapView | { unreadable: WorkUnreadable };
 export interface HierarchyProjectRow {
   project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null;
-  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string; ifUnnamed?: { id: string | null; live: boolean } };
+  /** `unmeasured` distinguishes unknown team ownership from a measured lack of an owner; absent on older servers. */
+  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; unmeasured?: true; project?: string; ifUnnamed?: { id: string | null; live: boolean } };
   ownsTeam: boolean; state: HierarchyState; stateAt: number | null; itemId: number | null; inboundWaiting: number;
 }
 export interface HierarchyAnswer {

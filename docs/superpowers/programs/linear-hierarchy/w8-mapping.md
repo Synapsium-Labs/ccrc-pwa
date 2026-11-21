@@ -22,16 +22,19 @@ The plan's "Deviations found" carries both entries in full. In short:
 - **Storage.** One migration (slot 116 after the absorbs of main) holds three columns: `teamWorkspace`, `teamSuggestions` and `teamCallId`. The Overlord's link is
   stored as `teamSource` `auto` plus `teamCallId`, because migration 64's CHECK admits only `manual` and `auto`. Exactly one
   function, `linkSourceOf`, derives the wire's `overlord` source. `single-definition/team-link-source.test.ts` fails when
-  a file of `shared/` or `server/src` other than `linkingStore.ts` names `teamCallId`, or when code outside `linkSourceOf`
+  a file of `shared/` or `server/src` other than `linkingStore.ts` and the migration that declares the column
+  (`coord/schema.ts`) names `teamCallId` (review 3020 A-3), or when code outside `linkSourceOf`
   (and the migration's CHECK) compares `teamSource` to `'auto'` in one of the shapes it lists (=, <>, IN, IS, CASE, a
   switch case); an alias or a word built at run time is out of its reach (the coordinator's condition, mail of
   2026-11-20; review 2997 A2).
 - **The write body's workspace (fix round 1, F4 and F2).** A key's workspace is set in the same write (spec §3.1.1). A named
-  workspace must hold the key (`team-unknown`). With none named (absent or null), the stored key sent back keeps the stored workspace
-  without reading the store (review 2997 A5); otherwise the one connected workspace that holds the key is stored, a key two hold is refused
-  `team-ambiguous` (the card points at its picker), and a key none holds is stored with none. An unreadable Linear store is
-  `unavailable`, never `team-unknown` and never stored as none. A cleared key, and the stored key sent back with no workspace
-  named, read no store (`writeReadsStore`). A row stored with no workspace (before this wave's migration) whose key one connected
+  workspace must hold the key (`team-unknown`). With the workspace absent, the stored key sent back keeps the stored workspace
+  without reading the store (review 2997 A5). Every other write with a key reads the store, an explicit `workspace: null` with
+  the unchanged key included (the code is the rule, review 3020 F1): the one connected workspace that holds the key is stored,
+  a key two hold is refused `team-ambiguous` (the card points at its picker), and a key none holds is stored with none. An
+  unreadable Linear store is `unavailable`, never `team-unknown` and never stored as none. A cleared key, and the stored key
+  sent back with the workspace absent, read no store (`writeReadsStore`); the shipped card never sends null, so only a direct
+  API caller meets the null arm. A row stored with no workspace (before this wave's migration) whose key one connected
   workspace holds already resolves there, so Save of the unchanged key, with that workspace or none, keeps the stored none: the
   source, team name, evidence and time stay (the coordinator's ruling: no change of source). Another key or a workspace among
   two holders is still the operator's decision.
@@ -43,10 +46,14 @@ The plan's "Deviations found" carries both entries in full. In short:
   - The door writes only an existing row (`no-project` otherwise).
   - It refuses a reason that names any connected team's ticket id or carries line or bidi control characters.
   - It keeps the newest eight suggestions and answers only what the caller wrote.
-  - Only a coordinator suggests (fix round 1, F7, the coordinator's ruling): the caller must claim an open run, read through
-    the binding's own claimant reader (`bindingsOf(...).claimant()`, the one `claimsProgramme` asks); none is `not-a-coordinator`
-    (403, a new word: `not-coordinator` is already the digest's word, 409, with another meaning), and a run series that cannot
-    be read is `run-unreadable` (503), never a pass. It checks no project ownership beyond that; the console shows who
+  - Only a coordinator suggests (fix round 1, F7, the coordinator's ruling): the caller must claim an open run, decided by the
+    role's own decider `claimsOpenRunOf` (`roleOf.ts`) over the open claimants `coord.openCoordinatorIds()` reads, the same
+    fact the card and the sleep lane read (round 2, A4); none is `not-a-coordinator` (403, a new word: `not-coordinator` is
+    already the digest's word, 409, with another meaning), and open claimants that cannot be read are `run-unreadable` (503),
+    never a pass. A4 narrowed what refuses `run-unreadable`: the old gate read the caller's binding series, which refused a run
+    row the box could not represent; `openCoordinatorIds()` parses no row, so only a thrown read refuses now, and a caller that
+    claims such a row passes, as it does for every other reader of the role fact (review 3020 A-1). It checks no project
+    ownership beyond that; the console shows who
     suggested. One suggestion per suggester, a resend replaces its own, and at most eight suggesters, the oldest by time
     evicted, never the one just written.
 - **The confirm door.**
@@ -55,8 +62,8 @@ The plan's "Deviations found" carries both entries in full. In short:
   - The call names the team and the workspace by display name, never by key. A suggestion's evidence reads "suggested by a
     coordinator, with the reason "…"" (fix round 1, F6): a call may be mirrored, so it names no session; the session stays on
     the card.
-- **Final review fixes.** The team owner is decided in the inbound issue's workspace at every plan-routes site except the plan-map route (wave 7's
-  migration lane and that route resolve by key alone until follow-up `w8-migration-workspace`, review 2997 F1), at all four
+- **Final review fixes.** The team owner is decided in the inbound issue's workspace at every plan-routes site (the plan-map route
+  and wave 7's migration lane since run 3027's `w8-migration-workspace`, below; review 2997 F1, F2), at all four
   key lookups of the inbound lane (fix round 1, F1: the close comment's public-text re-check was the fourth; D-8808 said
   three) and in `linearOwnerOfProject`; the suggest door and the confirm re-check the pair against the live Linear store and refuse
   `team-ambiguous` for a shared key with no workspace; a workspace-only change makes the link the operator's.
@@ -72,8 +79,7 @@ The plan's "Deviations found" carries both entries in full. In short:
 
 ## Carried (follow-up tickets in the `mapping` epic)
 
-- `w8-migration-workspace`: after this PR and #3137 land, every team lookup of the migration lane and the plan-map route
-  goes through `routeProjectTeam`, with shared-key tests; no team's migration starts before it (review 2997 F1, F2).
+- `w8-migration-workspace`: built by run 3027 (below).
 - `w8-attached-wire`: wire `readAttachedIssues` and the merged pull request URLs into the lane after the operator's go for one
   live capture; update `linking-attached-off.test.ts` deliberately in that commit.
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
@@ -109,12 +115,51 @@ to Linear, so keep it to a sentence, with no ticket ids and no private names (re
 `team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
 `team-unknown` (no connected workspace has that team, or the named workspace does not), `team-ambiguous` (no workspace named
 and the key is in more than one connected workspace: send it again with `workspace`), `not-a-coordinator` (the session claims
-no open run: only a programme's coordinator suggests), `run-unreadable` (the session's runs could not be read: try again),
+no open run: only a programme's coordinator suggests), `run-unreadable` (the open run claimants could not be read: try again),
 `no-project`, `linear-text-public` and `bad-request` (a body that is not exactly these keys, or a reason over its length).
 ````
 
 ## For the merge
 
-Wave 7 (#3109) adds a `locked` state to the card's `LinkingRow`; on merge, this wave's picker and candidate controls take
-`disabled={locked}` instead of `busy`. Several branches move the same counts (the migration slot, `ccrc-api` rows,
-`auth-gate` routes, box-token lanes, door-tools rows): whoever lands second recounts.
+Done: wave 7's `locked` state reached the card, and this wave's picker and candidate controls take `disabled={locked}`
+(`locked = busy || listBusy`), pinned by review 2997 A1's two tests (review 3020 A-2). Several branches move the same counts
+(the migration slot, `ccrc-api` rows, `auth-gate` routes, box-token lanes, door-tools rows): whoever lands second recounts.
+
+## Run 3027 (`w8-migration-workspace`): what was built
+
+The follow-up the final review named (review 2997 F1, F2), built with wave 7's `w7-race` in one pull request because both edit
+`server/src/linear/migration.ts`. Every team lookup the migration makes now goes through the project row's workspace, through
+the one resolver `routeProjectTeam`; none falls back to the first workspace holding the key, and a key two workspaces hold with
+no workspace on the row is refused `team-ambiguous` (409), as the rest of the hierarchy refuses it.
+
+| Lookup | Built | Test |
+|---|---|---|
+| Start ("Reshape in Linear") | `workspaceOfProject` routes the row's key and workspace. `start` returns a routing refusal before checking migration state; otherwise it inserts the migration in that workspace and decides its owning project there with `teamOwnerProject` | `migration-workspace.test.ts`: each project starts in its own workspace; an unpinned shared key is `team-ambiguous` even when another workspace has a proposing or applied migration; a project without a key still reads `no-team-key` |
+| The open-issue read | `readOpen` uses the migration's own workspace's slot from the snapshot that authorized the read | Fixtures pin the workspace, slot, and snapshot; the route passes its actual read result to the proposal inside the mutex |
+| The Linear owner | `ownerOf` passes the workspace and routing facts to `linearOwnerOfTeam`: the map mail, the map's owner check and the Return mail. Return cannot settle without a concrete recipient | `migration-workspace.test.ts` checks the workspace's recipient and proposer; `migration-propose.test.ts` checks the intact map and item on refusal and delivery of the note on retry |
+| The plan-map route | The pure `mapProposerVerdict` judges the caller in each waiting workspace. With nothing waiting, an owner learns `plan-bad-body` and anyone else `not-linear-owner`; two owned waiting workspaces answer `team-ambiguous` without reading issues. Unmeasured ownership also blocks the read | The policy and route fixtures pin owner scope, the selected read, the no-wait diagnostic and the refusal words. Filtering out **stored** null holders made the no-wait diagnostic test fail; removing the unused zero-holder `[null]` fallback did not |
+| The console's state | `stateOfProject` through the pure `migrationOfProject`: a pinned row reads its workspace's migrations without needing routing facts; an unpinned row uses the request's shared routing snapshot, a shared key showing "Not migrated". A key no slot serves matches by key alone only while all its migrations sit in one workspace | four `stateOfProject` cases |
+| Programme matches | The declare mails, `finishApply`'s declared programmes and the map's epic and leaf team checks (`MapContext.sameWorkspace`) ask `projectOnTeam` (L1): key and workspace | Two-workspace regressions reject both wrong-workspace epic and leaf placements, send declare mail only to the matching workspace's programme, and leave the other workspace's `planRequired` unchanged |
+
+The inbound and migration lanes share `teamOwnerProject`'s owner rule. It uses the same workspace resolver as
+`projectOnTeam`: a pinned project belongs to its stored workspace; an unpinned one belongs only to the workspace its
+key resolves to, and to neither when that key is shared. The two-workspace regression shows
+that a lower-order unpinned project cannot take the pinned project's migration, map mail, or inbound issue. The key-only
+owner lookup used when no map waits can supply a diagnostic, not permission to read or store a map. A Name a Linear owner
+item does not settle on a project fallback while its issues wait for routing (`plan-inbound.test.ts`).
+
+Fix round 1 also passes measured routing to the hierarchy owner display, the drift Hand fallback, and Upkeep sync mail. The
+hierarchy and drift doors read it outside the mutex; Upkeep reuses the snapshot that routed its pass. The tests in
+`hierarchy-routes.test.ts`, `drift-pass.test.ts` and `plan-sync.test.ts` each show that the lower-order unpinned holder wins
+when its key does resolve uniquely to the pinned row's workspace.
+
+**Fix round 2 (review 3048).** The rule distinguishes an owner, measured none, and an unmeasured decision. A listed
+slot with an unreadable, missing, or stale team record for its configured key does not count as a measured empty
+workspace. Close and Raise refuse `unreachable` before a re-read or write. Inbound waiting and answered mail and close
+notices cannot stamp or send to a substitute; key refusal still sets its retry hold. Take Return refuses before effects,
+and a handed issue or bound Upkeep ticket stays put when its destination workspace is unmeasured. Drift Hand refuses when it needs an unmeasured owner;
+the hierarchy card says the owner could not be measured, and Upkeep does not send a substitute notice. The project
+fallback belongs to measured none only. Map Return preserves the item and stored map on `unreachable`, `team-ambiguous`
+or `no-linear-owner`, pairing a successful settlement with its recipient mail in one transaction. Apply completion retries
+if needed to classify an unnamed declared programme rather than omitting it. The ownerless ambiguous inbound issue
+still waits quietly and counts in the console; `w8-ambiguous-notice` is carried until after the pilot.

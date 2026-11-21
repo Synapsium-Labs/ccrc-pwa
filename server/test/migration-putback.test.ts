@@ -314,10 +314,94 @@ describe('put back and a live binding (review 3004, D-8186)', () => {
     applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [t], update: [], drop: [] } }), OWNER, r.t.now, null);
     const tk = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === 'held1')!.id;
     adoptIssueBindingInTx(r.db, tk, WS.a.id, 'AAA', U(101), 'AAA-1', r.t.now);
+    const before = r.asks.length;
     await putBack(r, id);
-    expect(putBackAsks(r).filter((a) => a.input['id'] === U(101))).toEqual([]);
+    // review 3016 A1: put back's read is `issueOwned` on pass `migration`, so it is the id that is looked for, not the pass.
+    expect(r.asks.slice(before).filter((a) => a.input['id'] === U(101))).toEqual([]);
     expect(r.issues.get(U(101))!.stateType).toBe('canceled');      // left as it is
     expect(r.issues.get(U(102))!.stateType).toBe('unstarted');     // the other one is restored
+    const rep = r.plan.migrationById(id)!.report!;
+    expect(rep.taken).toEqual(['AAA-1']);
+    expect(rep.movedSince).toEqual([]);
+  });
+});
+
+describe('a take that lands while put back reads or waits to write (review 3016 F1, A2; D-8186, D-8796)', () => {
+  const hold = (r: MigRig, n: number, key: string): void => {
+    const t: NewTicket = { program: SLUG, epicKey: 'e1', checkpointKey: 'c1', key, kind: 'work', title: key, body: 'x', project: 'project-a', source: 'inbound' };
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [t], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const tid = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === key)!.id;
+    adoptIssueBindingInTx(r.db, tid, WS.a.id, 'AAA', U(100 + n), `AAA-${n}`, r.t.now);
+  };
+  const restores = (r: MigRig, n: number) => putBackAsks(r).filter((a) => a.op === 'issueUpdate' && a.input['id'] === U(100 + n));
+
+  it('a take during put back\'s read of an issue sends nothing for it: listed taken, its row handled, put back goes on', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([entry(1, 'stale'), entry(2, 'stale')]);
+    const flights = vi.spyOn(r.sync, 'withFlight');
+    let taken = false;
+    r.override.current = (ask) => { if (ask.op === 'issueOwned' && ask.input['id'] === U(101) && !taken) { taken = true; hold(r, 1, 'held1'); } return undefined; };
+    await putBack(r, id);
+    expect(taken).toBe(true);
+    expect(flights.mock.calls.some(([key]) => key === `migration:${U(101)}`)).toBe(false);
+    expect(restores(r, 1)).toEqual([]);
+    expect(r.issues.get(U(101))!.stateType).toBe('canceled');      // left as it is
+    expect(r.issues.get(U(102))!.stateType).toBe('unstarted');     // the next row is restored
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-1']);
+    expect(r.plan.movesOf(id).find((x) => x.identifier === 'AAA-1')!.revertedAt).not.toBeNull();
+  });
+
+  it('a take that lands as the write\'s flight starts sends nothing for it: listed taken, its row handled', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([entry(1, 'stale'), entry(2, 'stale')]);
+    const real = r.sync.withFlight.bind(r.sync);
+    let taken = false;
+    vi.spyOn(r.sync, 'withFlight').mockImplementation(((key: string, fn: () => Promise<unknown>) => {
+      if (key === `migration:${U(101)}` && !taken) { taken = true; hold(r, 1, 'held1'); }
+      return real(key, fn);
+    }) as typeof r.sync.withFlight);
+    await putBack(r, id);
+    expect(taken).toBe(true);
+    expect(restores(r, 1)).toEqual([]);
+    expect(r.issues.get(U(101))!.stateType).toBe('canceled');
+    expect(r.issues.get(U(102))!.stateType).toBe('unstarted');
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-1']);
+    expect(r.plan.movesOf(id).find((x) => x.identifier === 'AAA-1')!.revertedAt).not.toBeNull();
+  });
+
+  it('A2: a take found by put back is marked handled and listed taken together, so a crash between them loses nothing', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([entry(1, 'stale'), entry(2, 'stale')]);
+    const first = r.plan.movesOf(id).filter((x) => x.kind === 'issue').sort((a, b) => b.id - a.id)[0]!;   // put back's first row
+    const n = Number(first.identifier!.split('-')[1]);
+    hold(r, n, 'heldx');
+    // the report save after the row is marked handled fails, as a restart between the two would
+    const crash = vi.spyOn(r.mig as unknown as { saveMovedSince: () => never }, 'saveMovedSince').mockImplementationOnce(() => { throw new Error('crash'); });
+    expect(r.mig.act(reportItem(r, id), id, 'put-back', null)).toEqual({ ok: true });
+    await expect(r.tick()).rejects.toThrow('crash');
+    // the mark went with the failed save: the row is not left handled with the take forgotten (a handled row is never revisited)
+    expect(r.plan.movesOf(id).find((x) => x.id === first.id)!.revertedAt).toBeNull();
+    crash.mockRestore();
+    await putBack(r, id);
+    expect(r.plan.movesOf(id).find((x) => x.id === first.id)!.revertedAt).not.toBeNull();
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual([first.identifier]);
+  });
+
+  it('a take during put back\'s read of an issue the owner also reopened is listed taken, not moved since', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([entry(1, 'stale'), entry(2, 'stale')]);
+    let taken = false;
+    r.override.current = (ask) => {
+      if (ask.op === 'issueOwned' && ask.input['id'] === U(101) && !taken) { taken = true; hold(r, 1, 'held1'); r.issues.get(U(101))!.stateType = 'started'; }
+      return undefined;
+    };
+    await putBack(r, id);
+    expect(taken).toBe(true);
+    expect(restores(r, 1)).toEqual([]);
     const rep = r.plan.migrationById(id)!.report!;
     expect(rep.taken).toEqual(['AAA-1']);
     expect(rep.movedSince).toEqual([]);

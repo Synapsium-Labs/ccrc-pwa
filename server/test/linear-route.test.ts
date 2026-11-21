@@ -13,7 +13,7 @@ import { LINEAR_TEAM_PAGE_SIZE, checkLinearKey, verifyLinearKey, type FetchLike 
 import { keyTailOf, type LinearKeyRead } from '../src/linear/connection.js';
 import { LINEAR_QUOTA, type LinearRateService } from '../src/linear/rate.js';
 import { LINEAR_MISS_RETRY_AFTER_S, checkLinearSlot } from '../src/linear/refresher.js';
-import { routableSlots, routableTeams, routeLinear, routeProjectTeam, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
+import { measuredProjectTeam, measuredTeamRoutes, routableSlots, routableTeams, routeLinear, routeProjectTeam, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
 import { putLinearSlot, readLinearStore, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef, type LinearStoreRead } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
@@ -123,6 +123,43 @@ const legacy = (over: Partial<LinearLegacySlot> = {}): LinearLegacySlot => ({
 });
 const listed = (slots: LinearFileSlot[], leg: LinearLegacySlot | null): Extract<LinearStoreRead, { kind: 'listed' }> =>
   ({ kind: 'listed', slots, legacy: leg });
+
+describe('measured team routes for ownership', () => {
+  const good = fileSlot(WS_A, DIGEST_A, { kind: 'details', details: record(WS_A, DIGEST_A) });
+  const ask = { teamKey: 'AAA', workspaceId: null };
+  it.each([{ kind: 'malformed' } as const, { kind: 'unreadable', code: 'EIO' } as const])('a %j record is not a measured empty workspace', (record) => {
+    const partial = measuredTeamRoutes(listed([good, fileSlot(WS_B, DIGEST_B, record)], null));
+    expect(measuredProjectTeam(partial, ask)).toEqual({ kind: 'unmeasured' });
+    expect(measuredProjectTeam(partial, { ...ask, workspaceId: WS_B })).toEqual({ kind: 'unmeasured' });
+    expect(measuredProjectTeam(partial, { ...ask, workspaceId: WS_A })).toMatchObject({ kind: 'slot', slot: { workspaceId: WS_A } });
+  });
+
+  it.each([{ kind: 'absent' } as const, { kind: 'details', details: record(WS_B, DIGEST_A) } as const])('does not infer uniqueness from a key without a current team record (%j)', (record) => {
+    const partial = measuredTeamRoutes(listed([good, fileSlot(WS_B, DIGEST_B, record)], null));
+    expect(measuredProjectTeam(partial, ask)).toEqual({ kind: 'unmeasured' });
+    expect(measuredProjectTeam(measuredTeamRoutes(listed([good], null)), ask)).toMatchObject({ kind: 'slot', slot: { workspaceId: WS_A } });
+  });
+
+  it('distinguishes a current record with no team measurement from a measured empty team list', () => {
+    const other = (teamsAt: number | null) => fileSlot(WS_B, DIGEST_B, {
+      kind: 'details', details: record(WS_B, DIGEST_B, { teams: [], teamsAt }),
+    });
+    expect(measuredProjectTeam(measuredTeamRoutes(listed([good, other(null)], null)), ask)).toEqual({ kind: 'unmeasured' });
+    expect(measuredProjectTeam(measuredTeamRoutes(listed([good, other(1)], null)), ask)).toMatchObject({ kind: 'slot', slot: { workspaceId: WS_A } });
+  });
+
+  it('an unreadable legacy slot can hold a pinned workspace only when no file slot supersedes it', () => {
+    const partial = measuredTeamRoutes(listed([good], legacy({ teamsFile: 'unreadable', workspace: null })));
+    expect(measuredProjectTeam(partial, { ...ask, workspaceId: WS_L })).toEqual({ kind: 'unmeasured' });
+    expect(measuredProjectTeam(partial, { ...ask, workspaceId: WS_A })).toMatchObject({ kind: 'slot', slot: { workspaceId: WS_A } });
+  });
+
+  it('keeps measured ambiguity even with an additional unreadable record', () => {
+    const also = fileSlot(WS_B, DIGEST_B, { kind: 'details', details: record(WS_B, DIGEST_B) });
+    const partial = measuredTeamRoutes(listed([good, also, fileSlot(WS_L, null, { kind: 'absent' })], null));
+    expect(measuredProjectTeam(partial, ask)).toMatchObject({ kind: 'refused', word: 'team-ambiguous' });
+  });
+});
 
 describe('routableSlots: what the store read can route', () => {
   it('a file slot routes by the URL key and the teams of a record that describes its present key, team keys uppercased', () => {

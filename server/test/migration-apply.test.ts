@@ -411,7 +411,7 @@ describe('the migration apply reads each issue by id (D-8796, review round)', ()
     expect(updates(r, U(101))).toHaveLength(refused);
     expect(r.issues.get(U(101))!.title).toBe('A person renamed it between the adoption and the write');
     // a follow-up map can move it again
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: true, migrationId: id });
     const m = r.plan.migrationById(id)!;
@@ -638,7 +638,7 @@ describe('review 2918 fix round 2 (D-8186)', () => {
     expect(rep.taken).toEqual(['AAA-1']);
     expect(rep.skipped).toEqual([]);
     expect(r.db.prepare("SELECT subject FROM mail WHERE toId = ? AND subject LIKE '%follow-up%'").all(OWNER)).toEqual([]);
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: false, word: 'plan-bad-body' });
     expect(liveTicketBindings(r, U(101))).toHaveLength(1);
@@ -846,7 +846,7 @@ describe('review 2955 (D-8186)', () => {
     expect(rep.skipped).toEqual([]);
     expect(rep.waiting).toEqual([]);
     expect(r.db.prepare("SELECT subject FROM mail WHERE toId = ? AND subject LIKE '%follow-up%'").all(OWNER)).toEqual([]);
-    expect(r.mig.awaitsMap('AAA')).toBe(false);
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);
   });
 
   it('A1: a stale closer and a replaced epic naming an issue a live binding holds get no comment, no relation and no close; both go to `taken`', async () => {
@@ -984,7 +984,7 @@ describe('review 2998 fix round 1 (D-8186, D-8796)', () => {
     await r.until(() => r.stateOf(id) === 'applied', 20);
     expect([...r.plan.migrationById(id)!.report!.skipped].sort()).toEqual(['AAA-1', 'AAA-3']);
     hold(r, 1, 'held1');                                    // no tick has run: the applied row's report still lists it as skipped
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b'), leaf(3, 'k3b')] }, open)).toMatchObject({ ok: false });
     const stored = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(3, 'k3b')] }, open);
@@ -1049,6 +1049,52 @@ describe('review 3004 fix round 2 (D-8186, D-8796)', () => {
     expect(rep.taken).toEqual(['AAA-1']);
     expect(rep.unrelated ?? []).toEqual([]);
     expect(whyOf(r, id)).toContain('0 closed');
+    expect(r.mig.view(id)!.counts.closed).toBe(0);
+  });
+
+  it('F2 (review 3016): a take landing during the reconcile read of a closed-but-unacknowledged issue lists it taken, never applied, unrelated or counted closed', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    const id = await r.approved([entry(1, 'epic', { programme: SLUG, epic: 'e1' })]);
+    let refused = 0;
+    r.override.current = (ask) => {
+      // the state write reaches Linear, its answer does not
+      if (ask.op === 'issueUpdate' && ask.input['id'] === U(101) && ask.lane === 'migration' && refused === 0) { refused += 1; r.issues.get(U(101))!.stateType = 'canceled'; return fail('unreachable'); }
+      return undefined;
+    };
+    for (let i = 0; i < 6 && refused === 0; i += 1) await r.tick();
+    expect(refused).toBe(1);
+    expect(r.plan.movesOf(id).find((x) => x.identifier === 'AAA-1')!.appliedAt).toBeNull();
+    let taken = false;
+    r.override.current = (ask) => { if (ask.op === 'issueOwned' && ask.input['id'] === U(101) && !taken) { taken = true; hold(r, 1, 'held1'); } return undefined; };
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(taken).toBe(true);
+    expect(r.stateOf(id)).toBe('applied');
+    const rep = r.plan.migrationById(id)!.report!;
+    expect(rep.taken).toEqual(['AAA-1']);
+    expect(rep.unrelated ?? []).toEqual([]);
+    expect(r.plan.movesOf(id).find((x) => x.identifier === 'AAA-1')!.appliedAt).toBeNull();
+    expect(r.mig.view(id)!.counts.closed).toBe(0);
+    expect(whyOf(r, id)).toContain('0 closed');
+  });
+
+  it('A2 (review 3016): a take found after the state write is listed in the stored report when the row is stamped, so a crash in the same tick loses nothing', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => { if (ask.op === 'issueUpdate' && ask.input['id'] === U(101) && ask.lane === 'migration') hold(r, 1, 'held1'); return undefined; };
+    const id = await r.approved([entry(1, 'epic', { programme: SLUG, epic: 'e1' })]);
+    // the tick's own report save fails, as a restart before it would
+    const crash = vi.spyOn(r.mig as unknown as { saveReport: () => never }, 'saveReport').mockImplementation(() => { throw new Error('crash'); });
+    for (let i = 0; i < 6 && r.issues.get(U(101))!.stateType !== 'canceled'; i += 1) { try { await r.tick(); } catch { /* the crash */ } }
+    expect(r.issues.get(U(101))!.stateType).toBe('canceled');   // the write went out
+    // The stamp and the listing stand together or not at all: the failed save took the stamp with it, so the row is not left
+    // applied with the take forgotten (an applied row is never read again).
+    expect(r.plan.movesOf(id).find((x) => x.identifier === 'AAA-1')!.appliedAt).toBeNull();
+    crash.mockRestore();
+    r.override.current = null;
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-1']);
     expect(r.mig.view(id)!.counts.closed).toBe(0);
   });
 });

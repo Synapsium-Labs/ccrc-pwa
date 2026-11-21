@@ -1,8 +1,11 @@
 // D-8186 (Linear hierarchy plan, Task 7.2): the migration's start, the owner's proposal and the operator's Approve and Return.
 import { afterEach, describe, expect, it } from 'vitest';
+import Fastify from 'fastify';
+import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
+import { readLinearStore } from '../src/linear/store.js';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, fail, leaf, migRig, OWNER, SLUG, U } from './migrationRig.js';
-import { WS } from './linearProxyRig.js';
+import { seedSlot, WS } from './linearProxyRig.js';
 
 afterEach(cleanMigRigs);
 
@@ -18,23 +21,43 @@ describe('the migration proposal (D-8186)', () => {
     const id = await r.approved([leaf(1, 'k1')]);
     expect(r.stateOf(id)).toBe('approved');
     r.db.prepare('INSERT INTO project_linking (project, teamKey, override) VALUES (?, ?, ?)').run('project-b', 'BBB', 'private');
-    expect(r.mig.start('project-b', WS.a.id)).toMatchObject({ ok: false, word: 'migration-in-flight' });
+    expect(r.mig.start('project-b', { ok: true, workspaceId: WS.a.id })).toMatchObject({ ok: false, word: 'migration-in-flight' });
     await r.tick();                                          // applying
     expect(r.stateOf(id)).toBe('applying');
-    expect(r.mig.start('project-b', WS.a.id)).toMatchObject({ ok: false, word: 'migration-in-flight' });
+    expect(r.mig.start('project-b', { ok: true, workspaceId: WS.a.id })).toMatchObject({ ok: false, word: 'migration-in-flight' });
     expect(r.plan.migrationsOf()).toHaveLength(1);
+  });
+
+  it('defers migration completion until unnamed declared programmes can be classified', async () => {
+    let partial = false;
+    const r = await migRig({ routing: (store) => !partial || store.kind !== 'listed' ? store : {
+      ...store, slots: store.slots.map((slot) => slot.id === WS.b.id ? { ...slot, record: { kind: 'unreadable', code: 'EIO' } } : slot),
+    } });
+    await seedSlot(r.ccrcDir, 'b');
+    r.addIssue(1);
+    const id = await r.approved([leaf(1, 'k1')]);
+    applyPlanChanges(r.db, 'prog-b', NO_PLAN_CHANGES(), 'coord-b', r.t.now, { home: 'project-a', title: 'Programme B' });
+    r.db.prepare('UPDATE programs SET planRequired = 0 WHERE slug = ?').run('prog-b');
+    partial = true;
+    await r.until(() => r.stateOf(id) === 'applied', 6);
+    expect(r.stateOf(id)).toBe('applying');
+    expect(r.plan.migrationById(id)?.reportItemId).toBeNull();
+    partial = false;
+    await r.until(() => r.stateOf(id) === 'applied');
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.db.prepare('SELECT planRequired FROM programs WHERE slug = ?').get('prog-b')).toMatchObject({ planRequired: 1 });
   });
 
   it('a project with no team key cannot start', async () => {
     const r = await migRig();
-    expect(r.mig.start('project-nokey', WS.a.id)).toMatchObject({ ok: false, word: 'no-team-key' });
+    expect(r.mig.start('project-nokey', { ok: true, workspaceId: WS.a.id })).toMatchObject({ ok: false, word: 'no-team-key' });
   });
 
   it('propose by a non-owner is not-linear-owner', async () => {
     const r = await migRig();
     r.addIssue(1);
-    expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
-    const open = await r.mig.readOpen('AAA');
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     const res = r.mig.storeProposal('AAA', 'coord-x', { entries: [leaf(1, 'k1')] }, open);
     expect(res).toMatchObject({ ok: false, word: 'not-linear-owner' });
@@ -47,8 +70,8 @@ describe('the migration proposal (D-8186)', () => {
   it('a map missing an open issue is map-incomplete and raises nothing', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);
-    expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
-    const open = await r.mig.readOpen('AAA');
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     const res = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1')] }, open);
     expect(res).toMatchObject({ ok: false, word: 'map-incomplete', detail: 'missing:AAA-2' });
@@ -84,21 +107,101 @@ describe('the migration proposal (D-8186)', () => {
     const r = await migRig();
     r.addIssue(1);
     const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
-    expect(r.mig.act(itemId, migrationId, 'return', 'Place AAA-1 under the other epic')).toEqual({ ok: true });
+    expect(r.mig.act(itemId, migrationId, 'return', 'Place AAA-1 under the other epic', await r.mig.routingFacts())).toEqual({ ok: true });
     expect(r.plan.migrationById(migrationId)).toMatchObject({ state: 'proposing', map: null });
     const mail = mailsTo(r, OWNER).find((x) => x.subject.includes('came back'));
     expect(mail).toBeDefined();
     expect(mail!.body).toContain('Place AAA-1 under the other epic');
     // the owner proposes again
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1')] }, open)).toMatchObject({ ok: true });
+  });
+
+  it('return with unmeasured routing preserves the map and item until the note can be delivered', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
+    const before = r.plan.migrationById(migrationId);
+    const mailBefore = mailsTo(r, OWNER);
+    const note = 'Place the issue under the other epic';
+    expect(r.mig.act(itemId, migrationId, 'return', note, null)).toMatchObject({ ok: false, word: 'unreachable' });
+    expect(r.plan.migrationById(migrationId)).toEqual(before);
+    expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'open' })]);
+    expect(mailsTo(r, OWNER)).toEqual(mailBefore);
+
+    expect(r.mig.act(itemId, migrationId, 'return', note, await r.mig.routingFacts())).toEqual({ ok: true });
+    expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'done' })]);
+    expect(mailsTo(r, OWNER).filter((m) => m.subject.includes('came back'))).toEqual([
+      expect.objectContaining({ body: expect.stringContaining(note) }),
+    ]);
+  });
+
+  it.each([false, true])('Return preserves the note when a listed workspace record cannot be read (pinned fallback: %s)', async (pinned) => {
+    const r = await migRig();
+    r.addIssue(1);
+    const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
+    if (pinned) r.db.prepare("INSERT INTO project_linking (project, teamKey, teamWorkspace, linearOwner) VALUES ('project-b', 'AAA', ?, 'coord-b')").run(WS.a.id);
+    const before = r.plan.migrationById(migrationId);
+    const mailBefore = mailsTo(r, OWNER);
+    const note = 'Place the issue under the other epic';
+    let unreadable = true;
+    const app = Fastify();
+    try {
+      registerHierarchyRoutes(app, {
+        plan: r.plan, serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive', migration: r.mig,
+        itemOf: (id) => r.coord.itemById(id), readLinearStore: async () => {
+          const store = await readLinearStore(r.ccrcDir);
+          if (!unreadable || store.kind !== 'listed') return store;
+          return { ...store, slots: store.slots.map((slot) => ({ ...slot, record: { kind: 'unreadable', code: 'EIO' } })) };
+        },
+      });
+      const post = () => app.inject({ method: 'POST', url: `/api/items/${itemId}/linear`, payload: { act: 'return', note } });
+      const refused = await post();
+      expect([refused.statusCode, refused.json().error]).toEqual([503, 'unreachable']);
+      expect(r.plan.migrationById(migrationId)).toEqual(before);
+      expect(itemsOf(r)[0]?.state).toBe('open');
+      expect(mailsTo(r, OWNER)).toEqual(mailBefore);
+      expect(mailsTo(r, 'coord-b')).toEqual([]);
+
+      unreadable = false;
+      expect((await post()).statusCode).toBe(200);
+      expect(itemsOf(r)[0]?.state).toBe('done');
+      expect(mailsTo(r, OWNER).filter((m) => m.subject.includes('came back'))).toEqual([
+        expect.objectContaining({ body: expect.stringContaining(note) }),
+      ]);
+    } finally { await app.close(); }
+  });
+
+  it.each([true, false])('round 2: Return without a recipient keeps the item and map (ambiguous: %s)', async (ambiguous) => {
+    const r = await migRig();
+    r.addIssue(1);
+    const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
+    if (ambiguous) {
+      await seedSlot(r.ccrcDir, 'b', { teams: [{ ...WS.b.teams[0], key: 'AAA' }] });
+    } else {
+      r.db.prepare("UPDATE project_linking SET teamKey = NULL WHERE project = 'project-a'").run();
+    }
+    const before = r.plan.migrationById(migrationId);
+    const mailBefore = mailsTo(r, OWNER);
+    const app = Fastify();
+    try {
+      registerHierarchyRoutes(app, {
+        plan: r.plan, serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive', migration: r.mig,
+        itemOf: (id) => r.coord.itemById(id), readLinearStore: () => readLinearStore(r.ccrcDir),
+      });
+      const result = await app.inject({ method: 'POST', url: `/api/items/${itemId}/linear`, payload: { act: 'return', note: 'Explain the new placement' } });
+      expect([result.statusCode, result.json().error]).toEqual([409, ambiguous ? 'team-ambiguous' : 'no-linear-owner']);
+      expect(r.plan.migrationById(migrationId)).toEqual(before);
+      expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'open' })]);
+      expect(mailsTo(r, OWNER)).toEqual(mailBefore);
+    } finally { await app.close(); }
   });
 
   it('a proposing row mails the owner once for its map', async () => {
     const r = await migRig();
     r.addIssue(1);
-    expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
     await r.tick(); await r.tick();
     expect(mailsTo(r, OWNER).filter((x) => x.subject.includes('propose the map'))).toHaveLength(1);
   });
@@ -111,7 +214,7 @@ describe('the migration proposal (D-8186)', () => {
     await r.until(() => r.stateOf(id) === 'applied');
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-2']);
 
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     // AAA-1 was moved already: a follow-up that lists it again is not a map of the skipped issues
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b'), leaf(2, 'k2')] }, open)).toMatchObject({ ok: false, word: 'map-incomplete', detail: 'not-open:AAA-1' });
@@ -136,11 +239,11 @@ describe('the migration proposal (D-8186)', () => {
     const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2')]);
     r.issues.get(U(102))!.title = 'Edited by a person after the map';
     await r.until(() => r.stateOf(id) === 'applied');
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open)).toMatchObject({ ok: true });
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.act(m.itemId!, id, 'return', 'not yet')).toEqual({ ok: true });
+    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingFacts())).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.state).toBe('applied');
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-2']);
   });
@@ -155,8 +258,8 @@ describe('the migration proposal (D-8186)', () => {
     const tid = r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id;
     const bound = r.plan.bindingOf('ticket', tid, WS.a.id)!;
     r.issues.set(bound.linearId!, { id: bound.linearId!, identifier: 'AAA-50', title: 'Our own ticket', description: 'x', teamKey: 'AAA', stateType: 'unstarted', projectId: null, milestoneId: null, parentId: null });
-    expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
-    const open = await r.mig.readOpen('AAA');
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(open.rows.map((x) => x.identifier).sort()).toEqual(['AAA-1', 'AAA-50']);
     // the map covers AAA-1 alone: the bound issue is not "missing"
@@ -174,31 +277,31 @@ describe('the migration proposal (D-8186)', () => {
     // AAA-1 was adopted and applied: listing it among the skipped does not open it to a follow-up map
     const m = r.plan.migrationById(id)!;
     r.plan.setMigration(id, ['applied'], { report: { ...m.report!, skipped: ['AAA-1', 'AAA-2'] } }, r.t.now);
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b'), leaf(2, 'k2')] }, open)).toMatchObject({ ok: false, word: 'map-incomplete', detail: 'not-open:AAA-1' });
   });
 
-  it('awaitsMap answers only while a migration waits', async () => {
+  it('waitingWorkspaces names a workspace only while its migration waits', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);
-    expect(r.mig.awaitsMap('AAA')).toBe(false);              // none
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);              // none
     const { migrationId, itemId } = await (async () => {
-      expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
-      expect(r.mig.awaitsMap('AAA')).toBe(true);             // proposing
-      const open = await r.mig.readOpen('AAA');
+      expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
+      expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);             // proposing
+      const open = await r.mig.readOpen('AAA', WS.a.id);
       if (!open.ok) throw new Error('read');
       expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1'), leaf(2, 'k2')] }, open)).toMatchObject({ ok: true });
       const m = r.plan.migrationsOf()[0]!;
       return { migrationId: m.id, itemId: m.itemId! };
     })();
-    expect(r.mig.awaitsMap('AAA')).toBe(false);              // proposed
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);              // proposed
     expect(r.mig.act(itemId, migrationId, 'approve', null)).toEqual({ ok: true });
-    expect(r.mig.awaitsMap('AAA')).toBe(false);              // approved
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);              // approved
     r.issues.get(U(102))!.title = 'Edited by a person after the map';
     await r.until(() => r.stateOf(migrationId) === 'applied');
-    expect(r.mig.awaitsMap('AAA')).toBe(true);               // applied with one skipped: a follow-up
-    expect(r.mig.awaitsMap('ZZZ')).toBe(false);
+    expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);               // applied with one skipped: a follow-up
+    expect(r.mig.waitingWorkspaces('ZZZ')).toEqual([]);
   });
 
   it('a follow-up map is refused while put back is asked', async () => {
@@ -208,10 +311,10 @@ describe('the migration proposal (D-8186)', () => {
     r.issues.get(U(102))!.title = 'Edited by a person after the map';
     await r.until(() => r.stateOf(id) === 'applied');
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.awaitsMap('AAA')).toBe(true);
+    expect(r.mig.waitingWorkspaces('AAA')).not.toEqual([]);
     expect(r.mig.act(m.reportItemId!, id, 'put-back', null)).toEqual({ ok: true });
-    expect(r.mig.awaitsMap('AAA')).toBe(false);
-    const open = await r.mig.readOpen('AAA');
+    expect(r.mig.waitingWorkspaces('AAA')).toEqual([]);
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open)).toMatchObject({ ok: false, word: 'plan-bad-body' });
     expect(r.plan.migrationById(id)!.state).toBe('applied');
@@ -241,12 +344,12 @@ describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)'
     await r.until(() => r.stateOf(id) === 'applied', 10);
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
     expect(r.plan.movesOf(id).map((x) => x.subject)).toEqual([expect.stringMatching(/:skipped:/u)]);
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: true });
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.act(m.itemId!, id, 'return', 'not yet')).toEqual({ ok: true });
+    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingFacts())).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
   });
 
@@ -256,7 +359,7 @@ describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)'
     const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2'), entry(3, 'stale')]);
     r.issues.get(U(102))!.title = 'Edited by a person after the map';
     await r.until(() => r.stateOf(id) === 'applied');
-    const open = await r.mig.readOpen('AAA');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     const stored = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open);
     expect(stored).toMatchObject({ ok: true, counts: { moved: 1, closed: 0 } });
@@ -268,13 +371,13 @@ describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)'
   it("A4: a project row's state is its team's newest migration in the workspace its key routes to", async () => {
     const r = await migRig();
     r.plan.insertMigration({ workspaceId: 'ws-elsewhere', teamKey: 'AAA', project: 'project-x', now: r.t.now });
-    expect(await r.mig.stateOfTeam('AAA')).toMatchObject({ state: 'not-migrated' });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toMatchObject({ state: 'not-migrated' });
     r.addIssue(1);
-    expect(r.mig.start('project-a', WS.a.id)).toMatchObject({ ok: false, word: 'migration-in-flight' });   // one at a time, every workspace
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a'))).toMatchObject({ ok: false, word: 'migration-in-flight' });   // one at a time, every workspace
     r.db.prepare("UPDATE linear_migrations SET state = 'failed' WHERE workspaceId = 'ws-elsewhere'").run();
     const { migrationId } = await r.propose([leaf(1, 'k1')]);
     r.plan.insertMigration({ workspaceId: 'ws-elsewhere', teamKey: 'AAA', project: 'project-x', now: r.t.now + 1 });
-    expect(await r.mig.stateOfTeam('AAA')).toMatchObject({ state: 'map-waiting', itemId: r.plan.migrationById(migrationId)!.itemId });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toMatchObject({ state: 'map-waiting', itemId: r.plan.migrationById(migrationId)!.itemId });
   });
 });
 
@@ -284,7 +387,7 @@ describe('review 2918 fix round 2: wiring the panel mutated green (D-8186)', () 
     const older = r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
     r.db.prepare("UPDATE linear_migrations SET state = 'put-back', putBackAt = ? WHERE id = ?").run(r.t.now, older);
     r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now + 1 });
-    expect(await r.mig.stateOfTeam('AAA')).toMatchObject({ state: 'migrating' });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toMatchObject({ state: 'migrating' });
   });
 
   it('F6: a superseded entry may name a successor ccrc already holds (a bound issue outside the map)', async () => {
@@ -295,8 +398,8 @@ describe('review 2918 fix round 2: wiring the panel mutated green (D-8186)', () 
     await r.sync.passFor(SLUG, r.t.now + 60_000);
     const bound = r.plan.bindingOf('ticket', r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id, WS.a.id)!;
     r.issues.set(bound.linearId!, { id: bound.linearId!, identifier: 'AAA-50', title: 'Our own ticket', description: 'x', teamKey: 'AAA', stateType: 'unstarted', projectId: null, milestoneId: null, parentId: null });
-    expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
-    const open = await r.mig.readOpen('AAA');
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA', WS.a.id);
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [entry(1, 'superseded', { successor: bound.linearId! })] }, open)).toMatchObject({ ok: true });
   });
