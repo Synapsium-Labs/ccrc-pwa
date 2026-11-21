@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_DOOR_LIB, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_DOOR_LIB, CCD_ALIASES_LIB, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 
@@ -46,7 +46,7 @@ const body = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
 const stampedTreeBody = (): Buffer =>
   Buffer.from(installedCcdBody(fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8'), fs.readFileSync(path.join(tree(), 'ccd/lib/disk-retention.sh')),
     { redact: fs.readFileSync(path.join(tree(), 'shared/redact.mjs')), cli: fs.readFileSync(path.join(tree(), 'shared/redact-cli.mjs')) },
-    fs.readFileSync(path.join(tree(), 'ccd/lib/train-proof.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/delegation-lease.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/pool-set.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/long-lived.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/door.sh')), fs.readFileSync(path.join(tree(), 'ccd/door-process.mjs'))));
+    fs.readFileSync(path.join(tree(), 'ccd/lib/train-proof.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/delegation-lease.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/pool-set.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/long-lived.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/door.sh')), fs.readFileSync(path.join(tree(), 'ccd/door-process.mjs')), fs.readFileSync(path.join(tree(), 'ccd/lib/model-aliases.sh'))));
 /** The library the body pins and loads (D-6913), where the publisher puts it: `lib/` beside the body. */
 const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
 /** The second library (D-7463), beside the first. */
@@ -59,6 +59,8 @@ const poolsetLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'l
 const longlivedLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'long-lived.sh');
 /** The sixth library (the Overlord's door process), beside the fifth. */
 const doorLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'door.sh');
+/** The seventh library (the model-class Anthropic arm), beside the sixth. */
+const aliasesLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'model-aliases.sh');
 /** The door program (plan question 2), beside the body, not on PATH. */
 const doorProg = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'door-process.mjs');
 const sha = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -98,6 +100,7 @@ function plantTree(o: {
   poolset?: (t: string) => string; poolsetPin?: (line: string) => string;
   longlived?: (t: string) => string; longlivedPin?: (line: string) => string;
   door?: (t: string) => string; doorPin?: (line: string) => string;
+  aliases?: (t: string) => string; aliasesPin?: (line: string) => string;
 } = {}): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
@@ -118,6 +121,9 @@ function plantTree(o: {
   // The sixth library (the Overlord's door process), `door` rewriting it as `longlived` rewrites the fifth.
   const doorText = o.door ? o.door(fs.readFileSync(CCD_DOOR_LIB, 'utf8')) : fs.readFileSync(CCD_DOOR_LIB, 'utf8');
   fs.writeFileSync(path.join(dir, 'lib', 'door.sh'), doorText);
+  // The seventh library (the model-class Anthropic arm), `aliases` rewriting it as `door` rewrites the sixth.
+  const aliasesText = o.aliases ? o.aliases(fs.readFileSync(CCD_ALIASES_LIB, 'utf8')) : fs.readFileSync(CCD_ALIASES_LIB, 'utf8');
+  fs.writeFileSync(path.join(dir, 'lib', 'model-aliases.sh'), aliasesText);
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
   fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));
@@ -131,6 +137,7 @@ function plantTree(o: {
   if (o.poolsetPin) bodyText = bodyText.replace(/^__CCD_LIB_POOLSET_SHA256=.*$/m, o.poolsetPin);
   if (o.longlivedPin) bodyText = bodyText.replace(/^__CCD_LIB_LONGLIVED_SHA256=.*$/m, o.longlivedPin);
   if (o.doorPin) bodyText = bodyText.replace(/^__CCD_LIB_DOOR_SHA256=.*$/m, o.doorPin);
+  if (o.aliasesPin) bodyText = bodyText.replace(/^__CCD_LIB_ALIASES_SHA256=.*$/m, o.aliasesPin);
   fs.writeFileSync(path.join(dir, 'ccd'), bodyText, { mode: 0o755 });
   const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
   fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
@@ -248,6 +255,10 @@ function assertPair(): void {
   expect(fs.statSync(doorLib()).mode & 0o777).toBe(0o644);
   expect(fs.readFileSync(doorLib()).equals(fs.readFileSync(path.join(tree(), 'ccd/lib/door.sh'))), 'the door library is the tree\'s').toBe(true);
   expect(/^__CCD_LIB_DOOR_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(body(), 'utf8'))?.[1], 'the published body pins the published door library').toBe(sha(doorLib()));
+  expect(fs.lstatSync(aliasesLib()).isFile(), 'the model-aliases library is a regular file, not a link').toBe(true);
+  expect(fs.statSync(aliasesLib()).mode & 0o777).toBe(0o644);
+  expect(fs.readFileSync(aliasesLib()).equals(fs.readFileSync(path.join(tree(), 'ccd/lib/model-aliases.sh'))), 'the model-aliases library is the tree\'s').toBe(true);
+  expect(/^__CCD_LIB_ALIASES_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(body(), 'utf8'))?.[1], 'the published body pins the published model-aliases library').toBe(sha(aliasesLib()));
   const text = fs.readFileSync(entry(), 'utf8');
   expect(text.split('\n')[0]).toBe(`#!${RENDERED} -IS`);
   expect(/^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(text)?.[1], 'the launcher names the published body').toBe(sha(body()));
@@ -1319,7 +1330,7 @@ describe('the fifth library, lib/long-lived.sh: published, pinned and refused ex
   }
 });
 
-describe('the fifth and sixth libraries\' staging slots (.4, .5) are swept, and the stage pattern admits exactly slots 1 to 5 (the Overlord W1 ccd arms, the door process)', () => {
+describe('the fifth, sixth and seventh libraries\' staging slots (.4, .5, .6) are swept, and the stage pattern admits exactly slots 1 to 6 (the Overlord W1 ccd arms, the door process, the model-aliases reader)', () => {
   it('a slot-4 staging file a killed run left in lib/ is swept by the next run', () => {
     plantTree();
     fs.mkdirSync(path.dirname(longlivedLib()), { recursive: true });
@@ -1335,6 +1346,17 @@ describe('the fifth and sixth libraries\' staging slots (.4, .5) are swept, and 
     plantTree();
     fs.mkdirSync(path.dirname(doorLib()), { recursive: true });
     const left = path.join(path.dirname(doorLib()), '.ccd.ccrc-stage.4242.5');
+    fs.writeFileSync(left, 'left by a killed run\n');
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(left), 'the slot file was swept').toBe(false);
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('a slot-6 staging file a killed run left in lib/ is swept by the next run', () => {
+    plantTree();
+    fs.mkdirSync(path.dirname(aliasesLib()), { recursive: true });
+    const left = path.join(path.dirname(aliasesLib()), '.ccd.ccrc-stage.4242.6');
     fs.writeFileSync(left, 'left by a killed run\n');
     const r = helper(['install', tree(), home]);
     expect(r.code, r.stderr).toBe(0);
@@ -1412,6 +1434,80 @@ describe('the sixth library, lib/door.sh: published, pinned and refused exactly 
       const r = helper(['install', tree(), home]);
       expect(r.code, r.stderr).toBe(1);
       expect(r.stderr).toContain('ccd/lib/door.sh must end in exactly one newline and contain no NUL byte');
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+});
+
+describe('the seventh library, lib/model-aliases.sh: published, pinned and refused exactly as the sixth (the model-class Anthropic arm)', () => {
+  it('a fresh install publishes it after the sixth library and before the body', () => {
+    plantTree();
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    const said = r.stdout.split('\n').filter((l) => / published at /.test(l));
+    const at = (n: string): number => said.findIndex((l) => l.includes(n));
+    expect(at('lib/door.sh')).toBeGreaterThan(-1);
+    expect(at('lib/model-aliases.sh'), 'after the sixth library').toBeGreaterThan(at('lib/door.sh'));
+    expect(at('body published'), 'before the body that pins it').toBeGreaterThan(at('lib/model-aliases.sh'));
+    assertPair();
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('changed out of band, it is republished alone; mode drift is repaired in place', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const [e, b, l] = [ident(entry()), ident(body()), ident(lib())];
+    fs.appendFileSync(aliasesLib(), '\n# edited on the box\n');
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('library published');
+    expect(r.stdout).not.toContain('body published');
+    expect([ident(entry()), ident(body()), ident(lib())]).toEqual([e, b, l]);
+    assertPair();
+    const before = ident(aliasesLib());
+    fs.chmodSync(aliasesLib(), 0o600);
+    const m = helper(['install', tree(), home]);
+    expect(m.code, m.stderr).toBe(0);
+    expect(m.stdout).toMatch(/lib\/model-aliases\.sh: mode repaired to 644/);
+    expect(ident(aliasesLib())).toBe(before);
+    assertPair();
+  }, 60_000);
+
+  it('its digest is rendered into the body\'s one pin line before the stamp, and a changed file needs no source edit', () => {
+    plantTree({ aliases: (l) => `${l}# a library edit\n` });
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    const installed = fs.readFileSync(body(), 'utf8');
+    expect(installed.match(/^__CCD_LIB_ALIASES_SHA256=.*$/gm)).toEqual([`__CCD_LIB_ALIASES_SHA256=${sha(aliasesLib())}`]);
+    expect(verifyMarker(installed)).toBe('ccrc-unmodified');
+    expect(verifyMarker(installed.replace(/^__CCD_LIB_ALIASES_SHA256=.*$/m, '__CCD_LIB_ALIASES_SHA256=stamp-at-install')), 'the stamp covers the pin').toBe('ccrc-edited');
+    assertPair();
+  }, 60_000);
+
+  for (const [what, aliasesPin] of [
+    ['no aliases pin line at all', (): string => '# no pin'],
+    ['two aliases pin placeholders', (): string => '__CCD_LIB_ALIASES_SHA256=stamp-at-install\n__CCD_LIB_ALIASES_SHA256=stamp-at-install'],
+    ['a literal digest of another file', (): string => `__CCD_LIB_ALIASES_SHA256=${'0'.repeat(64)}`],
+  ] as const) {
+    it(`a body with ${what} is refused before anything is created`, () => {
+      plantTree({ aliasesPin });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/ccd\/lib\/model-aliases\.sh is not the library .* pins/);
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+
+  for (const [shape, edit] of [
+    ['no trailing newline', (l: string) => l.replace(/\n+$/, '')],
+    ['two trailing newlines', (l: string) => `${l}\n`],
+    ['a NUL byte', (l: string) => `\0${l}`],
+  ] as const) {
+    it(`an aliases library with ${shape} is refused before anything is created`, () => {
+      plantTree({ aliases: edit });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain('ccd/lib/model-aliases.sh must end in exactly one newline and contain no NUL byte');
       expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
     }, 60_000);
   }
@@ -1533,7 +1629,7 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
       expect(pinOf('__CCD_REDACT_CLI_SHA256'), 'the body pins the published redact-cli.mjs').toBe(sha(shared('redact-cli.mjs')));
       // One `library published` line per file of the half, in its rename order, all before the body.
       const said = r.stdout.split('\n').filter((l) => l.includes('library published at'));
-      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh']);
+      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'lib/model-aliases.sh']);
       expect(r.stdout.indexOf('library published')).toBeLessThan(r.stdout.indexOf('body published'));
       assertPair();
       assertNoLeftovers();
@@ -1579,7 +1675,7 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
     expect(r.code, r.stderr).toBe(2);
     expect(r.stderr).toContain('refused after the library moved');
     expect(r.stderr).toContain('the library was renamed into place');
-    expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs, lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh\n');
+    expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs, lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh\n');
     expect(r.stderr).not.toContain('the body was renamed into place');
     expect(fs.existsSync(body())).toBe(false);
   }, 60_000);
