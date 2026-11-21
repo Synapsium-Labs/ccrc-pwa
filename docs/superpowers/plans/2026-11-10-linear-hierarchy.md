@@ -526,9 +526,10 @@ number from `POST /api/ledger/deviations`.
   programme whose membership cannot be measured. Ambiguous inbound with no owner still waits quietly and counts in the console.
   Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
-  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill`, `w8-triage-l1` and
+  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and
   `w8-ambiguous-notice` (after the pilot);
-  `w8-write-ambiguous` was built in the review's fix round and dropped, and `w8-migration-workspace` by run 3027. Record: the
+  `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027, and
+  `w8-triage-l1` by run 3155. Record: the
   wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
