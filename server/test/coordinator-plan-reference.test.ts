@@ -153,7 +153,7 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     const next = text.indexOf('\n## ', at + 1);
     const section = flat(text.slice(at, next === -1 ? undefined : next));
     expect(section).toMatch(/`team-ambiguous` \(a migration of the team waits for a map in more than one workspace whose owner you are, so ccrc cannot tell which this map is for: stop and tell the operator\)/);
-    expect(section).toMatch(/`unreachable` \(ccrc could not measure the team's Linear owner in a workspace whose owner you could be\. Try once more later; if it is refused again, stop and tell the operator: it may need a fix in Linear, or a new Linear key\)\./);
+    expect(section).toMatch(/`unreachable` \(ccrc could not measure something the map needs: the team's Linear owner, in a workspace whose owner you could be; a Linear key that serves the team; the team's open issues, read from Linear, all of them within the pages one map reads; or the runs\. The refusal's detail names which\. Try once more later; if it is refused again, stop and tell the operator\. When the detail says the team has more open issues than the map reads, tell the operator at once: a retry never helps\)\./);
     for (const word of ['not-linear-owner', 'map-incomplete', 'map-rewrites-plan', 'plan-bad-body', 'team-ambiguous', 'unreachable']) expect(section).toContain(`\`${word}\``);
   });
 
@@ -163,7 +163,7 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('plan triage and plan take each name unreachable as the coordinator can act on it, and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2920 F1, 2929 F1, 2960 A1, 3110 F1, 3121 F1, 3144 F1, F2, F3)', () => {
+  it('plan triage and plan take each name unreachable as the coordinator can act on it, and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2920 F1, 2929 F1, 2960 A1, 3110 F1, 3121 F1, 3144 F1, F2, F3, 3205 F2, F3)', () => {
     for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
       const text = plan();
       const at = text.indexOf(`\n${heading}\n`);
@@ -182,7 +182,8 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       // `possibleOwnerIds`); anyone else is `not-linear-owner`. F2: `upkeepLookupOf` runs for any take into an epic or close with
       // no handed row, before the issue is known to be an Upkeep ticket. F3: its no-slot cause needs the home project's linking,
       // not a retry.
-      expect(section, heading).toMatch(/`unreachable` \(ccrc could not measure something the decision needs: [^)]*Try once more later; if it is refused again, stop and tell the operator: it may need a fix in Linear, or a new Linear key(?:\)|, or, when the refusal names the programme's home workspace, a slot for the home project's team in its Linear linking\))/);
+      // shared regex: balanced inner parentheses, ending at the common remedy; each section's own regex below pins its ending (3205 F2)
+      expect(section, heading).toMatch(/`unreachable` \(ccrc could not measure something the decision needs: (?:[^()]|\([^()]*\))*Try once more later; if it is refused again, stop and tell the operator: it may need a fix in Linear, or a new Linear key/);
       for (const cause of ['malformed', 'forbidden or invalid', 'with a 401', 'transport fault', 'no managed team']) {
         expect(section, `${heading} names a cause the coordinator cannot see: ${cause}`).not.toContain(cause);
       }
@@ -190,8 +191,8 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       // that binds the issue is refused, and the rest goes on (`inboundDoorVerdict`); review 2960 A1: each section names its own
       // verb's decisions, triage's binding pair being `planRoutes.ts`'s `upkeep || hand`
       expect(section, heading).toMatch(heading === '## plan take'
-        ? /`unreachable` \(ccrc could not measure something the decision needs: for a handed issue, the issue, read back from Linear to confirm it is still inbound, refused only for a decision that binds it: a take into an epic, while a close or a return goes on, and the team's Linear owner, for a close or a return; for a take into an epic, the workspace of the epic; or, for a take into an epic or a close of an issue not handed to this programme, an Upkeep ticket's included, the programme's home workspace, measured before ccrc looks the issue up\. Try once more later; if it is refused again, stop and tell the operator: it may need a fix in Linear, or a new Linear key, or, when the refusal names the programme's home workspace, a slot for the home project's team in its Linear linking\)/
-        : /`unreachable` \(ccrc could not measure something the decision needs: the team's Linear owner, when you could be that owner, for any decision, a close and a raise included, while any other caller is refused `not-linear-owner`; the issue, read back from Linear to confirm it is still inbound, refused only for a decision that binds it: a hand or an Upkeep placement, while a close or a raise goes on; or, for a hand to your own programme, the workspace of the epic it is taken into\. Try once more later;/);
+        ? /`unreachable` \(ccrc could not measure something the decision needs: for a handed issue, the issue, read back from Linear to confirm it is still inbound, refused only for a decision that binds it: a take into an epic, while a close or a return goes on, and the team's Linear owner, for a close or a return; for a take into an epic, the workspace of the epic; or, for a take into an epic or a close, when the issue was not handed to this programme \(an Upkeep ticket's included\), the programme's home workspace, measured before ccrc looks the issue up\. Try once more later; if it is refused again, stop and tell the operator: it may need a fix in Linear, or a new Linear key, or, when the refusal names the programme's home workspace, a slot for the home project's team in its Linear linking\)/
+        : /`unreachable` \(ccrc could not measure something the decision needs: the team's Linear owner, when you could be that owner, for any decision, a close and a raise included, while any other caller is refused `not-linear-owner`; the issue, read back from Linear to confirm it is still inbound, refused only for a decision that binds it: a hand or an Upkeep placement, while a close or a raise goes on; or, for a hand to your own programme, the workspace of the epic it is taken into\. Try once more later; if it is refused again, stop and tell the operator: it may need a fix in Linear, or a new Linear key\)/);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
   });

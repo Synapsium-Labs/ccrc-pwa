@@ -18,3 +18,13 @@ behaviour change.
 
 The review judge flags rules-mixed when a PR changes plan.md and anything else; as ruled for #3151 and #3155, the pin test rides
 with the rules file it pins, and the run lands as one PR.
+
+## Fix round 1 (review 3205)
+
+| Finding | Ruling | Done | Pin (seen red) |
+|---|---|---|---|
+| F1 | map-propose's `unreachable` names every cause the map can meet: the owner, a Linear key, the open issues (and the page limit), the runs. | plan.md's gloss reworded; the detail names which cause, and the page-limit cause is told to the operator at once. | The map-propose test's `unreachable` pin, exact through the final `\)\.`; red against the pre-round gloss. |
+| F2 | The shared regex no longer lets triage carry take's linking remedy unseen. | The shared regex takes one level of inner parentheses and ends at the common remedy; triage's own regex pins its full ending; take's pins its own. | Red with take's linking remedy written into triage's tail; red against the pre-round take clause. |
+| F3 | Take's home-workspace clause says exactly when the lookup runs. | "or, for a take into an epic or a close, when the issue was not handed to this programme (an Upkeep ticket's included), the programme's home workspace". | Take's own regex, red against the pre-round clause. |
+| F4 | Two docblocks say when the shared-key item settles. | One line each in `inboundPolicy.ts` and `planPolicy.ts`: no waiting issue of the key is team-ambiguous or unmeasured. | None: comments. |
+| F5 | Re-wrap plan.md's triage paragraph to at most 118 characters. | Reflowed at spaces; `git diff --word-diff` shows no word changed there. | None: whitespace only. |
