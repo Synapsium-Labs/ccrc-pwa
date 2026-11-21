@@ -137,6 +137,22 @@ describe('held reports: the fold\'s own end facts, capped at parse time', () => 
     expect(held.size).toBe(1 + HELPER_KEPT_MAX);
   });
 
+  it('a helper not drawn yet keeps its report beside 20 drawn rows\' reports, and has it when its row is drawn', () => {
+    const drawnFacts = factsOf(...Array.from({ length: HELPER_KEPT_MAX }, (_, i) => notice(`d${i}`, NOW - 1_000 + i, `drawn ${i}`)));
+    const pending = factsOf(notice('p1', NOW - 90_000, 'the pending report'));
+    const facts = [...pending, ...drawnFacts];
+    const ids = Array.from({ length: HELPER_KEPT_MAX }, (_, i) => `d${i}`);
+    const one = reading(facts, ids); // p1's meta is not read yet: no row
+    expect(one.arm.agents.map((a) => a.id)).not.toContain('p1');
+    const folded = foldHelperFacts(new Map(), facts);
+    const arm2 = decideAgentHelpers({
+      now: NOW, roster: listedNone, proc: { kind: 'live', startedAt: NOW - 3_600_000 }, facts: folded,
+      metas: new Map(['p1', ...ids.slice(1)].map((id) => [id, meta()])), memory: emptyHelperMemory(),
+    });
+    const held2 = M.boundReports(M.holdReports(one.held, [], folded), arm2.agents);
+    expect(M.reportAnswer(held2, arm2.agents, 'p1').report).toBe('the pending report');
+  });
+
   it('two ends at one time are told apart by their outcome: the fold\'s (failed) keeps its report, not the done one\'s', () => {
     const facts = factsOf(notice('a1', NOW - 1_000, 'the failure', 'failed'), notice('a1', NOW - 1_000, 'the success'));
     const { held, arm } = reading(facts, ['a1']);
@@ -172,6 +188,15 @@ describe('SessionHelpers holds the reports of the rows it drew', () => {
     await r.read({ roster: listedNone, facts: factsOf(notice('a1', NOW - 1_000, 'the report')), proc: { kind: 'live', startedAt: NOW - 3_600_000 }, now: NOW });
     expect(r.reportOf('a1')).toEqual({ type: 'helper-report', id: 'a1', report: 'the report', cut: false });
     expect(r.reportOf('b2')).toEqual({ type: 'helper-report', id: 'b2', report: null, cut: false });
+  });
+
+  it('the reader holds a bounded set: many notifications that are no row\'s keep at most HELPER_KEPT_MAX of theirs', async () => {
+    const S = path.join(home, '.claude-a', 'projects', '-work-project-a', 'session-uuid-b');
+    mkdirSync(path.join(S, 'subagents'), { recursive: true });
+    const r = new SessionHelpers(localIO, S);
+    const many = factsOf(...Array.from({ length: HELPER_KEPT_MAX + 15 }, (_, i) => notice(`t${i}`, NOW - 60_000 + i, `task ${i}`)));
+    await r.read({ roster: listedNone, facts: many, proc: { kind: 'live', startedAt: NOW - 3_600_000 }, now: NOW });
+    expect((r as unknown as { reports: ReadonlyMap<string, unknown> }).reports.size).toBe(HELPER_KEPT_MAX);
   });
 });
 
