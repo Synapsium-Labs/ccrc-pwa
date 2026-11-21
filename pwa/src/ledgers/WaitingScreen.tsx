@@ -13,7 +13,7 @@ import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
-  CLEARED_HEADING, CLEARED_SHOWN, MENTIONS_WORD, SHOW_FEWER_WORD, clearedCountWord, clearedCallPlace, clearedGroups, clearedTrail, itemNumber, itemRefWord, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
+  CLEARED_HEADING, CLEARED_SHOWN, MENTIONS_WORD, SHOW_FEWER_WORD, clearedCountWord, clearedCallPlace, clearedCallPlaceKey, clearedGroups, clearedTrail, itemNumber, itemRefWord, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, REVIEW_CAP_WORD, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups,
   openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ClearedEntry, type ItemList, type ProgrammeGroup,
   type QuestionRow, type Row, CALL_CLEARED_WORD, callClearedHow, callClearedOn,
@@ -406,7 +406,17 @@ interface ClearedGrouping { readonly title: (program: string | null) => string; 
  *  order of its newest clear, its name beside its hue's swatch and its count, each COLLAPSED until its heading is pressed. Which
  *  groups are open lives in this component's state alone: Show fewer forgets it, and so does leaving the page (nothing is kept
  *  in storage). The list filtered to one programme has one group, so it draws its share as one plain list. */
-export function ClearedTrail({ items, asks = [], calls = NO_CALLS, where, now, grouping, current = false, targetCallId = null }: {
+export function ClearedTrail(props: ClearedTrailProps): ReactNode {
+  // Keyed by where the target stands, so a list that gains the call later (a saved copy, then the live list) remounts the trail
+  // with the initial state that shows it (D-8808).
+  const { items, asks = [], calls = NO_CALLS, now, targetCallId = null } = props;
+  const place = targetCallId === null ? null : clearedCallPlace(clearedTrail(items, now, asks, calls), targetCallId);
+  return <ClearedTrailBody key={clearedCallPlaceKey(place)} {...props} />;
+}
+
+type ClearedTrailProps = Parameters<typeof ClearedTrailBody>[0];
+
+function ClearedTrailBody({ items, asks = [], calls = NO_CALLS, where, now, grouping, current = false, targetCallId = null }: {
   items: readonly ItemView[]; where?: Where; now: number; grouping?: ClearedGrouping;
   /** The asks the operator has that are not live (answer marks B), joined to the trail by their time. */
   asks?: readonly AskMarkRow[];
@@ -517,8 +527,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const empty = groups.length === 0 && (view.approvals?.length ?? 0) === 0;
   // Calls made for the operator (D-8126) never count and never make a group on the rows' account: a programme with calls and no
   // rows draws them apart, among the groups, under the filter that shows it.
-  const target = props.call === undefined || props.call === null ? null : callTargetOf(view, props.call);
-  const targetId = target === null || target.at === 'gone' ? null : target.call.id;
+  const target = props.call === undefined || props.call === null ? null : callTargetOf(view, props.call, props.notCurrent === undefined);
+  const targetId = target === null || target.at === 'gone' || target.at === 'unheard' ? null : target.call.id;
   const callFilter: CallFilter = { noProgramme, programme: list.programme };
   const callsFor = (p: string | null): readonly CallView[] => (p === null ? NO_CALLS : openCallsOf(view, p));
   const apartBlock = callsApartOf(view, groups.map((g) => g.program), callFilter).map((p) => (

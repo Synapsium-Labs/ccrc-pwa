@@ -38,19 +38,22 @@ export function clearedCallsOf(view: WaitingView, filter: CallFilter): CallView[
 /** What a call's address (`?call=<id>`, D-8808, D-8809) names on the list: the call still to see (`open`), the call on the
  *  Recently cleared trail (`cleared`), or neither (`gone`: a call addressed by a link was a real call, so one in neither list has
  *  left the 48-hour trail). An older view with no `calls` fields reads as `gone`. */
-export type CallTarget = { at: 'open'; call: CallView } | { at: 'cleared'; call: CallView } | { at: 'gone' };
+export type CallTarget = { at: 'open'; call: CallView } | { at: 'cleared'; call: CallView } | { at: 'gone' } | { at: 'unheard' };
 
-export function callTargetOf(view: WaitingView, id: number): CallTarget {
+/** `current` is whether the view is the live list. A call in neither list is `gone` only on a current view; on the device's saved
+ *  copy it may simply not have been heard yet, so it is `unheard`, never folded into `gone` (D-8808). */
+export function callTargetOf(view: WaitingView, id: number, current: boolean): CallTarget {
   const open = (view.calls ?? []).find((c) => c.id === id);
   if (open !== undefined) return { at: 'open', call: open };
   const cleared = (view.callsCleared ?? []).find((c) => c.id === id);
-  return cleared !== undefined ? { at: 'cleared', call: cleared } : { at: 'gone' };
+  return cleared !== undefined ? { at: 'cleared', call: cleared } : { at: current ? 'gone' : 'unheard' };
 }
 
 /** The one-line notices over the list for a call whose address is not an open call (D-8808). */
 export const CALL_TARGET_WORDS = {
   cleared: 'That call has cleared. It is marked below, in Recently cleared.',
   gone: 'That call has cleared and is no longer on this list.',
+  unheard: 'That call is not in the list saved on this device. It shows here once the list is current.',
 } as const;
 
 /** The line of one call: the question (when it asked one), the option chosen, the reason, and the age. */

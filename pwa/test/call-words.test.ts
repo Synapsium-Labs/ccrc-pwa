@@ -84,15 +84,18 @@ describe('call refusals', () => {
 describe('callTargetOf', () => {
   const view = { ...waitingView(), calls: [call({ id: 1 })], callsCleared: [call({ id: 2, seenAt: NOW - MIN })] };
   it('a call still to see is open, a call on the trail is cleared, any other is gone', () => {
-    expect(callTargetOf(view, 1)).toEqual({ at: 'open', call: view.calls[0]! });
-    expect(callTargetOf(view, 2)).toEqual({ at: 'cleared', call: view.callsCleared[0]! });
-    expect(callTargetOf(view, 3)).toEqual({ at: 'gone' });
+    expect(callTargetOf(view, 1, true)).toEqual({ at: 'open', call: view.calls[0]! });
+    expect(callTargetOf(view, 2, true)).toEqual({ at: 'cleared', call: view.callsCleared[0]! });
+    expect(callTargetOf(view, 3, true)).toEqual({ at: 'gone' });
+    expect(callTargetOf(view, 3, false)).toEqual({ at: 'unheard' });
+    expect(callTargetOf(view, 1, false)).toEqual({ at: 'open', call: view.calls[0]! });
   });
   it('an older view with no calls fields is gone', () => {
-    expect(callTargetOf(waitingView(), 1)).toEqual({ at: 'gone' });
+    expect(callTargetOf(waitingView(), 1, true)).toEqual({ at: 'gone' });
   });
   it('the two notices are pinned', () => {
     expect(CALL_TARGET_WORDS.cleared).toBe('That call has cleared. It is marked below, in Recently cleared.');
     expect(CALL_TARGET_WORDS.gone).toBe('That call has cleared and is no longer on this list.');
+    expect(CALL_TARGET_WORDS.unheard).toBe('That call is not in the list saved on this device. It shows here once the list is current.');
   });
 });

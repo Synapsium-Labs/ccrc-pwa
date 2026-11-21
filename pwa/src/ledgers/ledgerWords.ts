@@ -132,6 +132,10 @@ export function clearedCallPlace(trail: readonly ClearedEntry[], id: number): { 
   return found === undefined ? null : { beyond: at >= CLEARED_SHOWN, program: found.program };
 }
 
+/** A key that changes when the target's place in the trail does (D-8808), so the trail remounts with the right initial state. */
+export const clearedCallPlaceKey = (place: { beyond: boolean; program: string | null } | null): string =>
+  place === null ? 'none' : `${place.beyond ? 'beyond' : 'shown'}:${place.program ?? ''}`;
+
 /** What a pill's colour means; a pill always says it in words too, so no state is read out of colour alone. */
 export type PillTone = 'blocking' | 'soon' | 'later' | 'checking' | 'stale' | 'bounced' | 'ask';
 export interface Pill { readonly tone: PillTone; readonly word: string }

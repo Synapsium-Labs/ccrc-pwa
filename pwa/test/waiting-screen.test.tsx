@@ -1157,6 +1157,35 @@ describe('calls made for you (D-8126)', () => {
       expect(document.querySelector('[data-call-target="gone"]')!.textContent).toBe(CALL_TARGET_WORDS.gone);
       expect(marked()).toEqual([]);
     });
+    it('a saved copy without the call says it is not heard, never that it cleared, and marks nothing', () => {
+      open({ view: withItem({ calls: [call({ id: 1 })] }), call: 99, notCurrent: 'Saved on this device.' });
+      expect(document.querySelector('[data-call-target="unheard"]')!.textContent).toBe(CALL_TARGET_WORDS.unheard);
+      expect(document.querySelector('[data-call-target="gone"]')).toBeNull();
+      expect(marked()).toEqual([]);
+    });
+    it('a list that gains the call past the shown rows later still shows and marks its row', () => {
+      const props = { sessions: [], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+      const newer = Array.from({ length: 6 }, (_, i) => call({ id: 10 + i, program: 'prog-a', seenAt: NOW - (i + 1) * MIN }));
+      const old = call({ id: 50, program: 'prog-b', seenAt: NOW - 60 * MIN });
+      const { rerender } = render(<WaitingScreen view={withItem({ callsCleared: newer })} call={50} notCurrent="Saved." {...props} />);
+      expect(document.querySelector('.wl-cleared-row[data-call="50"]')).toBeNull();
+      rerender(<WaitingScreen view={withItem({ callsCleared: [...newer, old] })} call={50} {...props} />);
+      const row = document.querySelector('.wl-cleared-row[data-call="50"]')!;
+      expect(row.getAttribute('aria-current')).toBe('true');
+    });
+    it('the named row is scrolled into view, open and cleared', () => {
+      const scroll = vi.fn();
+      // The test setup defines scrollIntoView on HTMLElement.prototype, so the stub goes there.
+      const was = HTMLElement.prototype.scrollIntoView;
+      HTMLElement.prototype.scrollIntoView = scroll;
+      try {
+        open({ view: withItem({ calls: [call({ id: 1 }), call({ id: 2 })] }), call: 2 });
+        expect(scroll.mock.contexts).toEqual([document.querySelector('li.wl-call[data-call="2"]')]);
+        cleanup(); scroll.mockClear();
+        open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - MIN })] }), call: 3 });
+        expect(scroll.mock.contexts).toEqual([document.querySelector('.wl-cleared-row[data-call="3"]')]);
+      } finally { HTMLElement.prototype.scrollIntoView = was; }
+    });
     it('no call named draws no notice and marks nothing', () => {
       open({ view: withItem({ calls: [call({ id: 1 })] }) });
       expect(document.querySelector('[data-call-target]')).toBeNull();
