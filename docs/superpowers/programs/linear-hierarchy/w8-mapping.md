@@ -74,8 +74,8 @@ The plan's "Deviations found" carries both entries in full. In short:
   evidence kind and suggester too, so one pair offered twice is two rows (fix round 1, A2).
   The picker offers the legacy key's workspace too while it routes like a slot (learned, not superseded): the workspaces
   answer's legacy row carries `workspace.workspaceId`, additive (an older server omits it and the picker leaves it out), read
-  once in `wireReaders.ts` and merged by `pickerWorkspacesOf` (fix round 1, A1). The Overlord link's line links to the
-  Waiting on you screen, because a call cannot be addressed by id.
+  once in `wireReaders.ts` and merged by `pickerWorkspacesOf` (fix round 1, A1). The Overlord link's line opens its own
+  call on the Waiting on you screen (run 3209, below); before that run it linked to the screen, because a call had no address.
 
 ## Carried (follow-up tickets in the `mapping` epic)
 
@@ -85,7 +85,7 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
   by the packet the README's holding run approved; the ticket can close with the PR.
 - `w8-overlord-skill`: the Overlord skill's door table gains `link_team`, and says when it suggests instead (below `full`).
-- `w8-call-anchor`: address one call by id on the Waiting on you screen, so the Overlord link's line links to its call.
+- `w8-call-anchor`: built by run 3209 (below).
 - `w8-triage-l1`: built by run 3155 (below). It moved the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`)
   into `planPolicy.ts` beside `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It had stayed in the route because
   `planPolicy.ts` was held by another wave; D-8808 stated it as a bend.
@@ -232,3 +232,15 @@ copy, measured by restoring the console's old one, reds it. D-8808 says the item
 coordinator's call.
 
 The test typecheck (`test/tsconfig.tests.json`) was killed by the test slice's memory cap here; CI's run on the tip checks it.
+
+## Run 3209 (`w8-call-anchor`): what was built
+
+A call made for the operator has an address on the Waiting on you screen, and the project card's line for an Overlord link
+opens that call, open and marked, ready for Seen or Overturn…. No wire change: the card already received the link's call id
+(`TeamLinkWire`'s `overlord` arm, D-8809).
+
+| Step | Built | Test |
+|---|---|---|
+| The address | `/waiting?call=<id>`, built by `callPath` and read by `callParamOf` beside `waitingPath` in `pwa/src/lib/routes.ts`. An item's address is a route of its own (`/waiting/<id>`) because an item has a page; a call has none, only a place in the list, so its address is a query on the list's route, as the side rail's filter is (`?programme=`). It is in the URL, so a reload and a cold start keep it; changing the filter drops it. The id takes a run id's grammar (`isRunId`) | `waiting-routes.test.tsx`: the path is the list's route and reads back; `0`, a leading zero, a sign, letters, an absent query and one past the safe integers name no call |
+| Where it lands | `callTargetOf` (`callWords.ts`, L1) answers `open`, `cleared`, `gone` or `unheard` from the waiting view. Open: that programme's "Calls made for you" opens once per address (a ref and an effect, so a Seen that takes the call away does not fold the group), and the call is marked (`aria-current`) and scrolled to. Cleared: a one-line notice, and the trail's entry marked and scrolled to; when the entry lies past the newest rows shown, the trail starts expanded with its programme's group open (`clearedCallPlace`, `ledgerWords.ts`, L1). Gone (no longer on the 48-hour trail, or an older server with no calls fields), on a current list only: a one-line notice saying the call has cleared. Unheard (the list drawn is the device's saved copy and holds no such call): a notice saying it shows once the list is current, never that it cleared (review: "not heard" is not "gone"). The trail is keyed by where it holds the call (`clearedCallPlaceKey`), so a list that gains the call later opens on it. Not built: a filter in the same URL that hides an open call's programme draws nothing for it (the card's link carries no filter) | `call-words.test.ts`; `waiting-screen.test.tsx`, describe `calls made for you (D-8126)`: open, apart, cleared, cleared past the shown rows in a grouped trail, gone, unheard on a saved copy, the trail following a call that arrives later, the scroll to an open and a cleared call, and the group staying open when the call leaves; `waiting-routes.test.tsx`: the URL alone opens and marks it, also when the list arrives after the page |
+| The card | `overlordCallLink` (`linkingWords.ts`, L1): with a readable call id the line reads "Open this call in Calls made for you" and links to `callPath`; without one (absence permits) it keeps "See it in Calls made for you" and the screen | `linking-words.test.ts`; `project-linking-card.test.tsx`: the id present and absent |
