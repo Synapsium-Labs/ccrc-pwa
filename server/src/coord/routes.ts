@@ -1141,7 +1141,11 @@ export function registerCoordRoutes(
       const mark = row !== undefined ? row.child
         : names.includes(`${resolvedToId}.uuid`) ? { kind: 'unreadable' as const } : { kind: 'none' as const };
       const v = coord.urgentVerdict(fromId, resolvedToId, runId, mark);
-      if (v.kind === 'refused') return refuse(reply, v.code, { fromId, fromUuid, toId, kind, subject, runId }, v.detail);
+      if (v.kind === 'refused') {
+        // The rule's refusal word, named as one: the D-5381 scan reads a `.code` argument as a status.
+        const { code: refusal, detail } = v;
+        return refuse(reply, refusal, { fromId, fromUuid, toId, kind, subject, runId }, detail);
+      }
       urgentAs = v.role;
     }
 

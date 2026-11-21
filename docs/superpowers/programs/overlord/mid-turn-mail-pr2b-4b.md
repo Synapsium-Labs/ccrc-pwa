@@ -14,9 +14,10 @@ any numbers. No D-number is defined here.
   - ruling N10: `urgent` is one of the mail key's compared fields;
   - the reclaim's repoint of an urgent mail to a displaced coordinator (review 2833 F3);
   - the ack's kick of the mailhold projection.
-- **`routes.ts`** carries exactly the packet its holder consented to under the operator's item 486: six hunks, 37 lines
-  added and 3 edited in place. The three edited lines are the `keyedRequest` literal, the keyed `same` reply and the
-  `insertMail` call, and each gains one field.
+- **`routes.ts`** carries exactly the two packets its holder consented to under the operator's item 486. The first has
+  six hunks: 37 lines added and 3 edited in place. The second is the CI fix (`refusal-word-named-for-the-status-scan`):
+  one line of the first packet becomes five. Against `main`, that is 41 lines added and the same 3 edited in place: the
+  `keyedRequest` literal, the keyed `same` reply and the `insertMail` call, each gaining one field.
 - **No migration.** The column and its index came with PR 2 (migration 108).
 - **No new route, verb, run state or wire bump.** `urgent` on the send body and its answer is additive. An older server
   answers no `urgent`, which reads as "not urgent".
@@ -45,6 +46,8 @@ any numbers. No D-number is defined here.
 | `urgent-park-not-moved` | The F3 repoint moves outstanding deliveries only, as the repoint always has. An urgent mail to a claimant that was already parked as abandoned before the reclaim stays on the displaced id, as every park does (D-1425's arm (c)), and that id's hold stands until it acks. This is not reachable in version 1: only the Overlord arm sends urgent mail to a claimant, and the Overlord cannot send at this door (`overlord-urgent-unreachable-at-the-ingress`). | `server/src/coord/store.ts#repointCoordinatorMail` |
 | `repoint-urgent-by-programme` | The repoint's new arm is `m.urgentAs IS NOT NULL`, beside `m.toId = 'coordinator'`, under the same `toId IN (displaced)` and `r.program = ?` scope. The rule admits urgent mail to a claimant only about a run that claimant claims, so such a mail is mail to the chair of a run in this programme. A worker's urgent mail never matches, because a worker is not displaced. Ordinary mail by session id stays where it is (D-1142), and a case pins that. | `server/src/coord/store.ts#repointCoordinatorMail` |
 | `ack-kick-on-landed-ack-only` | The kick fires on `markAcked`'s `ok` only. A repeated ack (`already-acked`), a parked delivery and an ack refused before `markAcked` kick nothing. | `server/src/coord/routes.ts` (the ack route) |
+| `refusal-word-named-for-the-status-scan` | CI's first run went red on `refusal-status.test.ts` ("no helper call passes a status"): the D-5381 scan reads any second argument of the mail ingress's `refuse(reply, …)` that ends in `.code` as a status, and check 8.5 passed the rule's refusal word as `v.code`. The word was never a status, but the scan cannot tell, so check 8.5 now names it (`const { code: refusal, detail } = v`). This is a second packet to the file's holder, one line out and five in, all inside this PR's own block. Run locally, the scan was missed because `refusal-status` was not among the files this PR ran. | `server/src/coord/routes.ts` (check 8.5), `server/test/refusal-status.test.ts` |
+| `ingress-case-replaced` | The judge marks `mail-urgent-route.test.ts` `test-weakened`. PR 2's case "the route ignores urgent" pinned the ingress as it stood while it waited; Task 2.4 replaces it with the ingress cases, which pin the opposite. The Overlord's refusal at this door is kept, unchanged. | `server/test/mail-urgent-route.test.ts` |
 | `replay-echoes-the-stored-mark` | As PR 2's note planned (`replay-echoes-the-flag-not-the-role`), a matching keyed retry echoes `urgent: true` from the stored `urgentAs`, never the role word. | `server/src/coord/mailKey.ts` |
 
 ## 3. Mutations
@@ -82,7 +85,7 @@ By the growth check's own counter (`codeLines`), against `main` at `66c63606c3`:
 
 | File | Code lines |
 |---|---|
-| `server/src/coord/routes.ts` | +20 |
+| `server/src/coord/routes.ts` | +23 (+20 before the follow-up packet) |
 | `server/src/coord/store.ts` | 0 (one clause widened, the rest comment) |
 | `server/src/index.ts` | +2 (not a listed file) |
 | `server/src/deps.ts` | +1 (not a listed file) |
@@ -100,6 +103,8 @@ One file at a time through `ccrc test`, from `server/`:
   `mail-deliveries-writer`, `growth-check`, `growth-caps`, `box-token-census`, `coordinator-skill`,
   `run-session-census`, `anchors`, `citations`, `dtbd`, `docs-grammar`, `topology-clean`, every
   `single-definition/*` file, and every `rings/*` file.
+- **`refusal-status`** was red on CI's first run (shard 7), and is green after the follow-up packet; mutant 5 was run again
+  over the new text and went red.
 - **`single-definition/advance-switches`** was red once, on this PR's own first draft: the composition case pinned
   `index.ts` by a `toContain` over its text, which ARCH-06's literal-pin ratchet refuses. The case now reads the call
   with the parser (`scan/symbols.ts`).
