@@ -18,8 +18,8 @@ import { verdictFor } from '../../ccd/approval-verify.mjs';
 
 const VERIFY = path.resolve(__dirname, '../../ccd/approval-verify.mjs');
 
-/** The verifier's SHA-256 at the base. A one-byte change to it reds this row. */
-const VERIFY_SHA256 = '20aa0cff3edb4f0f9acf44a8cc340c688f07dafd9b203f7d35bdb1f68cb8d480';
+/** The verifier's SHA-256 since approvals PR 3v (record v2). A one-byte change to it reds this row. */
+const VERIFY_SHA256 = '545c1562be65caabc1f9d546f6fc9aa1da404eb43cf0a1e01523f3921c6aff1a';
 
 /** PKCS#8 DER for an Ed25519 private key is this 16-byte prefix and the 32-byte seed. */
 const SEED = Buffer.alloc(32, 0x5a);

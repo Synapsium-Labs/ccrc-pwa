@@ -1,10 +1,10 @@
 // Approvals PR 3 ships inert (the coordinator's rulings of 2026-11-19: the verifier's change goes into PR 3v; the route
-// hunks once split into PR 3b ride this PR under item 486's packet). Two pins hold it:
+// hunks once split into PR 3b ride this PR under item 486's packet). Since PR 3v ONE pin holds it:
 //  - the park's Shadow lanes row is GATED, so `live` is refused at the card and reads as not live everywhere, and the mint
-//    stores `shadow` (`approval-park.test.ts`'s "inert" cases pin the mint and the lapse);
-//  - the hook's ruling verifier is unchanged in PR 3, and it prints NOTHING for a v2 record, signed or not, so a v2 operator
-//    record could not be printed even if one were signed: the menu paints (Table 3b's older-verifier row). PR 3v changes this
-//    case, by design, when it lands (`docs/superpowers/programs/overlord/approvals-pr3-verifier-patch.md`).
+//    stores `shadow` (`approval-park.test.ts`'s "inert" cases pin the mint and the lapse). With nothing parked, no v2
+//    record is ever signed.
+// Before PR 3v a second pin held it: the unchanged verifier printed NOTHING for a v2 record. PR 3v changed that by design
+// (`docs/superpowers/programs/overlord/approvals-pr3-verifier-patch.md`), so the case below now pins what it prints.
 import { describe, it, expect } from 'vitest';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { approvalRulingBytes, type ApprovalRulingRecordV2 } from '../../shared/api.js';
@@ -21,7 +21,9 @@ describe('the lane is gated in PR 3', () => {
   });
 });
 
-describe('an unchanged verifier prints nothing for a v2 record (PR 3v changes this)', () => {
+// PR 3v has landed this case's change: the verifier now prints a signed v2 OPERATOR record (Table 3b). The lane's gate
+// above still holds the park inert; the verifier alone never arms it.
+describe('the verifier prints a signed v2 operator record (PR 3v)', () => {
   const kp = generateKeyPairSync('ed25519');
   const pem = kp.publicKey.export({ type: 'spki', format: 'pem' }).toString();
   const expected = { sessionId: 'project-a-quiet-basin', agentId: '', digest: 'a'.repeat(64), nonce: 'b'.repeat(32), rowId: 7, now: 1_000 };
@@ -32,8 +34,8 @@ describe('an unchanged verifier prints nothing for a v2 record (PR 3v changes th
   it('a signed v1 ordinary allow prints (the control)', () => {
     expect(verdictFor(signed({ v: 1, ...base, class: 'ordinary', verdict: 'allow' }), expected, pem)).toBe('allow ok');
   });
-  it.each(['allow', 'deny'] as const)('a signed v2 operator %s prints nothing', (verdict) => {
+  it.each(['allow', 'deny'] as const)('a signed v2 operator %s prints its line', (verdict) => {
     const v2: ApprovalRulingRecordV2 = { v: 2, ...base, class: 'escalate', verdict, authority: 'operator', denyCurrent: true, family: 'none' };
-    expect(verdictFor(signed(v2 as unknown as Record<string, unknown>), expected, pem)).toBeNull();
+    expect(verdictFor(signed(v2 as unknown as Record<string, unknown>), expected, pem)).toBe(`${verdict}:operator ok`);
   });
 });

@@ -468,6 +468,16 @@ describe('drift marks and events', () => {
     expect(graceBindingsOf(db, 'ws-b')).toEqual([]);
     expect(planStorePort(db).graceBindingsOf('ws-a').map((x) => x.id)).toEqual([b.id]);
   });
+  it('graceBindingsOf leaves out a retired binding whose grace still stands (review 2918 A2; review 2955 F4)', () => {
+    declare('prog-a');
+    const tk = (db.prepare("SELECT id FROM plan_tickets WHERE program = 'prog-a'").get() as { id: number }).id;
+    const b = ensurePending(db, 'ticket', tk, 'ws-a', 'AAA');
+    markBound(db, b.id, 'lin-7', 'AAA-7', 'fp', 5);
+    setDriftSince(db, b.id, 99);
+    expect(graceBindingsOf(db, 'ws-a').map((x) => x.id)).toEqual([b.id]);
+    tx(db, () => retireBindingInTx(db, b.id));             // set aside: it holds its issue for no reader
+    expect(graceBindingsOf(db, 'ws-a')).toEqual([]);
+  });
   it('recordDrift and driftRestoresOf', () => {
     const a = recordDrift(db, { bindingId: 1, at: 100, field: 'projectId', value: 'x', actor: 'not read', restored: true });
     const b = recordDrift(db, { bindingId: 1, at: 50, field: 'title', value: 'y', actor: 'not read', restored: true });
