@@ -84,8 +84,15 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     expect(text).toContain('**The hierarchy is ccrc\'s.**');
     expect(text).toContain('The hierarchy items (drift, inbound, initiatives, owner, map, report) are the operator\'s, acted on in the '
       + 'console: contract clause 22 holds that rule.');
-    // the rule's words live in clause 22 alone (`coordinator-skill.test.ts` pins it there)
+    // the rule's words live in clause 22 alone (`coordinator-skill.test.ts` pins it there); review 3106 F3: plan.md carries
+    // neither its old wording nor the clause's own distinctive words
     expect(text).not.toContain('never answers one for them');
+    const clause22 = read('SKILL.md').split('\n').find((l) => l.startsWith('22. '))!;
+    const rule = clause22.slice(clause22.indexOf('The operator acts on hierarchy items in the console'));
+    for (const phrase of ['acts on hierarchy items in the console', 'never answers a drift', 'never asks for those approvals']) {
+      expect(rule, `clause 22 no longer says ${phrase}`).toContain(phrase);
+      expect(text, `plan.md restates clause 22: ${phrase}`).not.toContain(phrase);
+    }
     expect(text).toContain('Never file or edit a hierarchy object');
   });
 
@@ -150,7 +157,7 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3, 2960 F1, A1)', () => {
+  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3, 2960 F1, A1, 3106 F1)', () => {
     for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
       const text = plan();
       const at = text.indexOf(`\n${heading}\n`);
@@ -159,10 +166,10 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       expect(at, heading).toBeGreaterThanOrEqual(0);
       // review 2885 F5 as review 2920 F2 rules it: the third case, a key Linear refused with a 401 (only a 401 is a verdict on the
       // key); review 2920 F3: the fourth, a workspace with no managed team, where nothing is re-read; review 2929 F3: the fifth, an
-      // answer about one issue (inboundPolicy.ts's ROW_WORDS: linear-forbidden, linear-invalid, malformed); review 2960 F1: only
-      // the two refusals repeat, while `malformed` is in RETRY_WORDS (a transport fault reads as malformed) and repeats only as
-      // inboundRecheckOf's by-id answer missing its team or state
-      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again; when Linear refused that one issue as forbidden or invalid, a retry gets the same answer until that issue changes in Linear; and an answer outside Linear's grammar may clear on a retry, unless it is the issue's own answer missing its team or its state, which repeats until that issue changes in Linear\)/);
+      // answer about one issue (inboundPolicy.ts's ROW_WORDS: linear-forbidden, linear-invalid, malformed); review 2960 F1 and
+      // review 3106 F1: the by-id read (`issueOwned`, hierarchyOps.ts's issueRecord) shapes the whole issue, so any field outside
+      // the grammar answers `malformed` until the issue changes, while a body that could not be read (client.ts) may clear
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again; when Linear refused that one issue as forbidden or invalid, or answered `malformed` because a field of that issue is outside Linear's grammar, a retry gets the same answer until that issue changes in Linear; and a `malformed` answer whose body could not be read, a transport fault, may clear on a retry\)/);
       // review 2920 F1 and 2929 F1: the clauses main's api.md pin held, now pinned where they live, "only" included: a decision
       // that binds the issue is refused, and the rest goes on (`inboundDoorVerdict`); review 2960 A1: each section names its own
       // verb's decisions, triage's binding pair being `planRoutes.ts`'s `upkeep || hand`

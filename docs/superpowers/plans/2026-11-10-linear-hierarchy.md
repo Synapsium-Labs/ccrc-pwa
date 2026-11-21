@@ -343,9 +343,12 @@ number from `POST /api/ledger/deviations`.
   (503, the Linear read's existing word; a retry helps only when Linear or ccrc's Linear store could not be read: a missing
   key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to replace it, a
   workspace with no managed team is not re-read at all, and Linear's refusal of that one issue (`linear-forbidden`,
-  `linear-invalid`) repeats until the issue changes in Linear, while a `malformed` answer is retried (it is in
-  `RETRY_WORDS`, and a transport fault reads as malformed; the close lane gives it up past its last backoff step), except the by-id answer missing the issue's team or state,
-  which repeats until the issue changes; amended by review 2920 F4, review 2929 F3 and review 2960 F1), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  `linear-invalid`) or a `malformed` answer about it repeats until the issue changes in Linear: the by-id read shapes the
+  whole issue, so any field of it outside Linear's grammar answers `malformed`. A `malformed` answer whose body could not
+  be read, a transport fault, may clear on a retry. A door re-reads the issue on every call and refuses `unreachable` on
+  any unmeasured answer, reading no retry table (`inboundDoorVerdict`); `RETRY_WORDS` is the close lane's, and that lane
+  gives a `malformed` write refusal up past its last backoff step; amended by review 2920 F4, review 2929 F3, review 2960
+  F1 and review 3106 F1, F2), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
   before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
@@ -1357,7 +1360,8 @@ every file found. The fix:
   epic lists an unavailable ticket answers `ticket-unavailable` first); `ticket-required`
   (programme work map WM6, D-8780, with WM1's word: a run that names no ticket, at a wave no live epic lists, in a plan where
   a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is unknown, `done`, `dropped`, held by another run (`started`,
-  or `open` with a run attached, a planned run included, as `ticketIsHeld` decides), or an Upkeep ticket; or the plan has no live epic, does not require one, and the run names a ticket); with no live epic,
+  or `open` with a run attached, a planned run included, as `ticketIsHeld` decides; amended by review 2960 A3), or an
+  Upkeep ticket; or the plan has no live epic, does not require one, and the run names a ticket); with no live epic,
   no `planRequired` and no named ticket, the run opens with none (`planGate`, amended by review 2929 F5). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
   run attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's
   project, the run's title, key `run-<runId>`, which `UNIQUE (program, key)` needs and a retry derives again) in the
