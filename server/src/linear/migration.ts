@@ -533,13 +533,16 @@ export class LinearMigration {
       budget.writes -= 1;
       const seen = await this.readIssue(m, slot, e.issue, budget);
       if (seen === 'unread') { this.saveReport(m, report, lists, now); return; }
+      // A take that landed during that read: the issue is the owner's, so it is never marked applied, never listed unrelated and
+      // never counted closed, whatever the read shows (review 3016 F2). An adopted entry holds its own binding: it is not asked.
+      if (CLOSERS.has(e.class) && this.heldIdentifier(m, e.identifier)) { taken.add(e.identifier); continue; }
       const v = reconcileMove(asMoveRow(row), seen === 'gone' ? 'closed' : seen);
       if (v === 'applied') {
         plan.setMove(row.id, { appliedAt: now });
         if (relation?.kind === 'none') unrelated.add(e.identifier);   // the state write landed: it joins the list (review 2955 A2)
       }
       else if (v === 'skip') this.skipAdopted(row, e, skipped, now);
-      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget, relation, unrelated, taken);
+      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget, relation, unrelated, taken, () => this.saveReport(m, report, lists, now));
       else { budget.calls -= 1; await this.deps.planSync.passFor(String(row.after['key'] ?? ''), now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred'); }
     }
 
@@ -581,7 +584,7 @@ export class LinearMigration {
         if (out === 'unread') { this.saveReport(m, report, lists, now); return; }
         if (out === 'taken') { taken.add(e.identifier); continue; }
         if (out === 'changed') { skipped.add(e.identifier); continue; }
-        await this.closeIssue(m, e, out, slot, entries, budget, relation, unrelated, taken);
+        await this.closeIssue(m, e, out, slot, entries, budget, relation, unrelated, taken, () => this.saveReport(m, report, lists, now));
       } else {
         const out = await this.adopt(m, e, was, store, slot, budget);
         if (out === 'unread') { this.saveReport(m, report, lists, now); return; }
@@ -760,7 +763,7 @@ export class LinearMigration {
    *  ticket placed under it closes with none and joins the report's `unrelated` list (review 2918 F2). */
   private async closeIssue(
     m: MigrationRow, e: MapEntry, row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>, budget: TickBudget,
-    relation: CloserRelation | null, unrelated: Set<string>, taken: Set<string>,
+    relation: CloserRelation | null, unrelated: Set<string>, taken: Set<string>, persist: () => void,
   ): Promise<void> {
     const { plan, coord } = this.deps;
     const state = String((row.after['expect'] as Record<string, unknown> | undefined)?.['state'] ?? 'canceled');
@@ -797,10 +800,18 @@ export class LinearMigration {
       if (heldNow()) return;
       const update = await this.callIn(budget, { ...base, op: 'issueUpdate', fields: ['state'], input: { id: e.issue, stateId: status.id } });
       if (update.ok) {
-        plan.setMove(row.id, { appliedAt: this.deps.now() });
         // A take that landed during the write is listed taken and counted nowhere else (review 3004 F2); otherwise the level joins
-        // `unrelated` only once the state write landed (review 2955 A2).
-        if (!heldNow() && relation?.kind === 'none') unrelated.add(e.identifier);
+        // `unrelated` only once the state write landed (review 2955 A2). The stamp and the tick's report (with the issue taken) are
+        // written in ONE transaction, so a restart between them cannot lose the listing (review 3016 A2); `persist` is the tick's own
+        // report save, called only when the issue is held.
+        const stamp = this.deps.now();
+        let held = false;
+        tx(coord.db, () => {
+          plan.setMove(row.id, { appliedAt: stamp });
+          held = heldNow();
+          if (held) persist();
+        });
+        if (!held && relation?.kind === 'none') unrelated.add(e.identifier);
       }
     });
   }
@@ -870,22 +881,23 @@ export class LinearMigration {
     const movedSince = new Set(report.movedSince);
     const todo = moves.filter((x) => x.kind === 'issue' && x.revertedAt === null && x.linearId !== null).sort((a, b) => b.id - a.id).slice(0, PUT_BACK_ISSUES_PER_TICK);
     for (const row of todo) {
-      // An issue a live binding holds is the owner's: no read, no write, listed taken; its row is handled so put back goes on
-      // (review 3004 F2).
-      // A row this migration adopted holds its own binding (`after.bindingId`), which is no take: only a closer's row can be taken.
-      if (typeof row.after['bindingId'] !== 'number' && this.heldIdentifier(m, row.identifier ?? row.linearId!)) {
-        report.taken = [...new Set([...(report.taken ?? []), row.identifier ?? row.linearId!])];
-        plan.setMove(row.id, { revertedAt: this.deps.now() });
-        continue;
-      }
+      // An issue a live binding holds is the owner's: no write, listed taken; its row is handled so put back goes on (review 3004
+      // F2). It is asked before the read, again after it and again inside the write's flight (review 3016 F1): a take can land in
+      // any of those awaits. A row this migration adopted holds its own binding (`after.bindingId`), which is no take: only a
+      // closer's row can be taken.
+      const held = (): boolean => typeof row.after['bindingId'] !== 'number' && this.heldIdentifier(m, row.identifier ?? row.linearId!);
+      if (held()) { this.putBackTaken(m, report, movedSince, row, now); continue; }
       const seen = await this.readIssue(m, slot, row.linearId!);
       // An issue found moved since earlier in this tick is saved before any early return (review 2892 F2): its row is already
       // marked handled, so no later tick would list it.
       if (seen === 'unread') { this.saveMovedSince(m, report, movedSince, now); return; }
+      if (held()) { this.putBackTaken(m, report, movedSince, row, now); continue; }
       const { steps, moved } = putBackSteps([asMoveRow(row)], seen === 'gone' ? new Map() : new Map([[row.linearId!, seen]]));
       // An issue moved since (or gone) is listed and never touched; its row is marked handled so the next tick goes on.
       if (moved.length > 0 || steps.length === 0) { movedSince.add(row.identifier ?? row.linearId!); plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
-      if (!(await this.putBackStep(m, steps[0]!, row, slot, entries))) { this.saveMovedSince(m, report, movedSince, now); return; }
+      const stepped = await this.putBackStep(m, steps[0]!, row, slot, entries, held);
+      if (stepped === 'taken') { this.putBackTaken(m, report, movedSince, row, now); continue; }
+      if (stepped === 'failed') { this.saveMovedSince(m, report, movedSince, now); return; }
       plan.setMove(row.id, { revertedAt: this.deps.now() });
     }
     // The created objects only once every moved issue is handled: a project is canceled after its issues left it.
@@ -927,27 +939,37 @@ export class LinearMigration {
     }
     plan.setMigration(m.id, ['applied'], { state: 'put-back', putBackAt: now, report: { ...report, movedSince: [...movedSince], milestonesLeft: [...report.milestonesLeft, ...milestones] } }, now);
   }
+  /** An issue a live binding holds, found by put back: listed taken (once), its row marked handled and the report saved in ONE
+   *  transaction, so a restart between them loses neither (review 3016 A2). The one place put back says "held, so take it". */
+  private putBackTaken(m: MigrationRow, report: NonNullable<MigrationRow['report']>, movedSince: ReadonlySet<string>, row: MoveRowStored, now: number): void {
+    report.taken = [...new Set([...(report.taken ?? []), row.identifier ?? row.linearId!])];
+    tx(this.deps.coord.db, () => {
+      this.deps.plan.setMove(row.id, { revertedAt: this.deps.now() });
+      this.saveMovedSince(m, report, movedSince, now);
+    });
+  }
   private saveMovedSince(m: MigrationRow, report: NonNullable<MigrationRow['report']>, movedSince: ReadonlySet<string>, now: number): void {
     this.deps.plan.setMigration(m.id, ['applied'], { report: { ...report, movedSince: [...movedSince] } }, now);
   }
 
   /** One moved issue restored from its `before` (state, project, milestone, parent, team, title and description), in its key's
    *  flight, on lane `migration` with pass `put-back`. */
-  private async putBackStep(m: MigrationRow, step: ReturnType<typeof putBackSteps>['steps'][number], row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>): Promise<boolean> {
-    if (step.linearId === null) return true;
+  private async putBackStep(m: MigrationRow, step: ReturnType<typeof putBackSteps>['steps'][number], row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>, held: () => boolean): Promise<'restored' | 'failed' | 'taken'> {
+    if (step.linearId === null) return 'restored';
     const was = row.before!;
     const team = slot.teams.find((t) => t.key.toUpperCase() === was.team.toUpperCase());
     const state = statusOfType(entries, 'issue', was.state, was.team);
-    if (team === undefined || state === null) return false;
+    if (team === undefined || state === null) return 'failed';
     const key = typeof row.after['key'] === 'string' ? row.after['key'] : `migration:${step.linearId}`;
     return this.deps.planSync.withFlight(key, async () => {
+      if (held()) return 'taken' as const;   // review 3016 F1: a take that landed while the write waited for its flight
       const out = await this.deps.call({
         pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey,
         op: 'issueUpdate', target: row.identifier, destinationTeamKey: was.team, fields: ['title', 'description', 'state', 'project', 'milestone', 'team', 'parent'],
         input: { id: step.linearId, teamId: team.id, stateId: state.id, projectId: was.project, projectMilestoneId: was.milestone, parentId: was.parent, title: was.title, description: was.description },
       });
       if (!out.ok && out.word === 'rate-limited' && 'retryAfterS' in out) this.restUntil = this.deps.now() + out.retryAfterS * 1000;
-      return out.ok;
+      return out.ok ? 'restored' as const : 'failed' as const;
     });
   }
 }
