@@ -34,12 +34,18 @@ Spec §7.1, Table 9, Table 13's S1 row. One PR: "feat(coord): an Agent's task re
 helpers S1)".
 
 - [x] **Count first (review 2900 F3).** Read only, from what the fleet box can read. See "F3's counts" below.
-- [x] **Red first.** `server/test/delegation-task-report.test.ts`, against `origin/main` d0b7467b9: 17 red, 5 green.
-  The 5 green rows are the two characterization pins, and three guards that are green by design: S1-A4 (another key
-  ends nothing), S1-A6 (a Workflow's own notification ends its run as before) and S1-C2 (an unknown basis word is
-  refused).
+- [x] **Red first.** `server/test/delegation-task-report.test.ts`, 24 cases, measured against `origin/main` 66c63606c3:
+  19 red, 5 green. (At d0b7467b9 the file had 22 cases, 17 red and 5 green; S1-A7 was added during the build and S1-K1
+  in review 3026's fix round, both red on `main`.) The 5 green cases are the two characterization pins, and three guards
+  that are green by design, each red under its own mutant: S1-A4 (another key ends nothing), S1-A6 (a Workflow's own
+  notification ends its run as before) and S1-C2 (an unknown basis word is refused). Three red cases are red on `main`
+  for a reason other than the missing arm, and are labelled so in the file: S1-W4 (`main`'s closed reader refuses its
+  hand-written `endBasis` key before the replay runs), S1-C3 (`main` has no projectability rule for the key, and no arm
+  ends its fixture row) and S1-M2 (`main` has no `endBasis` entry to find; the refusal it asserts is behaviour `main`
+  already has).
   - The arm: S1-A1 (completed), S1-A2 (failed and cancelled end; `unknown` moves nothing), S1-A3 (no launch index),
-    S1-A5 (a measured end stands, in either order).
+    S1-A5 (a measured end stands, in either order), S1-A7 (out-of-order event times: the end is never before the record
+    opened, and `lastEventAt` never moves back).
   - A record retired before its notification: S1-R1.
   - The boot replay: S1-B1 (recovery), S1-B3 (the applier saves it: disk, SQLite and one warn line).
   - The rebuild gives the same ends: S1-B2.
@@ -49,9 +55,11 @@ helpers S1)".
     and worker arms), S1-W4 (the boot replay over a backfill row).
   - The migration: S1-M1 (the column, null on old rows, its CHECK), S1-M2 (a migration that cannot apply refuses
     rather than opening empty).
+  - What an older server can read: S1-K1 (against a frozen copy of `main`'s activity key list, a row a task report
+    ended carries exactly `endBasis` outside it, and a checkpoint whose ends are all observed carries no key outside it).
   - Characterization pins, labelled so: PIN-1 (a captured workflow's Start and Stop give an ended `agent` record),
-    PIN-2 (a frozen copy of `main`'s activity key list lacks `endBasis`, a closed reader refuses an unknown activity key
-    with `bad-shape`, and recovery reports that rather than opening empty).
+    PIN-2 (a closed reader refuses an unknown activity key with `bad-shape`, and recovery reports that rather than
+    opening empty).
 - [x] **The decisions, in `delegation-end-basis.ts` (L1, C5).** `isEndable` (the widened "not ended"), `endedBy` (one
   measured end, `observed` written as absence), `taskReportKey` and `taskReportEnd` (the arm's join on the natural key
   through the mapping), `endBasisDefect` (Table 9's projectability rule).
@@ -61,8 +69,8 @@ helpers S1)".
   comparing the basis, `foldTaskReport` (called beside `foldNotification`, in replay and observe alike), and the three
   existing end sites routed through `isEndable` and `endedBy`: `touchActivity`, and `foldNotification`'s run and worker
   arms. Net growth measured with `growthCheck.ts#codeLines`: +3 code lines.
-- [x] **The migration, slot 116** (the next free slot at `origin/main` 5041cf1733, which holds 115 entries; it was 112 at
-  d0b7467b9, and moved up when the branch absorbed `main` after 112 to 115 landed). One
+- [x] **The migration, slot 118** (the next free slot at `origin/main` 66c63606c3, which holds 117 entries; it was 112 at
+  d0b7467b9 and 116 at 5041cf1733, and moved up each time the branch absorbed `main` after other entries landed). One
   `ALTER TABLE delegation_activities ADD COLUMN endBasis` whose CHECK holds the three words and Table 9's two rules.
   Every test that pins the migration list or the schema, found by what it asserts, is run locally; the task note says
   which files ran where (the coordinator's ruling of 2026-11-20 leaves the other schema importers to CI's selection).
@@ -81,15 +89,17 @@ Read only, on 2026-11-20 at 11:49 UTC, on the fleet box. Counts only.
 | Of those 788, a SubagentStop after the notification, or none | 0 | Measured |
 | Agents open in the window (a Start or launch, no Stop, no completed launch) | 7, none with a notification | Measured |
 | Final notifications that name no agent started in the window | 655, and 118 more that are Workflow tasks | Measured. A notification also reports background shells and agents started before the window |
+| Final notifications in the window | 1,705 | Measured. The three counts above (788, 655, 118) are distinct (session, incarnation, task id) keys, each counted once at its first final notification, and between them they hold every key, so the other 144 notifications repeat a key already counted |
 | Open agent records the first boot after S1 would end | none expected from the spool's window | Inferred from the two rows above; the server's journal may retain older notifications |
 
 **What the count says (the coordinator's ruling on it, 2026-11-20).**
 
-- **Measured:** by this count the arm closed none of today's open records. Every one of the 788 agents that reported
-  had already sent its SubagentStop, and that Stop had already ended its record.
-- **Measured, so inferred for the adoption effect:** the arm gives no earlier adoption terminal time than the Stop
-  already gives, for any record in this window. The spec's "adoption watches start sooner" holds only for an agent
-  record whose task notification arrives while it is still open, and this window held none.
+- **Measured:** no agent in the spool's window was still open when its task notification arrived. Every one of the
+  788 agents that reported had already sent its SubagentStop, which ends its record.
+- **Inferred** (the arm has not run on the fleet): the arm would close none of today's open records, and it would give
+  no earlier adoption terminal time than the Stop already gives, for any record in this window. The spec's "adoption
+  watches start sooner" holds only for an agent record whose task notification arrives while it is still open, and
+  this window held none.
 - **Not found:** the cause of today's residue of open records (spec §2.2) is still unknown. The 7 open agents of the
   window have no notification either, so the arm does not reach them.
 - **Not reached:** the server's journal and `coord.db`, so the count of open records the first boot will end is not
@@ -103,6 +113,8 @@ An older server refuses the new checkpoint (`bad-shape: activity has the unknown
 bb1a9478db: the lane reconstructs until a roll-forward. It does so **only once some row carries `endBasis`**: S1 writes
 the key for a task-report end alone, never for an `observed` one (written as absence). A checkpoint written by S1
 before any task report ended a record is byte-identical to one written before S1, and an older server reads it. The
+first boot after S1 can arm this at once, by ending an open record from a notification the journal retains, so the
+trap arms on the first boot that ends anything (review 3026); S1-K1 pins which checkpoints carry the key. The
 new column is nullable: an older server never names it in a read or a write, so `coord.db` is not what refuses. PIN-2
 pins the refusal shape. The PR body says this plainly.
 
@@ -123,6 +135,24 @@ counts, spec §7.1).
   idempotent. Its decision goes in `delegation-end-basis.ts` (or a sibling L1 module), not in the frozen file.
 - [ ] **The readers of Table 10:** the identity and workflow holds and the retirable set in `delegation-compaction.ts`,
   and `retireBehindCut`, read the basis.
+- [ ] **`openWorkflowWorkerFromMeta`** (`delegation-checkpoint.ts`, review 3026 F3): a worker opened from its run's row
+  copies the run's `endedAt` and opens ended only when that value is set. A run S2's pass closed has a null `endedAt`,
+  so its worker would open active under a closed run, and the next pass would have to close it again. S2 makes this
+  site read the run's state and basis, not its `endedAt` alone, with a red test first. S1 cannot reach it: nothing
+  writes a backfill yet.
+- [ ] **The dry run counts one order S1 leaves to a restart** (review 3026 F4): an agent record opened only by the meta
+  door after its final notification was journaled while its key was still unmapped. Live, that notification ended
+  nothing, so the record stays open; the next boot's observe pass finds the notification covered and the key mapped,
+  ends the record as a task report, counts it and saves. The end is right, but it waits for a restart, against the
+  rule that replay never differs from the live path. The dry run reports how many records are in this state; S2
+  decides then whether the meta door should apply an already-journaled final notification.
+- [ ] **Two writers to fold, and the arm's silent case** (review 3026 F9, carried; no code change in S1):
+  `delegation-end-basis.ts` restates `foldNotification`'s "final status" rule, and its `later` restates `maxInstant`,
+  so each rule has two writers; S2's L1 work makes each one writer. The CHECK and `endBasisDefect` accept an explicit
+  `observed` and an `endBasis` on a row that is not ended, which nothing writes and an older server would refuse for
+  nothing; S2 decides whether to narrow them. Where the mapping names an ID with no row, `foldTaskReport` ends nothing
+  and says nothing (`mapped-row-missing-ignored`, below), while its two siblings refuse `fold-refused`; it is
+  unreachable today, since the checkpoint's identity assertion refuses such a checkpoint.
 - [ ] **The undo:** a second builder method that reopens every `backfill-unmeasured` record.
 - [ ] **The words,** in `shared/`: "closed by the one-time pass; its real end was not measured".
 
@@ -142,13 +172,15 @@ one (`isEndable`), so S2 adds no end rule of its own.
   (`column-check-mirrors-rule`).
 - **§9, Table 12's last row:** the new end and the basis rules live in a new file, `server/src/coord/delegation-end-basis.ts`
   (L1, C5), beside the files that row names (review 2900 F8).
+- **Table 10, a missing row** (review 3026 F3): `openWorkflowWorkerFromMeta` in `delegation-checkpoint.ts` reads the
+  run's `endedAt` to decide whether a worker opens ended; a backfilled run has none, so S2 must handle this reader too.
 
 ## Deviations found
 
 - **D-8830** — `broker-task-report-end`: session helpers S1 (desktop polish wave 156). An Agent's final task notification
   ends its broker activity record on the natural key through the mapping, with no launch index; `endedAt` is the
   notification's observed time, and `endBasis` (`observed`, `task-report` or `backfill-unmeasured`, optional, absence
-  meaning `observed`) is a checkpoint key and a nullable column (migration 116). A later measured end replaces a
+  meaning `observed`) is a checkpoint key and a nullable column (migration 118). A later measured end replaces a
   backfill one, at every end site. Each departure from the spec, by slug:
   - `observed-written-as-absence`: an `observed` end is written by removing the key, never as `endBasis: 'observed'`, so
     a checkpoint carries the key only for a task report or a backfill. The codec still reads an explicit `observed`.
