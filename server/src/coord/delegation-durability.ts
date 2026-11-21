@@ -877,15 +877,15 @@ export class DelegationDurability {
 
   /** Review 3026 F4: the natural keys (encoded) of every Agent final task notification the retained set holds, read OUTSIDE the queue (the
    *  coordinator's condition: nothing the watcher applies waits for it) and cut at `DELEGATION_BACKFILL_SCAN_MS` by the injected clock. Read
-   *  only, through the applier's own port: the journal is append-only and a compaction replaces it by rename, so the read sees one retained
+   *  only, through the applier's one reader of the retained set (`retainedRecords`): the journal is append-only and a compaction replaces it by rename, so the read sees one retained
    *  set or refuses; a read that refuses or is cut answers `complete: false`, and the count is then unmeasured, never partial. */
   private async retainedTaskReportKeys(): Promise<{ keys: Set<string>; complete: boolean }> {
     const keys = new Set<string>();
     const deadline = this.deps.now() + DELEGATION_BACKFILL_SCAN_MS;
     try {
-      for await (const line of readDelegationRetainedRecords(this.port, this.carriedPath, this.journalPath)) {
+      for await (const record of this.retainedRecords()) {
         if (this.deps.now() > deadline) return { keys, complete: false };
-        const entry = line.record.entry;
+        const entry = record.entry;
         if (entry.kind !== 'evidence-accepted') continue;
         const key = taskReportKey(entry.event);
         if (key !== null) keys.add(encodeDelegationNaturalKey(key));

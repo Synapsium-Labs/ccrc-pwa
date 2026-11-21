@@ -3,7 +3,7 @@
 // old open records (`GET`/`POST /api/coord/delegation-backfill`): the words a closed record's basis stands for, the dry run's report,
 // the request's acts and the door's one refusal word. Every decision is the server's L1 (`server/src/coord/delegation-backfill.ts`);
 // nothing here decides. L0: the PWA bundles `shared/`, so this file takes no `node:` module. It sits outside `shared/api.ts`, whose
-// growth is capped (D-8635), as `delegation-adopt.ts` does.
+// growth is capped (D-8635), as the adoption switch's wire file does.
 import type { DelegationActivitySourceKind } from './api.js';
 
 /** What `endBasis: backfill-unmeasured` stands for (spec §7.2, condition 2). A closed record is never projected to any wire, so the

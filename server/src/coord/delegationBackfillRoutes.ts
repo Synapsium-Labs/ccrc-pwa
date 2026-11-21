@@ -17,7 +17,7 @@ import { incarnationOf } from './delegationLeaseDoor.js';
  *    PWA-surface door (they are in no EXEMPT table), and the box-token census lists them as `DELEGATION_BACKFILL_DOORS`. A command was the
  *    other shape the spec allowed; it would still need a door to reach the watcher's one applier, so the route is the smaller.
  *  - THE PASS NEEDS A SIGNED-IN OPERATOR: it refuses `sign-in-unarmed` while sign-in is dark or the caller holds no session (the collect-lane
- *    and delegation-adopt argument: a durable write across the broker's records). The dry run and the undo stay open dark: the one writes
+ *    and adoption-switch argument: a durable write across the broker's records). The dry run and the undo stay open dark: the one writes
  *    nothing, the other only gives back what the pass closed.
  *  - THE DRY RUN FIRST: the pass carries the dry run's count and refuses `count-changed` (with the report it would act on) unless it is the
  *    count it would close now, so the pass never runs on a number nobody read.
