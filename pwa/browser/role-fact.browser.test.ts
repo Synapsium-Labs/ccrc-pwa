@@ -168,7 +168,8 @@ describe('D-8142, D-8817: the card wears the coordinator badge', () => {
 
 // D-8834 (C51), after D-8817 (C50): in the session header the badge sits on the TITLE line, right after the session's name,
 // sized to the name's text and on its baseline; the details row no longer carries it, so the header loses the line the badge
-// stood on alone and is taller nowhere. A coordinator that holds a programme's run, so its header draws the Goals door, is
+// stood on alone. It is taller than a worker's header only where the name's last line has no room for the glyph, and the
+// sweep below measures that (review 2995 F6). A coordinator that holds a programme's run, so its header draws the Goals door, is
 // opened at each width in each skin and theme.
 const HEAD_NOW = Date.now();
 const headRow = (id: string, extra: object = {}): object => ({
@@ -372,7 +373,8 @@ describe('D-8834: the header\'s role badge sits on the title line, after the nam
 
     it(`${at}: the badge adds no line, and the header is shorter by the line it stood alone on at C50`, async () => {
       const m = await measureView(skin, theme, width);
-      // No taller anywhere: hiding the badge's carrier changes nothing, so a worker's header of the same name is as tall.
+      // At this view's name the glyph fits the name's last line: hiding the badge's carrier changes nothing, so a worker's
+      // header of the same name is as tall. (Where the last line has no room, it is taller: the sweep below, review 2995 F6.)
       expect(m.carrierAdds, 'the badge has a carrier').not.toBeNull();
       expect(Math.abs(m.carrierAdds!), 'the badge adds no height of its own').toBeLessThanOrEqual(0.5);
       // The line saved: C50's placement, rebuilt as a cell of the details row, costs the row's height and the gap above it

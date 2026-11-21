@@ -4,7 +4,6 @@
 // rendered card's facts are all in the rendered header, in both skins.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
@@ -21,7 +20,6 @@ import {
 import type { ChildRunContext } from '../src/fleet/runWords';
 import { setSkin } from '../src/lib/skin';
 import { activity } from './delegationFixture';
-import { ENTRIES_NOTE } from '../src/fleet/delegationWords';
 
 afterEach(cleanup);
 
@@ -186,7 +184,8 @@ describe('the model (D-5545)', () => {
     expect(h).toContainEqual(expect.objectContaining({ key: 'hold', text: 'held: program:port-api wave:5/7 run:40' }));
     expect(h).toContainEqual(expect.objectContaining({ key: 'coordinator', text: 'programme coordinator' }));
     expect(h).toContainEqual(expect.objectContaining({ key: 'tasks', text: '2/5 tasks' }));
-    expect(h).toContainEqual(expect.objectContaining({ key: 'subagents', text: '1 subagent' }));
+    // H3 (D-8875): its subagent is the Helpers section's row, so the header carries no count of it.
+    expect(h.map((x) => x.key)).not.toContain('subagents');
   });
 
   it('a review child reads "review of wave N"', () => {
@@ -429,28 +428,11 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
   });
 });
 
-// Delegation visibility: the session header lists every delegation entry the session started, every liveness counted
-// (D-7781). The row's R9 chip and its count comparison (D-7782) went with D-8771: the fleet list shows no such count.
-describe('the header\'s delegated-entries disclosure (D-7781; the card chip is gone, D-8771)', () => {
+// Delegation visibility once listed every delegation entry a session started in its header (D-7781), and the row's chip went
+// with D-8771. Since H3 (D-8875) neither the row nor the header counts or lists them (the header's case is H3-H1 below); the
+// background work's count is the header's one allowance.
+describe('a session\'s delegated work on the row and in the header (D-8771, H3)', () => {
   const worker = s({ role: 'child', child: { kind: 'child', runId: 40 }, status: 'busy', bucket: 'working' });
-  const two = [activity({ activityId: 'a1', parentId: worker.id, displayName: 'map the tree' }),
-    activity({ activityId: 'a2', parentId: worker.id, displayName: 'read the plan' })];
-
-  it('C46 (supersedes D-7781 and D-7782 on the card): the card carries no delegated fact, the header keeps it with its count', () => {
-    const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
-    const card = cardFacts(f);
-    expect(card, 'no field survives on the card').not.toHaveProperty('delegated');
-    const head = headerFacts(f).find((h) => h.key === 'delegated');
-    expect(head).toMatchObject({ text: '2 delegated' });
-    expect(head?.title).toBe('2 recorded delegation entries, not a current agent count; execution not confirmed');
-    // Every entry still counts in the header, of every liveness (D-7781's header side stands).
-    const dead = s({ ...worker, status: 'dead', bucket: 'dead' });
-    const three = [...two, activity({ activityId: 'a3', parentId: worker.id, liveness: 'stale' })];
-    expect(headerFacts(sessionFacts({ session: dead, now: NOW, delegated: three })).find((h) => h.key === 'delegated')?.text).toBe('3 delegated');
-    // The subset rule is now about the card's own facts only, and still catches a header that lacks one.
-    expect(cardWithinHeader(card, headerFacts(f))).toEqual([]);
-    expect(cardWithinHeader(card, headerFacts(f).filter((h) => h.key !== 'status'))).toEqual([card.status]);
-  });
 
   // A GUARD, not a pin that was red at `main`: the card already drew no subagent count there (they moved to the header in
   // D-5545), and the row is handed no delegated entries any more. The chip's absence is pinned by project-card's C46 case.
@@ -540,60 +522,6 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
     expect(within('branch', 'working · 2 in background', 'working · 2 in background')).toBe(0);
   });
 
-  it('C46: the same session\'s header still draws both disclosures with their counts', () => {
-    const busy = s({ ...worker, subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] });
-    const f = sessionFacts({ session: busy, now: NOW, childRun: child(RUN), delegated: two });
-    render(<SessionHeaderHost {...headerProps({ session: busy, status: busy.status, facts: f })} />);
-    const toggle = screen.queryByRole('button', { name: /details/i });
-    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
-    expect(screen.getByRole('button', { name: '2 subagents' }).textContent).toContain('2 subagents');
-    expect(screen.getByRole('button', { name: '2 delegated' }).textContent).toContain('2 delegated');
-  });
-
-  it('VIS-H1: the header lists every entry the session started, once each, behind a disclosure that does not navigate', async () => {
-    const entries = [
-      activity({ activityId: 'a1', parentId: worker.id, placement: 'chip', displayName: 'map the tree' }),
-      activity({ activityId: 'a2', parentId: worker.id, placement: 'row', displayName: 'read the plan', liveness: 'stale',
-        openedAt: '2026-10-26T10:01:00.000Z' }),
-      activity({ activityId: 'a3', parentId: worker.id, placement: 'row', displayName: 'check the build', liveness: 'unmeasured',
-        openedAt: '2026-10-26T10:02:00.000Z' }),
-    ];
-    const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: entries });
-    render(<SessionHeaderHost {...headerProps({ session: worker, status: worker.status, facts: f })} />);
-    const details = screen.queryByRole('button', { name: /details/i });
-    if (details !== null && details.getAttribute('aria-expanded') === 'false') fireEvent.click(details);
-    const door = screen.getByRole('button', { name: '3 delegated' });
-    expect(door.getAttribute('aria-expanded')).toBe('false');
-    expect(door.hasAttribute('aria-controls')).toBe(false);
-    expect(document.body.textContent).not.toContain(ENTRIES_NOTE);
-    const path = location.pathname;
-    // Keyboard: Enter on the focused button opens it.
-    door.focus();
-    await userEvent.keyboard('{Enter}');
-    expect(door.getAttribute('aria-expanded')).toBe('true');
-    const list = document.getElementById(door.getAttribute('aria-controls')!);
-    if (list === null) throw new Error('aria-controls names no element');
-    expect(list.textContent).toContain(ENTRIES_NOTE);
-    const rows = [...list.querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
-    expect(rows).toEqual([
-      ['agent', 'map the tree', 'not confirmed'], ['agent', 'read the plan', 'stop not seen'], ['agent', 'check the build', 'unmeasured'],
-    ]);
-    expect(location.pathname).toBe(path);
-    // Touch: a tap closes it, and the list and its aria-controls go together.
-    fireEvent.click(door);
-    expect(door.getAttribute('aria-expanded')).toBe('false');
-    expect(door.hasAttribute('aria-controls')).toBe(false);
-    expect(document.body.textContent).not.toContain(ENTRIES_NOTE);
-    expect(location.pathname).toBe(path);
-  });
-
-  it('the rendered header draws the delegated disclosure with its count', () => {
-    const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
-    render(<SessionHeaderHost {...headerProps({ session: worker, status: worker.status, facts: f })} />);
-    const toggle = screen.queryByRole('button', { name: /details/i });
-    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
-    expect(visible(document.querySelector('.chat-head')!)).toContain('2 delegated');
-  });
 });
 
 // Session helpers H3 (D-8875; spec 2026-11-19 §4.5): the Helpers section is the one list and the one count of a session's

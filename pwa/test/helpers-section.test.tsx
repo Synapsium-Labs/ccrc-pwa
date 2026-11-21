@@ -200,7 +200,7 @@ for (const width of [360, 1280]) {
       const done = s.section()!.querySelector('[data-helper-row="today\'s session panel"]')!;
       expect(plain(done.querySelector('.helper-facts')!.textContent)).toBe('done · 4m12s · header facts only');
       const failed = s.section()!.querySelector('[data-helper-row="the mockup"]')!;
-      expect(failed.querySelector('.helper-facts')!.textContent).toBe('failed · 1m3s · headless browser not found');
+      expect(plain(failed.querySelector('.helper-facts')!.textContent)).toBe('failed · 1m3s · headless browser not found');
     });
 
     it('Table 6: stopped, finished and a workflow\'s final words', () => {
@@ -213,7 +213,7 @@ for (const width of [360, 1280]) {
       });
       open(s.section()!);
       fireEvent.click(within(s.section()!).getByRole('button', { name: /Finished · last 10 min \(3\)/ }));
-      const facts = (id: string): string => s.section()!.querySelector(`[data-helper-row="${id}"] .helper-facts`)!.textContent!;
+      const facts = (id: string): string => plain(s.section()!.querySelector(`[data-helper-row="${id}"] .helper-facts`)!.textContent);
       expect(facts('stop')).toBe('stopped · 22s');
       expect(facts('fin')).toBe('finished · 6m0s');
       expect(facts('wf_00000000-bbb')).toBe('done · 12/12 agents · 6m10s');

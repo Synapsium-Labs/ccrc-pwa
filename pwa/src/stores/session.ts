@@ -912,6 +912,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
       apply(msg) {
         if (msg.type === 'workflows' && !framed) { framed = true; asked.clear(); }
+        // `asked` is an ask with no answer yet (review 3099 F1): an answer, kept or dropped, ends it, and a reset of the
+        // helper rows (a backlog onto another transcript) forgets every ask with them.
+        if (msg.type === 'helper-report') asked.delete(msg.id);
+        if (msg.type === 'backlog' && !sameTranscript(get().file, msg.file)) asked.clear();
         set((s) => {
           const confirmed = clearConfirmed(s.pending, msg);
           for (const key of confirmed.cleared) {
@@ -1055,6 +1059,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           ask: null, askFrameSeen: false, pairing: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
           ...noHelpers(),
         });
+        asked.clear(); // the helper rows are gone, so are their asks (review 3099 F1)
       },
 
       async send(text, opts = {}) {

@@ -145,12 +145,6 @@ export function detailsHaveFacts(facts: SessionFactSet, coordination: Coordinati
   return Object.values(rows).some((v) => v !== null) || headerMetaHasCells(facts) || facts.worktrees.length > 0;
 }
 
-/** Whether the details row would have nothing to show once its worktrees were gone: the row then ends with its last worktree, and
- *  the focus a worktree control hands back goes to the header's title, not to a region about to leave (`SessionWorktrees`). */
-export function detailsEndWithWorktrees(facts: SessionFactSet, coordination: Coordination | null): boolean {
-  return !detailsHaveFacts({ ...facts, worktrees: [] }, coordination);
-}
-
 /** The coordination line's clauses, each `null` when it has none: whose code it works on, its programme's run (a coordinator's
  *  own hold, or a child's run), and who coordinates it. One derivation: the line (`SessionCoordination`) draws it, and
  *  `hasCoordinationClause` asks it. */

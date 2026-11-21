@@ -52,17 +52,21 @@ describe('the facts, written the way Claude Code writes them', () => {
     strip([wf({ failed: 2 })]);
     fireEvent.click(screen.getByRole('button', { name: /^Helpers/ }));
     const row = document.querySelector('[data-helper-row="wf_00000000-aaa"]')!;
-    expect([...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent))
-      .toEqual(['running', 'phase Verify', '19/20 agents', '2 failed']);
-    expect([...row.querySelectorAll('.helper-fact')].map((g) => g.textContent!.replace(/\u00A0/g, ' ')).slice(0, 2))
-      .toEqual(['workflow', 'running · phase Verify · 19/20 agents · 2 failed']);
+    // The group is the state with its times: the state words, then the inline elapsed and the activity when the row has them.
+    const words = [...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent);
+    expect(words.slice(0, 4)).toEqual(['running', 'phase Verify', '19/20 agents', '2 failed']);
+    expect(words.length, 'elapsed (and the activity, when read) follow in the same group').toBeGreaterThan(4);
+    const groups = [...row.querySelectorAll('.helper-fact')].map((g) => g.textContent!.replace(/\u00A0/g, ' '));
+    expect(groups[0]).toBe('workflow');
+    expect(groups[1]!.startsWith('running · phase Verify · 19/20 agents · 2 failed')).toBe(true);
+    expect(row.querySelector('.helper-state .helper-elapsed-inline')).not.toBeNull();
   });
   it('an unread journal leaves the progress out of the row, never 0/0', () => {
     expect(mainFacts(item(wf({ done: null, failed: null, total: null })))).toEqual(['workflow']);
     strip([wf({ done: null, failed: null, total: null })]);
     fireEvent.click(screen.getByRole('button', { name: /^Helpers/ }));
     const row = document.querySelector('[data-helper-row="wf_00000000-aaa"]')!;
-    expect([...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent)).toEqual(['running', 'phase Verify']);
+    expect([...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent).slice(0, 2)).toEqual(['running', 'phase Verify']);
   });
 });
 

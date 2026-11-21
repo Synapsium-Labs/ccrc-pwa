@@ -475,11 +475,12 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     expect(alert.textContent, 'its text emptied').toBe('');
   });
 
-  it('W5-U10: an older server\'s rows (no disposition) render byte for byte as the fleet list\'s rows did on the base', () => {
-    // Measured on the base (67121c031) with this fixture, before PR10's card change.
+  it('W5-U10: an older server\'s rows (no disposition) add no word and no control to the row\'s own', () => {
+    // Measured on the base (67121c031) with this fixture, before PR10's card change, and re-measured for H3 (D-8875): the
+    // row says what made it and its path, and its title is the path; it says no liveness word.
     const BASE = [
-    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-a1; Execution not confirmed: its session is live in the run that started it, but nothing shows the helper itself is still working\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">agent worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-a1</span></span><span class=\"proj-work-part\">not confirmed</span></span></div>",
-    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-r1; Execution not confirmed: its session is live in the run that started it, but nothing shows the helper itself is still working\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-r1</span></span><span class=\"proj-work-part\">not confirmed</span></span><span class=\"proj-work-chip\" title=\"linked by the worktree listing taken before and after Bash call toolu_test_0001, with no other session's listing overlapping it; no upstream id confirms it, and nothing acts on it automatically\">inferred</span><span class=\"proj-work-chip\" title=\"the Bash call that created this worktree: toolu_test_0001\">Bash call …est_0001</span></div>",
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-a1\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">agent worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">/work/project-a/.claude/worktrees/agent-a1</span></span></span></div>",
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-r1\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">/work/project-a/.claude/worktrees/agent-r1</span></span></span><span class=\"proj-work-chip\" title=\"linked by the worktree listing taken before and after Bash call toolu_test_0001, with no other session's listing overlapping it; no upstream id confirms it, and nothing acts on it automatically\">inferred</span><span class=\"proj-work-chip\" title=\"the Bash call that created this worktree: toolu_test_0001\">Bash call …est_0001</span></div>",
     ];
     const { container } = renderCard({ frame: frame({ leases: [lease({ leaseId: LEASE_ID }), lease({ leaseId: 'l-raw', sourceKind: 'raw',
       adminRecord: 'agent-r1', canonicalPath: '/work/project-a/.claude/worktrees/agent-r1' })] }), sessions: [COORD_A] });

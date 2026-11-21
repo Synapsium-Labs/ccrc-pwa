@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { ToastHost } from '@ccrc/ui';
-import { DELEGATION_LIVENESS, type DelegationLiveness, type FleetSession, type SessionStreamMsg } from '../../shared/api';
+import { DELEGATION_LIVENESS, type DelegationActivityWire, type DelegationLiveness, type FleetSession, type SessionStreamMsg } from '../../shared/api';
 import type { AgentHelperView, WorkflowView } from '../../shared/workflows';
 import { SessionDetails } from '../src/session/SessionDetails';
 import { SessionScreen } from '../src/screens/SessionScreen';
@@ -62,14 +62,16 @@ const SELF = fleetSession({
   id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a', status: 'busy', bucket: 'working',
   subagents: SUBAGENTS, tasks: { done: 1, total: 3, running: 1, active: null },
 });
-/** The recorded entries the broker holds for `coord-a`, one of each liveness and both kinds. */
-const ENTRIES = DELEGATION_LIVENESS.map((l, i) => activity({
-  activityId: `act-${l}`, parentId: 'coord-a', liveness: l, sourceKind: i % 2 === 0 ? 'agent' : 'workflow', displayName: `entry ${l}`,
+/** The recorded entries the broker holds for `coord-a`, one of each liveness an entry carries on the wire (an ended one is
+ *  never sent), and both kinds. */
+const ENTRIES = DELEGATION_LIVENESS.filter((l): l is DelegationActivityWire['liveness'] => l !== 'ended').map((l, i) => activity({
+  activityId: `act-${i}`, parentId: 'coord-a', liveness: l, sourceKind: i % 2 === 0 ? 'agent' : 'workflow', displayName: `entry ${i}`,
 }));
-/** One worktree of each liveness, half of them with their presence on disk not measured, each held (its disposition said). */
+/** One worktree of each liveness, half of them with their presence on disk not measured, each held (its disposition said).
+ *  Their names carry no liveness word, so the census reads only what the page says. */
 const LEASES = DELEGATION_LIVENESS.map((l, i) => lease({
-  leaseId: `lease-${l}`, parentId: 'coord-a', liveness: l, adminRecord: `agent-${l}`,
-  canonicalPath: `/work/project-a/.claude/worktrees/agent-${l}`, workspace: i % 2 === 0 ? 'unmeasured' : 'present',
+  leaseId: `lease-${i}`, parentId: 'coord-a', liveness: l, adminRecord: `agent-${i}`,
+  canonicalPath: `/work/project-a/.claude/worktrees/agent-${i}`, workspace: i % 2 === 0 ? 'unmeasured' : 'present',
   sourceKind: i === 0 ? 'raw' : 'agent', disposition: 'retained', expiresAt: '2026-11-28T10:00:00.000Z',
 }));
 
@@ -112,7 +114,7 @@ describe('SessionDetails sheds the broker\'s lists (H3, §4.5)', () => {
       expect(buttons.filter((b) => /subagent|delegated|⑂/i.test(b)), 'no disclosure toggle').toEqual([]);
       const texts = everything(region!);
       expect(texts.filter((t) => /subagent|\bdelegat|⑂|recorded entr|execution/i.test(t)), 'no count, chip, title or note of either').toEqual([]);
-      expect(texts.filter((t) => /code-reviewer|explorer|entry (live|stale|asleep|ended|unmeasured)/.test(t)), 'no name of a helper or an entry').toEqual([]);
+      expect(texts.filter((t) => /code-reviewer|explorer|entry \d/.test(t)), 'no name of a helper or an entry').toEqual([]);
       expect(region!.querySelector('.sess-subagent-list, .sess-subagents, .sess-entries, .proj-work'), 'no list and no row').toBeNull();
     });
   }
@@ -140,8 +142,8 @@ describe('a worktree row says its path, its disposition and its controls, and no
         // No liveness word, in the row's words, its title or its controls' names.
         expect(bannedIn(everything(row)), 'the row says no liveness word and no `unmeasured`').toEqual([]);
         // The presence not measured is said once, in the section's head, never on the row.
-        const said = [...section.querySelectorAll('*')].filter((e) => e.children.length === 0 && /presence on disk not measured/.test(e.textContent ?? ''));
-        expect(said.map((e) => e.textContent), 'said once in the head').toEqual(ws === 'unmeasured' ? ['presence on disk not measured for 1 tree'] : []);
+        const said = (section.textContent ?? '').split('presence on disk not measured for 1 tree').length - 1;
+        expect(said, 'said once in the head').toBe(ws === 'unmeasured' ? 1 : 0);
         expect(row.textContent).not.toMatch(/presence on disk/);
       });
     }
@@ -220,7 +222,8 @@ describe('the word census over the whole session panel (H3, §4.4)', () => {
       expect(root.querySelectorAll('.sess-worktrees .proj-work')).toHaveLength(LEASES.length);
       expect(root.querySelector('[data-helper-row]'), 'a Helpers row').not.toBeNull();
       expect(root.textContent).toContain('Measure running one');
-      expect(bannedIn(everything(root)), 'no liveness word, no liveness sentence, no `unmeasured`').toEqual([]);
+      const all = everything(root);
+      expect(bannedIn(all), `no liveness word, no liveness sentence, no \`unmeasured\`: ${all.filter((t) => /unmeasured/i.test(t)).map((t) => t.slice(Math.max(0, t.toLowerCase().indexOf('unmeasured') - 80), t.toLowerCase().indexOf('unmeasured') + 40)).join(' | ')}`).toEqual([]);
     });
   }
 });

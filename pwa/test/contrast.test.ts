@@ -170,7 +170,6 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.sess-state--waiting',
   '.sess-state--working',
   '.sess-state--exited',
-  '.sess-subagent-row',
   '.sess-ctxpressure',
   '.sess-ctxpressure[data-wedge]',
   '.sess-warn',

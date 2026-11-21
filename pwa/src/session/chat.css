@@ -97,15 +97,6 @@
 }
 .chat-facts .sess-meta { display: contents; }
 .chat-facts .sess-meta > *::before { content: none; }
-/* D-7785 (review 1424 F3; review 1431 F1): the header's two disclosure toggles, the subagent one and the
-   delegated-entries one. The rule above removes `.sess-subagents::before`, the card's tap overlay, with the middots, so
-   in the header the toggle's own box is its hit area. On a touch screen it takes the tap floor. The floor is gated on
-   `(pointer: coarse)` rather than reset under `(pointer: fine)`: this rule is unlayered, so a reset of equal specificity
-   above it never applied (the door's own floor is a layered utility, which any unlayered rule beats), and a desk with
-   a mouse keeps the toggles' base size and the header its base height (the operator's ruling of 2026-10-15, below). */
-@media (pointer: coarse) {
-  .chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
-}
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
 /* D-8834 (C51; C50's D-8817 drew the badge in the details row): a coordinator's role badge sits on the TITLE line, right after the
    session's name (`HeaderTitleText`), in both skins. It is an inline box in the title's own line, so it shares the name's line
@@ -118,15 +109,11 @@
 .chat-title-glue { white-space: nowrap; }
 .chat-title-role { vertical-align: -0.125em; margin-inline-start: var(--sp-1); }
 .chat-title-role svg { width: 1em; height: 1em; }
-.chat-facts .sess-subagent-list { flex-basis: 100%; }
-/* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its
-   min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long
-   row would push the header past the screen's edge; with it, the row keeps the list's width, its free-text part ends in
-   an ellipsis and its other words wrap whole (`.proj-work-part`, fleet.css; D-7783). */
-.chat-facts .sess-entries { flex-basis: 100%; min-width: 0; }
-/* D-8782 (review 2864 F6): the session's worktrees, the entries list's twin in the same row: a full-width flex item with a
-   minimum of 0, for the same reason. Its rows carry chips, controls and an alert sentence, and without these one long path
-   or word would push the header past the screen's edge, or the section would shrink to nothing in a nowrap rail. */
+/* D-8782 (review 2864 F6): the session's worktrees, a full-width flex item of .chat-facts, whose automatic minimum would be
+   its min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long row
+   would push the header past the screen's edge, or the section would shrink to nothing in a nowrap rail; with it, the row
+   keeps the section's width, its path ends in an ellipsis and its other words wrap whole (`.proj-work-part`, fleet.css;
+   D-7783). Its rows carry chips, controls and an alert sentence too. */
 .chat-facts .sess-worktrees { flex-basis: 100%; min-width: 0; padding: var(--sp-1); }
 /* The padding is the focus ring's room: the controls' box draws a ring 4px outside itself (2px outline, 2px offset), and
    Refined's phone rail scrolls sideways, so it clips whatever it holds at its own edge: a ring on a box flush with that edge

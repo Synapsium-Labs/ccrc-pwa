@@ -45,7 +45,7 @@ import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
-import { activitiesStartedBy, readDelegation } from '../fleet/delegationWords';
+import { readDelegation } from '../fleet/delegationWords';
 import { worktreeSidesKey, worktreesOf } from '../fleet/sessionWorktrees';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordinatorPresence } from '../fleet/presence';
@@ -351,7 +351,6 @@ export function SessionScreen({
     workingOn: coordination?.workingOn ?? null,
     coordinator: presence,
     coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
-    delegated: delegation === null ? null : activitiesStartedBy(live.id, readDelegation(delegation)),
     worktrees: delegation === null ? null : worktreesOf(readDelegation(delegation).leases, worktreeKey),
     claudeLatest,
     claudeLaneLatest,
