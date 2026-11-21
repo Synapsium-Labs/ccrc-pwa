@@ -16,10 +16,12 @@ import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTr
 
 /** Why the box takes no capture. `not-test-box`: the node's install config is not a test box's (`probeRole`).
  *  `no-runner`: the box has no capture runner wired to its desk. `build-absent`: the box does not hold the build's bytes
- *  (the admin lane's copy has not placed them). `capture-id-used`: that capture id is already queued, running or ended. */
-export type CaptureRefusal = 'not-test-box' | 'no-runner' | 'build-absent' | 'capture-id-used';
+ *  (the admin lane's copy has not placed them). `path-refused`: a path the capture would write is, or is inside, a fleet
+ *  account's config directory (the probe desk's write guard). `capture-id-used`: that capture id is already queued,
+ *  running or ended. */
+export type CaptureRefusal = 'not-test-box' | 'no-runner' | 'build-absent' | 'path-refused' | 'capture-id-used';
 export const CAPTURE_REFUSAL_MAP: Record<CaptureRefusal, true> = {
-  'not-test-box': true, 'no-runner': true, 'build-absent': true, 'capture-id-used': true,
+  'not-test-box': true, 'no-runner': true, 'build-absent': true, 'path-refused': true, 'capture-id-used': true,
 };
 export const CAPTURE_REFUSALS: readonly CaptureRefusal[] = Object.keys(CAPTURE_REFUSAL_MAP) as CaptureRefusal[];
 
@@ -28,6 +30,7 @@ export const CAPTURE_REFUSAL_SENTENCE: Readonly<Record<CaptureRefusal, string>> 
   'not-test-box': 'this node is not the configured test box: builds are captured on the test box only, never on the fleet',
   'no-runner': 'no capture runner is wired to the test box',
   'build-absent': 'the test box does not hold this build yet',
+  'path-refused': "a path the capture would write is, or is inside, a fleet account's config directory",
   'capture-id-used': 'that capture id is already used',
 });
 

@@ -78,15 +78,17 @@ plus `PreToolUse`):
 | Step | What the runner does | What the stand-in answers | Events and files recorded |
 |---|---|---|---|
 | 1 | Starts the build in its own tmux server | (no request) | SessionStart, statusline JSON, status file `idle` |
-| 2 | Types the first prompt | a Bash tool call, `cd sub && pwd` | UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse |
-| 3 | (the recorder answers the permission prompt `allow`) | a short text reply after the tool result | Stop, status file `busy` then `idle` |
+| 2 | Types the first prompt | a Bash tool call, `cd sub`, then a second, `touch ccrc-capture-mark` | UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse |
+| 3 | (the recorder answers each permission prompt `allow`) | a short text reply after the last tool result | Stop, status file `busy` then `idle` |
 | 4 | Types the second prompt | an Agent (Task) tool call, then the subagent's own text reply | SubagentStart, SubagentStop |
 | 5 | Types `/compact` | a summary | PreCompact, PostCompact |
 | 6 | Types a third prompt | an API error (HTTP 500) | StopFailure |
 | 7 | Types `/exit` | (no request) | SessionEnd |
 
-*Table 1. The drive. The `cd` in step 2 is what proves the `cwd` fact: the PermissionRequest payload's `cwd` must name `sub`,
-the shell's directory after the `cd` (the fact `ClaudeBuildRecord.cwd` stores).*
+*Table 1. The drive. The `cd` in step 2 is what proves the `cwd` fact: the write that follows it raises a permission prompt,
+and that PermissionRequest's `cwd` must name `sub`, the shell's directory after the `cd` (the fact `ClaudeBuildRecord.cwd`
+stores). The stand-in answers with a tool call only when the request offers that tool, so a side request (a title, a
+summary) never gets one.*
 
 The **recorder** is one small script set as the command of every hook and of the statusline. It appends what it was given to
 the recording, with a copy of the live status file (`<config>/sessions/<pid>.json`) taken at that moment. As the
@@ -114,7 +116,7 @@ its own tmux socket. Its environment is built from empty, the probe desk's rule 
 
 | Name | Value |
 |---|---|
-| `HOME` | `<capture>/home`; the build's bytes are placed at the home's versions path and run from there |
+| `HOME` | `<capture>/home`, empty; the build runs from the builds store, `<CCRC_TESTBOX_ROOT>/captures/builds/<version>`, read-only |
 | `CLAUDE_CONFIG_DIR` | `<capture>/config`, seeded with onboarding done, the capture folder trusted, every hook and the statusline set to the recorder |
 | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` | the stand-in on `127.0.0.1:<port>`, and a fixed placeholder |
 | `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1`, so the build fetches nothing and reports nothing |
@@ -148,8 +150,10 @@ already reads. The table holds, per source:
 
 A capture **passes** when every event of Table 1 was recorded, each record fits the table, the status file's `version` names
 the build, and the recording ends cleanly. It **proves `cwd`** when the PermissionRequest payload's `cwd` is the `sub`
-directory. Anything else fails, with the replay output naming each missing or ill-formed field. A runner that cannot finish
-(a deadline, a crash) answers no verdict, so the build stays queued and is tried again, the lane's existing rule.
+directory. Anything else fails, with the replay output naming each missing or ill-formed field. A build that started but
+did not raise a step's events within that step's deadline fails too, its output naming what was never recorded: a broken
+contract must not wait in the queue for ever. Only a runner that could not start the build (the stand-in or tmux failed)
+answers no verdict, so the build stays queued and is tried again, the lane's existing rule.
 
 ### 2.5 The job's path, end to end
 
