@@ -2553,7 +2553,7 @@ describe('plan triage row choice, pinned before its move (D-8808)', () => {
   });
 
   describe('a shared key, both holders pinned', () => {
-    it.each([[OWNER, 12, 13, 'ws-a row'], [OTHER, 13, 12, 'ws-b row']] as const)('%s raises only its own workspace row (%s)', async (who, mine, theirs) => {
+    it.each([[OWNER, 12, 13, 'ws-a row'], [OTHER, 13, 12, 'ws-b row']] as const)('%s raises only its own workspace row (%s)', async (who, mine, theirs, _label) => {
       const r = await rig({ twoWs: true });
       await holdAaaInBoth(r);
       pin(r, 'project-a', WS.a.id);
