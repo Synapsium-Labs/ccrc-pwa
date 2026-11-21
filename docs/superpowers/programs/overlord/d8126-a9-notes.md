@@ -51,8 +51,22 @@ whether another run named it as the worker, and ignored `mail-disabled`. Rebuilt
 ## Tests run (each file alone, through `ccrc test`)
 
 `session-hook-roster-card`, `session-hook-role-card`, `session-hook-anchor`, `install-linear-skill`, `session-hook`,
-`single-definition/roster-card`, `compact-card`, `session-hook-start-loads`, `session-hook-start-report`,
-`skill-rollout`, `lane-schedule`, and the server typecheck.
+`compact-card`, `session-hook-start-loads`, `session-hook-start-report`, `skill-rollout`, `lane-schedule`, the whole
+`single-definition/` directory, `growth-check`, `rings/`, `anchors`, `citations`, `mail-hardening`, the server
+typecheck and the server tests' typecheck (`typecheck-tests` itself needs the PWA's packages, which this workspace did
+not install). `rings/watcher-store-port` lost its worker to a SIGKILL once under load and passed alone.
+
+## Guards measured red
+
+Each by an in-place mutation of the source, restored from a saved copy and checked by its sha:
+
+- the builder (`roster-card.jq`): the line dropped, the final clip dropped, the collapse line's reserve dropped, the
+  awaiting-you collapse dropped: each reds `session-hook-roster-card`.
+- the role texts: the tests ran red before the hook changed (16 failures over three files).
+- the lane (`skillRolloutLane.ts`): nine mutants (the refused id, each of the two readers, the settled memory read and
+  write, the `.child` reading, the failed-write flag, the mail switch, the unlisted claimant): each reds `skill-rollout`.
+- the watcher's call: removing it reds the tick pin.
+- the decider (`skillRollout.ts`): nine mutants in `skill-rollout.test.ts`'s `runMutants` set, all killed.
 
 ## For the operator
 
