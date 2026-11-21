@@ -136,7 +136,7 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     return flat(text.slice(at, next === -1 ? undefined : next));
   };
 
-  it('its "Keep the plan" section runs the three verbs and names, inside the section, each refusal it documents (review 2975 F6)', () => {
+  it('its "Keep the plan" section runs the four verbs and names, inside the section, each refusal it documents (review 2975 F6)', () => {
     const section = keepThePlan();
     for (const verb of ['put', 'ticket-add', 'phase-ref', 'ticket-done']) {
       expect(section, `the section does not run plan ${verb}`).toContain(`"$API" plan ${verb} <slug> --json - <<JSON`);
@@ -158,7 +158,7 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     const section = keepThePlan();
     expect(section).toContain('**A put restates what it keeps.** Every live epic is restated, with its open checkpoints and the tickets you name; '
       + 'a phase takes only an epic or ticket of the epics that put restates; every live phase is restated. One you leave out is refused '
-      + '`dropped-needs-reason`');
+      + '`dropped-needs-reason`, and an epic or phase you cut is named again with `droppedWhy`');
     expect(section).toContain('The examples in this section run in order, on one plan');
   });
 
@@ -170,13 +170,40 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     // F4: ticket-required reads plan show, needs an open ticket with no run attached that is not an auto ticket, and also refuses a plan with no phases
     expect(section).toContain('read `plan show` for the epic\'s open tickets');
     expect(section).toContain('an open ticket with no run attached that is not an auto ticket');
-    expect(section).toContain('A ticket a planned run already holds is refused `ticket-unavailable`: name another ticket.');
-    expect(section).toContain('except where no live epic lists the run\'s wave and a live epic lists no waves: that is also `ticket-required` (phased or not)');
+    expect(section).toContain('A ticket held by another run (started, or open with a run attached, a planned run included) is refused `ticket-unavailable`, '
+      + 'and so is a key that is not in this programme\'s plan: name another ticket.');
+    expect(section).toContain('except where no live epic lists the run\'s wave: with a live epic that lists no waves that is also `ticket-required` (phased or not)');
+    expect(section).toContain('where every live epic lists waves it is `wave-epic-mismatch`, above.');
     // F5: done only when the run ends done; a malformed body is plan-bad-body; the back-fill is one ticket per past run
     expect(section).toContain('it is recorded done when that run ends `done`, and a run that ends `failed` puts the ticket back to open with no run');
     expect(section).toContain('or the body is malformed: two evidence keys, a number that is not a positive integer, an unknown field');
     expect(section).toContain('the landing line\'s ties of runs to pull requests could not be read; another ticket stores evidence that reads as neither kind');
-    expect(section).toContain('**One ticket per past run:** where one past run did several tasks, declare one ticket for it, and drop each extra ticket with `plan ticket-move`');
+    expect(section).toContain('**One ticket per past run:** where one past run did several tasks, declare only one ticket for it, or, where the plan already '
+      + 'holds several, keep one and drop each extra ticket with `plan ticket-move`');
+  });
+
+  it('its "Keep the plan" remedies and rules are pinned inside the section, each red when moved out of it (review 3112 F1, F3)', () => {
+    const section = keepThePlan();
+    // review 3112 F3: the recoveries and rules that were pinned nowhere inside the section
+    expect(section).toContain('Carry to a later phase that is not dropped, read `plan show` for what each phase holds, and a carry is recorded once: neither verb undoes it.');
+    expect(section).toContain('A `plan put` is refused `bad-carry` too, when its order of phases puts a recorded carry\'s target at or before its source.');
+    expect(section).toContain('Read `plan show` for the keys. For a missing live object, declare it first, with `plan put` or `plan ticket-add`, then name it.');
+    expect(section).toContain('and open again with `"ticket":"<that key>"`.');
+    expect(section).toContain('A run verifies when it is a work run of this programme, is `done`, and its own ticket is this ticket, an auto ticket (`run-<id>`) or none.');
+    expect(section).toContain('Name the run that carried the pull request instead of a bare number when the line holds no entry for the project; wait for the run '
+      + 'to be `done`, then record it; and for a ticket whose evidence is taken, name different evidence.');
+    // review 3112 F1: the refusal the route makes before the verdict, and a read that failed may be retried
+    expect(section).toContain('there is no such run, the run could not be read, it is not a work run of this programme');
+    expect(section).toContain('A refusal about a fact is not recorded again unchanged: the same body gets the same answer until the fact changes. '
+      + 'A read that failed (a run, the landing line, its ties) may be retried once the read works.');
+  });
+
+  it('plan.md and api.md give ticket-unavailable the same words, a key outside the plan included (review 3112 F4)', () => {
+    const held = 'held by another run (started, or open with a run attached, a planned run included), or an Upkeep ticket.';
+    expect(flat(plan())).toContain(held);
+    const api = flat(read('references', 'api.md'));
+    expect(api).toContain(held);
+    expect(api).toContain('A key that is not in this programme\'s plan is refused the same way.');
   });
 
   it('the drop body its back-fill line gives parses as `plan ticket-move` parses it (review 2975 F5)', () => {

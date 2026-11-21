@@ -3,7 +3,9 @@
 // plan routes over a real coord.db (the deciders `parsePlanPut`, `diffPlan`, `diffPhases`, `phaseRefVerdict` and
 // `ticketDoneVerdict` behind them) and must be accepted as written. The section says its examples run in order on the plan
 // the `plan put` example at the top of the file leaves; this file starts from that example, so a refused example, an
-// example that names what no earlier one declared, or one deleted or reordered, is red.
+// example that names what no earlier one declared, or one deleted or reordered, is red. Only the run number inside the
+// `ticket-done` example is the coordinator's own and is replaced; its shape is sent as written (review 3112 F2), and an
+// example this file cannot parse is refused, never skipped (F5).
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,6 +34,18 @@ const examplesOf = (section: string): { verb: string; body: Record<string, unkno
 /** The route each verb of the section is served at, under `/api/programmes/:slug/plan`. */
 const SUB: Readonly<Record<string, string>> = { put: '', 'ticket-add': '/tickets', 'phase-ref': '/phases/refs', 'ticket-done': '/tickets/done' };
 
+/** The run number of a `ticket-done` example's evidence, which is the coordinator's own. The shape stays as the section writes it:
+ *  exactly one key, `runId`, a positive integer, so a changed shape (`pr` beside it, `pr` alone, another word) is red here and
+ *  never replaced by a good one (review 3112 F2). Returns the body with only that number replaced. */
+export const withRunNumber = (body: Record<string, unknown>, runId: number): Record<string, unknown> => {
+  const ev = body.evidence as Record<string, unknown> | undefined;
+  const keys = ev === undefined || ev === null || typeof ev !== 'object' ? [] : Object.keys(ev);
+  if (keys.length !== 1 || keys[0] !== 'runId' || !Number.isSafeInteger(ev!.runId) || (ev!.runId as number) < 1) {
+    throw new Error(`the ticket-done example's evidence is not exactly { runId: <positive integer> }: ${JSON.stringify(ev)}`);
+  }
+  return { ...body, evidence: { runId } };
+};
+
 let w: CharWorld | undefined;
 afterEach(async () => { if (w) await w.app.close(); w = undefined; });
 
@@ -46,6 +60,22 @@ describe('the "Keep the plan" examples run in order against the real plan routes
     expect(start.verb).toBe('put');
   });
 
+  it('every example of the section is one this file runs: none is skipped for its form (review 3112 F5)', () => {
+    // each example is a `"$API" plan <verb> <slug> --json - <<JSON` block; another head, `<<'JSON'`, `-<<JSON` or an inline body
+    // is a form `examplesOf` does not read, so the section's own counts of the head and of `--json -` must equal the parsed ones
+    expect(section.split('"$API" plan ').length - 1, 'a "$API" plan line that is not a heredoc example').toBe(examples.length);
+    expect(section.split('--json -').length - 1, 'a --json - that is not a heredoc example').toBe(examples.length);
+    expect(section).not.toMatch(/ccrc-api plan |<<'|<<-|-<<JSON/);
+  });
+
+  it('the ticket-done example keeps its shape: one runId, a positive integer; a changed shape is refused (review 3112 F2)', () => {
+    const ex = examples.find((e) => e.verb === 'ticket-done')!;
+    expect(withRunNumber(ex.body, 7)).toEqual({ ...ex.body, evidence: { runId: 7 } });
+    for (const bad of [{ runId: 1234, pr: 5 }, { pr: 123 }, { run: 1234 }, { runId: 0 }, { runId: '1234' }]) {
+      expect(() => withRunNumber({ ticket: 'w1-1', evidence: bad }, 7), JSON.stringify(bad)).toThrow(/not exactly/);
+    }
+  });
+
   it('each one is accepted, on the plan the one before it left', async () => {
     w = await charWorld();
     const first = await planVerb(w, 'prog-a', '', start.body);
@@ -57,10 +87,15 @@ describe('the "Keep the plan" examples run in order against the real plan routes
     const runId = (run.json() as { id: number }).id;
     for (const to of ['dispatched', 'closing', 'done'] as const) expect(w.coord.advance(runId, to, 'test').ok, to).toBe(true);
     for (const [i, e] of examples.entries()) {
-      const body = e.verb === 'ticket-done' ? { ...e.body, evidence: { runId } } : e.body;
+      const body = e.verb === 'ticket-done' ? withRunNumber(e.body, runId) : e.body;
       const res = await planVerb(w, 'prog-a', SUB[e.verb]!, body);
       expect(res.statusCode, `example ${i + 1} (${e.verb} ${JSON.stringify(e.body)}): ${res.body}`).toBe(200);
     }
+    // the one body the back-fill line gives, on the final plan: a ticket no example closes (w1-3, added and its reference removed) is dropped
+    const dropText = /`(\{"ticket":"<key>","drop":\{"why":"<why>"\}\})`/.exec(section);
+    expect(dropText, 'the back-fill line gives no drop body').not.toBeNull();
+    const drop = await planVerb(w, 'prog-a', '/tickets/move', JSON.parse(dropText![1]!.replace('<key>', 'w1-3').replace('<why>', 'cut from scope')));
+    expect(drop.statusCode, `the back-fill drop body: ${drop.body}`).toBe(200);
     const read = await w.app.inject({ method: 'GET', url: '/api/programmes/prog-a/plan', headers: { 'x-ccrc-mail-token': CHAR_TOKEN } });
     const tickets = (read.json() as { plan: PlanView }).plan.epics.flatMap((e) => e.tickets);
     expect(tickets.find((t) => t.key === 'w1-1')?.state, 'the ticket-done example closes w1-1').toBe('done');

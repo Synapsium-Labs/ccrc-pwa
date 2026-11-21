@@ -94,8 +94,10 @@ response said. The refusals you will actually meet are
   that lists this wave still has an open ticket with no run attached that is not an auto
   ticket, or no live epic lists this wave and a live epic lists no waves. Open again naming that ticket (in the
   second case, a ticket of the epic that lists no waves).
-- `ticket-unavailable`: the ticket is done, dropped, started by another run, or an
-  Upkeep ticket. Name another, or open with none unless `ticket-required` refuses that.
+- `ticket-unavailable`: the ticket is done, dropped, held by another run (started, or open
+  with a run attached, a planned run included), or an Upkeep ticket. A key that is not in this
+  programme's plan is refused the same way. Name another, or open with none unless
+  `ticket-required` refuses that.
 - `plan-closed`: the plan was ended with `plan close`. Nothing opens under it.
 - `reserved-programme`: `linear-sync` is ccrc's own. Use your programme's slug.
 
