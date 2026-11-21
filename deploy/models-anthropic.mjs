@@ -514,7 +514,11 @@ export function anthropicArm(io) {
    *     `previous` may be stale, so revert reads the class's alias in the aliases file: an alias that moved off the held id
    *     reverts to the held id, which is the `previous` the settle would write; one still at it reverts to `previous`. An
    *     aliases file that cannot be read refuses with its word, and one with no id the lane can launch refuses
-   *     `alias-source-absent`, writing nothing. A revert keeps the evidence, so a second revert holds where the first did.
+   *     `alias-source-absent`, writing nothing. A second revert holds where the first did, whatever the alias does in
+   *     between (review 3006 F1): a revert that finds the alias still at the held id drops the evidence in its write (the
+   *     alias had not moved when the hold was placed, so there is no move to settle), and the next revert reads `previous`
+   *     as it did; one that finds the alias moved keeps it, and a revert over that revert's hold at the held id holds there
+   *     again without reading the aliases file.
    *   - `release` clears the hold and records the time as the class's `releasedAt`, so a later reader can count a day from
    *     it, and the held id with that time as `releasedHold`, the evidence the next trustworthy refresh settles (D-8857).
    *     It makes no history entry and spends no `HISTORY_CAP` slot, and `lastMoveOf` never sees it. */
@@ -542,7 +546,9 @@ export function anthropicArm(io) {
       if (opName === 'revert') {
         const lifted = releaseEvidenceOf(c);
         let moved = false;
-        if (lifted !== null) {
+        if (lifted !== null && c.hold !== null && c.hold.by === 'revert' && c.hold.model === lifted.model) {
+          moved = true; // an earlier revert in this window found the alias moved and held here: hold here again
+        } else if (lifted !== null) {
           const al = readAliases(a.id);
           if (al.err !== undefined) {
             return refuse(1, al.err[0], `${al.err[1]} The ${a.class} class's hold at ${lifted.model} was released and the `
@@ -557,6 +563,7 @@ export function anthropicArm(io) {
               + 'that reads a model the lane can launch. Nothing was written.');
           }
           moved = k.id !== lifted.model;
+          if (!moved) delete c.releasedHold;
         }
         model = moved ? lifted.model : (c.previous === null ? null : c.previous.model);
         if (model === null) {

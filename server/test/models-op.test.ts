@@ -6534,6 +6534,65 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
       expect(readAliases().at).toBe(T2);
     });
 
+    // Review 3006's F1: a second revert in the window holds where the first did, whichever way the alias went in between.
+    const C4 = '2026-11-17T20:00:00Z'; // after T3, before T4: a cache the alias moves by after the first revert
+    const T7 = '2026-11-18T18:00:00Z';
+
+    it('a revert while the alias is still at the held id holds at X1 and drops the evidence; the alias then moves, and a second revert holds at X1 too (F1)', () => {
+      heldWhileAliasMoves(ROWS, X2);
+      release();
+      expect(act('revert', T3).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T3, by: 'revert', model: X1 });
+      expect(opus()['releasedHold'], 'nothing to settle: the alias had not moved when the hold was placed').toBeUndefined();
+      plantCache(SUFFIX, 'cache-fixture', cacheJson(C4, { opus: X3 }, ROWS));
+      expect(refresh(T4).body['moved'], 'a held class records nothing').toEqual([]);
+      expect(readAliases().classes.opus.id).toBe(X3);
+      expect(act('revert', T5).code).toBe(0);
+      expect(opus().hold, 'the second revert holds where the first did').toEqual({ at: T5, by: 'revert', model: X1 });
+      expect(opus().history).toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      // Released at X1 with the alias at X3: the settle records X1 to X3 once, with previous X1, the id the class was held
+      // at when that release lifted the hold.
+      release(T6);
+      expect(opus()['releasedHold']).toEqual({ model: X1, at: T6 });
+      expect(refresh(T7).body['moved']).toEqual([{ class: 'opus', from: X1, to: X3 }]);
+      expect(opus().history).toHaveLength(2);
+      expect(opus().history[1]).toMatchObject({ at: T7, from: X1, to: X3, ok: true });
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      expect(opus()['releasedHold']).toBeUndefined();
+    });
+
+    it('a revert after the alias moved holds at X2; the alias moves back to X2, and a second revert still holds at X2 (F1)', () => {
+      heldWhileAliasMoves();
+      release();
+      expect(act('revert', T3).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T3, by: 'revert', model: X2 });
+      expect(opus()['releasedHold']).toEqual({ model: X2, at: REL_AT });
+      plantCache(SUFFIX, 'cache-fixture', cacheJson(C4, { opus: X2 }, ROWS));
+      expect(refresh(T4).body['moved']).toEqual([]);
+      expect(readAliases().classes.opus.id).toBe(X2);
+      expect(act('revert', T5).code).toBe(0);
+      expect(opus().hold, 'the second revert holds where the first did').toEqual({ at: T5, by: 'revert', model: X2 });
+      expect(opus().history).toHaveLength(1);
+      // Released at X2 with the alias at X2: nothing moved, nothing recorded.
+      release(T6);
+      expect(refresh(T7).body['moved']).toEqual([]);
+      expect(opus().history).toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+    });
+
+    it('a second revert over the first one\'s hold at the held id reads no aliases file: an unreadable one does not move it (F1)', () => {
+      heldWhileAliasMoves();
+      release();
+      expect(act('revert', T3).code).toBe(0);
+      expect(opus().hold).toMatchObject({ by: 'revert', model: X2 });
+      fs.rmSync(aliasesFile());
+      fs.mkdirSync(aliasesFile());
+      const r = act('revert', T4);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(opus().hold).toEqual({ at: T4, by: 'revert', model: X2 });
+    });
+
     it('an older build reads a file carrying the evidence and keeps the field', async () => {
       // #3107's merge on main: the first build with the Anthropic arm, and none of this field.
       const OLDER = '6c8f52199c50b1a1848a026c8f7c4af9288c9355';
