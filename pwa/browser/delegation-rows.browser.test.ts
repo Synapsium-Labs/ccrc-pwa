@@ -568,9 +568,9 @@ describe.each(SKINS)('the focus around a worktree control\'s real sheet in %s (r
       const { ctx, page, errors, send } = await openSession(skin, theme, width);
       try {
         const attach = page.getByRole('button', { name: `Attach to… (${FOCUS_ROW})`, exact: true });
-        // The lone session's row carries a context marker (`ctxPct: 40`), a fact of its own: with it the row would stay. Cleared, its
-        // details hold its worktrees alone.
-        send('/ws/fleet', { type: 'fleet', sessions: SESSIONS.map((x) => ((x as { id: string }).id === SESSION_ID ? { ...x, ctxPct: null } : x)) });
+        // The lone session's row carries a context marker (`ctxPct: 40`) and a task tally, facts of its own: with either the row
+        // would stay. Cleared, its details hold its worktrees alone.
+        send('/ws/fleet', { type: 'fleet', sessions: SESSIONS.map((x) => ((x as { id: string }).id === SESSION_ID ? { ...x, ctxPct: null, tasks: null } : x)) });
         for (const key of [null, 'Tab'] as const) {
           send('/ws/fleet', only(DELEGATION.leases));
           await page.waitForTimeout(300);
