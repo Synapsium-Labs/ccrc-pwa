@@ -46,12 +46,27 @@ describe('the facts, written the way Claude Code writes them', () => {
     expect([formatElapsed(42_000), formatElapsed(725_000), formatElapsed(11_700_000), formatElapsed(187_200_000)])
       .toEqual(['42s', '12m5s', '3h15m', '2d4h']);
   });
-  it('a running row: workflow · running · phase · done/total agents, then N failed', () => {
-    expect(mainFacts(item(wf()))).toEqual(['workflow', 'running', 'phase Verify', '19/20 agents']);
-    expect(mainFacts(item(wf({ failed: 2 })))).toEqual(['workflow', 'running', 'phase Verify', '19/20 agents', '2 failed']);
+  it('a running workflow row: mainFacts is the kind alone; the state, phase, progress and failures are the state group (review 3099 F3)', () => {
+    expect(mainFacts(item(wf()))).toEqual(['workflow']);
+    expect(mainFacts(item(wf({ failed: 2 })))).toEqual(['workflow']);
+    strip([wf({ failed: 2 })]);
+    fireEvent.click(screen.getByRole('button', { name: /^Helpers/ }));
+    const row = document.querySelector('[data-helper-row="wf_00000000-aaa"]')!;
+    // The group is the state with its times: the state words, then the inline elapsed and the activity when the row has them.
+    const words = [...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent);
+    expect(words.slice(0, 4)).toEqual(['running', 'phase Verify', '19/20 agents', '2 failed']);
+    expect(words.length, 'elapsed (and the activity, when read) follow in the same group').toBeGreaterThan(4);
+    const groups = [...row.querySelectorAll('.helper-fact')].map((g) => g.textContent!.replace(/\u00A0/g, ' '));
+    expect(groups[0]).toBe('workflow');
+    expect(groups[1]!.startsWith('running · phase Verify · 19/20 agents · 2 failed')).toBe(true);
+    expect(row.querySelector('.helper-state .helper-elapsed-inline')).not.toBeNull();
   });
   it('an unread journal leaves the progress out of the row, never 0/0', () => {
-    expect(mainFacts(item(wf({ done: null, failed: null, total: null })))).toEqual(['workflow', 'running', 'phase Verify']);
+    expect(mainFacts(item(wf({ done: null, failed: null, total: null })))).toEqual(['workflow']);
+    strip([wf({ done: null, failed: null, total: null })]);
+    fireEvent.click(screen.getByRole('button', { name: /^Helpers/ }));
+    const row = document.querySelector('[data-helper-row="wf_00000000-aaa"]')!;
+    expect([...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent).slice(0, 2)).toEqual(['running', 'phase Verify']);
   });
 });
 

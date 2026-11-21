@@ -561,8 +561,8 @@ describe('on /accounts at 1280, in both skins, opened from a card, the document 
 // Review 940 O5's reach: the meter track's ring is an inset box-shadow (no layout), and the Helpers section on the session
 // screen (session helpers H2, D-8872, which replaced `WorkflowStrip` in place) draws a `Meter` per running workflow row, which
 // nothing had rendered. Its rows come from the session socket's `workflows` frame. Under the transcript the section is
-// collapsed by default and its glance draws no meter, so the block opens it first; at 1600 px and up in Refined the section
-// sits in the inspector rail, always open (review 3072 F1). `HELPER_METER` finds the track in either place.
+// collapsed by default and its glance draws no meter, so the block opens it first (review 3072 F1). `HELPER_METER` finds the
+// track once it is open.
 const HELPER_METER = '.helpers-strip .helper-bar .limit-track';
 const RING_SESSION = fleetSession({ id: 'project-a-lanes-ring', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workdir: '/w/project-a', workspace: 'lanes-ring', status: 'busy', bucket: 'working' });
 const RING_FIXTURE: AppFixture = { ...FIXTURE, fleetFrames: [{ type: 'fleet', sessions: [RING_SESSION] }] };
@@ -589,9 +589,8 @@ describe("the meter's inset ring reaches the Helpers section on the session scre
         await page.goto(`${server!.origin}/s/${RING_SESSION.id}`);
         const section = await page.waitForSelector('.helpers-strip', { timeout: 20_000 }).then(() => true, () => false);
         expect(section, "the session socket's workflows frame did not reach the Helpers section").toBe(true);
-        // In the column it opens from its head; in the rail it is already open and has no head of its own.
-        const head = page.locator('.chat-strips .helpers-strip button[aria-expanded="false"]');
-        if (await head.count() > 0) await head.first().click();
+        // Collapsed under the transcript: it opens from its head, which must be there.
+        await page.locator('.chat-strips .helpers-strip button[aria-expanded="false"]').first().click();
         const reached = await page.waitForSelector(HELPER_METER, { timeout: 20_000 }).then(() => true, () => false);
         expect(reached, 'the Helpers section drew no meter for a running workflow row').toBe(true);
         await page.waitForTimeout(300);

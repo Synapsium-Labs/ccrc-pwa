@@ -5170,8 +5170,124 @@ and 1920, is the programme's final gate, not this task's.
 changed module passes, every mutant of a new decision branch goes red or its disposition is recorded in the note, `tsc`
 passes for `server`, `pwa` and `ui`, and the PWA builds.
 
+**Dated note, 2026-11-21 (Task H3, review 3099 F8).** Three statements of this section went stale in H2's fix round and are
+corrected here, the code being the authority: `reports-held-for-drawn-rows`: the reader holds a report while its end fact is
+the fold's (`holdReports`), and the bound keeps the report of every row the last reading drew, whatever its `hasReport`, plus
+the newest `HELPER_KEPT_MAX` of the rest by end time (`boundReports`); it answers only for a row drawn with `hasReport`
+(`reportAnswer`). `report-answer-null`: besides an unknown or evicted id answered `report: null`, a stream answers nothing at
+all before its first reading (review 3072 F4), and the store asks again after that stream's first frame. The store bullet
+above: the store keeps an answer only for a row the frame still draws with `hasReport` and at the end the answer came for
+(`reportsFor`, review 3072 F2), and since H3 an answer, kept or dropped, ends the store's record of the ask (review 3099 F1).
+
 **Rollback.** A plain revert: the request is additive (an older server ignores it) and the answer is a new frame an older
 PWA's reducer ignores; the keep reverts to 30 s with the old constant.
+
+### Task H3: SessionDetails sheds its lists and its words (D-8875) — now
+
+**What.** C49's H3 row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4.4, §4.5, §11 Table 13's H3
+row; "Later" keeps `FleetSession.subagents` on the wire). With the Helpers section in the session panel (H2, #3148), the panel
+sheds what it replaces. Built red first: two test commits before the code, each case failing on `main` (the note lists them).
+
+- `pwa/src/session/SessionDetails.tsx` (L4, C3): no subagent button or list, no `N delegated` chip, no title of it and no
+  activity row. The entry list's bring-into-view (`bringIntoRail`, D-7784) and its tap bookkeeping had no other reader and
+  went with it. Review 2995 F2: the details hand their worktrees section their own render's answer to "is this region still
+  drawn" (`detailsStay`), so the focus a worktree control hands back when its row leaves is decided by the commit that
+  removes it.
+- `pwa/src/session/SessionWorktrees.tsx` (L4, C3): a presence on disk not measured is said once, in the section's head, in
+  the Archive's words (`presenceWord`: `presence on disk not measured for N tree(s)`); `detailsStay` replaces
+  `rowEndsWithThem`, and `NOTE_CLASS` is the section's own.
+- `pwa/src/session/sessionHeaderView.ts` (L1, C3): `detailsEndWithWorktrees` retired (its one reader was the prop above).
+- `pwa/src/fleet/sessionFacts.ts` (L1, C1): no `subagents` or `delegated` fact, field or input; `FactKey` loses both keys.
+- `pwa/src/fleet/SessionMeta.tsx` (L4, C1): the two toggles and their props go.
+- `pwa/src/fleet/delegationWords.ts` (L1, C1): `worktreeLine` says what made the worktree, its path and the worker it is via,
+  titled by the path, with no liveness word and no presence word. `activityLine`, `delegatedChip`, `activitiesStartedBy`,
+  `byOpened`, `ENTRIES_NOTE`, `ACTIVITY_WORD`, `WORKSPACE_WORD` and their types had no reader left and go;
+  `LIVENESS_QUALIFIER` stays as the census's list (below).
+- `pwa/src/screens/SessionScreen.tsx` (L4, C3): the entries are no longer read for the header.
+- `pwa/src/fleet/SessionLine.tsx`, `fleet.css`, `session/chat.css`, `skins/refined/refined.css`: the subagent list's
+  stand-down, the toggles' overlay and tap floors, the list's rules and the lamp's second variant selector, each with no
+  reader left; `chat.css` lets a worktree row's path wrap. `fleet.css` loses net lines; nothing grows past a cap.
+- The carries: `pwa/src/stores/session.ts` (review 3099 F1), `ui/src/components/workflow-strip.tsx` (F2, F3), the tests of
+  F4 and F5, and `pwa/browser/role-fact.browser.test.ts`'s two comments (review 2995 F6).
+
+**A worktree row's parts, each kept or dropped (the coordinator's ruling on review 2900 F17).**
+
+| Part | Kept or dropped | Why, in one line |
+|---|---|---|
+| What made it (`agent worktree`, `workflow worktree`, `worktree`, `attached worktree`) | kept | a fact of the tree the operator rules on: Not delegated answers whether it is delegated work, and Attach is offered only for an inferred one |
+| The path | kept, now the row's free-text part and its title, drawn whole (it wraps) | §4.4: the worktree's path |
+| The admin record | dropped from the words; kept in the controls' accessible names | the path names the worktree; the record keeps two rows' controls apart (F9 (f)) |
+| `via <label>` | kept | names the worker whose worktree it is, the session Attach would attach it to (`leaseParentOf`) |
+| works-on chip | kept | the tree holds another project's code: a fact of the tree |
+| `inferred` chip | kept | D-6999: the link rests on negative evidence, and it gates Attach |
+| creator chip (`Bash call …`) | kept | D-6999 has it beside `inferred` wherever the row is drawn; provenance, not liveness |
+| The liveness word and its sentence in the title | dropped | §4.4 and the ruling: no word the operator cannot act on |
+| The presence word (`unmeasured`) | dropped from the row; said once in the section's head | the ruling: said once, in words with no banned word |
+| The disposition (`worktree kept until …`, `moving to a run`, `moved to a run`) | kept | §4.4 |
+| The controls (Keep worktree, Attach to…, Not delegated) | kept | §4.4 |
+
+**The carries, each taken.** Review 3099 (H2 round 2): F1 (an answered or reset ask is forgotten: cases A and D), F2 (the
+coordinator's ruling: the two-line layout stays for a narrow section wherever it sits; a state group breaks only between its
+words, a no-break space before each `·` inside it, so a separator never starts a line; the real-Chrome split check lets a
+group take two lines and checks its words), F3 (a running workflow's `running`, phase, progress and failures are its state
+group, with its times), F4 (the meter block opens the strip with no condition; the rail wording is gone), F5 (a finished row's
+summary is prose outside the group; the misnamed case renamed), F6 and F7 (records, in the note), F8 (the dated note in H2's
+section above), F9 and F10 (records, in the note). Review 2995 (C51): F2 (the focus target, above, with its case and a second
+case the mutation run asked for), F6 (the two comments).
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8875** — `session-panel-sheds-broker-words`: Task H3, issued on 2026-11-21. The session panel draws no subagent or
+  recorded-entry count, toggle or list, and no word of the broker's liveness, and it departs from the spec in these places:
+  - `worktree-row-keeps-its-maker`: a worktree row also says what made it (`agent worktree` and its kin), beside the path,
+    disposition and controls §4.4 lists; the table above says why each part stays or goes.
+  - `path-replaces-admin-record`: the row's free-text part is the path, also its title, and in the worktrees section it
+    wraps anywhere instead of ending in D-7783's ellipsis: cut to one line, a long unbroken path sized Instrument's phone
+    header to its own length (measured: 42 and 72 px of sideways scroll at 360 and 390). The admin record stays only in the
+    controls' accessible names.
+  - `presence-in-the-section-head`: "said once in the panel head" is the worktrees section's own head line, in the Archive's
+    words (`presenceWord`), so the session panel and the Archive say it alike.
+  - `liveness-qualifier-kept-as-census`: `LIVENESS_QUALIFIER` stays, drawn by no page; its readers are the jsdom census
+    (`session-panel-sheds.test.tsx`) and the real-Chrome ones (`delegation-rows`, `session-panel-words`), which read its words
+    and sentences as what must not appear.
+  - `focus-target-from-the-committing-render` (review 2995 F2): `detailsEndWithWorktrees` retires; SessionDetails answers
+    from its own render, which also covers a desk narrowed to a phone behind a closed door.
+  - `asked-is-an-unanswered-ask` (review 3099 F1): `disconnect()` needs no clear of its own, because it drops `framed` and
+    the next stream's first frame clears the asks; its mutant is equivalent (the note).
+  - `narrow-section-two-lines-everywhere` (review 3099 F2): line 2 follows the section's width for elapsed as well as for
+    tokens, so the 1600 px rail draws the phone's two-line row; a state group wider than the line breaks only between its
+    words, and a separator never starts a line. This widens H2's `tokens-follow-the-section-width`.
+  - `running-workflow-state-group` (review 3099 F3): a running workflow's line 2 is `workflow`, then one state group of
+    `running`, its phase, its agents, its failures and its times; `mainFacts` names the kind alone.
+
+Spec corrections for the coordinator to fold: §10 and Table 5 (the two-line row is the narrow section's, in the rail too;
+the state group breaks between its words, never inside one); §4.4 (the row's maker stays; the presence line's home and
+words); §4.5 (the header's subagent and delegated facts leave the header's facts model too, `sessionFacts.ts`); Table 13's
+H3 row (the 2995 carries).
+
+**Spec amendments.** `docs/superpowers/specs/2026-11-02-delegation-visibility-design.md` and
+`docs/superpowers/specs/2026-10-04-delegation-broker-design.md` each carry a dated amendment: the session header's entry
+list and the liveness words a worktree row said are gone from the PWA.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H2's: each TypeScript file held
+as a Python module's text, each mutant written into a scratch copy of the tree under the session's temp root, its test files
+run through `ccrc test`, the original written back, the tree removed after the run): pass 1 ran 19 mutants, 17 killed; one
+survivor was a missing case (H3-5, added) and one was equivalent (`disconnect()`'s clear, removed from the code). At the tip,
+**18 mutants, 18 killed**. The table is in
+`docs/superpowers/programs/desktop-polish/h3.md`.
+
+**Looked at in the real app.** The production build in a real Chrome (`pwa/browser/session-panel-words.browser.test.ts`, new):
+the whole session panel, Helpers included, in Refined and Instrument, dark and light, at 360, 390, 1280, 1600 (the rail) and
+1920 px, every door opened; 20 of 20 green on this branch, and on `origin/main` 20 of 20 red at the census and green on every
+other check. The before and after pairs are under `docs/design/2026-11-19-session-helpers-design/h3/`, and the matrix is in
+the note and the PR. The first real-Chrome run found a defect of this task, fixed in it: a long unbroken path sized
+Instrument's phone header to its own length (`path-replaces-admin-record`).
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or its disposition is recorded in the note, `tsc` passes for `pwa` and `ui`, the PWA builds, and the PR body carries
+the matrix of "Acceptance (the matrix, per PR)" for the whole session panel, Helpers included.
+
+**Rollback.** A plain revert: nothing leaves the wire or the server, and `FleetSession.subagents` is still sent.
 
 ## Acceptance (the matrix, per PR)
 

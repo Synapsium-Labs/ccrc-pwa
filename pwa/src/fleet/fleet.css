@@ -1028,10 +1028,10 @@
    any future type-scale or line-height change instead of silently
    drifting off again.
 
-   A THIRD LINE breaks the premise this formula relies on, and there are
-   TWO of them, independently: .sess-ask (hookState 'waiting' + askSummary)
-   and .sess-subagent-list (the disclosure, once its toggle is tapped).
-   Either one puts the stack past the floor — label + gap + meta + gap +
+   A THIRD LINE breaks the premise this formula relies on: .sess-ask
+   (hookState 'waiting' + askSummary). (The subagent list was a second one,
+   until the row and then the session panel stopped drawing it: D-8771,
+   D-8875.) It puts the stack past the floor — label + gap + meta + gap +
    third line measures 51.5px today (18.75 + 2 + 15 + 2 + 13.75) against
    44px --tap-min — so .sess-body's auto height tracks its CONTENT instead
    of the floor and its justify-content:center has zero slack left to
@@ -1039,7 +1039,7 @@
    two-line formula's 4.125px. The base formula, left alone, still adds
    that 4.125px and the dot reads ~4px low.
 
-   Both selectors therefore share ONE variant below: the same formula with
+   It therefore takes ONE variant below: the same formula with
    a third line's height (--fs-2xs at --lh-tight) and its own 2px
    gap folded in, wrapped in max(0px, …) rather than left to go negative
    (-3.75px today) — negative would push the dot ABOVE the label's line
@@ -1047,19 +1047,18 @@
    keeps this tracking token changes correctly in EITHER direction: if a
    future type-scale shrinks the three-line stack back under 44px, max()
    recovers the real positive slack instead of silently drifting. The clamp
-   is also what makes ONE rule correct for a list of N rows and for a row
-   carrying BOTH extra lines: those stacks are taller still, so the formula
-   understates them, and an understated value below zero is exactly what
-   max(0px, …) already returns.
+   is also what makes ONE rule correct for a taller third line: that stack is
+   taller still, so the formula understates it, and an understated value
+   below zero is exactly what max(0px, …) already returns.
 
    NO TEST GUARDS THE MEASUREMENT: jsdom performs no layout and Vitest's
    `test.css` defaults to false (styles are stubbed, never applied) — see
    vite.config.ts's `test` block. What IS guarded, by fleet-css.test.ts
    reading this file as text, is that the variant's selector group covers
-   EVERY line-adding element — the miss that shipped in fix round 1, when
-   .sess-subagent-list arrived and only .sess-ask was listed here. Read
-   this comment before touching either rule, and add the selector here
-   whenever a fourth line joins. */
+   EVERY line-adding element — the miss that shipped in fix round 1, when the
+   subagent list arrived and only .sess-ask was listed here. Read this
+   comment before touching either rule, and add the selector here whenever
+   another line joins. */
 .sess-lamp {
   grid-column: 1;
   align-self: start;
@@ -1070,8 +1069,7 @@
     (var(--tap-min) - (var(--fs-base) * var(--lh-tight)) - 2px - (var(--fs-xs) * var(--lh-tight))) / 2
   );
 }
-.sess-line:has(.sess-ask) .sess-lamp,
-.sess-line:has(.sess-subagent-list) .sess-lamp {
+.sess-line:has(.sess-ask) .sess-lamp {
   margin-top: max(0px, calc(
     (var(--tap-min) - (var(--fs-base) * var(--lh-tight)) - 2px - (var(--fs-xs) * var(--lh-tight))
       - 2px - (var(--fs-2xs) * var(--lh-tight))) / 2
@@ -1099,13 +1097,13 @@
   line-height: var(--lh-tight);
 }
 
-/* Positioned WITH a z-index, for hit-testing rather than layout:
-   .sess-subagents' tap overlay below is absolutely positioned and reaches
-   ~4.5px up into this element's line box, and it would otherwise take those
-   taps — turning a tap on the bottom of the workspace name into a disclosure
-   toggle. `position: relative` alone is not enough: the overlay is also
-   positioned and comes LATER in tree order, so among z-index:auto siblings it
-   still wins. An explicit 1 is what puts the label back on top.
+/* Positioned WITH a z-index, for hit-testing rather than layout: a later
+   cell's absolutely positioned tap overlay that reaches up into this
+   element's line box would otherwise take those taps (the subagent count's
+   did, until the row stopped drawing it, D-8771). `position: relative` alone
+   is not enough: an overlay is also positioned and comes LATER in tree order,
+   so among z-index:auto siblings it still wins. An explicit 1 is what puts the
+   label back on top.
 
    Task 6 fix round 1: `display: flex` again (see `.sess-label`'s own note —
    this file used to be flex here, and went to `display: block` before this
@@ -1225,100 +1223,6 @@
    colour of its own (it inherits .sess-meta's ink-secondary), so it brings no
    new contrast pair with it. */
 .sess-graph {
-  font-family: var(--family-mono);
-  font-variant-numeric: tabular-nums;
-  flex: none;
-}
-
-/* The hook's last-reported subagent count — same quiet register as .sess-tally,
-   no colour of its own (inherits .sess-meta's ink-secondary). Task 7: a real
-   <button> now, so the declarations below are the button reset that keeps it
-   reading as one more meta cell (Tailwind preflight already zeroes the
-   margin/padding and inherits the font, but this file states its own resets
-   on .sess-open/.sess-actions too, and a cell that silently depended on
-   preflight would be the odd one out).
-
-   THE HIT AREA, which the visible box cannot be. Inheriting --fs-xs at
-   --lh-tight leaves a 15px-tall, ~22px-wide box for `⑂ 3` — the first
-   row-level button in this file to ship under --tap-min, and the worst place
-   for it: a thumb landing 3px low misses the button, hits .sess-body's click
-   forwarder (guarded only by `closest('button')`) and NAVIGATES, so the
-   operator who wanted to see which subagents are running loses the fleet
-   screen instead of getting nothing. Same invisible ::before overlay as
-   .sess-actions/.proj-card-add — but --tap-min WIDE and only --sp-6 (24px,
-   WCAG 2.2 SC 2.5.8's floor) TALL, and the asymmetry is the point: a 44px-
-   tall overlay reaches 14.5px up, over the whole of `.sess-open`'s own line
-   box, and taps on the bottom of the workspace name would toggle the
-   disclosure instead of opening the session. That is a WRONG control, which
-   is strictly worse than the near-miss it would be fixing. At 24px the
-   overlay reaches 4.5px — the 2px gap plus leading — and `.sess-open` is
-   given `position: relative` so it wins hit-testing over even that.
-
-   Growing the visible box instead is not available: .sess-meta is a flex row,
-   so real padding raises the whole line and puts .sess-lamp's centring
-   formula (see the block above .sess-lamp) ~4px out on every row in the
-   fleet, disclosure open or not. */
-.sess-subagents {
-  font-family: var(--family-mono);
-  font-variant-numeric: tabular-nums;
-  flex: none;
-  position: relative;
-  padding: 0;
-  background: none;
-  border: 0;
-  color: inherit;
-  font-size: inherit;
-  line-height: inherit;
-  cursor: pointer;
-}
-.sess-subagents::before {
-  content: '';
-  position: absolute;
-  /* Insets are NEGATIVE — the overlay grows out of a box smaller than the
-     target on both axes. Height off the cell's own line box (the same
-     --fs-xs × --lh-tight .sess-lamp's formula uses), so it tracks a
-     type-scale change instead of drifting; width off the cell's real width,
-     which no token knows, hence `left`/`right` in terms of --tap-min. */
-  top: calc((var(--fs-xs) * var(--lh-tight) - var(--sp-6)) / 2);
-  bottom: calc((var(--fs-xs) * var(--lh-tight) - var(--sp-6)) / 2);
-  left: calc((100% - var(--tap-min)) / 2);
-  right: calc((100% - var(--tap-min)) / 2);
-}
-
-/* The disclosure's own rows — a sibling LINE in .sess-body's flex column
-   rather than a cell inside the .sess-meta the tally sits in. Unlike
-   .sess-tally/.sess-cleanup-fact/.sess-subagents above, .sess-subagent-row
-   below sets its own colour rather than inheriting .sess-meta's (it is not a
-   descendant of it) — same shape as .sess-ask further down. On the selected
-   row it keeps that colour on the accent tint, where the gate measures it
-   (D-5101).
-   A real <ul> now that a <div>, not a <button>, is the ancestor: list-style
-   and the list's own margin/padding are zeroed here rather than trusted to
-   preflight, same reasoning as .sess-subagents above. */
-.sess-subagent-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 2px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.sess-subagent-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp-2);
-  padding-left: var(--sp-4);
-  font-size: var(--fs-2xs);
-  color: var(--ink-tertiary);
-}
-.sess-subagent-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sess-subagent-elapsed {
   font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
@@ -1613,7 +1517,8 @@
    or buys the tap floor.
 
    THE FLOOR IS PADDING PLUS A CANCELLING NEGATIVE MARGIN, deliberately NOT
-   `.sess-subagents`' `::before` overlay, and the difference is the cell's
+   the `::before` overlay a narrow chip takes (the subagent count's was one,
+   until it left the row, D-8771), and the difference is the cell's
    width. That formula insets LEFT and RIGHT by `(100% - var(--tap-min)) / 2`
    — negative on a narrow chip, which is what grows it — but `.sess-held` is
    the row's one WIDE, shrinkable cell, where the same arithmetic is POSITIVE

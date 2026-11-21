@@ -137,7 +137,7 @@ export const OWNED = [
   // The wordmark's typed entrance (`wordmark.css`): the word's width animation and the underscore's blink.
   'wordmark-type', 'wordmark-cursor',
   // The Helpers section's line 2 (WorkflowStrip's STATE_GROUP): a fact, and the state with its times, as one
-  // unbreakable group, selected by `workflow-strip.css`.
+  // group that breaks only between its words, selected by `workflow-strip.css`.
   'helper-fact',
 ];
 

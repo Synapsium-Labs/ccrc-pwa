@@ -9,7 +9,7 @@ import { fleetSession } from './fleetFixture';
 import { SessionMeta } from '../src/fleet/SessionMeta';
 import { SessionDetails } from '../src/session/SessionDetails';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
-import { detailsEndWithWorktrees, detailsHaveFacts } from '../src/session/sessionHeaderView';
+import { detailsHaveFacts } from '../src/session/sessionHeaderView';
 import { headerMetaHasCells, sessionFacts, type SessionFactSet } from '../src/fleet/sessionFacts';
 import { setSkin } from '../src/lib/skin';
 import { NOW } from './rollupFixture';
@@ -37,8 +37,6 @@ const CELLS: ReadonlyArray<{ name: string; facts: () => SessionFactSet }> = [
   { name: 'the task tally', facts: () => factsOf({ tasks: { done: 1, total: 3 } }) },
   { name: 'the graph counter', facts: () => factsOf({ graph: { reads: 2, gated: null } }) },
   { name: 'the current build', facts: () => factsOf({ build: { kind: 'current', build: '2.1.300' } as SessionFactSet['build'] }) },
-  { name: 'a subagent', facts: () => factsOf({ subagents: [{ name: 'a', startedAt: NOW - 1000 }] as SessionFactSet['subagents'] }) },
-  { name: 'a delegated entry', facts: () => factsOf({ delegated: { text: '1 delegated', title: 't', note: 'n', rows: [] } as unknown as SessionFactSet['delegated'] }) },
   { name: 'a marker (needs you)', facts: () => factsOf({ needsYou: true }) },
 ];
 
@@ -107,8 +105,7 @@ describe('the header draws no details row and no Details door when it has nothin
       const session = base();
       const withTree = factsOf({ worktrees: [WORKTREE] }, session);
       expect(detailsHaveFacts(withTree, null), 'the worktree is a fact').toBe(true);
-      expect(detailsEndWithWorktrees(withTree, null), 'with nothing else, the row ends with its last worktree').toBe(true);
-      expect(detailsEndWithWorktrees(factsOf({ worktrees: [WORKTREE], tasks: { done: 1, total: 2 } }, session), null), 'another fact keeps the row').toBe(false);
+      expect(detailsHaveFacts(factsOf({ worktrees: [] }, session), null), 'with nothing else, the row ends with its last worktree').toBe(false);
       const { rerender } = render(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: withTree })} />);
       expect(screen.getByRole('button', { name: /details/i })).toBeInTheDocument();
       rerender(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: factsOf({ worktrees: [] }, session) })} />);

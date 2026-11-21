@@ -98,18 +98,10 @@ export interface SessionMetaProps {
   mode: 'card' | 'header';
   /** Where a tap on the hold opens the run board, or `null` for nowhere (Task 5). */
   onOpenRun: (() => void) | null;
-  /** The subagent disclosure's state (header mode; the list renders beside the row). */
-  subagentsOpen?: boolean;
-  subagentsId?: string;
-  onToggleSubagents?: () => void;
-  /** The delegated-entries disclosure's state (header mode; `SessionDetails` draws the list beside the row). */
-  delegatedOpen?: boolean;
-  delegatedId?: string;
-  onToggleDelegated?: () => void;
 }
 
 export function SessionMeta({
-  facts: f, mode, onOpenRun, subagentsOpen = false, subagentsId, onToggleSubagents, delegatedOpen = false, delegatedId, onToggleDelegated,
+  facts: f, mode, onOpenRun,
 }: SessionMetaProps): ReactNode {
   const card = mode === 'card';
   const session = f.session;
@@ -183,7 +175,6 @@ export function SessionMeta({
     );
   }
 
-  const subagentList = f.subagents;
   return (
     <span className="sess-meta" style={metaStyle}>
       {/* The programme and wave are the coordination row's link in the header (`SessionCoordination`), so here
@@ -211,34 +202,7 @@ export function SessionMeta({
       {f.graph !== null && <GraphChip reads={f.graph.reads} gated={f.graph.gated} />}
       {/* D-8276: the Claude Code build of a session on the newest one (one behind says it in its marker below). */}
       {f.build.kind === 'current' && <span className="sess-unmeasured" data-build="current">{buildText(f.build.build)}</span>}
-      {/* The subagent tally, a disclosure: a REAL `<button>`; `aria-controls` only while the list exists. */}
-      {subagentList !== null && subagentList.length > 0 && (
-        <button
-          type="button"
-          className="sess-subagents"
-          aria-expanded={subagentsOpen}
-          aria-controls={subagentsOpen ? subagentsId : undefined}
-          aria-label={`${subagentList.length} subagent${subagentList.length === 1 ? '' : 's'}`}
-          onClick={onToggleSubagents}
-        >
-          ⑂ {subagentList.length} subagent{subagentList.length === 1 ? '' : 's'}
-        </button>
-      )}
-      {/* Delegation visibility (spec §5): every entry this session started, a disclosure in the subagent toggle's shape: a
-          REAL `<button>`, `aria-controls` only while the list exists (`SessionDetails` draws it). Header only: the fleet
-          list's row draws no count of these entries (D-8771). */}
-      {f.delegated !== null && (
-        <button
-          type="button"
-          className="sess-subagents"
-          aria-expanded={delegatedOpen}
-          aria-controls={delegatedOpen ? delegatedId : undefined}
-          title={f.delegated.title}
-          onClick={onToggleDelegated}
-        >
-          {f.delegated.text}
-        </button>
-      )}
+      {/* No subagent and no delegated disclosure (session helpers H3, D-8875): the Helpers section lists and counts them. */}
       {/* Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
           above, the header's own restart chip). */}
       {markers(f).filter((m) => m.key !== 'spawn' && m.key !== 'restarted').map((m) => (

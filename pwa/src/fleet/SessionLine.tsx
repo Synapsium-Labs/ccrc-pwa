@@ -199,16 +199,13 @@ function SessionLineView({
         className="sess-body"
         onClick={(e) => {
           const el = e.target as HTMLElement;
-          // Two stand-downs. Any real control on the row (`closest('button')`
+          // One stand-down: any real control on the row (`closest('button')`
           // covers every one this row ever grows, keyboard activation
           // included — Enter/Space on a <button> dispatches a click that
-          // bubbles here). And the expanded subagent list, which is CONTENT,
-          // not dead space: it renders inside this block, so a tap on a
-          // subagent's name used to navigate away from the disclosure the
-          // operator had just opened, and a truncated name could not even be
-          // selected to read.
+          // bubbles here). The row draws no subagent list any more (D-8771,
+          // and the session panel none since H3, D-8875), so the second
+          // stand-down for one went with it.
           if (el.closest('button') !== null) return;
-          if (el.closest('.sess-subagent-list') !== null) return;
           open();
         }}
       >

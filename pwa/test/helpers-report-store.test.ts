@@ -222,3 +222,44 @@ describe('the store: the request, and the reset sites', () => {
     expect((store.getState() as unknown as { reports: Reports }).reports).toEqual({});
   });
 });
+
+describe('review 3099 F1: `asked` is an ask with no answer yet', () => {
+  it('A: an answer dropped because the row has no report any more forgets the ask; the row back at the same end asks again', () => {
+    const f = fakeSocket();
+    const store = createSessionStore('cc-h2-i', { makeSocket: () => f.ws });
+    const ask = (id: string): void => (store.getState() as unknown as { requestHelperReport(id: string): void }).requestHelperReport(id);
+    store.getState().connect();
+    f.open();
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] });
+    f.sent.length = 0;
+    ask('a1');
+    expect(f.sent).toHaveLength(1);
+    // The row is continued (no report) before the answer lands: the answer is dropped as for no row.
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1', { hasReport: false })] });
+    store.getState().apply(answer('a1', 'x'));
+    expect((store.getState() as unknown as { reports: Reports }).reports).toEqual({});
+    // It returns at the same id and end.
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] });
+    ask('a1');
+    expect(f.sent, 'the answered ask is forgotten, so the row asks again').toHaveLength(2);
+    store.getState().disconnect();
+  });
+
+  it('D: a backlog onto another transcript resets the helpers and the asks; the same row coming back asks again', () => {
+    const f = fakeSocket();
+    const store = createSessionStore('cc-h2-j', { makeSocket: () => f.ws });
+    const ask = (id: string): void => (store.getState() as unknown as { requestHelperReport(id: string): void }).requestHelperReport(id);
+    store.getState().connect();
+    f.open();
+    store.getState().apply({ type: 'backlog', uuid: 'u', events: [], offset: 0, file: '/t/a.jsonl', missing: false });
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] });
+    f.sent.length = 0;
+    ask('a1');
+    expect(f.sent).toHaveLength(1);
+    store.getState().apply({ type: 'backlog', uuid: 'u2', events: [], offset: 0, file: '/t/b.jsonl', missing: false });
+    store.getState().apply({ type: 'workflows', workflows: [], agents: [helper('a1')] }); // the new reader restates the same row
+    ask('a1');
+    expect(f.sent, 'the reset forgot the ask').toHaveLength(2);
+    store.getState().disconnect();
+  });
+});

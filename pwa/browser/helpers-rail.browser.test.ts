@@ -9,7 +9,8 @@
 //   - "360: collapsed it is the head and two lines; open it is at most half the viewport and one scroll body": §10's
 //     phone layout, with the head at least 44 px and no sideways page scroll;
 //   - review 3072 F6 and F7: at 360 a row's elapsed time is in line 2 and line 1 draws none, at 1280 it is on line 1 and
-//     line 2 draws none; at either width no fact, and no state with its times, splits across two lines.
+//     line 2 draws none; at either width no fact splits across two lines, and a state with its times wider than the line
+//     breaks only between its words, never inside one (review 3099 F2 and F3, session helpers H3).
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // --maxWorkers=2 browser/helpers-rail.browser.test.ts )`.
@@ -89,12 +90,13 @@ async function openSession(v: AppView) {
   return opened;
 }
 
-/** Where each running row draws its elapsed time, and every fact group that the width split across two lines. */
+/** Where each running row draws its elapsed time, and every fact, or word of a state group, that the width split across two
+ *  lines. A state group itself may take two lines, between its words (review 3099 F2: the coordinator's ruling). */
 const lines = (page: Page): Promise<{ line1: boolean[]; line2: boolean[]; split: string[] }> => page.evaluate(() => {
   const shown = (e: Element | null): boolean => e !== null && getComputedStyle(e).display !== 'none' && e.getClientRects().length > 0;
   const rows = [...document.querySelectorAll('.chat-strips .helpers-strip .helpers-main [data-helper-row]')];
   // A group is an inline block: it spans two lines when its box is taller than one line of its own text.
-  const split = [...document.querySelectorAll('.chat-strips .helpers-strip .helper-fact')]
+  const split = [...document.querySelectorAll('.chat-strips .helpers-strip .helper-fact:not(.helper-state), .chat-strips .helpers-strip .helper-state .helper-word')]
     .filter((g) => shown(g) && g.getBoundingClientRect().height > 1.5 * parseFloat(getComputedStyle(g).lineHeight)).map((g) => g.textContent ?? '');
   return {
     line1: rows.map((r) => shown(r.querySelector(':scope > .helper-elapsed'))),

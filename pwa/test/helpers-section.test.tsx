@@ -99,8 +99,9 @@ const open = (section: HTMLElement): void => { fireEvent.click(within(section).g
 function line2At(row: Element, width: number): string {
   const facts = row.querySelector('.helper-facts')!.cloneNode(true) as Element;
   for (const hidden of facts.querySelectorAll(width < 480 ? '.helper-tokens' : '.helper-elapsed-inline')) hidden.remove();
-  return facts.textContent!;
+  return facts.textContent!.replace(/\u00A0/g, ' '); // the no-break spaces before a group's separators are pinned apart (review 3099 F2)
 }
+const plain = (t: string | null): string => (t ?? '').replace(/\u00A0/g, ' ');
 
 for (const width of [360, 1280]) {
   describe(`${width} px: the section sits in the strips under the transcript`, () => {
@@ -154,7 +155,7 @@ for (const width of [360, 1280]) {
         ? 'subagent · general-purpose · Sonnet · high · running · 12m5s · active 20s ago'
         : 'subagent · general-purpose · Sonnet · high · running · active 20s ago · ↓ 41k');
       expect(row.querySelector(':scope > .helper-elapsed')!.textContent, 'line 1\'s elapsed (the desk draws it)').toBe('12m5s');
-      expect(row.querySelector('.helper-elapsed-inline')!.textContent, 'line 2\'s elapsed (the phone draws it)').toBe(' · 12m5s');
+      expect(plain(row.querySelector('.helper-elapsed-inline')!.textContent), 'line 2\'s elapsed (the phone draws it)').toBe(' · 12m5s');
     });
 
     it('Table 5: past ten minutes quiet, the last activity reads "quiet 11m", in the muted ink, with no state change', () => {
@@ -197,9 +198,9 @@ for (const width of [360, 1280]) {
       fireEvent.click(toggle);
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       const done = s.section()!.querySelector('[data-helper-row="today\'s session panel"]')!;
-      expect(done.querySelector('.helper-facts')!.textContent).toBe('done · 4m12s · header facts only');
+      expect(plain(done.querySelector('.helper-facts')!.textContent)).toBe('done · 4m12s · header facts only');
       const failed = s.section()!.querySelector('[data-helper-row="the mockup"]')!;
-      expect(failed.querySelector('.helper-facts')!.textContent).toBe('failed · 1m3s · headless browser not found');
+      expect(plain(failed.querySelector('.helper-facts')!.textContent)).toBe('failed · 1m3s · headless browser not found');
     });
 
     it('Table 6: stopped, finished and a workflow\'s final words', () => {
@@ -212,7 +213,7 @@ for (const width of [360, 1280]) {
       });
       open(s.section()!);
       fireEvent.click(within(s.section()!).getByRole('button', { name: /Finished · last 10 min \(3\)/ }));
-      const facts = (id: string): string => s.section()!.querySelector(`[data-helper-row="${id}"] .helper-facts`)!.textContent!;
+      const facts = (id: string): string => plain(s.section()!.querySelector(`[data-helper-row="${id}"] .helper-facts`)!.textContent);
       expect(facts('stop')).toBe('stopped · 22s');
       expect(facts('fin')).toBe('finished · 6m0s');
       expect(facts('wf_00000000-bbb')).toBe('done · 12/12 agents · 6m10s');
@@ -345,11 +346,42 @@ describe('review 3072 F6 and F7: line 2 breaks only between its groups, and the 
     const s = screenAt(1280, { agents: [RUNNING[0]!] });
     open(s.section()!);
     const row = s.section()!.querySelector('[data-helper-row="server helper sources"]')!;
-    const groups = [...row.querySelectorAll('.helper-fact')].map((g) => g.textContent);
+    const groups = [...row.querySelectorAll('.helper-fact')].map((g) => plain(g.textContent));
     expect(groups).toEqual(['subagent · general-purpose', 'Sonnet', 'high', 'running · 12m5s · active 20s ago']);
     expect(row.querySelector('.helper-state .helper-activity')).not.toBeNull();
     // Inside the group each word is its own block, so a group wider than the line breaks between words, never inside one.
     expect([...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent)).toEqual(['running', '12m5s', 'active 20s ago']);
+  });
+  it('review 3099 F2: every " · " inside a state group is preceded by a no-break space, so a separator ends a line and never starts one', () => {
+    for (const frame of [{ agents: [RUNNING[0]!] }, { workflows: [wf('wf_00000000-aaa')] }]) {
+      const s = screenAt(1280, frame);
+      open(s.section()!);
+      const groups = [...s.section()!.querySelectorAll('.helper-state')];
+      expect(groups.length).toBeGreaterThan(0);
+      for (const g of groups) {
+        const t = g.textContent!;
+        expect(t, 'a group with a separator').toContain('·');
+        expect(t.match(/(?<!\u00A0)·/g), `a "·" not after U+00A0 in "${t}"`).toBeNull();
+        expect(t.match(/\u00A0· /g)!.length).toBe(t.split('·').length - 1);
+      }
+      s.unmount();
+    }
+  });
+  it('review 3099 F2: no rule on a state group or its words lets a word split inside', () => {
+    expect(css).not.toMatch(/\.helper-state[^{]*\{[^}]*(overflow-wrap:\s*anywhere|word-break:\s*break-all)/);
+    expect(rule('.helper-word'), 'today\'s rule: only a word wider than the whole line wraps, by overflow-wrap').not.toMatch(/word-break|break-word/);
+    expect(rule('.helper-word')).toContain('display: inline-block');
+    expect(css).toContain('.helper-fact,\n  .helper-word {'); // the shared rule: a fact or word is a block; only a word wider than the line wraps
+  });
+  it('review 3099 F5: a finished Agent row draws its summary as the wrappable prose part, outside the state group', () => {
+    const s = screenAt(1280, { agents: [DONE] });
+    open(s.section()!);
+    fireEvent.click(within(s.section()!).getByRole('button', { name: /Finished/ }));
+    const row = s.section()!.querySelector('[data-helper-row="today\'s session panel"]')!;
+    const prose = row.querySelector('.helper-prose')!;
+    expect(prose.textContent).toBe('header facts only');
+    expect(prose.closest('.helper-state')).toBeNull();
+    expect(plain(row.querySelector('.helper-state')!.textContent)).toBe('done · 4m12s');
   });
   it('at the desk the inline elapsed is hidden; under the phone container query line 1\'s elapsed hides, line 2\'s shows and the tokens hide', () => {
     expect(rule('.helper-elapsed-inline')).toContain('display: none');
@@ -358,7 +390,7 @@ describe('review 3072 F6 and F7: line 2 breaks only between its groups, and the 
     expect(rule('.helper-elapsed-inline', phone)).toContain('display: inline');
     expect(rule('.helper-tokens', phone)).toContain('display: none');
   });
-  it('review 3072 F14: " · " stands before the tokens and between the report links, as the mockup draws them', () => {
+  it('review 3072 F14: " · " stands before the tokens, as the mockup draws it (review 3099 F5: the report links\' separator is pinned elsewhere)', () => {
     const s = screenAt(1280, { agents: [RUNNING[0]!] });
     open(s.section()!);
     expect(s.section()!.querySelector('.helper-tokens')!.textContent).toBe(' · ↓ 41k');
