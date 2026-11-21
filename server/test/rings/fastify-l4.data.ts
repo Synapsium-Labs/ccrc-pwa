@@ -26,6 +26,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/endRequest.ts': { reason: "the end-request route's handler (D-8076), a session's ask to the operator", since: '2026-11-08' },
   'server/src/coord/coordCallsRoute.ts': { reason: "the coordinator call record's HTTP route (D-8126)", since: '2026-11-09' },
   'server/src/coord/programmeRemainingRoute.ts': { reason: "the coordinator's remaining-work door (Overlord W2 remaining work A)", since: '2026-11-16' },
+  'server/src/coord/delegationBackfillRoutes.ts': { reason: "the one-time pass's door over the broker's unmeasured records: the dry run's GET and the pass's or undo's POST, session-gated (session helpers S2, D-8874)", since: '2026-11-21' },
   'server/src/coord/decisionModelRoutes.ts': { reason: "the operator's decision-model doors: the read, arm, off, ceiling and the key's PUT and DELETE (Overlord W2, decision model B)", since: '2026-11-17' },
   'server/src/operatorModel/nameListRoutes.ts': { reason: "the private-name list's upload door and status read (Overlord W2, private names B)", since: '2026-11-17' },
   'server/src/continuity/quizRoutes.ts': { reason: "the replay quiz's record door and its rule door (Overlord W1a quiz record)", since: '2026-11-17' },
