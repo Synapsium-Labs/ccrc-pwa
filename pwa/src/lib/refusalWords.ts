@@ -9,7 +9,7 @@ import { SWAP_REFUSALS, TESTBOX_ADMIN_ROUTE_REFUSALS, TESTBOX_PARITY_REQUIRED_SE
 import { TESTBOX_ADMIN_CODE_SENTENCE } from '../../../shared/testbox-admin';
 import type { LinkingRefusal } from '../../../shared/linking';
 import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
-import { ANSWER_MAX } from '../../../shared/ledgers';
+import { ANSWER_MAX, type LinearItemAct } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
 
 /** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
@@ -436,9 +436,24 @@ export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found' | 'migration-
   'not-found': 'The server does not know that item. Reload the page.',
   'migration-in-flight': 'The team\'s next migration has started, so this one can no longer be put back. Nothing was changed.',
 };
-/** `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
-export const linearItemErrorText = (err: unknown): string =>
-  refusalText(err, { ...LINEAR_ITEM_REFUSAL_TEXT, 'not-open': LEDGER_REFUSAL_TEXT['not-open'] }) ?? linkingErrorText(err);
+/** The words an item act's refusal says the same for every act: `unreachable` is the owner's measurement failing on Hand and
+ *  Return alike (nothing was changed; D-8186, D-8808); `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
+const LINEAR_ITEM_ALL_ACTS_TEXT = (): Readonly<Record<string, string>> => ({
+  ...LINEAR_ITEM_REFUSAL_TEXT,
+  'not-open': LEDGER_REFUSAL_TEXT['not-open'],
+  unreachable: 'The Linear owner could not be measured, so nothing was changed. Try again.',
+});
+/** The sentences only one act says, read through `refusalText` like the rest. Return's two owner refusals keep the map and the
+ *  note (the item stays open); Hand's `no-linear-owner` stays in `LINKING_REFUSAL_TEXT`. */
+const LINEAR_ITEM_ACT_TEXT: Readonly<Partial<Record<LinearItemAct, Readonly<Record<string, string>>>>> = {
+  return: {
+    'no-linear-owner': "This project has no Linear owner to return the map to, so the map and your note are kept. Name a Linear owner for the project, then return it again.",
+    'team-ambiguous': 'More than one connected Linear workspace has this team key, so the map and your note are kept. Choose the project\'s workspace in Settings, then return it again.',
+  },
+};
+/** An item act's refusal in words: the act's own sentences first, then the words every act shares, then the linking sentences. */
+export const linearItemErrorText = (err: unknown, act: LinearItemAct): string =>
+  refusalText(err, { ...LINEAR_ITEM_ALL_ACTS_TEXT(), ...(LINEAR_ITEM_ACT_TEXT[act] ?? {}) }) ?? linkingErrorText(err);
 
 /** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
  *  code). `null`: the answer did not carry it, so the fixed sentence above is what is said. */
