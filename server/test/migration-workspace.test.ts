@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanMigRigs, entry, leaf, migRig, SLUG } from './migrationRig.js';
 import { seedSlot, WS } from './linearProxyRig.js';
+import type { LinearStoreRead } from '../src/linear/store.js';
 
 afterEach(cleanMigRigs);
 
@@ -160,6 +161,36 @@ describe('the console view is the project row\'s own', () => {
     r.db.prepare("UPDATE linear_migrations SET state = 'failed'").run();
     r.plan.insertMigration({ workspaceId: 'ws-gone-2', teamKey: 'QQQ', project: 'project-x', now: r.t.now });
     expect(await r.mig.stateOfProject({ teamKey: 'QQQ', workspaceId: null })).toMatchObject({ state: 'not-migrated' });
+  });
+});
+
+// F1 (D-8186, D-8808): a row whose routing cannot be measured says so, never "Not migrated".
+describe('the console view when the routing is not measured', () => {
+  type Mode = 'ok' | 'slot-unreadable' | 'no-listing';
+  const rigWith = async (mode: () => Mode): ReturnType<typeof migRig> => migRig({ routing: (store: LinearStoreRead): LinearStoreRead => {
+    if (mode() === 'no-listing') return { kind: 'unreadable', code: 'EIO' };
+    if (mode() === 'slot-unreadable' && store.kind === 'listed') return { ...store, slots: store.slots.map((s) => ({ ...s, key: { kind: 'unreadable', code: 'EIO' } })) };
+    return store;
+  } });
+  it('an unpinned row with one slot record unreadable is unmeasured even when a migration exists for its key', async () => {
+    let mode: Mode = 'ok';
+    const r = await rigWith(() => mode);
+    r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toMatchObject({ state: 'migrating' });
+    mode = 'slot-unreadable';
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+  });
+  it('an unpinned row with no listing at all is unmeasured too', async () => {
+    const r = await rigWith(() => 'no-listing');
+    r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null }, null)).toEqual({ state: 'unmeasured', at: null, itemId: null });
+  });
+  it('a pinned row needs no routing, and a row with no team key has none to measure', async () => {
+    const r = await rigWith(() => 'no-listing');
+    r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.a.id })).toMatchObject({ state: 'migrating' });
+    expect(await r.mig.stateOfProject({ teamKey: null, workspaceId: null })).toMatchObject({ state: 'not-migrated' });
   });
 });
 

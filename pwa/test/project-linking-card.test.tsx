@@ -1085,10 +1085,10 @@ describe('an Overlord link (D-8809, D-8808)', () => {
 
 // Reshape in Linear (Linear hierarchy design §11.1, D-8186, Task 5.1): the button, its confirm, the re-read and the fixed sentences.
 describe('Reshape in Linear', () => {
-  const STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back'] as const;
+  const STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back', 'unmeasured'] as const;
   const reshape = (n: string): HTMLElement | null => within(rowOf(n)).queryByRole('button', { name: HIERARCHY_TEXT.reshape });
 
-  it('the control shows only when not migrated or put back (each of the five states)', async () => {
+  it('the control shows only when not migrated or put back (each of the six states)', async () => {
     for (const state of STATES) {
       cleanup();
       await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state })]));

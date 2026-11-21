@@ -395,6 +395,16 @@ export function hierarchyStateOf(m: MigrationFacts | null): { state: HierarchySt
   }
 }
 
+/** F1 (D-8186, D-8808): the console state of a project row. An unpinned row with a team key whose routing is not measured (no
+ *  listing, or an unreadable slot) says `unmeasured`, never "not-migrated"; a pinned row needs no routing, and a row with no
+ *  team key has none to measure. `routingMeasured` is the caller's reading of `measuredProjectTeam` for the row. */
+export function hierarchyStateOfRow<M extends MigrationFacts & { id: number; workspaceId: string; teamKey: string }>(
+  row: { teamKey: string | null; workspaceId: string | null }, migrations: readonly M[], slots: readonly LinearRouteSlot[] | null, routingMeasured: boolean,
+): { state: HierarchyState; at: number | null; itemId: number | null } {
+  if (row.teamKey !== null && row.workspaceId === null && !routingMeasured) return { state: 'unmeasured', at: null, itemId: null };
+  return hierarchyStateOf(migrationOfProject(row, migrations, slots));
+}
+
 /** Put back is offered until the team's next migration starts (§10.4): a later row for the same team refuses it. */
 export function putBackVerdict(m: MigrationFacts, rows: readonly MigrationFacts[]):
   { ok: true } | { ok: false; word: 'migration-in-flight' | 'item-act-mismatch'; detail: string } {
