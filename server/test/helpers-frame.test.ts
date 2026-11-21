@@ -92,9 +92,9 @@ const ARM_NONE: AgentArm = { agents: [], omitted: 0, unmeasured: null, known: 0,
 const meta = (o: Partial<HelperMeta> = {}): HelperMeta => ({
   path: 'agent', agentType: 'Explore', description: 'look around', model: 'model-a', effort: 'high', finished: false, lastWriteAt: NOW - 5_000, tokens: 1200, ...o,
 });
-const armOf = (metas: Record<string, HelperMeta>, facts: Record<string, HelperIdFacts> = {}, listed: string[] = Object.keys(metas)): AgentArm =>
+const armOf = (metas: Record<string, HelperMeta>, facts: Record<string, HelperIdFacts> = {}, listed: string[] = Object.keys(metas), now = NOW): AgentArm =>
   decideAgentHelpers({
-    now: NOW,
+    now,
     roster: { kind: 'usable', at: AT, entries: listed.map((id, i) => ({ id, name: 'Explore', startedAt: NOW - 60_000 + i })) },
     proc: { kind: 'live', startedAt: NOW - 3_600_000 },
     facts: new Map(Object.entries(facts)),
@@ -180,7 +180,7 @@ describe('characterization: the gate H1b deleted from `checkWorkflows` agrees wi
   }
 });
 
-describe('a worst-case Agent row\'s serialised size, pinned where the frame is built (review 2961 F5)', () => {
+describe('serialized row sizes on three capped-text fixtures (review 2961 F5)', () => {
   // Every text field at its cap; an ASCII summary at its byte cap; 13-digit times. Measured on this branch (H1a's note
   // measured 895, 1,677 and 1,287 bytes on a row of its own with other numbers in it), and pinned so that a cap that
   // grows, or a field added to the row, is a decision someone makes, not a drift.
@@ -201,10 +201,42 @@ describe('a worst-case Agent row\'s serialised size, pinned where the frame is b
   it('supplementary-plane characters: 1,193 bytes a row (the cap counts UTF-16 code units, so a pair is two of them)', () => {
     expect(rowBytes(worst('😀'))).toBe(1_193);
   });
-  it('so the Agent arm\'s 84 rows are at most about 130 KiB of JSON at the 3-byte worst', () => {
-    const rows = HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX;
-    expect(rows).toBe(84);
-    expect(rows * rowBytes(worst('€'))).toBeLessThan(140 * 1024);
+});
+
+describe('the serialized Agent arm bound includes JSON escapes (review 3014 F4)', () => {
+  const wideNumber = -0.0000010000000000000002; // 25 JSON bytes, the longest shape for a JS Number
+  const idOf = (n: number): string => `a${n.toString().padStart(63, '0')}`;
+  // C0, C1 and lone surrogate controls add no bytes. Of the remaining characters, € uses the most JSON bytes per
+  // UTF-16 unit in labels; escaped backslashes use the most JSON bytes per UTF-8 byte in summaries.
+  const padded = (n: number): string => '\u0000\u0085\ud800' + '€'.repeat(n);
+  const wideMeta = (): HelperMeta => ({
+    ...meta(),
+    ...parseHelperMeta(JSON.stringify({ description: padded(HELPER_DESCRIPTION_MAX), agentType: padded(HELPER_LABEL_MAX), model: padded(HELPER_LABEL_MAX), effort: padded(HELPER_LABEL_MAX) }))!,
+    lastWriteAt: wideNumber, tokens: wideNumber,
+  });
+  const wideFacts = (final: boolean): HelperIdFacts => ({
+    launch: { at: wideNumber, model: null, async: true, durationMs: null },
+    end: final ? { outcome: 'stopped', at: wideNumber, summary: '\u0000\udc00' + '\\'.repeat(HELPER_SUMMARY_MAX_BYTES), hasReport: false, from: 'notification' } : null,
+  });
+  const bytes = (o: unknown): number => Buffer.byteLength(JSON.stringify(o), 'utf8');
+
+  it('bounds the longest final row at 1905 bytes including a fully escaped summary', () => {
+    const id = idOf(1);
+    const rows = frameOf({ arm: armOf({ [id]: wideMeta() }, { [id]: wideFacts(true) }, [], 0) }).frame.agents!;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.summary).toBe('\\'.repeat(200));
+    expect(bytes(rows[0])).toBe(1905);
+  });
+
+  it('caps the 84-row frame below 134000 bytes before adding any legacy workflow rows', () => {
+    const open = HELPER_LISTED_MAX + HELPER_NONFINAL_MAX;
+    const ids = Array.from({ length: open + HELPER_KEPT_MAX }, (_, n) => idOf(n));
+    const arm = armOf(Object.fromEntries(ids.map((id) => [id, wideMeta()])),
+      Object.fromEntries(ids.map((id, n) => [id, wideFacts(n >= open)])), ids.slice(0, HELPER_LISTED_MAX), 0);
+    const { frame } = frameOf({ arm, readEvery: { refreshed: 6, of: 64 } });
+    expect(frame.agents).toHaveLength(84);
+    expect(frame.agentsUnmeasured).toEqual({ why: 'unseen', helpers: 32 });
+    expect(bytes(frame)).toBeLessThan(134_000);
   });
 });
 
@@ -212,6 +244,20 @@ describe('the reads\' two small parsers (cases added after the first mutation ro
   it('parseHelperMeta: `finished` is true only when the file says `true`; a truthy other value is not an end', () => {
     expect(parseHelperMeta(JSON.stringify({ finished: true }))?.finished).toBe(true);
     for (const v of [1, 'true', 'yes', {}, null]) expect(parseHelperMeta(JSON.stringify({ finished: v }))?.finished).toBe(false);
+  });
+
+  it('parseHelperMeta: display text loses controls and lone surrogates, but keeps letters and paired emoji', () => {
+    expect(parseHelperMeta(JSON.stringify({ agentType: 'Ex\u0000plore', description: '\u001bα😀\ntext\u007f', model: 'm\ud800', effort: '\u0085\udc00' })))
+      .toEqual({ agentType: 'Explore', description: 'α😀text', model: 'm', effort: null, finished: false });
+  });
+
+  it('a launch model and summary cannot bring controls or lone surrogates back onto a row', () => {
+    const f: HelperIdFacts = {
+      launch: { at: NOW - 90_000, model: 'm\u001b\ud800😀', async: true, durationMs: null },
+      end: { outcome: 'done', at: NOW - 1_000, summary: 's\u0000\udc00😀', hasReport: true, from: 'notification' },
+    };
+    expect(frameOf({ arm: armOf({ a1: meta({ model: null }) }, { a1: f }, []) }).frame.agents?.[0])
+      .toMatchObject({ model: 'm😀', summary: 's😀' });
   });
 
   it('parseHelperMeta: an array or a scalar is not a meta; an empty string field is not measured (null)', () => {

@@ -426,7 +426,7 @@ export class SessionStream implements FeedSubscriber {
     if (reading.hook !== null) this.applyHook(reading.hook);
     if (this.stopped) return;
     const at = this.resolvedFor;
-    if (reading.tasks !== null && at !== null) await this.checkWorkflows(at.file, at.proc, reading);
+    if (reading.tasks !== null && at !== null) await this.checkWorkflows(at.file, at.proc, reading.helperHook);
     if (this.stopped) return;
     if (reading.mail !== null) this.applyMail(reading.mail);
   }
@@ -550,7 +550,7 @@ export class SessionStream implements FeedSubscriber {
    *  roster is `rosterInputOf` the feed's raw hook read and its read time. This method only carries them. A new session
    *  dir rebuilds the reader, which forgets the old dir's helpers with its workflows.
    *  Read-only: nothing here starts, stops or changes a workflow or a helper. */
-  private async checkWorkflows(file: string, proc: Proc, hook: Pick<FeedReading, 'hook' | 'hookAt'> | null = null): Promise<void> {
+  private async checkWorkflows(file: string, proc: Proc, hook: FeedReading['helperHook'] = null): Promise<void> {
     if (this.stopped) return;
     const dir = sessionDirOf(file);
     if (this.workflows?.sessionDir !== dir) {
@@ -560,7 +560,7 @@ export class SessionStream implements FeedSubscriber {
     const now = Date.now();
     const facts = this.helperFacts;
     this.helperFacts = [];
-    const roster = rosterInputOf(hook?.hook ?? null, hook?.hookAt ?? null, now, HOOKSTATE_FRESH_MS);
+    const roster = rosterInputOf(hook?.raw ?? null, hook?.at ?? null, now, HOOKSTATE_FRESH_MS);
     const { workflows: read, helpers } = await this.workflows.readAll(proc, now, { roster, facts });
     if (this.stopped) return;
     const { due, frame } = helpersFrame({

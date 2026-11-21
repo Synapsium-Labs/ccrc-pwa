@@ -1,11 +1,11 @@
 // Session helpers H1b (D-8862): the hook roster's READ TIME reaches the decision (review 2900 F6, review 2961 F7). Figure 2's
 // `launched` compares a launch result's time with the roster's read time (`HookReading.at`), which the feed used to drop:
-// `FeedReading.hook` was the bare raw read. Now the reading carries `hookAt` beside it: the published copy's `at`, else the
+// `FeedReading.hook` remains the bare raw read. The helper arm carries the published copy's `at`, else the
 // moment the feed's own fallback read returned. And the feed is the ONE place that orders them: a reading never carries a
 // roster read earlier than one it already handed on (one memory per feed), so the decision's drop witness never compares a
 // roster with an older one. Neutral fixture names.
 //
-// RED FIRST: committed before the code, against origin/main, where a reading has no `hookAt`.
+// RED FIRST: committed before the code, against origin/main, where a reading has no `helperHook.at`.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -54,14 +54,14 @@ const subscribe = async (bus: Bus, first: () => void = () => {}): Promise<{ read
   return { readings, poll: () => feed.poll() };
 };
 
-describe('FeedReading.hookAt: the roster\'s read time (review 2900 F6)', () => {
+describe('FeedReading.helperHook: the roster\'s read time (review 2900 F6)', () => {
   it('a fresh published copy: the reading carries its `at` beside its raw read', async () => {
     const bus = new Bus();
     const at = Date.now() - 1_500;
     const raw = roster(['a1']);
     const { readings } = await subscribe(bus, () => { bus.emit(`hook:${ID}`, { at, uuid: UUID, raw }); });
     expect(readings).toHaveLength(1);
-    expect(readings[0]!.hookAt).toBe(at);
+    expect(readings[0]!.helperHook?.at).toBe(at);
     expect(readings[0]!.hook).toBe(raw);
   });
 
@@ -73,29 +73,31 @@ describe('FeedReading.hookAt: the roster\'s read time (review 2900 F6)', () => {
     const { readings } = await subscribe(new Bus());
     const after = Date.now();
     expect(readings[0]!.hook?.ok).toBe(true);
-    expect(readings[0]!.hookAt).not.toBeNull();
-    expect(readings[0]!.hookAt!).toBeGreaterThanOrEqual(before);
-    expect(readings[0]!.hookAt!).toBeLessThanOrEqual(after);
-    expect(readings[0]!.hookAt!).toBeGreaterThanOrEqual(readings[0]!.startedAt);
+    expect(readings[0]!.helperHook?.at).not.toBeNull();
+    expect(readings[0]!.helperHook!.at).toBeGreaterThanOrEqual(before);
+    expect(readings[0]!.helperHook!.at).toBeLessThanOrEqual(after);
+    expect(readings[0]!.helperHook!.at).toBeGreaterThanOrEqual(readings[0]!.startedAt);
   });
 
   it('a session that did not resolve reads no hook state and so carries no read time', async () => {
     const readings: FeedReading[] = [];
     await feedFor(deps, new Bus(), ID).join({ onReading: async (r) => { readings.push(r); } }, null);
     expect(readings[0]!.hook).toBeNull();
-    expect(readings[0]!.hookAt).toBeNull();
+    expect(readings[0]!.helperHook).toBeNull();
   });
 });
 
-describe('the feed hands readings on in nondecreasing roster read time (review 2961 F7)', () => {
-  it('a published copy OLDER than the one already handed on is not handed on: the newer read stands, its time with it', async () => {
+describe('only the helper roster has nondecreasing read time (review 2961 F7)', () => {
+  it('an older publication reaches the raw hook consumers but not the helper roster', async () => {
     const bus = new Bus();
     const newer = Date.now() - 1_000;
     const { readings, poll } = await subscribe(bus, () => { bus.emit(`hook:${ID}`, { at: newer, uuid: UUID, raw: roster(['a1', 'a2']) }); });
-    bus.emit(`hook:${ID}`, { at: newer - 5_000, uuid: UUID, raw: roster(['a1']) });
+    const olderRaw = roster(['a1']);
+    bus.emit(`hook:${ID}`, { at: newer - 5_000, uuid: UUID, raw: olderRaw });
     await poll();
-    expect(readings.map((r) => r.hookAt)).toEqual([newer, newer]);
-    expect(readings[1]!.hook).toEqual(readings[0]!.hook);
+    expect(readings.map((r) => r.helperHook?.at)).toEqual([newer, newer]);
+    expect(readings[1]!.helperHook).toBe(readings[0]!.helperHook);
+    expect(readings[1]!.hook).toBe(olderRaw);
   });
 
   it('a later copy is handed on; an equal time is the same read and is handed on as it is', async () => {
@@ -106,8 +108,8 @@ describe('the feed hands readings on in nondecreasing roster read time (review 2
     await poll();
     bus.emit(`hook:${ID}`, { at: t + 1_000, uuid: UUID, raw: roster(['a3']) });
     await poll();
-    expect(readings.map((r) => r.hookAt)).toEqual([t, t, t + 1_000]);
-    const listed = (r: FeedReading): string[] => (r.hook?.ok ? r.hook.state.subagents.map((s) => s.id ?? '') : []);
+    expect(readings.map((r) => r.helperHook?.at)).toEqual([t, t, t + 1_000]);
+    const listed = (r: FeedReading): string[] => (r.helperHook?.raw.ok ? r.helperHook.raw.state.subagents.map((s) => s.id ?? '') : []);
     expect(readings.map(listed)).toEqual([['a1'], ['a1', 'a3'], ['a3']]);
   });
 
@@ -119,7 +121,7 @@ describe('the feed hands readings on in nondecreasing roster read time (review 2
     await poll();
     // the other uuid's copy is not this stream's: the feed reads its own file (absent here), stamped now
     expect(readings[1]!.hook).toEqual({ ok: false, reason: 'absent' });
-    expect(readings[1]!.hookAt!).toBeGreaterThanOrEqual(t);
+    expect(readings[1]!.helperHook!.at).toBeGreaterThanOrEqual(t);
   });
 });
 
@@ -138,7 +140,7 @@ describe('the order and the stamp, pinned after the first mutation round', () =>
     bus.emit(`hook:${ID}`, { at: t - 2_000, uuid: other, raw: rawB });
     await feed.poll();
     expect(readings[1]!.hook).toBe(rawB);
-    expect(readings[1]!.hookAt).toBe(t - 2_000);
+    expect(readings[1]!.helperHook?.at).toBe(t - 2_000);
   });
 
   it('the feed\'s own read is stamped when it RETURNED, not when the reading began', async () => {
@@ -155,6 +157,6 @@ describe('the order and the stamp, pinned after the first mutation round', () =>
     deps = { ...deps, io: slow };
     const { readings } = await subscribe(new Bus());
     expect(readings[0]!.hook?.ok).toBe(true);
-    expect(readings[0]!.hookAt! - readings[0]!.startedAt).toBeGreaterThanOrEqual(50);
+    expect(readings[0]!.helperHook!.at - readings[0]!.startedAt).toBeGreaterThanOrEqual(50);
   });
 });

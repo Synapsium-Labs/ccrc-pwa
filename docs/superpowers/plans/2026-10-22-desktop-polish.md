@@ -4649,9 +4649,9 @@ characterization pins in the note.
   guard is gone (review 2961 F6, review 2978 F5). A single-definition case pins both holders.
 - `server/src/hookstate.ts` (L3, C1): the roster keeps its optional `id`; one that fails the rule reads as absent, never as a
   malformed state. `server/src/fleet.ts` (L3, C1) strips it, so `FleetSession.subagents` and the state cache are unchanged.
-- `server/src/sessionFeed.ts` (L4, C3): `FeedReading.hookAt`, the roster's read time (the published copy's `at`, else the
-  moment the feed's own read returned), and the feed hands readings on in nondecreasing `hookAt` per identity: an older read
-  is not handed on, the newer one stands (review 2900 F6, review 2961 F7).
+- `server/src/sessionFeed.ts` (L4, C3): `FeedReading.helperHook` pairs the roster with its read time (the published copy's
+  `at`, else the moment the fallback read returned). The helper roster alone is ordered per identity; every other hook
+  consumer gets the latest read, as before (reviews 2900 F6, 2961 F7 and 3014 F3).
 - `server/src/transcript/tail.ts` (L3, C3): the tailer's second output, `HelperFact[]`, emitted as `helpers` beside the
   chunk's events, and the backlog's facts from its whole window (`BacklogRead.helpers`, absent when none).
 - `server/src/workflows/read.ts` (L3, C3; its header now says L3): `SessionHelpers`, the reads BY ID with the helper tier
@@ -4659,11 +4659,12 @@ characterization pins in the note.
   `lastActivityAt` on every workflow row, the newest write the reader measured (its journal's or a running agent's
   transcript's).
 - `server/src/workflows/model.ts` (L1, C3): `rosterInputOf` (the raw hook read and its time into the decision's roster, each
-  `HelpersUnmeasured` reason told apart), `parseHelperMeta`, `lastLineTime`, `isAgentHelper` (the decision's own agent rule,
-  exported so the reader spends its tier on the same ids), and `helpersFrame` (the frame, gated by `frameDue`).
-- `server/src/sessionws.ts` (L4, C3): `checkWorkflows` carries the feed's raw hook read and its time, the tailer's facts and
-  the session dir to the reader, and sends what `helpersFrame` decides; its inline gate is deleted (review 2961 F9), pinned
-  first in a characterization case that it agreed with `frameDue` on every input it had. Seven net code lines of its 40.
+  `HelpersUnmeasured` reason told apart), `orderHelperHook`, `parseHelperMeta`, `lastLineTime`, `workflowLastActivity`,
+  `isAgentHelper` (the agent rule the decision and reader share), and `helpersFrame` (the frame, gated by `frameDue`).
+- `server/src/sessionws.ts` (L4, C3): `checkWorkflows` carries the ordered roster read, the tailer's facts and the session
+  dir to the reader, and sends what `helpersFrame` decides. The characterization table compares the old inline gate with
+  `frameDue` on all 16 inputs before deleting it (review 2961 F9). It copies the old gate and needs the new frame builder,
+  so it is not a suite that loads on main (review 3014 F8). Seven net code lines of its 40.
 - `shared/api.ts` (L0, K): the `workflows` member is the intersection with `HelperFrameMembers` (`agents?`, `agentsUnmeasured?`,
   `readEvery?`, defined in `shared/workflows.ts`), two existing lines edited, zero net code lines, by co-edit with the holder
   of its claim (the holder's consent of 2026-11-20).
@@ -4671,23 +4672,24 @@ characterization pins in the note.
   `snapshotOf`, replaced with every frame (absent is none), and cleared with the workflow rows at the three client reset
   sites (a backlog onto another transcript, the initial state, `disconnect()`). On the server, `sendBacklogAndTail` restates
   the frame (its gate resets, as before) and restarts the facts from the backlog's, and a new session dir rebuilds the reader,
-  which forgets the old dir's helpers with its workflows.
+  which forgets the old dir's helpers with its workflows. **H2:** Table 11's absence draws nothing; it cannot distinguish
+  an older server from a current server with no helper rows (review 3014 F13). There is no new protocol marker.
 
-**The carries, each taken or left.** Review 2900: F6 taken (`hookAt`, its test); F14 taken as the split below. Review 2961: F7
-taken (the feed stamps its own read and orders readings per identity: one memory per feed); F6 taken; F5 taken (a worst-case
-row pinned where the frame is built: 801 bytes of JSON for ASCII text, 1,585 for 3-byte characters, 1,193 for
-supplementary-plane characters, on this task's fixture; the 84-row arm about 130 KiB at the 3-byte worst); F9 taken; F10c taken (the hold below).
+**The carries, each taken or left.** Review 2900: F6 taken (the helper roster's read stamp, its test); F14 taken as the split
+below. Review 2961: F7 taken (only the helper roster is ordered per identity, one memory per feed); F6 taken; F5 taken (the
+serialized Agent arm bound below); F9 taken; F10c taken (the hold below).
 Review 2978: F1 taken (two characterization pins: an unmeasured process with a later listing reads running; an unlisted helper
 whose meta was written after its end keeps its end); F2 taken (a pin for a sibling-first envelope, and the H1a note's rows
 corrected: that mutant is not equivalent); F3 taken as a comment and a residual (below), the memory's shape kept; F5 taken; F4
-and F6 left, records the coordinator folds.
+and F6 left, records the coordinator folds. Review 3014: F1–F5 taken; F6 and F7 corrected in the records; F8 clarified, not
+moved (the gate is unchanged this round); F9 and F10 taken; F11 left (rotation cursor unchanged; churn can defer a row);
+F12 gains a behavioral clock-step test, while the historical reds and the PWA fallback test are unchanged; F13 noted for H2.
 
 **Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1a's kind of adapter: each TypeScript file held
-as a module's text, each mutant run in a scratch copy of the tree): 94 mutants of the new branches in ten files, 92 killed and
-2 equivalent (the parser's prefilter, a cost cut; the store's snapshot members, which the reducer only writes). The first
-round left 26 missed cases (4 in the model's parsers, 17 in the reader's tier, 2 in the feed, 3 in the stream's wiring); each
-got a case and the second round killed it. Review 2978's own mutants (F1's N4 and N3, F2's tag prefix) are killed by the new
-pins. The tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
+as a module's text, each mutant run in a scratch copy of the tree): the initial round measured 94, with 92 killed, one
+accepted non-equivalent survivor (the prefilter on JSON-escaped input the writer does not emit) and one equivalent survivor
+(the reducer's snapshot members). The review fix adds 15 killed mutants, including the five review 3014 F5 cases; the
+initial and fix-round tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
 
 **Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
 
@@ -4699,15 +4701,21 @@ pins. The tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
   - `agent-arm-beside-the-workflow-read`: the spec moves `SessionWorkflows.read`'s early return "inside the workflow arm"; H1b
     leaves `read` as the workflow arm, unchanged, and adds the Agent arm as a sibling reader (`SessionHelpers`) that
     `SessionWorkflows.readAll` runs regardless of it.
-  - `finished-held-until-its-last-write` (review 2961 F10c): a meta that says `finished` is handed to the decision as not
-    finished until the reader has read the helper transcript's last write (or found it unreadable). Meanwhile the row reads
-    what else is measured (running, when the roster lists it), so a finished row is never drawn with no end time and drawn
-    again. A transcript that cannot be read releases the hold: the row is decided with no end time, drawn once, and not
-    retried.
-  - `tier-costs-as-built`: step 5's "one tail read" costs two of the budget (a stat for the size, then the read); the first
-    meta re-stat of a helper also reads its meta (its first read stored no stat), once per helper.
-  - `hook-order-owned-by-the-feed` (review 2961 F7): the ordering is the feed's (`ordered`, per identity), not a check in the
-    decision's memory; the feed's own read is stamped when it returned.
+  - `finished-held-until-its-last-write-attempt` (reviews 2961 F10c and 3014 F1): a meta that says `finished` is held until
+    the reader attempts the last-write measurement. Meanwhile the row reads what else is measured (running when listed).
+    A failed stat or range read releases the hold on that reading, with no last write or end time; the final row can be
+    drawn once and the final read is not retried.
+  - `tier-costs-as-built` (review 3014 F2): step 4 re-stats open helper metas and listed ids whose meta was missing. The
+    first re-stat also wants a read (the first meta read stored no stat). A changed stat whose read does not fit is saved;
+    the read leads step 4 next time. Step 5 attempts any final helper's unread last write or one whose meta says `finished`,
+    not only those first seen final. Reserve one call for due step 4 and two for due step 5 (stat and a nonempty range),
+    inside the same 12-call budget.
+  - `hook-order-applies-only-to-the-helper-roster` (reviews 2961 F7 and 3014 F3): the feed holds one ordered helper roster
+    per active identity via `model.ts#orderHelperHook`. The fallback is stamped on return. The hook ask and other readers
+    keep the latest raw read even after the wall clock steps back.
+  - `helper-display-text-json-bound` (review 3014 F4): strip controls and lone surrogates from display text, including
+    transcript-derived model labels and summaries, not reports. A final row is at most 1,905 serialized bytes; the frame
+    with no legacy workflow rows is below 134,000 bytes even with Agent qualifiers and JSON escaping.
   - `no-hook-read-is-unreadable`: a reading that carries no hook read (only a direct call, today) gives the roster
     `unreadable`, never an empty listing.
   - `omitted-stays-off-the-wire` (H1a's `omitted-and-known-leave-the-arm`): `AgentArm.omitted` is not put on the frame; it has
@@ -4721,12 +4729,14 @@ pins. The tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
     newer ids read `unlisted` (no end claimed) rather than left out. The comment in `seenDrops` says so; the memory's shape is
     kept, because the case needs a reset and a continued helper's new start inside one 2 s reading.
 
-Spec corrections for the coordinator to fold: §3.1 (the split; the Agent arm as a sibling reader); §5's helper tier (the hold
-and the two costs above) and its frame bound (the pinned row sizes); Table 12 (`sessionFeed.ts` carries the read time; the
-agent rule `isAgentHelper` in `model.ts`); Table 13's H1b row (less the start scan and the report request) and an H1c row.
+Spec corrections for the coordinator to fold: §3.1 (the split; the Agent arm as a sibling reader; `frameDue` from
+`helpersFrame`, not `workflowsFrame`); Table 7 and §5 (the start-scan guarantee waits for H1c); §5's helper tier (hold,
+listed meta retry, final attempts and reservations above) and its frame-size sentence (the serialized Agent arm bound);
+Table 12 (`sessionFeed.ts` carries the ordered roster read; the Agent rule stays in `model.ts`); Table 13's H1b row (less the
+start scan and the report request) and an H1c row.
 
 **Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
-goes red (or is named equivalent in the note), `tsc` passes for `server`, its tests and `pwa`.
+goes red or its disposition is recorded in the note, `tsc` passes for `server`, its tests and `pwa`.
 
 **Rollback.** A plain revert: the frame's new members are additive (an older PWA ignores them), and the roster's `id` never
 leaves the server.

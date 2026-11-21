@@ -282,10 +282,10 @@ function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[]
 const sameTranscript = (was: string | null | undefined, now: string | null | undefined): boolean =>
   typeof was === 'string' && was !== '' && was === now;
 
-/** Pure reducer over the session stream — one message in, next snapshot out. */
 /** H1b (D-8862): the helper members as none, fresh each time, where every reset site clears them with the workflow rows. */
 const noHelpers = (): Pick<SessionState, 'agents' | 'agentsUnmeasured' | 'readEvery'> => ({ agents: [], agentsUnmeasured: null, readEvery: null });
 
+/** Pure reducer over the session stream — one message in, next snapshot out. */
 export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): SessionSnapshot {
   switch (msg.type) {
     case 'backlog': {

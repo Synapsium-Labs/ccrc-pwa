@@ -45,7 +45,7 @@ const counted = (inner: FleetIO): Counted => {
     readFileFromBytesMeasured: async (p, o, m, ...rest) => {
       calls.push({ op: 'range', file: name(p) });
       ranges.push({ file: name(p), offset: o, max: m });
-      return inner.readFileFromBytesMeasured(p, o, m, ...rest);
+      return io.fail('range', name(p)) ? { ok: false, reason: 'unreadable' } : inner.readFileFromBytesMeasured(p, o, m, ...rest);
     },
   };
   return io;
@@ -257,6 +257,69 @@ describe('the helper tier: at most HELPER_READS_PER_TICK reads a reading, spent 
     expect(finishedAt).toBe(RESTAT_EVERY);
   });
 
+  it.each([{ count: 11, growing: false }, { count: 6, growing: true }])(
+    'steps 4 and 5 make progress beside $count open helpers (growing: $growing)', async ({ count, growing }) => {
+      const ids = Array.from({ length: count }, (_, n) => `b${n}`);
+      for (const id of ids) { seedMeta(id); seedTranscript(id, plainLine(NOW - 10_000)); }
+      const io = counted(localIO);
+      const reader = new SessionHelpers(io, S);
+      for (let tick = 1; tick <= RESTAT_EVERY; tick++) await read(reader, listed(ids));
+
+      const finalId = 'f1';
+      seedMeta(finalId, { finished: true });
+      seedTranscript(finalId, plainLine(NOW - 2_000));
+      // At the first due reading, step 4 can stat but has no slot to read that meta. Step 5 gets its two calls.
+      io.calls.length = 0;
+      if (growing) for (const id of ids) grow(id, plainLine(NOW - 5_000));
+      const first = await read(reader, listed([...ids, finalId]));
+      const calls = helperCalls(io);
+      expect(calls.length).toBeLessThanOrEqual(12);
+      expect(calls.filter((c) => c.file === 'agent-b0.meta.json')).toEqual([{ op: 'stat', file: 'agent-b0.meta.json' }]);
+      expect(calls.slice(-2)).toEqual([{ op: 'stat', file: 'agent-f1.jsonl' }, { op: 'range', file: 'agent-f1.jsonl' }]);
+      expect(first.arm.agents.find((a) => a.id === finalId)).toMatchObject({ state: 'finished', endedAt: NOW - 2_000 });
+
+      io.calls.length = 0;
+      if (growing) for (const id of ids) grow(id, plainLine(NOW - 4_000));
+      await read(reader, listed([...ids, finalId]));
+      expect(helperCalls(io).length).toBeLessThanOrEqual(12);
+      expect(helperCalls(io).filter((c) => c.file === 'agent-b0.meta.json')).toEqual([{ op: 'read', file: 'agent-b0.meta.json' }]);
+
+      const reRead = new Set(['agent-b0.meta.json']);
+      for (let k = 2; k < 2 * count; k++) {
+        if (growing) for (const id of ids) grow(id, plainLine(NOW - 3_000 + k));
+        io.calls.length = 0;
+        await read(reader, listed([...ids, finalId]));
+        expect(helperCalls(io).length).toBeLessThanOrEqual(12);
+        for (const c of helperCalls(io)) if (c.op === 'read' && c.file.endsWith('.meta.json')) reRead.add(c.file);
+      }
+      expect(reRead).toEqual(new Set(ids.map((id) => `agent-${id}.meta.json`)));
+    },
+  );
+
+  it('step 4 defers a range-budget-edge meta read instead of making a thirteenth call', async () => {
+    const ids = Array.from({ length: 6 }, (_, i) => `b${i}`);
+    for (const id of ids) { seedMeta(id); seedTranscript(id, plainLine(NOW - 10_000)); }
+    const io = counted(localIO);
+    const reader = new SessionHelpers(io, S);
+    for (let tick = 1; tick <= RESTAT_EVERY; tick++) await read(reader, listed(ids));
+    for (const id of ids) grow(id, plainLine(NOW - 5_000));
+    io.calls.length = 0;
+    await read(reader, listed(ids));
+    expect(helperCalls(io)).toHaveLength(12);
+    expect(helperCalls(io).at(-1)).toEqual({ op: 'stat', file: 'agent-b0.meta.json' });
+  });
+
+  it('step 4 discovers a listed id whose meta was absent and later appeared', async () => {
+    const io = counted(localIO);
+    const reader = new SessionHelpers(io, S);
+    const roster = listed(['a1']);
+    expect((await read(reader, roster)).arm.agents).toEqual([]);
+    seedMeta('a1');
+    for (let tick = 1; tick < RESTAT_EVERY; tick++) await read(reader, roster);
+    const { arm } = await read(reader, roster);
+    expect(arm.agents).toEqual([expect.objectContaining({ id: 'a1', state: 'running' })]);
+  });
+
   it('(5) a helper first seen already final costs one tail read for its last write, and nothing after', async () => {
     seedMeta('f1', { finished: true });
     seedTranscript('f1', plainLine(NOW - 70_000) + plainLine(NOW - 20_000));
@@ -433,12 +496,13 @@ describe('the tier\'s finality, re-stats, eviction and tail reads (cases added a
     await read(r, listed(ids));        // six metas, three transcripts (p0..p2); the rotation's cursor at p3
     await read(r, listed(ids));        // p3..p5 read, p0..p2 stat'ed; the cursor back at p3
     for (const id of ids) grow(id, plainLine(NOW - 2_000));
+    seedMeta('p1', { finished: true });
     seedMeta('p2', { finished: true });
-    // p2 drops (older survivors listed): its meta is re-read (finished), and of the eleven reads left, p3, p4, p5, p0 and
-    // p1 are read and p2 only stat'ed: its new write is not read this reading
-    const held = await read(r, listed(['p0', 'p1', 'p3', 'p4', 'p5']));
+    // Both drop behind p0. Step 3 spends eight slots on p3, p4, p5 and p0; step 5 has room for p1, but not p2.
+    const held = await read(r, listed(['p0', 'p3', 'p4', 'p5']));
+    expect(held.arm.agents.find((a) => a.id === 'p1')).toMatchObject({ state: 'finished', endedAt: NOW - 2_000 });
     expect(held.arm.agents.find((a) => a.id === 'p2')?.state).not.toBe('finished');
-    const next = await read(r, listed(['p0', 'p1', 'p3', 'p4', 'p5']));
+    const next = await read(r, listed(['p0', 'p3', 'p4', 'p5']));
     expect(next.arm.agents.find((a) => a.id === 'p2')).toMatchObject({ state: 'finished', endedAt: NOW - 2_000 });
   });
 });
@@ -482,7 +546,29 @@ describe('a finished row whose last write is read one reading late is held, not 
     expect([...drawn.keys()].sort()).toEqual([...ids].sort());
   });
 
-  it('a transcript that cannot be read does not hold the row forever: it is decided with no end time (drawn once)', async () => {
+  it('a repeated range failure releases a finished row on the first attempt even when the stat succeeds', async () => {
+    seedMeta('k1', { finished: true });
+    seedTranscript('k1', plainLine(NOW - 10_000));
+    const io = counted(localIO);
+    io.fail = (op, file) => op === 'range' && file === 'agent-k1.jsonl';
+    const r = new SessionHelpers(io, S);
+    const first = await read(r, listed(['k1']));
+    expect(first.arm.agents).toEqual([expect.objectContaining({ id: 'k1', state: 'finished', endedAt: null, lastActivityAt: null })]);
+    expect(io.ranges.map((call) => call.file)).toEqual(['agent-k1.jsonl']);
+    expect((await read(r, listed(['k1']))).arm.agents).toEqual([]);
+    expect(io.ranges).toHaveLength(1);
+  });
+
+  it('an empty finished transcript does not issue a zero-length range call', async () => {
+    seedMeta('k1', { finished: true });
+    seedTranscript('k1', '');
+    const io = counted(localIO);
+    const { arm } = await read(new SessionHelpers(io, S), listed(['k1']));
+    expect(arm.agents).toEqual([expect.objectContaining({ id: 'k1', state: 'finished', endedAt: null })]);
+    expect(io.ranges).toEqual([]);
+  });
+
+  it('a failed stat releases a finished row with no end time (drawn once)', async () => {
     seedMeta('k1', { finished: true });
     const r = new SessionHelpers(localIO, S);
     const first = await read(r, listed(['k1']));

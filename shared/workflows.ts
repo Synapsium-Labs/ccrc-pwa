@@ -181,12 +181,10 @@ export const HELPER_FINISHED_KEEP_MS = 600_000;
 /** The most finished rows kept per arm, the newest. */
 export const HELPER_KEPT_MAX = 20;
 
-// THE BOUNDS OF THE AGENT ARM (review 2900 F9). The frame's Agent arm is at most
-// HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX = 84 rows. Each text field is capped by the unit named
-// below, so the bytes of a row depend on the text (review 2961 F5, measured on a row with every field at its cap and
-// serialised as JSON): ASCII text, 895 bytes a row (73 KiB for 84 rows); 3-byte characters, 1,677 bytes (138 KiB);
-// supplementary-plane characters, 1,287 bytes (106 KiB). No byte cap is added: no frame size limit is read anywhere
-// on the path, and the one that frames bytes is H1b's to pin where the frame is built.
+// THE BOUNDS OF THE AGENT ARM (reviews 2900 F9, 3014 F4): at most 64 non-final rows and 20 final rows. After removing
+// controls and lone surrogates, display text costs at most 3 JSON bytes per UTF-16 unit, and a summary costs at most
+// twice its UTF-8 bytes after JSON escaping. The frame with no workflow rows is below 134,000 bytes, including the
+// Agent qualifiers and envelope; the legacy workflow arm is not part of that bound. Pinned in helpers-frame.test.ts.
 /** The hook roster's own cap: the most `running` rows. */
 export const HELPER_LISTED_MAX = 32;
 /** The most rows that are not final and not listed (launched, no longer listed, session ended, state left out) together. */

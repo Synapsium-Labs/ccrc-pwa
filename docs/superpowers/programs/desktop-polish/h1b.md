@@ -11,7 +11,7 @@ Task H1b section carries the definition of D-8862 and the departures by slug; th
 |---|---|---|
 | `isAgentId`, the one guard over the one `AGENT_ID_RE`; `isHelperId` is it; `hookstate.ts`'s private rule and `hookReports.ts`'s private guard are gone | `shared/continuity-reports.ts`, `shared/workflows.ts`, `server/src/hookstate.ts`, `server/src/continuity/hookReports.ts` | Measured: `single-definition/vocabularies.test.ts` (two new cases: the pattern's holders, the guard's holder) |
 | The roster keeps its optional `id`; a bad one reads as absent; `fleet.ts` strips it | `server/src/hookstate.ts`, `server/src/fleet.ts` | Measured: `hookstate-roster-id.test.ts` |
-| `FeedReading.hookAt`, and the feed's order per identity | `server/src/sessionFeed.ts` | Measured: `session-feed-hook-at.test.ts` |
+| `FeedReading.helperHook`, with the read stamp and ordering scoped to the helper roster; the raw hook stays independent | `server/src/sessionFeed.ts`, `server/src/workflows/model.ts#orderHelperHook` | Measured: `session-feed-hook-at.test.ts`, `sessionws-helpers.test.ts` |
 | The tailer's `helpers` output and the backlog's facts | `server/src/transcript/tail.ts`; a prefilter in `parse.ts#helperFactsOf` | Measured: `transcript-tail-helper-facts.test.ts` |
 | `SessionHelpers` (reads by id, the tier, the rotation, the hold), `SessionWorkflows.readAll`, `lastActivityAt` on workflow rows, the L3 header | `server/src/workflows/read.ts` | Measured: `helpers-read.test.ts`, `sessionws-helpers.test.ts` |
 | `rosterInputOf`, `parseHelperMeta`, `lastLineTime`, `isAgentHelper`, `helpersFrame` | `server/src/workflows/model.ts` | Measured: `helpers-frame.test.ts`, and `helpers-decision.test.ts` unchanged in its answers |
@@ -43,18 +43,32 @@ listed); and the worst-case row sizes were first guesses and now hold the measur
 
 ## 3. Facts
 
-- **Measured** (a test): the tier spends 12 reads a reading at most, in the spec's order, and with ten growing helpers
-  refreshes six a reading (a stat and a read each), every helper within two readings.
-- **Measured**: a worst-case Agent row (every text field at its character cap, a 200-byte ASCII summary, 13-digit times) is
-  801 bytes of JSON in ASCII, 1,585 with 3-byte characters and 1,193 with supplementary-plane characters (the cap counts
-  UTF-16 code units, so a pair is two of them). H1a's note measured 895, 1,677 and 1,287 on a row of its own; the difference
-  is the fixture's numbers and summary. The 84-row arm is about 130 KiB at the 3-byte worst.
+- **Measured**: the tier stays inside 12 calls. With ten growing helpers and neither step 4 nor 5 due it can refresh six
+  per reading, reaching every helper in two. In the fix-round cases (11 quiet or 6 continuously growing), step 5 gets a
+  final helper's tail on the first reading it competes with the first due meta cycle. Step 4 stats on that reading, reads
+  the saved stat's meta on the next without another stat, and revisits the entire cohort within twice its size in readings
+  from the first due reading. **Inferred**: a due meta cohort with no new or changing ids costs at most two readings per
+  id (one reserved call per reading, oldest due first), and an already-known final backlog at least one attempt per reading
+  while work remains (two reserved calls). New finals discovered after the reserve is made can wait to the next reading to
+  join that backlog. The step 3 cursor can still defer a helper under roster churn (review 3014 F11).
+- **Measured**: the old illustrative row fixtures still measure 801 bytes (ASCII), 1,585 (3-byte labels), and 1,193
+  (supplementary characters). The fix-round row with maximum-width fields, escaped 200-byte summary, 64-byte id, and wide
+  numbers measures 1,905 bytes. The 84-row fixture with both qualifiers is below 134,000 bytes. **Inferred bound**: C0/C1
+  controls and lone surrogates are removed from display strings. The remaining labels and description cost at most three
+  JSON bytes per UTF-16 unit, a summary at most 400 escaped bytes. At 25 bytes per Number, 1,905 is the final-row upper
+  bound; at most 1,489 for a non-final row (no summary or end time, but longer state). `20 × 1,905 + 64 × 1,489 + 83` row
+  and separator bytes, plus at most 256 for the envelope and Agent qualifiers, is 133,735 bytes. This does not count the
+  legacy workflow rows. Reports are not display strings and are not sent on this frame.
 - **Measured** (a test): the deleted inline gate and `frameDue` agree on all 16 inputs it had (4 reads, the hook's word, sent
   before or not).
 - **Inferred**: the start scan's absence (H1c) costs a reloaded stream the facts older than the backlog's 1 MiB window: such a
   helper is drawn from the roster and its meta alone, as spec §3.1 says for one beyond the scan's bound.
-- **Inferred**: a `finished` meta whose transcript stat fails for a passing reason is decided with no end time and not
-  retried (the hold's release; recorded as a departure).
+- **Measured**: a `finished` meta whose transcript stat or range read fails is decided without a last write on that
+  reading. The row with no end time is drawn once and the terminal read is not retried. The range case stats a real
+  nonempty file and refuses every range call. An empty file causes no range request.
+- **Measured**: after a five-second backward clock step, the next raw hook publication changes the ask immediately; the
+  old-stamped roster does not fabricate a helper drop. The order comparison is L1, and the same `workflowLastActivity`
+  calculation is shared between the workflow verdict and row.
 
 ## 4. Runs
 
@@ -86,8 +100,9 @@ nothing and exits 0; the scanner fires on its canary (**measured**).
 module's text, and the tests function writes the mutant into a scratch copy of the tree (outside the work tree, removed after
 the run), runs ONE test file there through `ccrc test` with `--maxWorkers=2`, and writes the original back. A vitest exit with
 no failed test is retried and never counted as a kill (the infra log stayed empty). `--no-coverage`: the runner's trace sees
-the wrapper, not the TypeScript. **Measured**: 94 mutants of the new branches across ten files, 92 killed and 2 equivalent,
-each named in its row. The first round left 28 alive: the two equivalent ones, and 26 missed cases (4 in `model.ts`, 17 in
+the wrapper, not the TypeScript. **Measured** (initial round): 94 mutants across ten files, 92 killed, one accepted
+non-equivalent survivor and one equivalent survivor, each named in its row. The first round left 28 alive: those two and
+26 missed cases (4 in `model.ts`, 17 in
 `read.ts`, 2 in `sessionFeed.ts`, 3 in `sessionws.ts`). Each of the 26 got a case, committed after that round, and the second
 round killed every one. The fleet mutant ran against `hookstate-roster-id.test.ts` only: `fleet.test.ts` needs `ccd/` in the
 scratch tree (its baseline failed there).
@@ -204,13 +219,13 @@ the continuation) and N3 (an unlisted helper's last write taken as its start) ar
 | `tailer-no-emit` | `    if (helpers.length > 0) this.emit('helpers', helpers);⏎` | `(removed)` | killed |
 | `tailer-emit-empty` | `if (helpers.length > 0) this.emit('helpers', helpers);` | `this.emit('helpers', helpers);` | killed |
 
-#### `server/src/transcript/parse.ts`: 3 mutants, 2 killed, 1 equivalent
+#### `server/src/transcript/parse.ts`: 3 mutants, 2 killed, 1 accepted
 
 | Mutant | Original | Mutated to | Result |
 |---|---|---|---|
 | `prefilter-launch-only` | `if (!line.includes('"toolUseResult"') && !line.includes('<task-notifi…` | `if (!line.includes('"toolUseResult"')) return [];` | killed |
 | `prefilter-notice-only` | `if (!line.includes('"toolUseResult"') && !line.includes('<task-notifi…` | `if (!line.includes('<task-notification>')) return [];` | killed |
-| `prefilter-dropped` | `  if (!line.includes('"toolUseResult"') && !line.includes('<task-noti…` | `(removed)` | survived: equivalent on every line `JSON.stringify` writes: without the prefilter, a line that names neither key parses and yields no fact either; it differs only on a line that spells `<` or the key with a JSON escape, which that writer never emits (inferred from its rules, not measured on transcripts) |
+| `prefilter-dropped` | `  if (!line.includes('"toolUseResult"') && !line.includes('<task-noti…` | `(removed)` | survived, accepted: observable on an escaped key or opening `<` (measured by review 3014 F7). The writer's `JSON.stringify` does not emit either escape (inferred). |
 
 #### `server/src/sessionws.ts`: 7 mutants, 7 killed
 
@@ -240,3 +255,49 @@ the continuation) and N3 (an unlisted helper's last write taken as its start) ar
 | `st-backlog-keeps` | `{ workflows: [], workflowsUnreadable: false, ...noHelpers() }` | `{ workflows: [], workflowsUnreadable: false }` | killed |
 | `st-snapshot-drops` | `  agents: s.agents,⏎  agentsUnmeasured: s.agentsUnmeasured,⏎  readEve…` | `(removed)` | survived: equivalent: the reducer writes the three members and never reads them, and the store merges its answer over its own state, so a snapshot without them changes no state |
 | `st-disconnect-keeps` | `workflows: [], workflowsUnreadable: false,⏎          ...noHelpers(),⏎…` | `workflows: [], workflowsUnreadable: false,⏎        });` | killed |
+
+## 6. Review 3014, fix round 1
+
+F1–F5 are taken. F6 updates the departures and spec-fold list. F7 corrects the prefilter classification above. F8 stays a
+comparison to a copy of the old gate, not a test that loads on main; no gate code changes in this round. F9 moves the reducer
+comment back to the reducer. F10 puts the ordering and the shared workflow activity calculation in the model. F11 stays
+open: changing the cursor under churn is not part of guaranteeing the two lower tiers. F12's clock-step behavior has its own
+red and two mutation directions now; the earlier missing-symbol reds and unchanged PWA fallback test remain as recorded.
+F13 is a handoff note for H2: absent fields draw nothing, whether no helpers or an older server. No wire change.
+
+**Measured red first:** the two saturated tier cases missed the due meta stat; the persistent range failure stayed running;
+two display cases leaked controls/lone surrogates; the clock-step case only delivered the first ask. The unchanged behavior
+pins for pending facts, missing metas and zero-length calls were green before the fix and are proved with their own mutants.
+
+**Fix-round mutations (measured, 15/15 killed).** `mutation-run.py` ran one file per process through the test slice, at
+1-minute load 8.19–8.47, in a scratch tree; targets were restored from saved copies and compared byte for byte.
+
+| Mutation | Removed or inverted behavior | Killed by |
+|---|---|---|
+| X1 | Remove the pending facts slice | `sessionws-helpers`, newest 1,024 across two chunks |
+| X2 | Skip a listed id whose meta was missing | `helpers-read`, missing meta appears |
+| X3 | Read a changed meta after the budget threshold | `helpers-read`, thirteenth-call boundary and final reservation |
+| X4 | Leave a terminal range failure held | `helpers-read`, stat succeeds and range always fails |
+| X5 | Issue a range for a zero-length tail | `helpers-read`, empty transcript |
+| No meta reserve | Allow open reads to consume the meta slot | `helpers-read`, saturated quiet/growing cohorts |
+| No final reserve | Allow open reads to consume the final slots | `helpers-read`, saturated quiet/growing cohorts |
+| Forget deferred stat | Drop the pending changed stat before the next read | `helpers-read`, no second stat before reading |
+| Publish stale end | Do not invalidate last-write knowledge on new `finished` meta | `helpers-read`, two final writes compete for one attempt |
+| Newest due first | Reverse the meta order | `helpers-read`, whole cohort within its bound |
+| Keep controls | Do not sanitize display text | `helpers-frame`, meta display text |
+| Keep launch model controls | Bypass display cleanup on launch-model fallback | `helpers-frame`, launch model and summary |
+| Keep summary controls | Bypass display cleanup on summary | `helpers-frame`, launch model and summary |
+| Accept older helper roster | Replace the helper ordering result with the latest arrival | `sessionws-helpers`, no fabricated drop at clock step |
+| Hold the ask with the roster | Reuse the ordered hook for raw hook consumers | `session-feed-hook-at`, older publication still reaches raw readers; clock-step behavior pinned in `sessionws-helpers` |
+
+**Fix-round local verification (measured).** 28 of 29 server importer and feed/ask/import-pin files passed (load 8.07–9.95).
+`ask-pairing-skew` timed out in one of 38 cases at its 60 s limit; the isolated old-client/new-server group passed all 20
+selected cases at load 8.39. The two separately run importers still red locally were `session-ladders-characterization`
+(61 passed; the same fresh-heartbeat case failed as on the base) and `secret-mask` (95 passed, one skipped; the slow drawer
+input timed out at 20 s, the same class measured on main by review 3014). The feed's mail delivery is covered by
+`session-stream-readings` and `sessionws`; the separate watcher mail sweep does not consume this reading.
+
+61 of 62 architecture, single-definition and static/ledger files passed in the batch (load 8.50–11.44); the test slice
+killed the `docs-l0` worker at its memory cap, and the isolated rerun passed all 155 at load 8.10. `deviation-refs` ran
+after a fresh fetch. The 50 PWA store and session-consumer files passed (load 7.22–8.84). Server source, server test tree,
+and PWA typechecks passed.

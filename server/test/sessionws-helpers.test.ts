@@ -6,7 +6,7 @@
 // reader's rebuild when the session dir changes. Neutral fixture names.
 //
 // RED FIRST: committed before the code, against origin/main, where the frame carries the workflow rows only.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Deps } from '../src/server.js';
@@ -22,6 +22,9 @@ import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { fakeTime } from './fakeTime.js';
+import type { HookReading } from '../src/bus.js';
+import type { TranscriptTailer } from '../src/transcript/tail.js';
+import type { HelperFact } from '../src/transcript/parse.js';
 
 const ID = 'claude-a-project-a';
 const UUID = 'c'.repeat(36);
@@ -85,7 +88,8 @@ const open = (bus: Bus = new Bus()): { stream: SessionStream; frames: SessionStr
 type WfFrame = SessionStreamMsg & { type: 'workflows' };
 const wfFrames = (frames: SessionStreamMsg[]): WfFrame[] => frames.filter((f): f is WfFrame => f.type === 'workflows');
 type Priv = {
-  helperFacts: unknown[];
+  helperFacts: HelperFact[];
+  tailer: TranscriptTailer | null;
   resolve(): Promise<{ ok: true; data: unknown } | { ok: false }>;
   sendBacklogAndTail(r: unknown): Promise<void>;
   feed: { poll(): Promise<void> } | null;
@@ -204,6 +208,47 @@ describe('the wiring, pinned after the first mutation round', () => {
     } } });
     try { await stream.start(); } finally { stream.stop(); }
     expect(wfFrames(frames).at(-1)!.agents).toEqual([expect.objectContaining({ id: 'a5', state: 'launched' })]);
+  });
+
+  it('a backward clock step does not freeze hook ask frames or hand the helper decision an older roster', async () => {
+    for (const id of ['a1', 'a2']) seedHelper(S, id);
+    const bus = new Bus();
+    const { stream, frames } = open(bus);
+    const feed = feedFor(lastDeps, bus, ID);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    const publication = (at: number, ids: string[], question: string): HookReading => ({
+      at, uuid: UUID, raw: { ok: true, sessionId: UUID, identity: 'current', state: {
+        state: 'working', updatedAt: at, event: null, ask: { questions: [{ question, options: [{ label: 'Yes' }, { label: 'No' }] }] },
+        subagents: ids.map((id, n) => ({ id, name: 'Explore', startedAt: now - 60_000 + n })),
+        graphQueries: 0, graphGateDenials: 0, interrupted: false,
+      } },
+    });
+    try {
+      bus.emit(`hook:${ID}`, publication(now, ['a1', 'a2'], 'Use the first option?'));
+      await stream.start();
+      clock.mockReturnValue(now - 5_000);
+      bus.emit(`hook:${ID}`, publication(now - 5_000, ['a1'], 'Use the second option?'));
+      await feed.poll();
+      expect(frames.filter((f) => f.type === 'ask').map((f) => 'questions' in f.ask ? f.ask.questions[0]?.question : null))
+        .toEqual(['Use the first option?', 'Use the second option?']);
+      expect(wfFrames(frames).flatMap((f) => f.agents ?? []).filter((a) => a.id === 'a2').map((a) => a.state)).toEqual(['running']);
+    } finally { stream.stop(); clock.mockRestore(); }
+  });
+
+  it('the pending facts retain only the newest 1024 across live chunks while no reading runs', async () => {
+    const { stream } = open();
+    const p = stream as unknown as Priv;
+    try {
+      await stream.start();
+      const facts: HelperFact[] = Array.from({ length: 1027 }, (_, i) => ({
+        source: 'notification', id: `a${i}`, status: 'completed', at: now, model: null, durationMs: null, summary: null, report: null, reportCut: false,
+      }));
+      p.tailer!.emit('helpers', facts.slice(0, 900));
+      p.tailer!.emit('helpers', facts.slice(900));
+      expect(p.helperFacts).toHaveLength(1024);
+      expect(p.helperFacts[0]?.id).toBe('a3');
+      expect(p.helperFacts.at(-1)?.id).toBe('a1026');
+    } finally { stream.stop(); }
   });
 
   it('a reading hands the pending facts to the reader and keeps none: the stream holds nothing between readings', async () => {
