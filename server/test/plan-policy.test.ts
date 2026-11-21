@@ -465,10 +465,13 @@ describe('triageLookup and triageChoice (D-8808, w8-triage-l1)', () => {
     expect(r.owner).toEqual({ kind: 'unmeasured', possibleIds: ['coord-of-project-a', 'coord-b'] });
   });
   it('an owned row beats an earlier unmeasured one', () => {
-    const rows = [projectFacts('project-a', { order: 1, workspaceId: 'ws-a', linearOwner: 'coord-a' }), projectFacts('project-b', { order: 2 })];
+    // The earlier row's unmeasured owner may be the caller too (project-b's named owner), so only the order of the two
+    // preference steps decides: swapped, the earlier unmeasured row would win (review 3172 F1).
+    const rows = [projectFacts('project-a', { order: 1, workspaceId: 'ws-a', linearOwner: 'coord-a' }), projectFacts('project-b', { order: 2, linearOwner: 'coord-a' })];
     const r = triageChoice('AAA', 'coord-a', found('ws-b', 'ws-a'), rows, f, unreadable('ws-b'));
     expect(r.row).toMatchObject({ workspaceId: 'ws-a' });
     expect(r.owner).toMatchObject({ kind: 'owner', id: 'coord-a' });
+    expect(triageChoice('AAA', 'coord-a', found('ws-b'), rows, f, unreadable('ws-b')).owner).toEqual({ kind: 'unmeasured', possibleIds: ['coord-a'] });
   });
   it('is the first row, with its owner, when the caller owns none', () => {
     const r = triageChoice('AAA', 'nobody', found('ws-a', 'ws-b'), pinnedRows, f, routes2);

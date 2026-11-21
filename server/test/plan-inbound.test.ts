@@ -2553,7 +2553,7 @@ describe('plan triage row choice, pinned before its move (D-8808)', () => {
   });
 
   describe('a shared key, both holders pinned', () => {
-    it.each([[OWNER, 12, 13, 'ws-a row'], [OTHER, 13, 12, 'ws-b row']] as const)('%s raises only its own workspace row (%s)', async (who, mine, theirs, _label) => {
+    it.each([[OWNER, 12, 13, 'ws-a row'], [OTHER, 13, 12, 'ws-b row']] as const)('%s raises row %i, not row %i (the %s)', async (who, mine, theirs, _label) => {
       const r = await rig({ twoWs: true });
       await holdAaaInBoth(r);
       pin(r, 'project-a', WS.a.id);
@@ -2609,8 +2609,21 @@ describe('plan triage row choice, pinned before its move (D-8808)', () => {
     });
   });
 
-  describe('a team no project holds', () => {
-    it('the identifier lookup finds the row; no project holds the key, so it has no owner', async () => {
+  describe('the identifier lookup across workspaces (review 3172 F3)', () => {
+    // No workspace candidate: the one holder is unpinned and its key is in two readable workspaces, so it resolves to none.
+    // The lookup unique across workspaces finds the row, whose workspace has no owner: refused. Without that lookup the
+    // key-only diagnostic would name project-a's owner, who would then be told the issue is not inbound (409).
+    it('finds the row of an unpinned holder whose key two workspaces hold, and its workspace has no owner', async () => {
+      const r = await rig({ twoWs: true });
+      await holdAaaInBoth(r);
+      seed(r, 12, WS.a.id, 'AAA-12');
+      const o = await run(r, [12], RAISE, OWNER);
+      expect(o.answer).toEqual([403, 'not-linear-owner']);
+      expect(o.moved).toEqual([]);
+      expect(writes(r)).toEqual([]);
+    });
+    // A team no project holds answers the same refusal whether or not a row is found: this pins the answer only.
+    it('a team no project holds is refused for any caller, and its row does not move', async () => {
       const r = await rig();
       seed(r, 5, WS.a.id, 'CCC-5', 'CCC');
       const o = await run(r, [5], { issue: 'CCC-5', decision: 'raise', note: 'scope' }, OWNER, 'CCC');
