@@ -119,6 +119,13 @@ const QUIZ_RULE_SET: MutantSet<Quiz> = {
     { id: 'V3', old: "return { kind: 'write', state: 'discarded', baseline: false };", new: "return { kind: 'write', state: 'discarded', baseline: true };" },
     { id: 'V4', old: "baseline: quizBaseline(i.runs, i.w1aChoices) };", new: 'baseline: true };' },
     { id: 'V5', old: "if (i.action === 'discard') return", new: "if (i.action !== 'discard') return" },
+    // Run 3212, the unattended `match` ruling: the sha never compared; a mismatch confirmed; a resend answered for a run ruled
+    // under another sha; a match without its sha accepted; a match's confirm made the baseline whatever the rule says.
+    { id: 'V6', old: 'const matched = i.sha.stored === i.sha.claimed;', new: 'const matched = true;' },
+    { id: 'V7', old: ": { kind: 'write', state: 'discarded', baseline: false };\n    }", new: ": { kind: 'write', state: 'confirmed', baseline: false };\n    }" },
+    { id: 'V8', old: "if (matched && i.state !== 'unknown') return", new: "if (i.state !== 'unknown') return" },
+    { id: 'V9', old: "if (i.sha === undefined) return { kind: 'refuse', detail: 'a match ruling carries the sha the run measured' };", new: "if (i.sha === undefined) return { kind: 'write', state: 'confirmed', baseline: false };" },
+    { id: 'V10', old: "return matched ? { kind: 'write', state: 'confirmed', baseline: quizBaseline(i.runs, i.w1aChoices) }", new: "return matched ? { kind: 'write', state: 'confirmed', baseline: true }" },
   ],
   suite(m): Record<string, SuiteCase> {
     const base = { id: 7, action: 'confirm' as const, runs: [], w1aChoices: SHADOW };
@@ -134,6 +141,21 @@ const QUIZ_RULE_SET: MutantSet<Quiz> = {
         expect(m.quizRuleVerdict({ ...base, state: 'confirmed' })).toEqual({ kind: 'refuse', detail: 'already confirmed' });
       },
       'an unknown id refuses': () => { expect(m.quizRuleVerdict({ ...base, state: null })).toEqual({ kind: 'refuse', detail: 'no quiz run 7' }); },
+      'a match confirms on the sha by the baseline rule, and discards on another': () => {
+        const match = { ...base, action: 'match' as const, state: 'pending' as const };
+        const sha = (stored: string | null, baseline = false) => ({ stored, claimed: 'a'.repeat(64), baseline });
+        expect(m.quizRuleVerdict({ ...match, sha: sha('a'.repeat(64)) })).toEqual({ kind: 'write', state: 'confirmed', baseline: true });
+        expect(m.quizRuleVerdict({ ...match, runs: [CONFIRMED(true)], sha: sha('a'.repeat(64)) })).toEqual({ kind: 'write', state: 'confirmed', baseline: false });
+        expect(m.quizRuleVerdict({ ...match, sha: sha('b'.repeat(64)) })).toEqual({ kind: 'write', state: 'discarded', baseline: false });
+        expect(m.quizRuleVerdict(match)).toEqual({ kind: 'refuse', detail: 'a match ruling carries the sha the run measured' });
+      },
+      'a match on a run already ruled answers it on the same sha and refuses on another': () => {
+        const sha = (stored: string, baseline: boolean) => ({ stored, claimed: 'a'.repeat(64), baseline });
+        expect(m.quizRuleVerdict({ ...base, action: 'match', state: 'confirmed', sha: sha('a'.repeat(64), true) })).toEqual({ kind: 'same', state: 'confirmed', baseline: true });
+        expect(m.quizRuleVerdict({ ...base, action: 'match', state: 'discarded', sha: sha('a'.repeat(64), false) })).toEqual({ kind: 'same', state: 'discarded', baseline: false });
+        expect(m.quizRuleVerdict({ ...base, action: 'match', state: 'confirmed', sha: sha('b'.repeat(64), true) })).toEqual({ kind: 'refuse', detail: 'already confirmed' });
+        expect(m.quizRuleVerdict({ ...base, action: 'match', state: 'unknown', sha: sha('a'.repeat(64), false) })).toEqual({ kind: 'refuse', detail: 'already unknown' });
+      },
     };
   },
 };
@@ -301,10 +323,13 @@ const QUIZ_LANE_SET: MutantSet<Quiz> = {
     { id: 'L10', old: 'const waiting = pendingWaits', new: 'const waiting = false' },
     // Review 2449 F2: the item always carries what to do with a run recorded this week.
     { id: 'L11', old: '  const how = [\n    waiting,', new: '  const how = [\n    ...(pendingWaits ? [waiting] : []),' },
+    // Run 3212: the grace dropped, and measured from the pass's start of day instead of the week's.
+    { id: 'L12', old: "if (f.now < f.week.start + QUIZ_UNATTENDED_GRACE_DAYS * QUIZ_DAY_MS) return { kind: 'hold', why: 'unattended-grace' };", new: '' },
+    { id: 'L13', old: 'f.now < f.week.start + QUIZ_UNATTENDED_GRACE_DAYS * QUIZ_DAY_MS', new: 'f.now < f.week.start' },
   ],
   suite(m): Record<string, SuiteCase> {
     const facts = (over: Partial<Facts> = {}): Facts => ({
-      recordReady: true, week: { key: '2026-W47', start: MON }, recordedAts: { ok: true, value: [] }, pendingWaits: { ok: true, value: false },
+      recordReady: true, now: MON + 4 * DAY, week: { key: '2026-W47', start: MON }, recordedAts: { ok: true, value: [] }, pendingWaits: { ok: true, value: false },
       baseline: { ok: true, exists: false },
       itemRaised: { ok: true, value: false }, ...over,
     });
@@ -327,6 +352,10 @@ const QUIZ_LANE_SET: MutantSet<Quiz> = {
       'a run of last week does not': () => { expect(m.quizLaneVerdict(facts({ recordedAts: { ok: true, value: [MON - 1] } })).kind).toBe('raise'); },
       'raised once': () => { expect(m.quizLaneVerdict(facts({ itemRaised: { ok: true, value: true } }))).toEqual({ kind: 'hold', why: 'raised' }); },
       'the baseline title before one exists': () => { expect(m.quizLaneVerdict(facts())).toEqual({ kind: 'raise', item: m.quizItemText('2026-W47', false) }); },
+      'held inside the unattended run\'s grace, raised at its end': () => {
+        expect(m.quizLaneVerdict(facts({ now: MON + 3 * DAY - 1 }))).toEqual({ kind: 'hold', why: 'unattended-grace' });
+        expect(m.quizLaneVerdict(facts({ now: MON + 3 * DAY })).kind).toBe('raise');
+      },
     };
   },
 };

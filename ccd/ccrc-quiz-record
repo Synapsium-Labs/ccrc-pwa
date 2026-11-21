@@ -3,10 +3,15 @@ set +x
 # ccrc-quiz-record — the operator's record of a replay quiz run (Overlord W1a; plan
 # 2026-11-17-overlord-quiz-record.md §5 and Task 10). Run by hand on the fleet box, outside any session and any pane:
 #
-#   ccrc quiz-record --report <file> --sha <64 hex>
+#   ccrc quiz-record --report <file> --sha <64 hex> [--confirm]
 #
 # It posts one report (a regular file of at most 64 KiB) as a JSON body and prints what the server answered. The run it
-# records is PENDING: only the operator's confirmation on the Shadow lanes card makes it count.
+# records is PENDING: the operator's confirmation on the Shadow lanes card makes it count, or, with `--confirm`, the
+# operator's matching rule applied by the server (run 3212; the operator's ruling of 2026-11-22). `--confirm` is what the
+# weekly timer runs (`deploy/history-quiz-unattended.mjs`): after the record it posts the run id the record answered and
+# this `--sha` to `ccrc-api quiz confirm`, and the server confirms that run when its stored sha is this one and discards it
+# when it is not. It prints `confirmed run <id>, report sha <12 hex>`, with ` (the baseline)` when the run became it, and
+# exits 0; a discarded run or a refusal prints its word on stderr and exits 1.
 #
 # IT POSTS THROUGH THE CLIENT (coordinator ruling, plan slug `quiz-record-posts-through-the-client`; CLAUDE.md's
 # consolidate rule: no fifth hand copy of the URL-and-credential read). This file does its own validation and packaging
@@ -31,15 +36,16 @@ CLIENT="$HOME/.local/bin/ccrc-api"
 MAX_BYTES=65536
 
 die() { printf '%s: %s\n' "$SELF" "$1" >&2; exit "${2:-1}"; }
-usage() { printf 'usage: ccrc quiz-record --report <file> --sha <64 hex>\n' >&2; exit 2; }
+usage() { printf 'usage: ccrc quiz-record --report <file> --sha <64 hex> [--confirm]\n' >&2; exit 2; }
 
 # The refusals come FIRST, before any argument or file is read.
 [ -z "${CLAUDECODE+set}" ] || die "refused: in-session (a session never records a quiz run; run it by hand)" 2
 [ -z "${TMUX_PANE:-}" ] || die "refused: in-pane (run it from the operator's own shell, outside tmux)" 2
 
-report="" sha="" have_report=0 have_sha=0
+report="" sha="" have_report=0 have_sha=0 confirm=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --confirm)  confirm=1; shift ;;
     --report)   [ $# -ge 2 ] || usage; report="$2"; have_report=1; shift 2 ;;
     --report=*) report="${1#--report=}"; have_report=1; shift ;;
     --sha)      [ $# -ge 2 ] || usage; sha="$2"; have_sha=1; shift 2 ;;
@@ -66,7 +72,9 @@ size=$(wc -c < "$report" | tr -d '[:space:]')
 user=$(id -un 2>/dev/null | tr -cd 'A-Za-z0-9._-')
 role=""
 [ -r "$HOME/.ccrc/ccrc.env" ] && role=$(grep -E '^[[:space:]]*CCRC_ROLE=' "$HOME/.ccrc/ccrc.env" | tail -n1 | cut -d= -f2- | tr -cd '[:lower:]')
-trace="quiz-record ${user:-unknown} ${role:-unknown} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+verb=quiz-record
+[ "$confirm" -eq 0 ] || verb=quiz-unattended
+trace="$verb ${user:-unknown} ${role:-unknown} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # The report travels as UTF-8 JSON text: `jq --rawfile` reads the file, never a shell variable.
 body=$(jq -n --rawfile report "$report" --arg sha "$sha" --arg by "$trace" \
@@ -88,12 +96,33 @@ if [ "$ok" = true ]; then
   state=$(printf '%s' "$answer" | jq -r '.state // "unknown"')
   # The run id and the start of the report's sha, as the Shadow lanes card shows them (review 2442 F1): match both there
   # before pressing Confirm.
-  if [ "$fresh" = true ]; then
-    printf 'recorded run %s, report sha %s, pending: confirm it on the Shadow lanes card\n' "$id" "${sha:0:12}"
-  else
-    printf 'already recorded as run %s, report sha %s (%s)\n' "$id" "${sha:0:12}" "$state"
+  if [ "$confirm" -eq 0 ]; then
+    if [ "$fresh" = true ]; then
+      printf 'recorded run %s, report sha %s, pending: confirm it on the Shadow lanes card\n' "$id" "${sha:0:12}"
+    else
+      printf 'already recorded as run %s, report sha %s (%s)\n' "$id" "${sha:0:12}" "$state"
+    fi
+    exit 0
   fi
-  exit 0
+  [[ "$id" =~ ^[1-9][0-9]*$ ]] || die "the record answered no run id; nothing was confirmed"
+  # The confirmation: the run id the record answered and the sha the report printed, ruled by the server's matching rule.
+  cbody=$(jq -n --arg sha "$sha" --arg by "$trace" '{sha256: $sha, by: $by}') || die "could not build the confirm body"
+  answer=$(printf '%s' "$cbody" | "$CLIENT" quiz confirm "$id" --json -)
+  rc=$?
+  [ "$rc" -eq 0 ] || die "no answer to the confirmation (ccrc-api exited $rc); run $id is recorded, its ruling unknown"
+  printf '%s' "$answer" | jq -e 'type == "object"' >/dev/null 2>&1 || die "the confirmation's answer was not JSON; run $id's ruling is unknown"
+  state=$(printf '%s' "$answer" | jq -r 'if .ok == true then (.state // "unknown") else "refused" end')
+  if [ "$state" = confirmed ]; then
+    tail=""
+    [ "$(printf '%s' "$answer" | jq -r '.baseline // false')" = true ] && tail=" (the baseline)"
+    printf 'confirmed run %s, report sha %s%s\n' "$id" "${sha:0:12}" "$tail"
+    exit 0
+  fi
+  if [ "$state" = discarded ]; then die "discarded: run $id's stored report sha is not ${sha:0:12}…; it does not count"; fi
+  word=$(printf '%s' "$answer" | jq -r '.error // "confirm-refused"')
+  detail=$(printf '%s' "$answer" | jq -r '.detail // "no detail"')
+  printf '%s: %s\n' "$word" "$detail" >&2
+  exit 1
 fi
 word=$(printf '%s' "$answer" | jq -r '.error // "refused"')
 detail=$(printf '%s' "$answer" | jq -r '.detail // "no detail"')

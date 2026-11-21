@@ -452,8 +452,9 @@ describe('the client stays closed', () => {
     // (Overlord W1 door process B1; the hook's own report body, no splice and no fill) to ninety-two.
     // `plan.map-propose` (the per-team migration, D-8186; the caller's own body, the identity in the query, no fill) to ninety-three.
     // `linking.suggest` (D-8808) to ninety-four: it takes the `calls.record` fill's rule, pinned below. `linking.confirm` (D-8809)
-    // to ninety-five: the suggestion row's fill, on one condition with it.
-    expect(routeKeys().size).toBe(95);
+    // to ninety-five: the suggestion row's fill, on one condition with it. `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the
+    // unattended quiz: the timer's verb and runner, and the coordinator's own body, no splice and no fill) to ninety-eight.
+    expect(routeKeys().size).toBe(98);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

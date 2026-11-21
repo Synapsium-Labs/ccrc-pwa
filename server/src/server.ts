@@ -76,6 +76,7 @@ import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorM
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
+import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -2278,7 +2279,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     masker: deps.masker,
   });
   // The replay quiz's record door (box token, the operator's shell) and its rule door (session and step-up), from their own file.
-  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate });
+  // Run 3212 adds the unattended confirm door (its baseline mail rides `queueSystemMail`, the operator's sender, as the watcher's
+  // notices do) and the coordinator's Live door (attributed on `fromUuid`, with a record-only feed row).
+  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'), notice,
+    mail: (m) => (deps.coord === undefined ? false : queueSystemMail(deps.coord, null, { fromId: 'operator', runId: null, kind: 'status', ...m }).queued) });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a

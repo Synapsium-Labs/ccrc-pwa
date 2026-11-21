@@ -184,10 +184,19 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // Overlord W1a (plan 2026-11-17-overlord-quiz-record.md §4): the replay quiz's single-arm module's --out, a class of its own so
   // history-replay-out keeps describing one W2 run. The operator names it; the module makes it by the driver's --out rule and
   // marks it beside the driver's marker. Nothing in the tree removes it.
-  { name: 'history-quiz-single-out', root: 'the single-arm module\'s --out, operator-chosen outside any git tree, mode 0700, marked by .ccrc-history-quiz-single beside the driver\'s own marker', pattern: 'O',
-    creators: ['deploy/history-quiz-single.mjs'], collector: null,
+  // Run 3212: the weekly unattended run names these too (~/.ccrc/quiz/setup.<n> and ~/.ccrc/quiz/weeks/<YYYY-Www>), the module
+  // still makes them, and the runner removes its own week directories beyond the newest four once their week closed.
+  { name: 'history-quiz-single-out', root: 'the single-arm module\'s --out, operator-chosen or named by the weekly unattended run under ~/.ccrc/quiz/, outside any git tree, mode 0700, marked by .ccrc-history-quiz-single beside the driver\'s own marker', pattern: 'O',
+    creators: ['deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs (through the module)'],
+    collector: 'deploy/history-quiz-unattended.mjs (its own week directories beyond the newest four, once their week is confirmed or failed)',
     bound: 'the setup directory for as long as the quiz lane runs; a week directory until its run is confirmed or discarded', tier: 'one setup\'s frozen list, or one week\'s transcripts and scores',
-    ruling: 'operator-made; a week directory is removed by hand once its run is confirmed or discarded' },
+    ruling: null },
+  // Run 3212: the weekly unattended run's own record. Its state (written whole by rename), its lock, its journal (one line
+  // each time it writes the history marker headless-on, which is once) and that write's temp file, which it removes.
+  { name: 'quiz-unattended', root: '~/.ccrc/quiz/ (0700): unattended.json, unattended.lock, journal.log and headless-on.tmp.<pid>', pattern: 'O',
+    creators: ['deploy/history-quiz-unattended.mjs'], collector: null,
+    bound: 'one state file, one lock, one journal line per marker write, and one temp file while the marker is written', tier: 'a few kilobytes',
+    ruling: 'ccrc-owned record of the weekly unattended run, kept for as long as the quiz lane runs' },
   // ccrc history, W2-1 (spec 2026-10-05 §9.4; W2-D9, W2-D28): the replay eval's control arm. sweep.mjs's --op recall-off is its
   // one writer (O13), through its temp recall-off/~tmp.<pid>, which the next recall-off pass removes; the operator verbs clear
   // it, `recall-off --clear-all` at W2 close, and an entry that verb skips is removed by hand.

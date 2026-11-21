@@ -1165,7 +1165,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'cc-tmp-loose-entries', 'child-workspaces', 'workspace-dependency-dirs', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
       'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
       'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-steer-files', 'history-replay-out',
-      'history-quiz-single-out', 'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
+      'history-quiz-single-out',
+      // Run 3212: the weekly unattended replay quiz's own record.
+      'quiz-unattended', 'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
       'testbox-token', 'testbox-push-key',
       // Test box connect (D-8166): the files `ccrc testbox-admin` owns.
@@ -1534,15 +1536,29 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     const c = LIFECYCLE.find((x) => x.name === 'history-quiz-single-out');
     expect(c, 'shared/lifecycle.ts declares no history-quiz-single-out class').toBeTruthy();
     expect(c!.pattern).toBe('O');
-    expect(c!.creators).toEqual(['deploy/history-quiz-single.mjs']);
-    expect(c!.collector).toBeNull();
-    expect(c!.ruling).toContain('removed by hand once its run is confirmed or discarded');
+    // Run 3212: the weekly unattended run names these directories too, and collects its own week directories.
+    expect(c!.creators).toEqual(['deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs (through the module)']);
+    expect(c!.collector).toContain('deploy/history-quiz-unattended.mjs');
+    expect(c!.ruling).toBeNull();
+    const { KEEP_WEEKS } = await import('../../deploy/history-quiz-unattended.mjs');
+    expect(KEEP_WEEKS, 'the row names another keep count than the runner prunes to').toBe(4);
+    expect(c!.collector).toContain('beyond the newest four');
     expect(c!.bound).toBe('the setup directory for as long as the quiz lane runs; a week directory until its run is confirmed or discarded');
     expect(c!.root).toContain('outside any git tree');
     expect(c!.root).toContain('mode 0700');
     const { OUT_MARKER } = await import('../../deploy/history-quiz-single.mjs');
     expect(c!.root, 'the row names another marker than the module writes').toContain(`marked by ${OUT_MARKER as string} beside the driver's own marker`);
     expect(LIFECYCLE.find((x) => x.name === 'history-replay-out')!.creators, 'the W2 class is unchanged').toEqual(['deploy/history-replay.mjs']);
+  });
+
+  // Run 3212: the weekly unattended run's own record under ~/.ccrc/quiz/, bound to the runner's own file names.
+  it('declares quiz-unattended: the runner\'s state, lock, journal and marker temp, ccrc-owned with no collector', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'quiz-unattended');
+    expect(c, 'shared/lifecycle.ts declares no quiz-unattended class').toBeTruthy();
+    expect(c!.creators).toEqual(['deploy/history-quiz-unattended.mjs']);
+    expect(c!.collector).toBeNull();
+    const { STATE_FILE, LOCK_FILE } = await import('../../deploy/history-quiz-unattended.mjs');
+    for (const name of [STATE_FILE as string, LOCK_FILE as string, 'journal.log', 'headless-on.tmp.<pid>']) expect(c!.root).toContain(path.basename(name));
   });
 
   // ── ccrc history W2-1 (spec 2026-10-05 §9.4, O17's W2-1 half; W2-D9, W2-D28) ──────────────────────────────────────

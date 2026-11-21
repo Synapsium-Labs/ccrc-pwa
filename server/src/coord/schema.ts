@@ -4237,6 +4237,34 @@ export const MIGRATIONS: readonly string[] = [
     OR (endBasis = 'backfill-unmeasured' AND endedAt IS NULL)
   );
   `,
+
+  // ── 119: user_version 118 -> 119 ──────────────────────────────────────────
+  // The weekly unattended replay quiz's last word (run 3212; the operator's ruling of 2026-11-22: the quiz runs, records and
+  // confirms itself): `continuity_quiz_status`, ONE row (`id` 1), what `deploy/history-quiz-unattended.mjs`'s last tick on
+  // the fleet box reported through `POST /api/continuity/quiz-status`. ONE writer, `continuity/quizStore.ts#writeQuizStatus`;
+  // `mailedKey` is the week and word the coordinator was last mailed for, so a stop word is mailed once a week. The Shadow
+  // lanes card reads it. The coordinator allotted slot 120 to this entry beside run 3213's 119; by position it is the next
+  // free one on this branch, and whoever lands second renumbers on absorbing main.
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at this entry's version takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before merge (it must print 118 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_status (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    week        TEXT,                  -- the ISO week (UTC) the tick worked, or NULL before any week
+    act         TEXT NOT NULL,         -- the act the tick reached
+    outcome     TEXT NOT NULL,         -- ok | waiting | refused | failed
+    word        TEXT,                  -- the stop's word, or NULL
+    detail      TEXT,                  -- one line, or NULL
+    account     TEXT,                  -- the setup's account id, or NULL before setup
+    at          INTEGER NOT NULL,      -- wall ms of the tick (the runner's)
+    receivedAt  INTEGER NOT NULL,      -- wall ms the server stored it
+    mailedKey   TEXT                   -- '<week> <word>' the coordinator was last mailed for, or NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

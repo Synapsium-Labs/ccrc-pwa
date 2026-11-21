@@ -200,6 +200,20 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
       .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
   });
 
+  itLinux('places the weekly replay quiz\'s units, and enables its timer after daemon-reload, on a fleet box (Overlord W1a)', async () => {
+    const { home } = await fleet();
+    for (const u of ['ccd-quiz-weekly.service', 'ccd-quiz-weekly.timer']) {
+      const p = unitDir(home, u);
+      expect(existsSync(p), `${u} never reached ~/.config/systemd/user on the fleet role`).toBe(true);
+      expect(readFileSync(p), `${u} is not the shipped file`).toEqual(readFileSync(placed(home, 'deploy', 'systemd', u)));
+      expect(statSync(p).mode & 0o777, `${u} has the wrong mode`).toBe(0o644);
+    }
+    const argv = systemctlCalls(home).map((c) => c.argv);
+    expect(argv).toContain('--user enable --now ccd-quiz-weekly.timer');
+    expect(argv.indexOf('--user enable --now ccd-quiz-weekly.timer'), 'the quiz timer was enabled before daemon-reload read its unit file')
+      .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
+  });
+
   itLinux('places the test box durations timer\'s bin and units, and enables its timer, on a fleet box (test box TB11, D-7413)', async () => {
     const { home, r } = await fleet();
     const bin = join(home, '.local', 'bin', 'ccd-testbox-times');
@@ -320,6 +334,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-limit-watchdog.timer',
       // landing order wave 3b: the conflict radar's timer, `!= server` like the sweeps beside it, so `both` enables it.
       '--user enable --now ccd-land-probe.timer',
+      '--user enable --now ccd-quiz-weekly.timer',
       // test box TB11 (D-7413): the durations timer, `!= server` like the radar, so `both` enables it.
       '--user enable --now ccd-testbox-times.timer',
       // D-7857: the carry dedupe timer, `!= server` like the radar, so `both` enables it.
@@ -357,7 +372,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-limit-watchdog.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccd-carry-dedupe.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-limit-watchdog.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-quiz-weekly.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccd-carry-dedupe.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -386,6 +401,10 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-land-probe.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-land-probe.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-land-probe');
+    // Overlord W1a: the weekly replay quiz's pair is role-gated out too (a server box keeps no history store), and no enable names it.
+    expect(existsSync(unitDir(home, 'ccd-quiz-weekly.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-quiz-weekly.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-quiz-weekly');
     // test box TB11 (D-7413): the durations timer's pair is `!= server` too; its bin lands on every role, as the radar's.
     expect(existsSync(unitDir(home, 'ccd-testbox-times.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-testbox-times.timer'))).toBe(false);

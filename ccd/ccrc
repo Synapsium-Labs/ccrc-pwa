@@ -19104,6 +19104,10 @@ _inst_units() {
     # none. Gated `!= server`, so `fleet` and `both` take it.
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.service" "$dir/ccd-land-probe.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.timer" "$dir/ccd-land-probe.timer" 644
+    # The weekly replay quiz's pair (Overlord W1a), role-gated for its own reason: a server box keeps no history store and
+    # runs no sessions. The unit runs the tree's deploy/history-quiz-unattended.mjs through node, so no bin is placed.
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.timer" "$dir/ccd-quiz-weekly.timer" 644
     # The test box durations timer's pair (D-7413): the fleet host's gh fetches them for its own `ccrc test`, so `!= server`.
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.service" "$dir/ccd-testbox-times.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.timer" "$dir/ccd-testbox-times.timer" 644
@@ -19601,6 +19605,8 @@ _inst_enable() {
   # idiom: a radar is a reading, not the guardrail `ccd-cap-scopes.timer` is, and it measures nothing until the
   # operator opts a project in with a conf under ~/.ccrc/landing/.
   [ "$INST_ROLE" = server ] || _inst_enable_timer land-probe ccd-land-probe.timer
+  # Same gate as its unit files, and the same DEGRADE-rather-than-die idiom: the weekly quiz is an unattended reading, not a guardrail.
+  [ "$INST_ROLE" = server ] || _inst_enable_timer quiz-weekly ccd-quiz-weekly.timer
   [ "$INST_ROLE" = server ] || _inst_enable_timer testbox-times ccd-testbox-times.timer   # a reading; with no test box URL it fetches nothing
   [ "$INST_ROLE" = server ] || _inst_enable_timer carry-dedupe ccd-carry-dedupe.timer   # housekeeping, a dry run until the operator arms it
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
@@ -29038,7 +29044,7 @@ _uninst_units() {
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
       ccd-limit-watchdog.timer ccd-limit-watchdog.service \
-      ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
+      ccd-land-probe.timer ccd-land-probe.service ccd-quiz-weekly.timer ccd-quiz-weekly.service ccd-testbox-times.timer ccd-testbox-times.service \
       ccd-carry-dedupe.timer ccd-carry-dedupe.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
@@ -29070,7 +29076,7 @@ _uninst_units() {
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
     "$dir/ccd-limit-watchdog.service" "$dir/ccd-limit-watchdog.timer" \
-    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
+    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
     "$dir/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \

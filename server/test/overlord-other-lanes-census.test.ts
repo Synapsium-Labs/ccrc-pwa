@@ -293,6 +293,10 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/token/claim': ['launch-profile', 'a single-use code sent over the agent link; no session holds one'],
   'POST /api/reader-lab/probe/:nonce/:name': ['launch-profile', 'a counter that never reads its body; no caller identity'],
   'POST /api/continuity/quiz-runs': ['launch-profile', 'box token only, from the operator\'s `ccrc quiz-record` through `ccrc-api`; a session holding the token could post a pending run, but only the operator\'s session-gated Confirm makes it count'],
+  // Run 3212 (the operator's ruling of 2026-11-22: the weekly replay quiz runs, records and confirms itself).
+  'POST /api/continuity/quiz-runs/:id/confirm': ['launch-profile', 'box token only, from the weekly timer\'s `ccrc quiz-record --confirm` through `ccrc-api`; the server applies the matching rule, so a session holding the token could confirm a run it recorded itself (residual, as the record door\'s)'],
+  'POST /api/continuity/quiz-status': ['launch-profile', 'box token only, from the weekly timer\'s runner; it stores the last tick and may mail the coordinator, and makes no run count'],
+  'POST /api/continuity/quiz-baseline/live': ['programme-ownership', 'attribution, then `claimsProgramme` (the quiz\'s programme), then the baseline'],
   'POST /api/mail/:id/ack': ['stays-open', 'the Overlord acks its own deliveries: its timer mail reaches it as mail (question 5)'],
   'POST /api/linear/proxy/search': ['stays-open', 'a read sent as a POST (question 7)'],
   'POST /api/linking/suggest': ['stays-open', 'a box-token write lane, attribution-checked, that the Overlord uses too: below the full rung it suggests a team instead of linking (D-8808, spec §3.1 step 5); it stores the caller\'s own suggestion only'],

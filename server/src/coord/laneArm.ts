@@ -9,7 +9,7 @@
 import {
   LANE_ARM_LANES, LANE_ARM_MARKER, LANE_ARM_TEXT, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG, isLaneArmChoice, isLaneArmImport, isLaneArmLane,
   laneArmGate, laneArmLive,
-  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmImport, type LaneArmLane, type LaneArmQuizPending, type LaneArmQuizView,
+  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmImport, type LaneArmLane, type LaneArmQuizPending, type LaneArmQuizTick, type LaneArmQuizView,
   type LaneArmRequest, type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm.js';
 import { isW1aArmRow } from '../continuity/quiz.js';
@@ -45,16 +45,24 @@ export interface LaneArmQuizReads {
   readonly baseline: { readonly ok: true; readonly exists: true; readonly at: number } | { readonly ok: true; readonly exists: false; readonly at: null }
     | { readonly ok: false; readonly detail: string };
   readonly pending: { readonly ok: true; readonly runs: readonly LaneArmQuizPending[] } | { readonly ok: false; readonly detail: string };
+  /** The unattended run's last tick (run 3212; `quizStore.ts#quizStatusRead`), or no row yet, or why the read failed. */
+  readonly status?: { readonly ok: true; readonly row: LaneArmQuizTick | null } | { readonly ok: false; readonly detail: string };
 }
 
-/** The card's quiz block: the baseline recorded with its date, not yet, or unreadable (never folded into "not yet"), and the
- *  pending runs as read, oldest first. */
+/** The card's quiz block: the baseline recorded with its date, not yet, or unreadable (never folded into "not yet"), the
+ *  pending runs as read, oldest first, and, when the status was read, the unattended run's last tick (none yet, the tick, or
+ *  unreadable, never folded into "none"). */
 export function laneArmQuizViewOf(q: LaneArmQuizReads): LaneArmQuizView {
   const baseline: LaneArmQuizView['baseline'] = !q.baseline.ok
     ? { state: 'unreadable', detail: q.baseline.detail }
     : q.baseline.exists ? { state: 'recorded', at: q.baseline.at } : { state: 'not-yet' };
   const pending: LaneArmQuizView['pending'] = q.pending.ok ? { ok: true, runs: [...q.pending.runs] } : { ok: false, detail: q.pending.detail };
-  return { baseline, pending };
+  if (q.status === undefined) return { baseline, pending };
+  const s = q.status;
+  const unattended: NonNullable<LaneArmQuizView['unattended']> = !s.ok ? { state: 'unreadable', detail: s.detail }
+    : s.row === null ? { state: 'none' }
+      : { state: 'reported', week: s.row.week, act: s.row.act, outcome: s.row.outcome, word: s.row.word, detail: s.row.detail, account: s.row.account, at: s.row.at };
+  return { baseline, pending, unattended };
 }
 
 /** Every row of the card, in `LANE_ARM_LANES` order, and the quiz block when its reads are given. */
@@ -132,6 +140,30 @@ export function decideLaneArmPost(i: {
     }
   }
   return { kind: 'write', lane: request.lane, choice: request.choice };
+}
+
+/** The coordinator's Live on a W1a row (run 3212; `continuity/quizRoutes.ts`'s `POST /api/continuity/quiz-baseline/live`),
+ *  decided after the door's token, attribution and ownership checks. The card's door takes Live from a signed-in operator
+ *  only; this one is the programme coordinator's, and only for what the baseline gates: a W1a row (`W1A_ARM_ROWS`) only,
+ *  never one whose gate stands, never over an unreadable row, and only once a confirmed baseline exists (an unreadable
+ *  baseline refuses as unreadable, never as missing). It asks no confirm key: the coordinator acts on the baseline's mail.
+ *  `gate` is `laneArmGate(lane)`; a caller passes another only to drive a gated lane in a test. */
+export type LaneArmCoordLiveVerdict =
+  | { readonly kind: 'not-w1a' }
+  | { readonly kind: 'gated'; readonly reason: string }
+  | { readonly kind: 'unreadable'; readonly detail: string }
+  | { readonly kind: 'baseline-missing' }
+  | { readonly kind: 'write'; readonly lane: LaneArmLane };
+export function decideLaneArmCoordLive(i: {
+  readonly lane: LaneArmLane; readonly row: LaneArmRowView; readonly baseline: LaneArmBaseline; readonly gate?: string | null;
+}): LaneArmCoordLiveVerdict {
+  if (!isW1aArmRow(i.lane)) return { kind: 'not-w1a' };
+  const gate = i.gate === undefined ? laneArmGate(i.lane) : i.gate;
+  if (gate !== null) return { kind: 'gated', reason: gate };
+  if (i.row.stored === 'unreadable') return { kind: 'unreadable', detail: i.row.detail ?? 'the row could not be read' };
+  if (!i.baseline.ok) return { kind: 'unreadable', detail: `${LANE_ARM_TEXT.baselineUnreadable}: ${i.baseline.detail}` };
+  if (!i.baseline.exists) return { kind: 'baseline-missing' };
+  return { kind: 'write', lane: i.lane };
 }
 
 /** The feed row's body for a change, or null when the stored choice did not move. */
