@@ -54,6 +54,8 @@ They decide every question the plan leaves open.
 | 6 words | the plan reference and the ledger say what the code does: `malformed` and the doors' `unreachable`, triage's own decisions, a held ticket, clause 22's words recorded (`w6-words`) | D-8185, D-8808 | #3151 | **merged** 2026-11-21 as `bedc03d85` (head `83f5ece6b`, by the merge queue; run 3102 closed done): three review rounds (3106, 3110, 3121); landed with known limits, carried to `w6-unreachable-scope` (run 3129) |
 | 6 unreachable | the plan reference names every cause of `unreachable` at the doors (`w6-unreachable-scope`) | D-8185, D-8808 | #3155 | **merged** 2026-11-21 as `fd16dcd0c` (head `1fb38e62d`, by the merge queue; run 3129 closed done): one review round (3144); its minor words carried to `w6-plan-ref-words` |
 | 8 triage | the triage row choice decides in the plan policy, with one holder predicate (`w8-triage-l1`; D-8808's stated bend closed) | D-8808 | #3157 | **merged** 2026-11-21 as `6574dcd6f` (head `e4daf0aba`, by the merge queue; run 3155 closed done): two review rounds (3172, 3180); no behaviour change |
+| 8 notice | an item for the operator when a shared team key sits only on project rows that name no workspace; a new item action verb `linear-team-workspace` with no acts (`w8-ambiguous-notice`; built before the pilot at the coordinator's call) | D-8808 | #3162 | **merged** 2026-11-21 as `c21c572b6` (head `9b2377d4e`, by the merge queue; run 3187 closed done): two review rounds (3196, 3199); comment words carried to `w6-plan-ref-words` |
+| 6 last words | the plan reference's last `unreachable` words, two settle comments, a test title, and the settings-path guard counting occurrences (`w6-plan-ref-words`) | D-8185, D-8808 | #3163 | **merged** 2026-11-21 as `77a1fefe4` (head `45c25190a`, by the merge queue; run 3202 closed done): two review rounds (3205, 3208) |
 | 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence (built, off), a coordinator's suggestion, the Overlord's link as a call made for the operator, the console | D-8808, D-8809 | #3123 | **merged** 2026-11-21 as `6c3ea2c55` (head `dbc6483eb`, by the merge queue; run 2862 closed done): three review rounds (2971, 2997, 3020); accepted at the cap, migration **116**; six follow-up tickets, one dropped as built |
 
 ## Decisions & deviations
@@ -413,9 +415,8 @@ Every planned wave and every fix before the pilot has landed (#3145, #3150). The
 to the operator before any other team is started. After that rollout the coordinator makes item 498's one read-only
 capture, records it as a scrubbed fixture, and only then may `w8-attached-wire` switch the evidence on.
 
-In flight: run 3187, ticket `w8-ambiguous-notice` (an item for the operator when a shared team key sits only on rows that
-name no workspace; review 3048 F5).
+In flight: run 3209, ticket `w8-call-anchor` (a call has an address on the Waiting on you screen, and the Overlord link's
+line on the project card opens its own call).
 
-Open follow-up tickets: `w6-plan-ref-words` (review 3144's words in the plan reference), `w8-attached-wire` (after the
-capture), `w8-overlord-skill`, `w8-call-anchor` and `w8-skill-section` (the coordinator skill's linking section, reviewed text in the wave 8 note). Each is a
+Open follow-up tickets: `w8-attached-wire` (after the capture), `w8-overlord-skill` and `w8-skill-section` (the coordinator skill's linking section, reviewed text in the wave 8 note). Each is a
 rules or small code change of its own.
