@@ -7,7 +7,7 @@
 // fields the body leaves out read as null, never as an empty string. The hook's clock `at` is kept as sent; every window the
 // server reads uses its own `receivedAt` (the store's column), so a hook with a wrong clock moves no window.
 import {
-  AGENT_ID_RE, AGENT_TYPE_MAX, DOOR_TOOL_NAME_RE, DOOR_TOOL_PREFIX, REPORT_MODEL_MAX, WITNESS_KEY_SHAPE, isHookReportKind,
+  AGENT_TYPE_MAX, DOOR_TOOL_NAME_RE, DOOR_TOOL_PREFIX, REPORT_MODEL_MAX, WITNESS_KEY_SHAPE, isAgentId, isHookReportKind,
   isModelSwitchHow, READER_STALE_MS, WITNESS_WINDOW_MS, type HookReport, type ModelSwitchHow,
 } from '../../../shared/continuity-reports.js';
 import type { WitnessVerdict } from '../coord/overlordGate.js';
@@ -20,7 +20,6 @@ const isPos = (v: unknown): v is number => typeof v === 'number' && Number.isSaf
 const text = (max: number) => (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= max && !/[\x00-\x1f\x7f]/.test(v);
 /** An optional field: absent or null reads null; a present value must narrow, else `undefined` (the caller refuses it). */
 const opt = <T>(v: unknown, ok: (x: unknown) => x is T): T | null | undefined => (v === null || v === undefined ? null : ok(v) ? v : undefined);
-const isAgentId = (v: unknown): v is string => typeof v === 'string' && AGENT_ID_RE.test(v);
 const isTool = (v: unknown): v is string =>
   typeof v === 'string' && v.startsWith(DOOR_TOOL_PREFIX) && DOOR_TOOL_NAME_RE.test(v.slice(DOOR_TOOL_PREFIX.length));
 const isKey = (v: unknown): v is string => typeof v === 'string' && WITNESS_KEY_SHAPE.test(v);

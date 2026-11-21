@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { HookAsk, HookAskQuestion } from '../../shared/api.js';
 import type { HookApprovalEntry } from './coord/approvalEnvelope.js';
+import { isAgentId } from '../../shared/continuity-reports.js';
 
 /** A hookstate file whose `updatedAt` and `aliveAt` are both older than this is presumed stale: the writing hook
  *  process may be dead, wedged, or the session may have moved on without a
@@ -40,7 +41,10 @@ export interface HookState {
    *  literal, so a misspelt name fails to compile. */
   event: string | null;
   ask: HookAsk | null;
-  subagents: { name: string; startedAt: number }[];
+  /** The hook's roster. `id` (H1b, D-8862) is SERVER-INTERNAL: the session stream reads it for the Helpers section, and
+   *  `fleet.ts` strips it when it copies the roster onto `FleetSession.subagents`, so the fleet wire and the state cache are
+   *  unchanged. Absent for an entry that carries none (D-5375) or one that fails the hook's id rule (`isAgentId`). */
+  subagents: { id?: string; name: string; startedAt: number }[];
   /** How many `graphify query` / `path` / `explain` calls this session has
    *  made since it last started or cleared, as the hook counted them
    *  (`ccd/session-hook.sh`'s `GRAPH_QUERY_RE`). R4 of the read-side design:
@@ -90,8 +94,6 @@ export interface HookState {
   approvals?: readonly HookApprovalEntry[];
 }
 
-/** The hook's id rule for an `agent_id` it keeps (`[A-Za-z0-9_-]{1,64}`). */
-const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 /** The longest summary the hook writes (`.[0:200]`, in code points, so it is counted in code points here: review 2752 F7)
  *  and the longest route word this reader keeps (the `ask` reader's). */
 const ENTRY_SUMMARY_MAX = 200;
@@ -107,7 +109,7 @@ const reviveApprovalEntries = (raw: unknown): HookApprovalEntry[] => {
   for (const e of raw) {
     if (!isRecord(e)) continue;
     const { agentId, tool, summary, route, at } = e;
-    if (typeof agentId !== 'string' || !AGENT_ID_RE.test(agentId)) continue;
+    if (!isAgentId(agentId)) continue;
     if (typeof tool !== 'string' || tool === '' || tool.length > ENTRY_TOOL_MAX) continue;
     if (typeof summary !== 'string' || Array.from(summary).length > ENTRY_SUMMARY_MAX) continue;
     if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) continue;
@@ -205,7 +207,7 @@ function reviveAsk(raw: unknown): HookAsk {
   throw new Malformed('ask');
 }
 
-function reviveSubagents(raw: unknown): { name: string; startedAt: number }[] {
+function reviveSubagents(raw: unknown): HookState['subagents'] {
   // Absent (a file written before this field existed) or explicit null both
   // read as "no subagents", never a crash — the writer always includes the
   // field today, but the reader must not assume every file on disk agrees.
@@ -216,7 +218,10 @@ function reviveSubagents(raw: unknown): { name: string; startedAt: number }[] {
         typeof item['startedAt'] !== 'number' || !Number.isFinite(item['startedAt'])) {
       throw new Malformed('subagents[]');
     }
-    return { name: item['name'], startedAt: item['startedAt'] };
+    // H1b (D-8862): the id is kept when it is one on the hook's rule; any other value reads as ABSENT, never as a malformed
+    // state, because id-less entries still occur (D-5375) and a bad id must not cost the session its whole hook read.
+    const id = item['id'];
+    return { ...(isAgentId(id) ? { id } : {}), name: item['name'], startedAt: item['startedAt'] };
   });
 }
 

@@ -26,10 +26,12 @@ import {
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
 import { SKILL_PREFLIGHT_EVENT } from './skillInstall.js';
+import type { AttributionRead } from './openRun.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
   admitMarkerRefusal, capRefusalOf, capShadowLine, capShadowResumeLine, capsReadingOf, decideDispatch, freedSlotPending,
-  resumeSkipsCap, sendBackCapPlan, workerReadingOf, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop, type WorkerFacts, type WorkerReading,
+  resumeSkipsCap, sendBackCapPlan, sendBackCharged, workerReadingOf, decideInPlaceCaller, decideInPlaceRequest, decideInPlaceTarget,
+  type InPlaceHalt, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop, type WorkerFacts, type WorkerReading,
 } from './dispatchDecide.js';
 import { laneArmRowViewOf } from './laneArm.js';
 import { capWaitOf } from './admissionWake.js';
@@ -212,8 +214,11 @@ export type DispatchOutcome =
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' |
         'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch' | 'status-unmeasurable' |
-        'intent-held'>;
+        'intent-held' | 'self-dispatch' | 'claimed-by-another'>;
       limit?: number; running?: number; candidates?: number;
+      /** `self-dispatch`'s own field, PRESENT exactly on that code: the other door, in words (D-6096). Distinguishes by
+       *  presence, like `by` and `key`. */
+      detail?: string;
       /** `intent-held`'s own fields, PRESENT exactly on that code: the key and the other programme's run that holds it. */
       key?: string; holder?: { runId: number; program: string };
       /** WHICH project the measured party belongs to — `project-mismatch`'s
@@ -389,9 +394,12 @@ export async function sendBackCapCheck(
   coord: CoordStore, ports: CapPorts, id: number, to: RunState,
 ): Promise<() => { limit: number; running: number } | null> {
   const today = (): { limit: number; running: number } | null => capsMeasured(coord).overConcurrency;
+  const read = coord.run(id);
+  // D-6096 (review 2993 F2): an in-place run's send-back, which `sendBackCharged` answers not charged on every edge, is no
+  // refusal here, so the gate admits it and `waitOnSendBackRefusal` stamps nothing. Every other run's check is as before.
+  if (read.ok && read.run !== null && read.run.inPlace === true && !sendBackCharged(to, read.run.state, true)) return () => null;
   const workerFacts = ports.workerFacts;
   if (workerFacts === undefined || today() === null) return today;
-  const read = coord.run(id);
   const from = read.ok && read.run !== null ? read.run.state : null;
   const sessionId = read.ok && read.run !== null ? read.run.sessionId : null;
   const armed = capCountsWorkingArmed(coord);
@@ -996,4 +1004,62 @@ export async function dispatchRun(
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
     adopted, spawnState: adoptedSpawn, skillState, intents: intentKeys };
+}
+
+/** The deps `bindRunInPlace` needs: the store, the registry reads and the caller's attribution. A plain subset of what
+ *  the dispatch route already holds; no `runCcd`, no `sendClear` and no `fleetState`, because the in-place arm composes no
+ *  fleet act, which this type makes unrepresentable. */
+export interface InPlaceDeps {
+  readonly coord: CoordStore;
+  readonly io: FleetIO;
+  readonly cfg: CcrcConfig;
+  /** `attributionVerdict` over the route's io and cfg, with the `claimedByUuid` field name (the same gate `POST /api/runs`
+   *  applies to a claimant). */
+  readonly attribute: (who: string, uuid: string) => Promise<AttributionRead>;
+}
+
+/** `bindRunInPlace`'s answer: the bind, a refusal of the dispatch union, or the attribution gate's own refusal. */
+export type InPlaceOutcome = { ok: true; id: number; sessionId: string; branch: string } | InPlaceHalt;
+
+/**
+ * D-6096 (fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave as the run's own
+ * worker, in a sibling worktree on `branch`. Called by `POST /api/runs/:id/dispatch` with `inPlace: true`, INSIDE
+ * `coordMutex`. It is NOT `dispatchRun`: it starts no process and composes NO fleet act (no `ensure`, no `ws-hold`, no
+ * `ccd route`, no brief mail and no `/clear`), and its deps carry no `runCcd` to compose one with.
+ *
+ * Every refusal comes before any write, in this order: the operator's pause and the mail-disabled marker (the operator's
+ * stop binds every path, DISPATCH, THE IN-PLACE BIND AND SELF-WORK ON NEW WAVES, and nothing else: the close, the abandon
+ * and the advance do not read the marker; the listing fails shut, as the dispatch's admit step does), then the run (it
+ * exists, is a `planned` work run, is not already bound to another session), the caller (it is the claimant, and its uuid
+ * is the registry's), the claimant's measured project (equal to the run's; unreadable or unrecorded refuses), the branch
+ * (a bare git ref that is the sibling's: no registered workspace's and not the project's base, review 2993 F3), and
+ * another programme's held landing intent. Each is decided in `dispatchDecide.ts`. The concurrency cap is not asked: an in-place run
+ * starts nothing and is charged to neither cap (`CoordStore.bindInPlace` leaves `dispatchedAt` null).
+ */
+export async function bindRunInPlace(
+  deps: InPlaceDeps, id: number, by: string, byUuid: string, branch: unknown, intents: unknown = undefined,
+): Promise<InPlaceOutcome> {
+  const { coord } = deps;
+  // The executor only reads and writes: every refusal is `dispatchDecide.ts`'s (review 2993 F8), asked in the order the
+  // reads come. The measured listing (the plain `readdir` ratchet, D-5969) folds an absent or unreadable registry to
+  // `null`, which refuses `paused`, failing shut as the admit step does.
+  const listing = await deps.io.readdirMeasured(deps.cfg.registryDir);
+  const request = decideInPlaceRequest(listing.ok ? listing.entries : null, coord.run(id), by);
+  if (!request.ok) return request;
+  // From here every read and write names the claimant the store recorded (equal to `by`, the request step proved it),
+  // never the request's own value: the registry paths below are built from a stored id.
+  const { run, claimant } = request.plan;
+  const caller = decideInPlaceCaller(run, await deps.attribute(claimant, byUuid),
+    await fieldMeasured(deps.io, deps.cfg.registryDir, claimant, 'project'));
+  if (caller !== null) return caller;
+  // D-8085, D-8086: the landing intents a plain dispatch holds are held by the in-place bind too, under the same holder
+  // check (the caller runs inside `coordMutex`, which serialises this check and the write in `bindInPlace`).
+  // [registry-refused:refuses] an unlistable registry refuses the bind; a refused row is no workspace's branch.
+  const registry = await readRegistryMeasured(deps.io, deps.cfg);
+  const target = decideInPlaceTarget(run, claimant, branch, registry, intents,
+    (project, keys) => coord.heldLandingIntents(project, keys));
+  if (!target.ok) return target;
+  const adv = coord.bindInPlace(id, claimant, target.plan.branch, target.plan.intentKeys, Date.now());
+  if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
+  return { ok: true, id, sessionId: claimant, branch: target.plan.branch };
 }

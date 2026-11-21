@@ -1,7 +1,7 @@
 // D-8186 (Linear hierarchy plan, Task 7.4): the report and put back. Put back runs from the move record alone: the ccrc half first
 // (the records dropped "put back"), then each issue restored and each created initiative and project canceled.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket, type PlanChanges } from '../src/coord/planStore.js';
+import { adoptIssueBindingInTx, applyPlanChanges, NO_PLAN_CHANGES, type NewTicket, type PlanChanges } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, fail, leaf, migRig, OWNER, SLUG, T, U, type MigRig } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
 import { tx } from '../src/coord/tx.js';
@@ -302,5 +302,24 @@ describe('the migration report and put back (D-8186)', () => {
     // the report closes after a put back and the next team may start
     expect(r.mig.act(reportItem(r, id), id, 'done', null)).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.reportDoneAt).not.toBeNull();
+  });
+});
+
+describe('put back and a live binding (review 3004, D-8186)', () => {
+  it('put back never reads or writes an issue a live binding now holds: it is listed taken and put back still finishes', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.applied([entry(1, 'stale'), entry(2, 'stale')]);
+    const t: NewTicket = { program: SLUG, epicKey: 'e1', checkpointKey: 'c1', key: 'held1', kind: 'work', title: 'held1', body: 'x', project: 'project-a', source: 'inbound' };
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [t], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const tk = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === 'held1')!.id;
+    adoptIssueBindingInTx(r.db, tk, WS.a.id, 'AAA', U(101), 'AAA-1', r.t.now);
+    await putBack(r, id);
+    expect(putBackAsks(r).filter((a) => a.input['id'] === U(101))).toEqual([]);
+    expect(r.issues.get(U(101))!.stateType).toBe('canceled');      // left as it is
+    expect(r.issues.get(U(102))!.stateType).toBe('unstarted');     // the other one is restored
+    const rep = r.plan.migrationById(id)!.report!;
+    expect(rep.taken).toEqual(['AAA-1']);
+    expect(rep.movedSince).toEqual([]);
   });
 });

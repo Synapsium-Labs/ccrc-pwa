@@ -1,6 +1,10 @@
+// L3 adapter (C3 Session Conversation): every read below calls the FleetIO port. Its imports alone (a type import of the
+// port) would read L1, so this header says L3 (spec 2026-11-19-session-helpers-design Table 12; session helpers H1b, D-8862).
+//
 // The session's workflows, read where Claude Code keeps them (D-5561): one
 // instance per session socket and session dir, holding what it has read so a
 // 2 s tick costs a listing, a few stats and only the bytes appended since.
+// Since H1b it reads the session's Agent helpers too (`SessionHelpers`, below), by id, in a tier of their own.
 //
 // Read-only: every call below is a FleetIO read. Nothing here writes, signals
 // or starts anything, and the files it reads are under `<cfgDir>/projects/`,
@@ -23,8 +27,22 @@ import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import { walkBack } from '../backread.js';
 import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
-import { WORKFLOW_EVICT_MS, type WorkflowView } from '../../../shared/workflows.js';
+import { WORKFLOW_EVICT_MS, isFinalHelperState, isHelperId, type AgentHelperState, type WorkflowView } from '../../../shared/workflows.js';
+import type { HelperFact } from '../transcript/parse.js';
 import {
+  decideAgentHelpers,
+  emptyHelperMemory,
+  foldHelperFacts,
+  isAgentHelper,
+  isWorkflowAgentName,
+  lastLineTime,
+  parseHelperMeta,
+  seenDrops,
+  type AgentArm,
+  type HelperIdFacts,
+  type HelperMemory,
+  type HelperMeta,
+  type RosterInput,
   decideRun,
   emptyCarry,
   emptyFold,
@@ -40,6 +58,7 @@ import {
   selectRows,
   splitLines,
   summaryView,
+  workflowLastActivity,
   type Carry,
   type JournalFold,
   type Proc,
@@ -119,7 +138,19 @@ export class SessionWorkflows {
   /** Agent reads left this tick (tails, metas, stats of starts). */
   private budget = 0;
 
-  constructor(private readonly io: FleetIO, readonly sessionDir: string) {}
+  /** H1b: the session's Agent helpers, read beside its workflows and rebuilt with them when the session dir changes. */
+  private readonly helpers: SessionHelpers;
+
+  constructor(private readonly io: FleetIO, readonly sessionDir: string) {
+    this.helpers = new SessionHelpers(io, sessionDir);
+  }
+
+  /** One reading of the session's helpers (H1b, D-8862; spec §3.1): the workflow arm, whose missing directory answers
+   *  `absent` at once, and the Agent arm, which runs regardless, each in its own budget. */
+  async readAll(proc: Proc, now: number, agents: { roster: RosterInput; facts: readonly HelperFact[] }): Promise<{ workflows: WorkflowsRead; helpers: HelpersRead }> {
+    const workflows = await this.read(proc, now);
+    return { workflows, helpers: await this.helpers.read({ ...agents, proc, now }) };
+  }
 
   private get runsDir(): string { return path.join(this.sessionDir, 'subagents', 'workflows'); }
   private summaryPath(runId: string): string { return path.join(this.sessionDir, 'workflows', `${runId}.json`); }
@@ -181,10 +212,13 @@ export class SessionWorkflows {
         const { id, run } = r;
         const name = await this.nameOf(id, run);
         const phases = await this.phasesOf(id, run);
-        run.view = runningView({
-          id, name, fold: run.fold, phases, startedAt: startedAt.get(id) ?? null, meta: run.meta, unread: r.unread,
-          tokens: new Map([...run.tokens].map(([a, t]) => [a, t.tokens])),
-        });
+        run.view = {
+          ...runningView({
+            id, name, fold: run.fold, phases, startedAt: startedAt.get(id) ?? null, meta: run.meta, unread: r.unread,
+            tokens: new Map([...run.tokens].map(([a, t]) => [a, t.tokens])),
+          }),
+          lastActivityAt: workflowLastActivity(run.journalMtime, run.fold, run.activity),
+        };
         views.push(run.view);
       }
     }
@@ -215,11 +249,7 @@ export class SessionWorkflows {
 
     // The cheap verdicts first, before any byte is read: a finished run, or an
     // orphan whose journal predates this process (no write since can be its).
-    let activity = journal.mtimeMs;
-    for (const k of run.fold.keys.values()) {
-      const at = k.last === 'started' ? run.activity.get(k.agentId) : undefined;
-      if (at !== undefined && at > activity) activity = at;
-    }
+    const activity = workflowLastActivity(journal.mtimeMs, run.fold, run.activity);
     const decision = decideRun({ summaryMtime: run.summaryMtime, journalMtime: journal.mtimeMs, activityMtime: activity, proc });
     if (decision === 'undecided') {
       // Only a run never decided is quieted: one already showing keeps being
@@ -229,7 +259,11 @@ export class SessionWorkflows {
     }
     run.decision = decision;
     if (decision === 'interrupted') { run.view = null; return held(null); }
-    if (decision === 'finished') { run.view = await this.finishedView(id, run, now); return held(run.view); }
+    if (decision === 'finished') {
+      const view = await this.finishedView(id, run, now);
+      run.view = view === null ? null : { ...view, lastActivityAt: activity };
+      return held(run.view);
+    }
 
     // Running: read what was appended.
     const unread = !(await this.readJournal(id, run, journal.size));
@@ -399,5 +433,213 @@ export class SessionWorkflows {
     // has no state to show: the row waits for the next pass rather than guessing.
     if (facts === null) return null;
     return summaryView(id, facts, at, scriptNameFor(await this.scriptEntries(), id));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session helpers H1b (D-8862; spec 2026-11-19-session-helpers-design §3.1, §5 "The helper tier").
+
+/** The Agent helpers' read budget per reading, their own beside the workflows' `AGENT_READS_PER_TICK`, so neither starves
+ *  the other. A stat and a read each count one. */
+export const HELPER_READS_PER_TICK = 12;
+/** The most helper facts a stream holds between two readings, the oldest dropped first (the fold keeps `HELPER_FACTS_MAX`
+ *  ids; this bounds only a stream whose readings stopped while its tailer ran on). */
+export const HELPER_FACTS_PENDING_MAX = 1024;
+
+export interface HelperReadInput {
+  roster: RosterInput;
+  /** The helper facts the tailer and the backlog gave since the last reading. */
+  facts: readonly HelperFact[];
+  proc: Proc;
+  now: number;
+}
+
+export interface HelpersRead {
+  arm: AgentArm;
+  /** The tier rotated: `refreshed` of the `of` helpers not final had their transcript looked at; null when every one was. */
+  readEvery: { refreshed: number; of: number } | null;
+}
+
+interface HelperCache {
+  /** The meta as last read: its facts, or null (absent, unreadable, or not a meta). */
+  meta: ReturnType<typeof parseHelperMeta>;
+  /** The meta file's size and mtime at its last stat, null until one; the reading of that read or stat. */
+  metaStat: { size: number; mtimeMs: number } | null;
+  /** A changed stat was measured but its read did not fit. Take that read before the next stat. */
+  metaReadPending: boolean;
+  metaTick: number;
+  /** The transcript's size at its last read, null until one. */
+  size: number | null;
+  lastWriteAt: number | null;
+  tokens: number | null;
+  /** Its last write has been read since it last grew (or it could not be read): a `finished` meta may now decide (F10c). */
+  lastWriteKnown: boolean;
+}
+
+/**
+ * The session's Agent helpers, read BY ID: never a listing of `subagents/`, which piles up over a session's life. One
+ * instance per session dir and stream, holding what it has read. Each reading spends at most `HELPER_READS_PER_TICK`, in
+ * the spec's order (§5): (1) a meta read for each id first known (a roster entry named `workflow-subagent` is ruled out
+ * without one); (2) a meta read for each drop this reader saw (`seenDrops`, the decision's own witness); (3) for each
+ * helper not final, a stat of its transcript and, when it grew, a read of the new bytes, at most `TAIL_BYTES`, rotated so the
+ * ones left unread come first next time; (4) a due meta stat or read, oldest first, also for a listed id still missing its
+ * meta; (5) one attempt at the last write for a final helper or a `finished` meta. When due, steps 4 and 5 reserve one and
+ * two calls. A changed meta stat without room to read is saved and the read is first in step 4 next time. A `finished` meta
+ * is held until the last-write attempt (successful or not), so the row is not drawn without its time and then drawn again
+ * (reviews 2961 F10c and 3014 F1/F2). `decideAgentHelpers` decides; this class measures and carries.
+ */
+export class SessionHelpers {
+  private facts: Map<string, HelperIdFacts> = new Map();
+  private memory: HelperMemory = emptyHelperMemory();
+  private readonly cache = new Map<string, HelperCache>();
+  /** Each id's state at the last decision: what "not final" means for the tier. */
+  private last = new Map<string, AgentHelperState>();
+  private tick = 0;
+  private cursor = 0;
+
+  constructor(private readonly io: FleetIO, readonly sessionDir: string) {}
+
+  private file(id: string, ext: '.meta.json' | '.jsonl'): string { return path.join(this.sessionDir, 'subagents', `agent-${id}${ext}`); }
+
+  async read(i: HelperReadInput): Promise<HelpersRead> {
+    this.tick++;
+    let budget = HELPER_READS_PER_TICK;
+    this.facts = foldHelperFacts(this.facts, i.facts);
+    const entries = i.roster.kind === 'usable' ? i.roster.entries : [];
+    const nameOf = new Map<string, string>();
+    for (const e of entries) if (isHelperId(e.id)) nameOf.set(e.id, e.name);
+    const listed = [...nameOf].filter(([, name]) => !isWorkflowAgentName(name)).map(([id]) => id);
+    const launched = [...this.facts].filter(([, f]) => f.launch !== null).map(([id]) => id);
+    const noticed = [...this.facts.keys()];
+    const isAgent = (id: string): boolean => isAgentHelper(this.facts.get(id), this.metaOf(id), nameOf.get(id));
+    const isFinal = (id: string): boolean => {
+      const was = this.last.get(id);
+      if (was !== undefined) return isFinalHelperState(was);
+      return this.facts.get(id)?.end != null || this.cache.get(id)?.meta?.finished === true;
+    };
+
+    const needsMeta = ([id, c]: [string, HelperCache]): boolean =>
+      ((isAgent(id) && !isFinal(id)) || (c.meta === null && listed.includes(id)))
+      && (c.metaReadPending || this.tick - c.metaTick >= RESTAT_EVERY);
+    const needsLastWrite = ([id, c]: [string, HelperCache]): boolean =>
+      !c.lastWriteKnown && isAgent(id) && (isFinal(id) || c.meta?.finished === true);
+    const finalReserve = (): number => [...this.cache].some(needsLastWrite) ? 2 : 0;
+    // Reserve a meta call and a final stat+range if already due; a burst of discoveries or drops cannot take them.
+    const reserve = (metas: boolean): number => Number(metas) + finalReserve();
+    const earlyReserve = reserve([...this.cache].some(needsMeta));
+    // (1) the ids first known, the roster's first, then the launches', then any other id a fact names.
+    for (const id of new Set([...listed, ...launched, ...noticed])) {
+      if (budget <= earlyReserve) break;
+      if (!isHelperId(id) || this.cache.has(id)) continue;
+      await this.readMeta(id);
+      budget--;
+    }
+    // (2) the drops this reading saw.
+    for (const id of seenDrops(this.memory, i.roster, i.proc)) {
+      if (budget <= earlyReserve) break;
+      if (!this.cache.has(id) || isFinal(id)) continue;
+      await this.readMeta(id);
+      budget--;
+    }
+    // (3) the transcripts of the helpers not final, rotated. Newly discovered final work can reserve space too.
+    const metaDue = [...this.cache].filter(needsMeta).sort(([, a], [, b]) =>
+      Number(b.metaReadPending) - Number(a.metaReadPending) || a.metaTick - b.metaTick);
+    const keepForFinal = finalReserve();
+    const keepAfterOpen = Number(metaDue.length > 0) + keepForFinal;
+    const open = [...this.cache].filter((entry) => isAgent(entry[0]) && !isFinal(entry[0]) && !needsLastWrite(entry)).map(([id]) => id);
+    const from = open.length === 0 ? 0 : this.cursor % open.length;
+    let refreshed = 0;
+    let visited = 0;
+    for (const id of [...open.slice(from), ...open.slice(0, from)]) {
+      if (budget <= keepAfterOpen) break;
+      visited++;
+      const c = this.cache.get(id)!;
+      const st = await this.io.statMeasured(this.file(id, '.jsonl'));
+      budget--;
+      if (!st.ok || st.size === c.size) { refreshed++; continue; }
+      if (budget <= keepAfterOpen) { c.lastWriteKnown = false; visited--; break; } // its transcript leads next reading
+      if (await this.readTail(id, c, st.size, false)) budget--;
+      refreshed++;
+    }
+    this.cursor = from + visited;
+    // (4) the metas of the helpers not final (and of a listed id whose meta was not there yet), every RESTAT_EVERY readings.
+    for (const [id, c] of metaDue) {
+      if (budget <= keepForFinal) break;
+      if (!c.metaReadPending) {
+        const st = await this.io.statMeasured(this.file(id, '.meta.json'));
+        budget--;
+        if (!st.ok || (c.metaStat !== null && c.metaStat.size === st.size && c.metaStat.mtimeMs === st.mtimeMs)) { c.metaTick = this.tick; continue; }
+        c.metaStat = { size: st.size, mtimeMs: st.mtimeMs };
+        c.metaReadPending = true;
+        if (budget <= keepForFinal) break; // next reading goes straight to the read, not the same stat
+      }
+      await this.readMeta(id);
+      budget--;
+    }
+    // (5) a final helper's last write, attempted once.
+    for (const entry of this.cache) {
+      if (budget < 2) break;
+      if (!needsLastWrite(entry)) continue;
+      const [id, c] = entry;
+      const st = await this.io.statMeasured(this.file(id, '.jsonl'));
+      budget--;
+      if (!st.ok) { this.markLastWriteUnreadable(c); continue; }
+      if (await this.readTail(id, c, st.size, true)) budget--;
+    }
+
+    const metas = new Map<string, HelperMeta>();
+    for (const [id, c] of this.cache) {
+      if (c.meta === null) continue;
+      metas.set(id, {
+        path: 'agent', agentType: c.meta.agentType, description: c.meta.description, model: c.meta.model, effort: c.meta.effort,
+        finished: c.meta.finished && c.lastWriteKnown, // HELD while its last write is unread (F10c)
+        lastWriteAt: c.lastWriteAt, tokens: c.tokens,
+      });
+    }
+    const arm = decideAgentHelpers({ now: i.now, roster: i.roster, proc: i.proc, facts: this.facts, metas, memory: this.memory });
+    this.memory = arm.memory;
+    this.last = new Map(arm.agents.map((a) => [a.id, a.state]));
+    // Forget an id nothing names any more: not listed, no fact, no row.
+    for (const id of [...this.cache.keys()]) if (!nameOf.has(id) && !this.facts.has(id) && !this.last.has(id)) this.cache.delete(id);
+    return { arm, readEvery: refreshed < open.length ? { refreshed, of: open.length } : null };
+  }
+
+  private metaOf(id: string): { path: 'agent'; agentType: string | null } | undefined {
+    const m = this.cache.get(id)?.meta;
+    return m == null ? undefined : { path: 'agent', agentType: m.agentType };
+  }
+
+  private async readMeta(id: string): Promise<void> {
+    const r = await this.io.readFileMeasured(this.file(id, '.meta.json'));
+    const meta = r.ok ? parseHelperMeta(r.content) : null;
+    const c = this.cache.get(id);
+    if (c === undefined) {
+      this.cache.set(id, { meta, metaStat: null, metaReadPending: false, metaTick: this.tick, size: null, lastWriteAt: null, tokens: null, lastWriteKnown: false });
+      return;
+    }
+    if (meta?.finished === true && c.meta?.finished !== true) c.lastWriteKnown = false;
+    if (r.ok || r.reason === 'absent') c.meta = meta; // an unreadable re-read keeps what was read
+    c.metaReadPending = false;
+    c.metaTick = this.tick;
+  }
+
+  private markLastWriteUnreadable(c: HelperCache): void {
+    c.lastWriteAt = null;
+    c.lastWriteKnown = true;
+  }
+
+  /** The new bytes, at most `TAIL_BYTES` from the end (all of them after a shrink). Returns whether it spent a call. */
+  private async readTail(id: string, c: HelperCache, size: number, finalAttempt: boolean): Promise<boolean> {
+    const offset = c.size === null || size < c.size ? Math.max(0, size - TAIL_BYTES) : Math.max(c.size, size - TAIL_BYTES);
+    if (size - offset <= 0) { c.size = size; c.lastWriteKnown = true; return false; }
+    const r = await this.io.readFileFromBytesMeasured(this.file(id, '.jsonl'), offset, size - offset);
+    if (r.ok) {
+      const text = new TextDecoder().decode(r.bytes);
+      c.lastWriteAt = lastLineTime(text) ?? c.lastWriteAt;
+      c.tokens = lastUsageTokens(text) ?? c.tokens;
+      c.size = size;
+      c.lastWriteKnown = true;
+    } else if (finalAttempt) this.markLastWriteUnreadable(c);
+    return true;
   }
 }

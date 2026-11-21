@@ -370,6 +370,8 @@
 .linking-candidates { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
 .linking-candidate { display: grid; gap: calc(var(--pad-card) / 8); min-width: 0; }
 .linking-candidate button { width: auto; max-width: 100%; justify-self: start; }
+/* D-8808: the workspace picker under the key field. */
+.linking-workspace { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
 .linking-hier { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .linking-hier .opt { min-width: 0; }
 .linking-state { align-content: start; }

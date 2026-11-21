@@ -1,6 +1,7 @@
 // The park's mutant sets (approvals plan 2026-11-18, §3.3 and Tasks 3.1 to 3.3; approvals PR 3; the floors rule is D-8217):
 // each L1 decider of server/src/coord/approvalPark.ts, and `decideApprovalLapse`'s and `decideDeferredApprovalPush`'s park
-// arms in server/src/coord/questionPolicy.ts, run against every case of `../approvalParkCases.ts` over a mutated copy of
+// arms and (approvals PR 3c, F-A) `clearSettledApprovalIds` in server/src/coord/questionPolicy.ts, run against every case of
+// `../approvalParkCases.ts` over a mutated copy of
 // its module. Registered in mutation-floors.test.ts's MUTANT_SETS, with a floor in mutation-floors.json.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,6 +112,8 @@ export const PARKED_VIEW_SET: MutantSet<ApprovalParkModule> = {
     { id: 'PV-3 newest first', old: '.sort((a, b) => a.id - b.id);', new: '.sort((a, b) => b.id - a.id);' },
     { id: 'PV-4 a spent ruling shown', old: 'ruled: r.park !== null && parkHasUnspentRuling(r.park) && r.park.ruling !== null', new: 'ruled: r.park !== null && r.park.ruling !== null' },
     { id: 'PV-5 the input withheld', old: 'input: r.inputRedacted,', new: 'input: null,' },
+    { id: 'PV-6 the mark\'s run named (PR 3c F-D)', old: 'runId: r.park?.runId ?? null,', new: 'runId: (r as unknown as { runId: number | null }).runId,' },
+    { id: 'PV-7 no run named', old: 'runId: r.park?.runId ?? null,', new: 'runId: null,' },
   ],
   suite: parkSuite,
 };
@@ -131,7 +134,41 @@ export const LAPSE_PARK_SET: MutantSet<ApprovalLapseModule> = {
     { id: 'LP-11 the last poll ignores the word (historical and shadow rows move)', old: "row.fetchedAt === null && row.parkWord === 'live'", new: 'row.fetchedAt === null' },
     { id: 'LP-12 the last poll ignores the grace', old: 'now >= row.notifyAt + graceMs && now < ceiling', new: 'now >= row.notifyAt && now < ceiling' },
     { id: 'LP-13 the last poll ignores the ceiling', old: 'now >= row.notifyAt + graceMs && now < ceiling', new: 'now >= row.notifyAt + graceMs' },
-    { id: 'LP-14 the deferred push keeps a parked entry', old: "  if (mine.some((x) => x.state === 'parked')) return 'drop';\n", new: '' },
+    { id: 'LP-14 the deferred push may send a parked entry', old: "  if (mine.some((x) => x.state === 'parked')) return painted ? 'wait' : 'drop';\n", new: '' },
+    { id: 'LP-15 a painted parked entry dropped (PR 3c F-A: the press finds nothing)', old: "x.state === 'parked')) return painted ? 'wait' : 'drop';", new: "x.state === 'parked')) return 'drop';" },
+    { id: 'LP-16 an unpainted parked entry kept', old: "x.state === 'parked')) return painted ? 'wait' : 'drop';", new: "x.state === 'parked')) return 'wait';" },
+  ],
+  suite: lapseSuite,
+};
+
+export const CLEAR_SETTLE_SET: MutantSet<ApprovalLapseModule> = {
+  modulePath: POLICY_TS,
+  mutants: [
+    { id: 'CS-1 no slack: a clear settles a row the hook told "parked" (PR 3c F-A)', old: "(x.state === 'held' && !(x.parkWord === 'live' && now >= x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS))", new: "x.state === 'held'" },
+    { id: 'CS-2 the slack exclusive', old: 'now >= x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS', new: 'now > x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS' },
+    { id: 'CS-3 the slack zero', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 1_500;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 0;' },
+    { id: 'CS-4 the slack doubled', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 1_500;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 3_000;' },
+    { id: 'CS-11 the slack back at 2 s (review 3022 F4)', old: 'APPROVAL_PARK_CLEAR_SLACK_MS = 1_500;', new: 'APPROVAL_PARK_CLEAR_SLACK_MS = 2_000;' },
+    { id: 'CS-5 every word spared near the deadline', old: "x.parkWord === 'live' && now >= x.notifyAt", new: 'now >= x.notifyAt' },
+    { id: 'CS-6 a parked row settled by a clear', old: "x.state === 'released' || (x.state === 'held'", new: "x.state === 'released' || x.state === 'parked' || (x.state === 'held'" },
+    { id: 'CS-7 a released row spared', old: "x.state === 'released' || (x.state === 'held'", new: "(x.state === 'held'" },
+    { id: 'CS-8 an unreadable read settles every covered row', old: 'if (!rows.ok) return [];', new: 'if (!rows.ok) return [...rowIds];' },
+    { id: 'CS-9 an uncovered row settled', old: 'return rowIds.filter((id) => rows.rows.some((x) => x.id === id && settles(x)));', new: 'return rows.rows.filter(settles).map((x) => x.id);' },
+    { id: 'CS-10 a ruled row settled', old: "x.state === 'released' || (x.state === 'held'", new: "(x.state !== 'held' && x.state !== 'parked') || (x.state === 'held'" },
+  ],
+  suite: lapseSuite,
+};
+
+export const PRESS_PROMPT_SET: MutantSet<ApprovalLapseModule> = {
+  modulePath: POLICY_TS,
+  mutants: [
+    { id: 'PP-1 any press answers (the dialog id alone, review 3022 F1)', old: '  if (hs === null) return false;\n', new: '  return true;\n' },
+    { id: 'PP-2 no hook state answers', old: 'if (hs === null) return false;', new: 'if (hs === null) return true;' },
+    { id: 'PP-3 the main thread\'s stamp not compared', old: "'approval' in hs.ask && hs.updatedAt === held.at;", new: "'approval' in hs.ask;" },
+    { id: 'PP-4 the main thread\'s ask not checked', old: "return hs.ask !== null && 'approval' in hs.ask && hs.updatedAt === held.at;", new: 'return hs.updatedAt === held.at;' },
+    { id: 'PP-5 a subagent\'s agent not compared', old: 'e.agentId === held.agentId && e.at === held.at', new: 'e.at === held.at' },
+    { id: 'PP-6 a subagent\'s stamp not compared', old: 'e.agentId === held.agentId && e.at === held.at', new: 'e.agentId === held.agentId' },
+    { id: 'PP-7 a subagent read as the main thread', old: "  if (held.agentId === '') return hs.ask", new: '  if (true) return hs.ask' },
   ],
   suite: lapseSuite,
 };
@@ -145,4 +182,6 @@ export const APPROVAL_PARK_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/approvalPark.ts#signingRefusal': SIGNING_SET as MutantSet<never>,
   'server/src/coord/approvalPark.ts#parkedApprovalViewOf': PARKED_VIEW_SET as MutantSet<never>,
   'server/src/coord/questionPolicy.ts#decideApprovalLapse': LAPSE_PARK_SET as MutantSet<never>,
+  'server/src/coord/questionPolicy.ts#clearSettledApprovalIds': CLEAR_SETTLE_SET as MutantSet<never>,
+  'server/src/coord/questionPolicy.ts#pressAnswersHeldPrompt': PRESS_PROMPT_SET as MutantSet<never>,
 };

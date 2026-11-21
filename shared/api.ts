@@ -15,7 +15,7 @@ import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { ReadFailure } from './agent-protocol.js';
 import type { PerfHealth } from './perf.js';
-import type { WorkflowView } from './workflows.js';
+import type { HelperFrameMembers, WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
@@ -2398,56 +2398,8 @@ export interface ProjectLinkingWire {
   /** D-8405: the automatic pass's one-tap choices for a project with no key, best first; empty when it found none. The
    *  pass never links on them. Absent: an older server. */
   teamCandidates?: readonly TeamCandidateWire[];
-}
-
-/** D-8405: what the automatic team link read, strongest first. `ticket-ids`: `ids` distinct ticket ids of the team's key
- *  among `of` distinct ids of every known team key, in the project's branches, pull request titles and commits (a
- *  private repository only). `name-match`: the project's name or its repository's name equals the team's name or key,
- *  ignoring case. */
-export type TeamEvidence =
-  | { kind: 'ticket-ids'; ids: number; of: number }
-  | { kind: 'name-match'; matched: 'project' | 'repo'; on: 'name' | 'key' };
-export type TeamEvidenceKind = TeamEvidence['kind'];
-/** D-6048 (ARCH-12): the runtime list, derived from the type. */
-const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true };
-export const TEAM_EVIDENCE_KINDS: readonly TeamEvidenceKind[] = Object.keys(TEAM_EVIDENCE_KIND_MAP) as TeamEvidenceKind[];
-
-/** D-8405: who set a project's team key. */
-export type TeamLinkSource = 'manual' | 'auto';
-/** D-6048 (ARCH-12): the runtime list, derived from the type. */
-const TEAM_LINK_SOURCE_MAP: Record<TeamLinkSource, true> = { manual: true, auto: true };
-export const TEAM_LINK_SOURCES: readonly TeamLinkSource[] = Object.keys(TEAM_LINK_SOURCE_MAP) as TeamLinkSource[];
-
-/** D-8405: a project's team key and who set it. `at` is when (null for a key stored before anyone recorded it). */
-export type TeamLinkWire =
-  | { source: 'manual'; at: number | null }
-  | { source: 'auto'; teamName: string; evidence: TeamEvidence; at: number };
-
-/** D-8405: one team the automatic pass offers for a project, with the evidence that names it. */
-export interface TeamCandidateWire { key: string; name: string; evidence: TeamEvidence }
-
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
-
-/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the two shapes. */
-export function isTeamEvidence(v: unknown): v is TeamEvidence {
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
-  const o = v as Record<string, unknown>;
-  if (o['kind'] === 'ticket-ids') {
-    return Object.keys(o).length === 3 && isCount(o['ids']) && isCount(o['of']) && (o['ids'] as number) <= (o['of'] as number);
-  }
-  if (o['kind'] === 'name-match') {
-    return Object.keys(o).length === 3 && (o['matched'] === 'project' || o['matched'] === 'repo')
-      && (o['on'] === 'name' || o['on'] === 'key');
-  }
-  return false;
-}
-
-/** D-8405: the one guard of `TeamCandidateWire`; `isKey` is the team key's grammar (`isLinearTeamKey`, `./linear.ts`),
- *  passed in because this file imports no runtime module. */
-export function isTeamCandidate(v: unknown, isKey: (k: unknown) => boolean): v is TeamCandidateWire {
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
-  const o = v as Record<string, unknown>;
-  return Object.keys(o).length === 3 && isKey(o['key']) && typeof o['name'] === 'string' && isTeamEvidence(o['evidence']);
+  /** D-8808: the workspace id the team key resolves in; null: none set (the key resolves as before); absent: an older server. */
+  teamWorkspace?: string | null;
 }
 
 /**
@@ -5004,7 +4956,7 @@ export type SessionStreamMsg =
    *  directory this pass: `workflows` is then the last rows it DID read (or
    *  none), and the panel says so rather than reading an empty list as "nothing
    *  running". Absent from an older server: no frame, no panel. */
-  | { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true }
+  | ({ type: 'workflows'; workflows: WorkflowView[]; unreadable?: true } & HelperFrameMembers)
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -6773,6 +6725,11 @@ export function routeForBrowserCap(r: RouteFields | null, browserOk: boolean): {
  * account", because an unreadable marker or ledger is not a spent one. A
  * workspace with no marker is refused only when the registry cannot be listed.
  *
+ * `self-dispatch` (D-6096) — a plain `POST /api/runs/:id/dispatch` of a run whose bound session IS its claimant: it
+ * would `ensure`, hold and `/clear` the coordinator's own workspace. Refused before any read or fleet act, with a
+ * `detail` naming the other door: the same route with `inPlace: true`, `by`, `byUuid` and the sibling worktree's
+ * `branch`, which binds the run to its claimant with no fleet act at all.
+ *
  * `status-unmeasurable` and `worker-starting` are the dispatch resume arm's
  * live gate (D-5238): the `/clear` is typed only when the fail-closed turn
  * verdict (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`.
@@ -6799,7 +6756,8 @@ export type RunRefuseCode =
   | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'
   // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
   // into an epic with an open declared ticket no run holds must name one.
-  | 'ticket-required';
+  // D-6096: `self-dispatch`, a plain dispatch of a run onto the session that claims it; bind it in place instead.
+  | 'ticket-required' | 'self-dispatch';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6812,7 +6770,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
-  'ticket-required': true,
+  'ticket-required': true, 'self-dispatch': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -7327,6 +7285,11 @@ export interface RunSummary {
    *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
    *  `FLEET_PROTO` is not bumped. */
   runTitle?: string | null;
+  /** D-6096 (migration 117): `true` for a run its coordinator took IN PLACE, as the run's own worker, in a sibling worktree
+   *  (`POST /api/runs/:id/dispatch` with `inPlace: true`). Such a run starts no process, takes no concurrency slot and is
+   *  never closed through its coordinator's workspace. ABSENT for every other run, and on an older server. ADDITIVE;
+   *  `FLEET_PROTO` is not bumped. */
+  inPlace?: boolean;
   /** Who closed the run, from `runs.closedBy` (D-8071, migration 44), or null for a run closed by a session id or before
    *  the column. OPTIONAL on the wire: an older server omits it. Read it ONLY through `closeWords`
    *  (`pwa/src/fleet/closeWords.ts`). ADDITIVE; `FLEET_PROTO` is not bumped. */
@@ -14634,6 +14597,7 @@ export interface CallRecordAnswer { ok: true; id: number; class: CoordCallClass;
 
 // ── the test box connect routes (test box connect spec §2.1, §2.6, §2.10; plan TC12, D-8166) ───────────────────────────
 import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';
+import type { TeamCandidateWire, TeamLinkWire } from './linking.js';
 
 /** The cap word `ccd caps` prints when THIS copy of ccd carries the test box connect surface (the `testbox-admin` verb's
  *  host). The two routes ask the account gate for it; a fleet that does not print it answers `unsupported`. */

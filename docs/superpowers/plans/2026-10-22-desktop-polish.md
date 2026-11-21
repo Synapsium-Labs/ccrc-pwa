@@ -4824,6 +4824,111 @@ every mutant of every decision branch goes red. `tsc` passes for `server` and `p
 
 **Rollback.** A plain revert: nothing reads these pieces yet.
 
+### Task H1b: the helpers reach the frame and the store (D-8862) — now
+
+**What.** C49's H1b row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1, §5, §8, Table 12 and Table
+13's H1b row), less two pieces the coordinator moved out (the first departure below): H1a's pure decision is wired to the
+session's reads, the helpers go on the session's `workflows` frame, and the PWA's store accepts them. Nothing is drawn yet:
+H2 draws. Built red first: the branch's first commit holds the tests, each failing on `main` except those labelled
+characterization pins in the note.
+
+- `shared/continuity-reports.ts` (L0, K): `isAgentId`, the one guard over the one `AGENT_ID_RE`; `shared/workflows.ts`'s
+  `isHelperId` is it, `server/src/hookstate.ts`'s private copy of the rule is gone, and `continuity/hookReports.ts`'s private
+  guard is gone (review 2961 F6, review 2978 F5). A single-definition case pins both holders.
+- `server/src/hookstate.ts` (L3, C1): the roster keeps its optional `id`; one that fails the rule reads as absent, never as a
+  malformed state. `server/src/fleet.ts` (L3, C1) strips it, so `FleetSession.subagents` and the state cache are unchanged.
+- `server/src/sessionFeed.ts` (L4, C3): `FeedReading.helperHook` pairs the roster with its read time (the published copy's
+  `at`, else the moment the fallback read returned). The helper roster alone is ordered per identity; every other hook
+  consumer gets the latest read, as before (reviews 2900 F6, 2961 F7 and 3014 F3).
+- `server/src/transcript/tail.ts` (L3, C3): the tailer's second output, `HelperFact[]`, emitted as `helpers` beside the
+  chunk's events, and the backlog's facts from its whole window (`BacklogRead.helpers`, absent when none).
+- `server/src/workflows/read.ts` (L3, C3; its header now says L3): `SessionHelpers`, the reads BY ID with the helper tier
+  (`HELPER_READS_PER_TICK` = 12) in the spec's order and its rotation, owned by `SessionWorkflows` (`readAll`); and
+  `lastActivityAt` on every workflow row, the newest write the reader measured (its journal's or a running agent's
+  transcript's).
+- `server/src/workflows/model.ts` (L1, C3): `rosterInputOf` (the raw hook read and its time into the decision's roster, each
+  `HelpersUnmeasured` reason told apart), `orderHelperHook`, `parseHelperMeta`, `lastLineTime`, `workflowLastActivity`,
+  `isAgentHelper` (the agent rule the decision and reader share), and `helpersFrame` (the frame, gated by `frameDue`).
+- `server/src/sessionws.ts` (L4, C3): `checkWorkflows` carries the ordered roster read, the tailer's facts and the session
+  dir to the reader, and sends what `helpersFrame` decides. The characterization table compares the old inline gate with
+  `frameDue` on all 16 inputs before deleting it (review 2961 F9). It copies the old gate and needs the new frame builder,
+  so it is not a suite that loads on main (review 3014 F8). Seven net code lines of its 40.
+- `shared/api.ts` (L0, K): the `workflows` member is the intersection with `HelperFrameMembers` (`agents?`, `agentsUnmeasured?`,
+  `readEvery?`, defined in `shared/workflows.ts`), two existing lines edited, zero net code lines, by co-edit with the holder
+  of its claim (the holder's consent of 2026-11-20).
+- `pwa/src/stores/session.ts` (L4, C3): `agents`, `agentsUnmeasured` and `readEvery` in `SessionState`, `SessionSnapshot` and
+  `snapshotOf`, replaced with every frame (absent is none), and cleared with the workflow rows at the three client reset
+  sites (a backlog onto another transcript, the initial state, `disconnect()`). On the server, `sendBacklogAndTail` restates
+  the frame (its gate resets, as before) and restarts the facts from the backlog's, and a new session dir rebuilds the reader,
+  which forgets the old dir's helpers with its workflows. **H2:** Table 11's absence draws nothing; it cannot distinguish
+  an older server from a current server with no helper rows (review 3014 F13). There is no new protocol marker.
+
+**The carries, each taken or left.** Review 2900: F6 taken (the helper roster's read stamp, its test); F14 taken as the split
+below. Review 2961: F7 taken (only the helper roster is ordered per identity, one memory per feed); F6 taken; F5 taken (the
+serialized Agent arm bound below); F9 taken; F10c taken (the hold below).
+Review 2978: F1 taken (two characterization pins: an unmeasured process with a later listing reads running; an unlisted helper
+whose meta was written after its end keeps its end); F2 taken (a pin for a sibling-first envelope, and the H1a note's rows
+corrected: that mutant is not equivalent); F3 taken as a comment and a residual (below), the memory's shape kept; F5 taken; F4
+and F6 left, records the coordinator folds. Review 3014: F1–F5 taken; F6 and F7 corrected in the records; F8 clarified, not
+moved (the gate is unchanged this round); F9 and F10 taken; F11 left (rotation cursor unchanged; churn can defer a row);
+F12 gains a behavioral clock-step test, while the historical reds and the PWA fallback test are unchanged; F13 noted for H2.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1a's kind of adapter: each TypeScript file held
+as a module's text, each mutant run in a scratch copy of the tree): the initial round measured 94, with 92 killed, one
+accepted non-equivalent survivor (the prefilter on JSON-escaped input the writer does not emit) and one equivalent survivor
+(the reducer's snapshot members). The review fix adds 15 killed mutants, including the five review 3014 F5 cases; the
+initial and fix-round tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8862** — `helpers-reach-the-frame`: Task H1b, issued on 2026-11-20. The helpers reach the session frame and the store,
+  and it departs from the spec in these places:
+  - `start-scan-and-report-request-split` (review 2900 F14, the coordinator's call): the start scan of the transcript moves to
+    a task H1c after this one, with its own measurement, and the `helper-report` request moves to H2, its first user. Until H1c,
+    a stream that starts mid-session knows the facts of the backlog's window (the last 1 MiB) and what it tails after.
+  - `agent-arm-beside-the-workflow-read`: the spec moves `SessionWorkflows.read`'s early return "inside the workflow arm"; H1b
+    leaves `read` as the workflow arm, unchanged, and adds the Agent arm as a sibling reader (`SessionHelpers`) that
+    `SessionWorkflows.readAll` runs regardless of it.
+  - `finished-held-until-its-last-write-attempt` (reviews 2961 F10c and 3014 F1): a meta that says `finished` is held until
+    the reader attempts the last-write measurement. Meanwhile the row reads what else is measured (running when listed).
+    A failed stat or range read releases the hold on that reading, with no last write or end time; the final row can be
+    drawn once and the final read is not retried.
+  - `tier-costs-as-built` (review 3014 F2): step 4 re-stats open helper metas and listed ids whose meta was missing. The
+    first re-stat also wants a read (the first meta read stored no stat). A changed stat whose read does not fit is saved;
+    the read leads step 4 next time. Step 5 attempts any final helper's unread last write or one whose meta says `finished`,
+    not only those first seen final. Reserve one call for due step 4 and two for due step 5 (stat and a nonempty range),
+    inside the same 12-call budget.
+  - `hook-order-applies-only-to-the-helper-roster` (reviews 2961 F7 and 3014 F3): the feed holds one ordered helper roster
+    per active identity via `model.ts#orderHelperHook`. The fallback is stamped on return. The hook ask and other readers
+    keep the latest raw read even after the wall clock steps back.
+  - `helper-display-text-json-bound` (review 3014 F4): strip controls and lone surrogates from display text, including
+    transcript-derived model labels and summaries, not reports. A final row is at most 1,905 serialized bytes; the frame
+    with no legacy workflow rows is below 134,000 bytes even with Agent qualifiers and JSON escaping.
+  - `no-hook-read-is-unreadable`: a reading that carries no hook read (only a direct call, today) gives the roster
+    `unreadable`, never an empty listing.
+  - `omitted-stays-off-the-wire` (H1a's `omitted-and-known-leave-the-arm`): `AgentArm.omitted` is not put on the frame; it has
+    no reader until H2, which decides.
+  - `workflow-last-activity-is-the-newest-mtime`: `WorkflowView.lastActivityAt` is the newest mtime the reader measured, the
+    journal's or a running agent's transcript's, for running and finished rows alike.
+  - `helper-facts-prefilter`: `helperFactsOf` returns at once for a line that names neither `"toolUseResult"` nor
+    `<task-notification>`, because the tailer now asks it of every line.
+  - `continued-older-id-still-a-survivor` (review 2978 F3, a residual): the drop witness's memory keeps ids, not their starts,
+    so an older id stopped and re-added between two readings that also reset the roster still counts as a survivor, and the
+    newer ids read `unlisted` (no end claimed) rather than left out. The comment in `seenDrops` says so; the memory's shape is
+    kept, because the case needs a reset and a continued helper's new start inside one 2 s reading.
+
+Spec corrections for the coordinator to fold: §3.1 (the split; the Agent arm as a sibling reader; `frameDue` from
+`helpersFrame`, not `workflowsFrame`); Table 7 and §5 (the start-scan guarantee waits for H1c); §5's helper tier (hold,
+listed meta retry, final attempts and reservations above) and its frame-size sentence (the serialized Agent arm bound);
+Table 12 (`sessionFeed.ts` carries the ordered roster read; the Agent rule stays in `model.ts`); Table 13's H1b row (less the
+start scan and the report request) and an H1c row.
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or its disposition is recorded in the note, `tsc` passes for `server`, its tests and `pwa`.
+
+**Rollback.** A plain revert: the frame's new members are additive (an older PWA ignores them), and the roster's `id` never
+leaves the server.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

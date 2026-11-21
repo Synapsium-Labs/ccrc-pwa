@@ -1891,7 +1891,7 @@ describe('the park\'s state and words each have one home, and parked is no stop 
     expect(sh.split(' ')).not.toContain('parked');
   });
   it('the hook\'s parked arm compares the state with the TypeScript word', () => {
-    expect(hook).toMatch(/\[\[ "\$state" == parked \]\] && \{ _apr_park_print "\$rid"; return 0; \}/);
+    expect(hook).toMatch(/\[\[ "\$state" == parked \]\] && \{ _apr_park_print "\$rid"; _hook_approvals_drop; return 0; \}/);
     expect(/parked: true/.test(api)).toBe(true);
   });
   it('the park\'s words and constants are declared once, in shared/approval-park.ts', () => {

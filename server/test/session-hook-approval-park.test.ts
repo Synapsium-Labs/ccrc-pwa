@@ -32,6 +32,12 @@ const MAIN: Payload = (() => {
   if (ev === undefined) throw new Error('no PermissionRequest capture');
   return ev.payload;
 })();
+const SUB: Payload = (() => {
+  const doc = JSON.parse(fs.readFileSync(path.join(CAPTURES, '2.1.302', 'permission-subagent.json'), 'utf8')) as { events: Array<{ event: string; payload: Payload }> };
+  const ev = doc.events.find((e) => e.event === 'PermissionRequest');
+  if (ev === undefined) throw new Error('no subagent PermissionRequest capture');
+  return ev.payload;
+})();
 
 const hookAssign = (name: string): string => {
   const m = fs.readFileSync(HOOK, 'utf8').match(new RegExp(`^${name}=(?:'([^']*)'|"([^"]*)"|([^\\s#]*))`, 'm'));
@@ -102,9 +108,9 @@ const ENV = (): NodeJS.ProcessEnv => ({
 });
 const payloadFor = (): Payload => ({ ...MAIN, transcript_path: transcript });
 interface Run { stdout: string; ms: number; rulings: number }
-const fire = (env: NodeJS.ProcessEnv = ENV()): Run => {
+const fire = (env: NodeJS.ProcessEnv = ENV(), payload: Payload = payloadFor()): Run => {
   const t0 = Date.now();
-  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payloadFor()), encoding: 'utf8', env, timeout: 30_000 });
+  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 30_000 });
   const ms = Date.now() - t0;
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
@@ -212,5 +218,43 @@ describe('a child whose deny digest is only in the installer\'s history', () => 
   it('deny:operator prints the deny', () => {
     verdict('deny:operator r');
     expect(decision(fire(longWindow()))).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'denied by the operator: r' } } });
+  });
+});
+
+// Review 3037 F1: a parked subagent prompt's entry in hook state goes when the park deny prints. Its dialog is gone then,
+// and the server's press check (`questionPolicy.ts#pressAnswersHeldPrompt`) reads that list: an entry left standing would
+// let a press on a queued sibling's prompt, painted under the same menu (so the same dialog id), void the parked park.
+describe('the park deny drops the parked subagent prompt\'s entry; a sibling\'s stays (review 3037 F1)', () => {
+  const FIRST = 'a0000000000000013';
+  const SECOND = 'a0000000000000019';
+  const asAgent = (agent: string): Payload => ({ ...SUB, transcript_path: transcript, agent_id: agent });
+  const agents = (): string[] => {
+    const hs = JSON.parse(fs.readFileSync(path.join(home, '.cc-sessions', `${ID}.hookstate.json`), 'utf8')) as { approvals?: Array<{ agentId: string }> };
+    return (hs.approvals ?? []).map((e) => e.agentId);
+  };
+  /** The sibling's prompt, queued: its window ends unparked (shadow), nothing prints, and its entry stands. */
+  const queueSibling = (): void => {
+    put('stub/request.out', '{"id":42,"waitS":1,"park":"shadow"}');
+    put('stub/ruling.out', '{"state":"held"}');
+    expect(fire(ENV(), asAgent(SECOND)).stdout).toBe('');
+    expect(agents()).toEqual([SECOND]);
+  };
+  it('at the window\'s end on park "live": the deny prints and the parked agent\'s entry goes', () => {
+    queueSibling();
+    put('stub/request.out', '{"id":41,"waitS":1,"park":"live"}');
+    expect(decision(fire(ENV(), asAgent(FIRST)))).toEqual(parkDeny(41));
+    expect(agents()).toEqual([SECOND]);
+  });
+  it('on a ruling read answering parked: the deny prints at once and the parked agent\'s entry goes', () => {
+    queueSibling();
+    put('stub/ruling.out', '{"state":"parked"}');
+    expect(decision(fire(longWindow(), asAgent(FIRST)))).toEqual(parkDeny(41));
+    expect(agents()).toEqual([SECOND]);
+  });
+  it('a window that ends unparked prints nothing and drops nothing: the prompt is still painted, the operator\'s', () => {
+    queueSibling();
+    put('stub/request.out', '{"id":41,"waitS":1,"park":"shadow"}');
+    expect(fire(ENV(), asAgent(FIRST)).stdout).toBe('');
+    expect(agents().sort()).toEqual([FIRST, SECOND].sort());
   });
 });

@@ -376,16 +376,28 @@ number from `POST /api/ledger/deviations`.
   rows take their Linear ids from the bindings. The issues it closes (a replaced level, finished, superseded, stale) are not
   adopted, and it writes them itself through `runCcrcOp`, each move row before its write. The sync charges a step for an object a
   migration still writes to lane `migration` and journals it with pass `migration` (`planStore.ts#migratingLocals`), and an
-  apply tick starts at most `MIGRATION_WRITES_PER_TICK` issue writes, so a large map never spends the sync's own share (§10.6). A
+  apply tick starts at most `MIGRATION_WRITES_PER_TICK` issue writes, so a large map's issue writes never spend the sync's own
+  share (§10.6; the Upkeep epic's one create does, below). A
   live programme's part, its adoptions included, waits for no run in `ACTIVE_RUN_STATES`. A migration reads `applied` only
-  when every move row is applied or its issue skipped and listed. An adopted issue a person changes before the sync's write is
+  when every move row is applied or its issue skipped or taken, and listed. An adopted issue a person changes before the sync's write is
   put aside in one transaction: its ticket dropped "put back", so the sync never writes over the change; its binding `retired`
   (a binding state, the row kept), so the issue reaches the team's Linear owner as inbound, as §10.3 step 5 says; and it is
-  listed as skipped (fix round 1, review 2892 F5). The migration's own issue reads and writes of an apply tick count against
-  `MIGRATION_CALLS_PER_TICK` besides the write cap, and a rate refusal of any of them rests the lane. The plan sync's own two
-  passes on lane `migration` are not counted there: step 1's structure pass (only until the plan's objects exist, bounded by its
-  pass deadline) and the Upkeep epic's pass. They stay bounded by the writes cap, the lane and the one rate service (review 2892
-  A7, narrowed by the coordinator's ruling on review 2918 F3). A step that cannot be placed now (its epic's or the Upkeep epic's
+  listed as skipped (fix round 1, review 2892 F5). An issue a live binding holds leaves the migration: one the team's Linear
+  owner has taken through inbound (before the apply, on an earlier tick of a close, or while it sits on the skipped list) is
+  neither adopted, commented on nor closed, whatever its class, is never asked of the owner in a follow-up map, and holds no
+  wait of its own (a live programme's part still waits for its wave boundary, and a held entry in it reaches `taken` when its
+  step comes); the report lists it as taken by the owner (`taken`), not as skipped (the coordinator's rulings on review 2955 F2
+  and A1). A close asks again inside its flight, after its read and before each of its writes (the comment, the relation, the
+  state), and a held answer ends it there, with nothing more sent. Only a take that lands while one write is already in flight
+  lets that one write reach Linear (recorded in the move row when it is the relation or the state write; a comment is recorded
+  nowhere); a state write that lands is followed by one more ask, so the issue is then listed taken, not counted closed. Either
+  way the issue is left alone from then on: put back skips an issue a live binding holds, never reopens or rewrites it, and
+  lists it as taken (the coordinator's rulings on review 2998 F1, F4 and F5 and on review 3004 F2 and F3). The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
+  cap, and a rate refusal of any of them rests the lane. Two passes of the plan sync's own are counted by neither cap: step 1's
+  structure pass (only until the plan's objects exist), on lane `migration` for the objects the map declares, and the Upkeep
+  epic's pass, whose create has no move row and so goes out on lane `sync` as the plan sync's own. Each is bounded by its lane,
+  the pass deadline and the one rate service (review 2892 A7, narrowed by the coordinator's ruling on review 2918 F3 and
+  corrected on review 2955 F3). A step that cannot be placed now (its epic's or the Upkeep epic's
   Linear project not created yet) spends none of the tick's issue reads and writes and is listed as waiting with its reason
   (review 2892 F3); a replaced level whose placed ticket has not settled waits the same way and then closes related to it, as
   Task 7.3 says (review 2918 F2). The
@@ -431,6 +443,51 @@ number from `POST /api/ledger/deviations`.
   else), where Task 2.2 says `applyPlanChanges` sets them on the first call only. Put back reads `planBy` and ends only a plan
   that is still the map's, so a programme its coordinator has since taken over keeps its plan and its initiative. Record: the
   wave 7 note (the coordinator's rulings on review 2892 F1 and review 2918 F4, mails of 2026-11-20).
+- **D-8808 (2026-11-20)** — w8-team-and-workspace-mapping: wave 8 (spec §3.1, the operator's ruling of 2026-11-19, item
+  489). It departs from Tasks 8.1 to 8.6 in these places. The team-link vocabulary moved from `shared/api.ts` to
+  `shared/linking.ts` first, as a move commit with characterization pins; `shared/api.ts` gains one type-only import line
+  for `ProjectLinkingWire` (the L0 import pins move with it). The row's workspace is `project_linking.teamWorkspace`, in the
+  wave's one migration with `teamSuggestions` and `teamCallId`. The operator's write body's `workspace` is optional:
+  a named one must hold the key (`team-unknown`). With none named (absent or null), a key reads the Linear store: the one
+  connected workspace that holds it is stored, two holders are refused `team-ambiguous`, an unreadable store is
+  `unavailable`, and a key no connected workspace holds is stored with none. A cleared key reads no store. Saving the
+  unchanged key with no workspace named keeps the stored workspace, a row written before this wave's migration keeping its
+  none, without reading the store: nothing new is stored, and a later use resolves the key and refuses `team-ambiguous`
+  if two workspaces hold it. Saving the unchanged key keeps whoever set it (review 2971 F2, F4; review 2997 F3, A5). One resolver, `routeProjectTeam`, serves the plan
+  sync, the plan routes and the linking routes; the Linear proxy is unchanged, because it does not know the caller's
+  project. The inbound owner rule takes the issue's workspace at all four of its key lookups (review 2971 F1). Task 8.3's read
+  (`attachmentsForUrl`) has a constructed fixture (its schema is an assumption until the live capture), reads under its own
+  pass `team-link`, answers unmeasured unless every asked workspace answered, and is not wired into the lane: a guard test
+  goes red if it is, and wiring it is a follow-up after the operator's go. The suggestion's client row takes a JSON body
+  (`linking suggest --json -`, the identity spliced from the pane) rather than flags. The suggest door writes only an
+  existing row (`no-project` otherwise), refuses a reason naming a ticket id of any connected team or carrying line or
+  bidi control characters, refuses `team-ambiguous` for a key two connected workspaces hold when no workspace is named,
+  takes a suggestion only from a session that claims an open run (`not-a-coordinator`, 403, otherwise: the Overlord may
+  link a suggested candidate in the operator's name; `not-coordinator` already means another thing), keeps one suggestion
+  per suggester and at most eight suggesters (the oldest evicted), answers only what the caller wrote, and checks no
+  project ownership: a coordinator suggests for any keyless project its programme files into, and the console shows who
+  suggested; the Overlord's call says only "suggested by a coordinator" (review 2971 F6, F7). The README's
+  machine-lane count word moves (ninety-six after the absorbs) under the packet terms of the run that holds README.md. The wave's one
+  migration took slot 116 after the absorbs of main (wave 7 took 114, the approvals park 115). One bend of the rings rule is stated
+  here, not hidden: the choice of which inbound row a `plan triage` acts on (searching every workspace that holds the key,
+  preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
+  another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
+  it into the policy. The migration lane (wave 7's code) and the plan-map route still resolve a team by its key alone; the
+  follow-up `w8-migration-workspace` makes them go through `routeProjectTeam` after this wave and #3137 land, and no
+  team's migration starts before it (review 2997 F1, F2). Follow-ups this wave leaves: `w8-migration-workspace`,
+  `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
+  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and `w8-triage-l1`;
+  `w8-write-ambiguous` was built in the review's fix round and dropped. Record: the wave 8 note.
+- **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
+  act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
+  with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`
+  `auto` plus a nullable `teamCallId`, because migration 64's CHECK admits only `manual` and `auto` and cannot widen
+  without a table rebuild; exactly one function, `linkSourceOf`, derives the wire's `overlord` source from the pair, and a
+  single-definition test fails on any other read. The link and its big call are one transaction, under the automatic
+  link's own statement, after the chosen candidate's pair is re-checked against the live Linear store (`team-unknown`,
+  `team-ambiguous`, or `unavailable` when the store cannot be read). The call is filed under `linear-sync` (design call 19 as amended), names the project, the team and
+  the workspace by display name and the evidence, and shows in "calls made for you"; the operator overturns it by a key
+  write on the card, which makes the key `manual`. The door process gains a `link_team` tool row. Record: the wave 8 note.
 
 ## Global Constraints
 
@@ -2150,7 +2207,7 @@ Test `server/test/migration-putback.test.ts`.
 
 ---
 
-## Wave 8 — team and workspace mapping
+## Wave 8 — team and workspace mapping (D-8808)
 
 Spec §3.1, the operator's ruling of 2026-11-19 (item 489): coordinators suggest a team, and the Overlord may link one as
 a call made in the operator's name. It runs alongside wave 7's pilot and never blocks it. Its deviation numbers are

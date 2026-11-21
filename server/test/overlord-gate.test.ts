@@ -21,13 +21,22 @@ describe('overlordGate (the order)', () => {
   for (const [name, fn] of Object.entries(overlordGateCases(gate))) it(name, fn);
 });
 describe('the door table the gate reads', () => {
-  it('every Overlord row is a start door today, and the card recording page is the one write whose act is read', () => {
+  it('every Overlord row but the team link (D-8809) is a start door today, and the card recording page is the one write whose act is read', () => {
     expect(GATE_DOOR_KEYS.length).toBeGreaterThan(0);
-    for (const k of GATE_DOOR_KEYS) expect(isStart(OVERLORD_DOORS[k] as never), k).toBe(true);
+    for (const k of GATE_DOOR_KEYS) expect(isStart(OVERLORD_DOORS[k] as never), k).toBe(k !== 'link-team');
     const reads = GATE_DOOR_KEYS.filter((k) => { const r = doorRow(k) as { write: boolean; act: string }; return r.write && r.act === 'read'; });
     expect(reads).toEqual(['card-record']);
   });
   it('a passing fact set passes at every row', () => {
     for (const k of GATE_DOOR_KEYS) expect(gate.overlordGate(passFacts(doorRow(k) as never)), k).toEqual({ kind: 'pass' });
+  });
+  it('D-8809: the team link runs every step, and below full it is refused rung-below at step 10', () => {
+    const door = doorRow('link-team') as never;
+    for (const rung of ['chat', 'advise']) {
+      const v = gate.overlordGate(passFacts(door, { ladder: { kind: 'read', rung: { rung, operatorRung: 'full', binding: [], readBy: [] } } }));
+      expect([v.kind, (v as { word?: string }).word, (v as { step?: string }).step], rung).toEqual(['refuse', 'rung-below', '10']);
+    }
+    expect(gate.overlordGate(passFacts(door, { card: 'none' }))).toMatchObject({ kind: 'refuse', word: 'card-unread', step: '8' });
+    expect(gate.overlordGate(passFacts(door, { standing: { kind: 'other' } }))).toMatchObject({ kind: 'refuse', word: 'not-the-overlord', step: '1' });
   });
 });

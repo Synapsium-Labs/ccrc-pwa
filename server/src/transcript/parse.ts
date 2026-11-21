@@ -713,6 +713,9 @@ function envelopeOf(r: { type?: unknown; message?: unknown; attachment?: unknown
 /** The helper facts of ONE raw transcript line: an Agent or Task launch result, or a task notification. Defensive by
  *  contract: a malformed line, a sidechain record or anything else answers [], and nothing throws. */
 export function helperFactsOf(line: string): HelperFact[] {
+  // H1b (D-8862): the tailer asks this of EVERY line, so a line that names neither shape is not parsed a second time. Both
+  // shapes carry their key in the raw text: a launch result's `toolUseResult`, an envelope's opening tag.
+  if (!line.includes('"toolUseResult"') && !line.includes('<task-notification>')) return [];
   let raw: unknown;
   try { raw = JSON.parse(line); } catch { return []; }
   if (raw === null || typeof raw !== 'object') return [];

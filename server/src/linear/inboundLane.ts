@@ -198,7 +198,7 @@ export class InboundLane {
     const { rows, facts } = this.ownerFacts();
     const noOwner = new Set<string>();
     for (const row of plan.inboundByState(null, ['waiting'])) {
-      const owner = linearOwnerOfTeam(row.teamKey, rows, facts);
+      const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId);
       if (owner === null) continue;
       if (owner.id !== null && !owner.gone) this.mailOwner(row, owner.id, now); else noOwner.add(owner.project);
     }
@@ -241,7 +241,7 @@ export class InboundLane {
     for (const row of plan.inboundByState(null, ['raised'])) {
       const item = row.itemId === null ? null : coord.itemById(row.itemId);
       if (item !== null && item.state === 'open') continue;
-      const owner = linearOwnerOfTeam(row.teamKey, rows, facts);
+      const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId);
       if (owner === null || owner.id === null || owner.gone) continue;
       const ownerId = owner.id;
       const m = answeredMail(row, { state: item === null ? 'gone' : item.state, text: item === null ? null : item.answer }, row.itemId);
@@ -311,10 +311,12 @@ export class InboundLane {
 
   /** Spec §6.1, re-run before the close comment is sent: the facts (the project that owns the team, its linking mode, the installer's
    *  private tracker keys) may have changed since the close was decided. `textRefusalOf` is the one check; a team no project claims is
-   *  judged as `unknown`, public, with the row's team key. The class that refused it, or null. */
+   *  judged as `unknown`, public, with the row's team key. The project is decided in the row's own workspace, as the lane's other
+   *  owner lookups are (review 2971 F1): a key two workspaces hold never takes its mode from the other workspace's project. The class
+   *  that refused it, or null. */
   private textRefusal(row: InboundRow): string | null {
     const { coord, plan, planSync } = this.deps;
-    const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf());
+    const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf(), row.workspaceId);
     const fact = textFactOfTeam(project === null ? null : coord.linkingOf(project), row.teamKey);
     return textRefusalOf([row.reason ?? ''], [fact], planSync.privateKeys());
   }
@@ -346,7 +348,7 @@ export class InboundLane {
   private mailOwnerOnce(row: InboundRow, m: { subject: string; body: string }): void {
     const { coord } = this.deps;
     const { rows, facts } = this.ownerFacts();
-    const owner = linearOwnerOfTeam(row.teamKey, rows, facts);
+    const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId);
     if (owner === null || owner.id === null) return;
     const ownerId = owner.id;
     if (coord.hasMailWithSubject('operator', null, ownerId, m.subject)) return;

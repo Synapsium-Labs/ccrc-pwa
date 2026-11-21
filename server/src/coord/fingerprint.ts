@@ -8,7 +8,7 @@
  * The lineage DECISION is `lineage.ts`'s (pure, L1); this file reads, asks it, and re-reads the tip once after an accept.
  */
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
+import { boundRow, isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
 import { measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readBranchTip } from './gitref.js';
 import { decideLineage, lineageQualifies } from './lineage.js';
@@ -88,7 +88,20 @@ export interface VerifyDoneDeps {
  *  about this session at all" — and because `markDispatched` writes the column
  *  once and nothing updates it, every refusal produced from it says so in its
  *  own detail. */
-export interface DoneRun { sessionId: string; project: string; branch: string }
+export interface DoneRun {
+  sessionId: string; project: string; branch: string;
+  /** D-6096: the run was taken IN PLACE by its coordinator (`runs.inPlace`), so `branch` is the sibling worktree's branch,
+   *  recorded at the bind, and the registry's branch for `sessionId` is the COORDINATOR's workspace, which this run did
+   *  not touch. `resolveDoneBranch` then answers `branch` itself, never the registry's. Absent for every other run. */
+  inPlace?: boolean;
+}
+
+/** A run row's `DoneRun`, the one place a caller builds it: the run's session, project and recorded branch, and the in-place
+ *  flag only where it is set (so every other run's value is byte-identical to the literal each caller used to write). */
+export const doneRunOf = (
+  run: { sessionId: string; project: string; branch: string | null; inPlace?: boolean },
+): DoneRun => ({ sessionId: run.sessionId, project: run.project, branch: run.branch ?? '',
+  ...(run.inPlace === true ? { inPlace: true } : {}) });
 
 /**
  * A PR phase that has gone BACKWARDS since the worker looked. Forward motion is
@@ -107,6 +120,10 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
       (measured === 'none' || measured === 'no-commits')) return 'regressed';
   return 'ok';
 }
+
+/** Appended to a refusal that names an in-place run's branch (the `provenance` slot), so the coordinator reads where the name
+ *  came from: the bind, not a registry row. */
+const IN_PLACE_PROVENANCE = ' — the in-place run\'s recorded branch';
 
 /** `resolveDoneBranch`'s answer. `project` is the registry record's own `.project`, or `null` when the branch came from
  *  the run row (the registry has no row at all), which the lineage step does not trust. A record with no `.project`
@@ -133,6 +150,16 @@ export async function resolveDoneBranch(
   if (!isRegistryId(run.sessionId)) {
     return { ok: false, code: 'tip-unmeasurable',
       detail: 'the run\'s session id is not a registry id: it is refused, never read' };
+  }
+  // D-6096: an in-place run's work is on the sibling worktree's branch, recorded at the bind (`CoordStore.bindInPlace`) and
+  // never renamed (`sweepNames` renames registry workspaces, and this branch belongs to none). The registry's row for the
+  // session is the COORDINATOR's own workspace and says nothing about it, so the registry is not read at all.
+  if (run.inPlace === true) {
+    if (run.branch === '') {
+      return { ok: false, code: 'branch-unmeasurable',
+        detail: 'this in-place run records no branch, so there is nothing to re-measure' };
+    }
+    return { ok: true, branch: run.branch, provenance: IN_PLACE_PROVENANCE, project: null };
   }
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
   // why the DB column cannot be trusted here. `record` is undefined on ONE
@@ -270,6 +297,39 @@ async function settleStaleTip(
 const withLineageDetail = (today: string, s: Extract<StaleSettled, { kind: 'today' }>): string =>
   s.detail === undefined ? today : `${today} (${s.detail})`;
 
+type PrLineRead = { ok: true; line: CcdPrLine } | { ok: false; code: DoneRejectCode; detail: string };
+
+/**
+ * D-6096 (review 2993 F1): a `pr-state --project` line rebound to an in-place run's sibling branch, on the sibling TIP
+ * just read, never on ccd's `ours`. ccd sets `ours` per line by reachability from THAT line's registered session tip, and
+ * the sibling branch is no session's workspace, so on real output every line reads it false. Here a row is bound when it
+ * is the repo's own (not cross-repository), on the line's base, its head the recorded branch and its head commit the tip
+ * that was measured; every other row is unbound. `phaseFor`, `closePrFactsOf` and `mergedFactsOf` then read the line as
+ * they read any other, so an open, draft or merged sibling PR binds, a closed one regresses an open claim, and the close
+ * records the PR for `landOnClose`. `ahead` is unmeasured: no registry row counts that branch. Pure.
+ */
+export function siblingPrLine(line: CcdPrLine, branch: string, tip: string): CcdPrLine {
+  const rows = line.rows.map((r) => ({ ...r, ours: r.isCrossRepository === false && r.baseRefName === line.baseShort
+    && r.headRefName === branch && r.headRefOid === tip }));
+  return { ...line, rows, branch, tip, ahead: null };
+}
+
+/** The PR read of an in-place run (D-6096): the project form carries the repo's PR rows on every line, and each line is
+ *  rebound to the sibling branch on its measured tip (`siblingPrLine`). The line taken is the first that binds a row,
+ *  else the first full line, which then reads `none`. */
+async function inPlacePrLine(deps: VerifyDoneDeps, project: string, branch: string, tip: string): Promise<PrLineRead> {
+  const argv = CCD_ARGV.prStateProject(project);
+  if (!ccdCan(deps.fleetState, 'prStateProject')) {
+    return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
+  }
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return { ok: false, code: 'pr-unmeasurable', detail: res.stderr.trim() };
+  const lines = parsePrLines(res.stdout).filter(isFullLine).map((l) => siblingPrLine(l, branch, tip));
+  const bound = lines.find((l) => boundRow(l.rows, l.baseShort, branch) !== null) ?? lines[0];
+  if (!bound) return { ok: false, code: 'pr-unmeasurable', detail: 'pr-state answered no full line for the project' };
+  return { ok: true, line: bound };
+}
+
 /**
  * Re-measure a done claim. THE RUN IS NOT TOUCHED HERE — this answers, and the
  * route decides; a verifier that also advanced would be a verifier nobody can
@@ -367,14 +427,24 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
     }
   }
 
-  const argv = CCD_ARGV.prStateSession(run.sessionId);
-  if (!ccdCan(deps.fleetState, 'prStateSession')) {
-    return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
+  // D-6096: an in-place run's PR is the sibling branch's, never the claimant coordinator's own workspace PR, which
+  // `pr-state --session` would read. The project form answers the repo's PR rows, and the recorded branch is bound to one.
+  let line: CcdPrLine;
+  if (run.inPlace === true) {
+    const read = await inPlacePrLine(deps, run.project, branch, tip);
+    if (!read.ok) return read;
+    line = read.line;
+  } else {
+    const argv = CCD_ARGV.prStateSession(run.sessionId);
+    if (!ccdCan(deps.fleetState, 'prStateSession')) {
+      return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
+    }
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return { ok: false, code: 'pr-unmeasurable', detail: res.stderr.trim() };
+    const full = parsePrLines(res.stdout).find(isFullLine);
+    if (!full) return { ok: false, code: 'pr-unmeasurable', detail: 'pr-state answered no full line' };
+    line = full;
   }
-  const res = await deps.runCcd(argv);
-  if (!res.ok) return { ok: false, code: 'pr-unmeasurable', detail: res.stderr.trim() };
-  const line = parsePrLines(res.stdout).find(isFullLine);
-  if (!line) return { ok: false, code: 'pr-unmeasurable', detail: 'pr-state answered no full line' };
   const measured = phaseFor(line);
 
   const verdict = prVerdict(claim.prPhase, measured.phase);

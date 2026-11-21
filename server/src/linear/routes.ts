@@ -312,7 +312,10 @@ function workspaceView(slot: LinearFileSlot): LinearWorkspaceView {
 
 function legacyRow(l: LinearLegacySlot): LinearLegacyRow {
   const w = l.workspace;
-  return { view: l.view, workspace: w === null ? null : { name: w.name, urlKey: w.urlKey, teams: teamsShown(w.teams) }, superseded: l.superseded };
+  return {
+    view: l.view, superseded: l.superseded,
+    workspace: w === null ? null : { workspaceId: w.workspaceId, name: w.name, urlKey: w.urlKey, teams: teamsShown(w.teams) },
+  };
 }
 
 export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: LinearWorkspaceRouteOpts): void {
