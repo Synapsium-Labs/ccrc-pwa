@@ -11,8 +11,9 @@ import type { DelegationActivitySourceKind } from './api.js';
 export const DELEGATION_BACKFILL_WORDS = 'closed by the one-time pass; its real end was not measured';
 
 const DELEGATION_BACKFILL_AGE_BAND_MAP = { days1to7: true, days7to30: true, days30plus: true } as const;
-/** How long a record the pass would close has been QUIET: 1 to 7 days, 7 to 30 days, or 30 days and more. Nothing quieter qualifies,
- *  because a record must have been quiet for 24 hours; from 7 days the positive check passes it on its quiet alone. */
+/** How long a record the pass would close has been QUIET (since its last observed event; not an end time): 1 to 7 days, 7 to 30 days,
+ *  or 30 days and more. Nothing quiet for less than 24 hours qualifies, so no band starts below a day; from 7 days the positive check
+ *  passes a record on its quiet alone. Only records the pass would close are banded. */
 export type DelegationBackfillAgeBand = keyof typeof DELEGATION_BACKFILL_AGE_BAND_MAP;
 export const DELEGATION_BACKFILL_AGE_BANDS: readonly DelegationBackfillAgeBand[] = Object.keys(DELEGATION_BACKFILL_AGE_BAND_MAP) as DelegationBackfillAgeBand[];
 

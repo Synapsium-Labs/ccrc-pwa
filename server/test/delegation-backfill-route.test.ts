@@ -183,6 +183,18 @@ describe('POST /api/coord/delegation-backfill: the pass and the undo', () => {
     expect(bytes(w).equals(before)).toBe(true);
   });
 
+  // Review 3185 F2: the other direction, a count BELOW the one the pass would close now (more records crossed 24 hours of quiet
+  // since the dry run was read). A one-sided comparison passes RT-5 and closes here; this case reds it.
+  it('RT-5b: a count below the dry run\'s (0 when 1 qualifies) refuses count-changed (409) with the report, and writes nothing', async () => {
+    const w = await world();
+    const before = bytes(w);
+    const r = await post(w, { act: 'pass', closes: 0 });
+    expect([r.statusCode, r.json().error]).toEqual([409, 'count-changed']);
+    expect(r.json()).toMatchObject({ report: { closes: 1 }, detail: 'the pass would close 1, not 0: read the dry run again' });
+    expect(bytes(w).equals(before), 'the checkpoint is untouched').toBe(true);
+    expect(existsSync(path.join(w.ccrc, DELEGATION_BACKFILL_FILE)), 'no list is written').toBe(false);
+  });
+
   it('RT-6: the pass refuses sign-in-unarmed (403) for a caller that is not a signed-in operator; the undo and the dry run do not', async () => {
     const w = await world({ signedIn: false });
     const before = bytes(w);

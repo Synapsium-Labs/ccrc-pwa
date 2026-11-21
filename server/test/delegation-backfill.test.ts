@@ -380,6 +380,19 @@ describe('S2: the durable dry run, pass and undo', () => {
     expect(existsSync(path.join(dir, DELEGATION_BACKFILL_FILE))).toBe(false);
   });
 
+  // Review 3185 F2: the other direction. The drift a real pass meets runs this way: more records cross 24 hours of quiet after the
+  // operator read the dry run, so the pass is asked for FEWER than it would close now. A one-sided check (refusing only a count above
+  // the plan's) passes B-D4 and closes here; this case reds it.
+  it('B-D4b: the pass refuses a count below the one it would close (0 when 1 qualifies), and then writes nothing', async () => {
+    const dir = dirWith(journal());
+    const d = await applierOver(dir);
+    const bytes = checkpointBytes(dir);
+    const out = await d.backfillPass(NOW, LIVE_P_GONE_Q, 0);
+    expect(out, 'asked for fewer: refused with the count it would close now').toMatchObject({ ok: false, report: { closes: 1 } });
+    expect(checkpointBytes(dir).equals(bytes), 'the checkpoint is untouched').toBe(true);
+    expect(existsSync(path.join(dir, DELEGATION_BACKFILL_FILE)), 'no list is written').toBe(false);
+  });
+
   it('B-D5: records quiet for under 24 hours are untouched by the pass', async () => {
     const dir = dirWith(journal());
     const d = await applierOver(dir);
