@@ -21,7 +21,7 @@ import {
   type DelegationCheckpointV1,
   type DelegationJournalRecordV1,
 } from '../src/coord/delegation-model.js';
-import { DELEGATION_JOURNAL_FILE, buildDelegationJournalRecord, encodeDelegationJournalRecord, type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
+import { DELEGATION_CARRIED_FILE, DELEGATION_JOURNAL_FILE, buildDelegationJournalRecord, encodeDelegationJournalRecord, type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
 import { DELEGATION_CHECKPOINT_FILE, DelegationCheckpointBuilder, decodeDelegationCheckpoint, encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
 import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import type { DelegationProjectionPort } from '../src/coord/delegation-db-projection.js';
@@ -423,6 +423,7 @@ describe('S2: the durable dry run, pass and undo', () => {
     const first = await applierOver(dir);
     expect(await first.backfillPass(NOW, LIVE_P_GONE_Q, 1)).toMatchObject({ ok: true, closed: 1 });
     const listed = listOf(dir);
+    const listBytes = readFileSync(path.join(dir, DELEGATION_BACKFILL_FILE));
     await first.close();
     // The rebuild: the checkpoint is gone (an older server's reconstruction leaves one with no basis), the journal and the list stay.
     rmSync(path.join(dir, DELEGATION_CHECKPOINT_FILE));
@@ -436,7 +437,7 @@ describe('S2: the durable dry run, pass and undo', () => {
     expect(agentOf(cp, 'agent-z', Q)!.activityId, 'the same id').toBe(listed[0]);
     expect(agentOf(cp, 'agent-z', Q)).toMatchObject({ endBasis: 'backfill-unmeasured' });
     expect(agentOf(cp, 'agent-y', Q), 'Y qualifies now, and the list does not name it').toMatchObject({ executionState: 'active' });
-    expect(listOf(dir), 'the re-run does not rewrite the list').toEqual(listed);
+    expect(readFileSync(path.join(dir, DELEGATION_BACKFILL_FILE)).equals(listBytes), 'the re-run does not rewrite the list').toBe(true);
   });
 
   it('B-D9: a list that does not read refuses the dry run and the pass, and nothing is written', async () => {
@@ -470,5 +471,12 @@ describe('S2: the durable dry run, pass and undo', () => {
     opened.push(d);
     expect(d.failure()).toBeNull();
     expect(await d.backfillDryRun(NOW, LIVE_P_GONE_Q)).toMatchObject({ reportedFirst: null, reportedScan: 'cut', closes: 1, failedCheck: 2 });
+  });
+
+  it('B-D12: a read of the journal that refuses (here a carried file that does not parse) is unmeasured, never a count of nothing', async () => {
+    const dir = dirWith(journal());
+    const d = await applierOver(dir);
+    writeFileSync(path.join(dir, DELEGATION_CARRIED_FILE), 'not a record\n');
+    expect(await d.backfillDryRun(NOW, LIVE_P_GONE_Q)).toMatchObject({ reportedFirst: null, reportedScan: 'cut', closes: 1 });
   });
 });

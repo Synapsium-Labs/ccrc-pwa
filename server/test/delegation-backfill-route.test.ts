@@ -148,6 +148,12 @@ describe('GET /api/coord/delegation-backfill: the dry run (spec §7.2, condition
     expect((await app.inject({ method: 'GET', url: DOOR })).json(), 'Q is not proved absent: Z fails too').toMatchObject({ closes: 0, failedCheck: 2 });
   });
 
+  it('RT-11: a parent re-created at another incarnation passes the check: its record closes', async () => {
+    const w = await world();
+    writeFileSync(path.join(w.reg, `${P}.generation`), '7f3c9a10-5555-4aaa-8bbb-0123456789cd');
+    expect((await get(w)).json(), 'X (P at another incarnation) and Z (Q gone)').toMatchObject({ closes: 2, failedCheck: 0 });
+  });
+
   it('RT-3: no applier open answers 503 not-ready, to the dry run and the pass alike', async () => {
     const w = await world({ applier: 'none' });
     expect([(await get(w)).statusCode, (await get(w)).json().error]).toEqual([503, 'not-ready']);
