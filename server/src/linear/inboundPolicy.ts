@@ -246,7 +246,7 @@ export function sharedKeyItemInput(teamKey: string, projects: readonly string[])
     why: `Issues were filed in a Linear team ${teamKey} outside ccrc, and more than one connected Linear workspace has a team with that key. ${holders}, so ccrc cannot tell which project owns these issues, and they wait.`,
     how: [
       `Open ${LINEAR_PROJECTS_SETTINGS_PATH} and, on the row of the project that owns team ${teamKey}, choose its Workspace, then Save.`,
-      'ccrc then routes the waiting issues to that project\'s Linear owner, or asks you to name one, and closes this item.',
+      'ccrc then routes the waiting issues to that project\'s Linear owner, or asks you to name one. This item closes itself once no issue of the team waits on the choice.',
     ],
     options: null, action: { verb: 'linear-team-workspace', teamKey },
   };

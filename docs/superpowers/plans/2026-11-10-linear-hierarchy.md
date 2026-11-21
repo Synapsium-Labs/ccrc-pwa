@@ -522,23 +522,23 @@ number from `POST /api/ledger/deviations`.
   naming no workspace, and two readable workspaces hold the key), the inbound lane's route step raises one *Choose the Linear
   workspace of team KEY* item per team key while none is open, naming those projects and the settings page whose Workspace
   routes the team, and settles it once no waiting issue of the key measures ambiguous or unmeasured, never while the
-  routing is unread (`sharedKeyItemVerdict` decides, beside `ownerItemReady`). Unmeasured routing raises nothing. The wire's
+  Linear store cannot be listed (`sharedKeyItemVerdict` decides, beside `ownerItemReady`). Unmeasured routing raises nothing. The wire's
   item action gains one verb, `linear-team-workspace` with its `teamKey`, which takes no act (`LINEAR_ITEM_ACTS` gives it
   none) and which the console draws as the step and a link to Settings, Security; the stored action column is unchanged
   (its JSON reads the new verb, and a reader that does not know a verb reads no action, so an older console draws a plain
-  item), and there is no migration (the coordinator's answer to the departure question, run 3187).
+  item), and there is no migration (the coordinator's answer to the departure question, run 3187). After a rollback to a
+  build that does not know the verb, an open item of it reads as a plain item no lane settles: the operator dismisses it.
   Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
   `no-linear-owner` when otherwise there is no recipient. It settles only with recipient mail in the same transaction;
   refusals leave the item, map and note retry intact. The console's item act path says a Return sentence for
   `no-linear-owner` and `team-ambiguous` (the map and the note are kept), and one sentence for `unreachable` on Hand and
   Return alike (review 3073 F5, F6). Migration completion waits rather than dropping an unnamed declared
-  programme whose membership cannot be measured. Ambiguous inbound with no owner still waits quietly and counts in the console.
-  Follow-ups this wave leaves:
+  programme whose membership cannot be measured. Ambiguous inbound with no owner waits, counts in the console and, since run
+  3187, raises the shared-key item above. Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
-  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and
-  `w8-ambiguous-notice` (after the pilot);
-  `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027, and
-  `w8-triage-l1` by run 3155. Record: the
+  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor` and `w8-overlord-skill`;
+  `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
+  `w8-triage-l1` by run 3155, and `w8-ambiguous-notice` by run 3187. Record: the
   wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
