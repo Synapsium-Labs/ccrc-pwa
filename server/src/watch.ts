@@ -201,6 +201,7 @@ import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js'
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import { skillInstallPass } from './coord/skillInstallLane.js';
 import { rolloutListingOf, skillRolloutPass } from './coord/skillRolloutLane.js';
+import { isSkillRolloutMail } from './coord/skillRollout.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -2913,7 +2914,8 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
       const skillCoord = this.deps.coord;
       if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
-      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing; record-only feed rows, never a push. Only where
+      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing. Its own `coord` feed row is record-only, and
+      // the mail it queues is record-only in `pushNewMail` (`isSkillRolloutMail`) and never asks a wake. Only where
       // `index.ts` set the revision (`deps.skillRolloutRevision`): a test's or a script's watcher never mails its claimants.
       const rolloutRevision = this.deps.skillRolloutRevision;
       if (skillCoord !== undefined && rolloutRevision !== undefined) void this.runLane('skillRollout', () => skillRolloutPass({ coord: skillCoord, revision: rolloutRevision, settled: this.skillRolloutSettled, log: (line) => console.warn(line),
@@ -3427,7 +3429,7 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }

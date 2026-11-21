@@ -47,7 +47,16 @@ whether another run named it as the worker, and ignored `mail-disabled`. Rebuilt
 | `rollout-after-settle-is-quiet` | A coordinator that first claims a run after the pass settled gets no mail: it starts on the new cards. One that claims in the window before the first settled pass is told too, which costs one mail. |
 | `revision-in-l1` | `COORDINATOR_SKILL_REVISION` lives in the L1 file, not in `shared/api.ts` (which sits at its growth cap): only the server reads it. A test pins that clause 21 of the shipped `SKILL.md` is the autonomy clause it names. |
 | `rollout-wired-in-index` | The lane runs only where the composition root sets `deps.skillRolloutRevision` (`index.ts`), as `planSync` and `driftPass` do. The first push ran it on every watcher, and the fast run went red in five watcher test files (asks-mint, questions-pin, questions-sequence-pin, ask-restart, stall-sweep): the lane mailed their fixtures' claimants. A pin reads the gate in `FleetWatcher.tick` and the one assignment in `index.ts`. |
+| `rollout-wake-never` | Fix round 1 (review 3077 F2): the rollout mail is queued with `wake = 'never'`, so the mail sweep holds it for a sleeping coordinator and asks no `ccd ensure`. `queueSystemMail` takes no wake, and its file is held by another run, so the lane calls `insertSystemMailTx` in its own transaction, as `untold.ts` and `reviewRelease.ts` do. Its `told` check is the dedupe. |
+| `rollout-record-only` | Fix round 1 (review 3077 F3): `isSkillRolloutMail` (L1) joins `pushNewMail`'s record-only list, so a rollout mail queued on a later tick is recorded and never pushed. |
 | `shared-deps-line-with-3052` | `server/src/deps.ts` and `server/src/index.ts` are held by run 3052's claim. Its worker agreed to the two additive lines and their import, and the coordinator ruled the overlap; whichever PR lands second absorbs `main`. |
+
+## Notes from review 3077 (no code)
+
+- F7 (pre-existing): a malformed run field (`openedAt` not a number with no `dispatchedAt`, a `health` that is not an object, a non-object in `runs`) makes jq exit and the hook prints no card, autonomy line included (fail open). The coordinator carries it as a follow-up: make `age` and `.health.mailParked` type-tolerant, like `n`.
+- F8 (a): the awaiting-you list may take all the room the reserve leaves (5,000 awaiting runs: four lines, no run line). The cap and the line both hold. (b): `skillRolloutLane.ts` folds the registry reading into the decider's facts (`refused`, `unlisted`, the `.child` kind), ORs the two readers into `told` and ANDs `settled` with the mail outcome. These are mechanical reads in L4. (c): an archived coordinator that still has an open run and a registry row is mailed once (the mail then parks). This is noise only.
+- The `rollout-after-settle-is-quiet` gap: a long-lived session holding the old skill text that claims its first run after the pass settled is never mailed. What covers it: opening a programme invokes `ccrc-coordinator`, which reads `SKILL.md` from disk; the roster line reaches the session once it has an open run and the card is armed; a compaction brings the new cards.
+- F1 (carried by the coordinator): once `anchor-slot` is live, the hook skips the role card, and the anchor carries no clause-21 rule. The anchor or the live card must carry the rule before the operator arms `anchor-slot`.
 
 ## Tests run (each file alone, through `ccrc test`)
 
@@ -56,6 +65,13 @@ whether another run named it as the worker, and ignored `mail-disabled`. Rebuilt
 `single-definition/` directory, `growth-check`, `rings/`, `anchors`, `citations`, `mail-hardening`, the server
 typecheck and the server tests' typecheck (`typecheck-tests` itself needs the PWA's packages, which this workspace did
 not install). `rings/watcher-store-port` lost its worker to a SIGKILL once under load and passed alone. After the fix round: the five files above passed, but for `stall-sweep`'s M8a case, which timed out at 20 s locally at load 7, alone too. Its watchers set no revision, so the lane never runs there, and the case passed in CI on the first push.
+
+Fix round 1, each file alone: `skill-rollout`, `lane-schedule`, `session-hook-roster-card`, `single-definition/roster-card`,
+`feed-writers-pin`, `run-untold`, `push-copy`, `wake-budget`, `admission-wake`, `continuity-hibernate-wake`,
+`mail-hardening`, `single-definition/vocabularies`, `single-definition/advance-switches`, `asks-mint`, `rings/`,
+`growth-check` armed (`GROWTH_CHECK=1`), and both typechecks. `mail-sweep` ran 166 of 186 green at load 9 to 10: 18 cases
+timed out at their 10 s or 20 s bound, and two assertions failed. Both of those cases, and a third that timed out, passed
+alone. No `mail-sweep` watcher sets the revision, so the lane never runs there.
 
 ## Guards measured red
 
@@ -67,7 +83,8 @@ Each by an in-place mutation of the source, restored from a saved copy and check
 - the lane (`skillRolloutLane.ts`): nine mutants (the refused id, each of the two readers, the settled memory read and
   write, the `.child` reading, the failed-write flag, the mail switch, the unlisted claimant): each reds `skill-rollout`.
 - the watcher's call: removing it reds the tick pin.
-- the decider (`skillRollout.ts`): nine mutants in `skill-rollout.test.ts`'s `runMutants` set, all killed.
+- the decider and the push predicate (`skillRollout.ts`): eleven mutants in `skill-rollout.test.ts`'s `runMutants` set, all killed.
+- fix round 1: the mail's `wake: 'never'` dropped (reds both the delivery's wake and, alone, the no-ensure arm of the watcher case); `isSkillRolloutMail` dropped from the record-only list (the later-tick case pushes); the feed row's `kind: 'coord'` changed (the tick pin); the clamp dropped (the cap -5 case). A first clamp, `[$max, 0] | max`, kept the card at 363 characters for a cap of -5: the parameter `$max` defines a filter `max` that shadows jq's builtin, so the clamp is an `if`.
 
 ## For the operator
 

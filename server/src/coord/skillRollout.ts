@@ -54,7 +54,15 @@ export const rolloutKey = (revision: string, sessionId: string): string => `skil
 /** The revision as a person reads it: `clause-21` is "clause 21". */
 const revisionWords = (revision: string): string => revision.replace(/-/g, ' ');
 
-export const rolloutMailSubject = (revision: string): string => `coordinator skill changed (${revisionWords(revision)})`;
+/** The head of every rollout mail's subject, whatever the revision. */
+const ROLLOUT_SUBJECT_HEAD = 'coordinator skill changed (';
+
+export const rolloutMailSubject = (revision: string): string => `${ROLLOUT_SUBJECT_HEAD}${revisionWords(revision)})`;
+
+/** Review 3077 F3: the push lane's test for a rollout mail, which it records and never pushes (a record for the coordinator,
+ *  not news for the operator). Only the operator's own system mail answers: no session can send as `operator`. */
+export const isSkillRolloutMail = (m: { readonly fromId: string; readonly subject: string }): boolean =>
+  m.fromId === 'operator' && m.subject.startsWith(ROLLOUT_SUBJECT_HEAD);
 
 export const rolloutMailBody = (revision: string): string =>
   `The coordinator skill changed (${revisionWords(revision)}). Re-read \`ccrc-coordinator\`, then \`goals show\` for your programme.`;

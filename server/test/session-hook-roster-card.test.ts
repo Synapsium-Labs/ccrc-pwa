@@ -591,11 +591,11 @@ describe('D-8126: the roster card carries the fixed autonomy line', () => {
 
   it('the builder itself never passes the cap it is given, even one smaller than its fixed lines (the last clip)', () => {
     const body = JSON.stringify({ runs: [run_('', { id: 51 }), run_('', { id: 52, state: 'awaiting-review' })] });
-    for (const max of [80, 250, 400]) {
+    for (const max of [-5, 0, 80, 250, 400]) {   // a negative cap clips to nothing (review 3077 F6)
       const r = spawnSync('jq', ['-L', path.resolve(__dirname, '../../ccd/lib'), '-r', '--arg', 'me', ID, '--argjson', 'now', String(NOW),
         '--argjson', 'max', String(max), 'include "roster-card"; roster_card($me; $now; $max)'], { input: body, encoding: 'utf8' });
       expect(r.status).toBe(0);
-      expect(r.stdout.replace(/\n$/, '').length, `cap ${max}`).toBeLessThanOrEqual(max);
+      expect(r.stdout.replace(/\n$/, '').length, `cap ${max}`).toBeLessThanOrEqual(Math.max(max, 0));
     }
   });
 

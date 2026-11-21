@@ -2,7 +2,7 @@
 // system mail per coordinator per coordinator-skill revision. `decideRollout` is the L1 decision over literal facts, held
 // by a mutant set; `skillRolloutPass` is the L4 lane, proven against a real coord store in a fixture HOME. No box is
 // touched.
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
@@ -15,6 +15,13 @@ import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { mkTmp } from './tmpHelpers.js';
 import { runMutants, type MutantSet, type SuiteCase } from './sim/mutate.js';
 import { sourceOfSymbol } from './scan/symbols.js';
+import { Bus } from '../src/bus.js';
+import type { Runner } from '../src/exec.js';
+import type { PushPayload } from '../src/push.js';
+import type { Deps } from '../src/server.js';
+import { FleetWatcher } from '../src/watch.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { testDeps, withFakeClock } from './helpers.js';
 
 const { COORDINATOR_SKILL_REVISION, decideRollout, rolloutKey, rolloutMailBody, rolloutMailSubject } = rollout;
 type RolloutModule = typeof rollout;
@@ -64,6 +71,13 @@ function decideCases(m: RolloutModule): Record<string, SuiteCase> {
     'no claimant: settled, nothing to send': () => {
       expect(d(facts())).toEqual({ mails: [], holds: [], settled: true });
     },
+    'the push lane\'s predicate: the operator\'s rollout mail of any revision, and nothing else': () => {
+      expect(m.isSkillRolloutMail({ fromId: 'operator', subject: m.rolloutMailSubject('clause-21') })).toBe(true);
+      expect(m.isSkillRolloutMail({ fromId: 'operator', subject: m.rolloutMailSubject('clause-22') })).toBe(true);
+      expect(m.isSkillRolloutMail({ fromId: 'coord-a', subject: m.rolloutMailSubject('clause-21') }), 'a session cannot borrow it').toBe(false);
+      expect(m.isSkillRolloutMail({ fromId: 'operator', subject: 'stall: coord-a' })).toBe(false);
+      expect(m.isSkillRolloutMail({ fromId: 'operator', subject: 're: coordinator skill changed (clause 21)' })).toBe(false);
+    },
     'a later revision has its own key and words': () => {
       const p = d(facts({ revision: 'clause-22', claimants: [c('coord-a')] }));
       expect(p.mails[0]).toMatchObject({ key: 'skill-rollout:clause-22:coord-a', subject: 'coordinator skill changed (clause 22)' });
@@ -83,6 +97,8 @@ const DECIDE_SET: MutantSet<RolloutModule> = {
     { id: 'R7', old: 'settled: holds.length === 0 }', new: 'settled: true }' },
     { id: 'R8', old: "revision.replace(/-/g, ' ')", new: 'revision' },
     { id: 'R9', old: '`skill-rollout:${revision}:${sessionId}`', new: '`skill-rollout:${sessionId}`' },
+    { id: 'R10', old: "m.fromId === 'operator' && ", new: '' },
+    { id: 'R11', old: 'm.subject.startsWith(ROLLOUT_SUBJECT_HEAD)', new: 'm.subject.includes(ROLLOUT_SUBJECT_HEAD)' },
   ],
   suite: decideCases,
 };
@@ -104,19 +120,19 @@ describe('decideRollout — the L1 decision', () => {
   });
 });
 
+// The migrations run once, into a template, and each case opens a copy: a fresh store per case without paying for every
+// migration per case (about 8 s each on a loaded box).
+let template = '';
+beforeAll(() => {
+  const home = mkTmp('skill-rollout-template-');
+  template = path.join(home, 'coord.db');
+  openCoordDb(template).close();
+});
+afterAll(() => { if (template !== '') fs.rmSync(path.dirname(template), { recursive: true, force: true }); });
+
 describe('skillRolloutPass — the lane, against a real coord store', () => {
   const homes: string[] = [];
   afterEach(() => { for (const h of homes.splice(0)) fs.rmSync(h, { recursive: true, force: true }); });
-  // The migrations run once, into a template, and each case opens a copy: a fresh store per case without paying for
-  // every migration per case (about 8 s each on a loaded box).
-  let template = '';
-  beforeAll(() => {
-    const home = mkTmp('skill-rollout-template-');
-    template = path.join(home, 'coord.db');
-    openCoordDb(template).close();
-  });
-  afterAll(() => { if (template !== '') fs.rmSync(path.dirname(template), { recursive: true, force: true }); });
-
   const build = () => {
     const home = mkTmp('skill-rollout-');
     homes.push(home);
@@ -286,7 +302,7 @@ describe('the watcher runs the lane on its tick (D-8126, A9-3)', () => {
     expect(tick.indexOf("this.runLane('skillRollout'", at + 1), 'one call site').toBe(-1);
     const call = tick.slice(at, tick.indexOf('?.catch(', at));
     for (const part of ['skillRolloutPass({', 'revision: rolloutRevision', 'settled: this.skillRolloutSettled',
-      'recordAlways: true, recordOnly: true, dedupeKey', 'rolloutListingOf(registryRead)']) expect(call).toContain(part);
+      'recordAlways: true, recordOnly: true, dedupeKey', "kind: 'coord'", 'rolloutListingOf(registryRead)']) expect(call).toContain(part);
     // Gated on the revision the composition root sets: a watcher built without it (a test, a script) never runs the lane.
     expect(tick).toContain('const rolloutRevision = this.deps.skillRolloutRevision;');
     expect(tick.slice(tick.lastIndexOf('\n', at), at)).toContain('rolloutRevision !== undefined');
@@ -298,6 +314,95 @@ describe('the watcher runs the lane on its tick (D-8126, A9-3)', () => {
       'deps.skillRolloutRevision = COORDINATOR_SKILL_REVISION;   // D-8126 (A9-3): the watcher\'s `skillRollout` lane runs only where this is set',
     ]);
   });
+});
+
+// Review 3077 F2 and F3: what the queued mail does downstream, through a real FleetWatcher. It never asks a sleeping
+// coordinator's wake (`wake = 'never'`: the mail sweep holds it for a hibernated recipient, with no `ccd ensure`), and the
+// push lane records it without pushing, also when it is queued on a later tick, after the push lane's watermark is primed.
+describe('the rollout mail downstream: no wake, no push (review 3077 F2, F3)', () => {
+  const NOW = 1_800_000_000_000;
+  const ID = 'project-a-calm-coord';
+  const homes: string[] = [];
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+  afterEach(() => { vi.useRealTimers(); for (const h of homes.splice(0)) fs.rmSync(h, { recursive: true, force: true }); });
+
+  const rig = async (revision: string | null = 'clause-21') => {
+    const home = mkTmp('skill-rollout-watch-');
+    homes.push(home);
+    const reg = path.join(home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.copyFileSync(template, path.join(home, '.ccrc', 'coord.db'));
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    // Every session is proven gone from tmux, so nothing is typed into a pane.
+    const run: Runner = async (_cmd, args) => (args[0] === 'has-session'
+      ? { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-x\n" } : { ran: true, code: 1, stdout: '', stderr: '' });
+    const ccd: string[][] = [];
+    const sent: PushPayload[] = [];
+    const notifyLog = new NotifyLog(path.join(home, 'notify.json'));
+    await notifyLog.load();
+    const deps: Deps = { ...testDeps(home, run), coord, notifyLog,
+      runCcd: async (a) => { ccd.push([...a]); return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
+      push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
+      ...(revision === null ? {} : { skillRolloutRevision: revision }) };
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+    const row = (id: string): void => {
+      for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'project-a', workdir: '/w/project-a', uuid: 'a'.repeat(36), started: '1' })) {
+        fs.writeFileSync(path.join(reg, `${id}.${k}`), v);
+      }
+    };
+    const hibernate = (id: string): void => {
+      fs.writeFileSync(path.join(reg, `${id}.stopped`), `${Math.floor(NOW / 1000)} ccd`);
+      fs.writeFileSync(path.join(reg, `${id}.hibernated`), `${Math.floor(NOW / 1000) - 7 * 3600} 7`);
+    };
+    const settle = async (): Promise<void> => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+    const beat = async (ms = 31_000): Promise<void> => { vi.setSystemTime(Date.now() + ms); await w.tick(); await settle(); };
+    const rollout = () => coord.db.prepare(
+      "SELECT d.id, d.wake, d.state, d.lastGate FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.subject = ?",
+    ).all(rolloutMailSubject('clause-21')) as { id: number; wake: string | null; state: string; lastGate: string | null }[];
+    return { home, reg, coord, w, ccd, sent, row, hibernate, beat, settle, rollout };
+  };
+  const open = (coord: CoordStore, claimedBy: string): void => {
+    const r = coord.openRun({ program: 'prog-a', title: 'prog-a', project: 'project-a', wave: 1, waveOf: 1, claimedBy });
+    if (!('id' in r)) throw new Error('openRun refused');
+  };
+
+  it('a hibernated coordinator gets the mail with a never wake, and the mail sweep asks no ensure for it', async () => {
+    const t = await rig();
+    t.row(ID); t.hibernate(ID); open(t.coord, ID);
+    await t.w.tick(); await t.settle();
+    await t.beat();
+    expect(t.rollout()).toHaveLength(1);
+    expect(t.rollout()[0]!.wake).toBe('never');
+    for (let i = 0; i < 3; i++) { vi.setSystemTime(Date.now() + 11_000); await t.w.sweepMail(); }
+    expect(t.ccd.filter((a) => a[0] === 'ensure'), 'no wake asked for the rollout mail').toEqual([]);
+    expect(t.rollout()[0]).toMatchObject({ state: 'queued', lastGate: 'hibernated' });
+  }, 60_000);
+
+  it('a mail queued on a later tick (held by mail-disabled, then released) is recorded and never pushed', async () => {
+    const t = await rig();
+    t.row(ID); open(t.coord, ID);
+    fs.writeFileSync(path.join(t.reg, MAIL_DISABLED_MARKER), '');
+    await t.w.tick(); await t.settle();
+    await t.beat();
+    expect(t.rollout(), 'held while mail-disabled stands').toHaveLength(0);
+    fs.rmSync(path.join(t.reg, MAIL_DISABLED_MARKER));
+    await t.beat();
+    expect(t.rollout(), 'queued on a later tick, after the push lane is primed').toHaveLength(1);
+    await t.beat(); await t.beat();
+    const subject = rolloutMailSubject('clause-21');
+    expect(t.coord.feedEvents(50).filter((e) => e.kind === 'mail' && e.body === subject), 'the push lane saw the mail and recorded it')
+      .toHaveLength(1);
+    expect(t.sent.filter((p) => p.body === subject), 'never pushed').toEqual([]);
+  }, 60_000);
+
+  it('CONTROL: a watcher built without the revision queues no rollout mail', async () => {
+    const t = await rig(null);
+    t.row(ID); open(t.coord, ID);
+    await t.w.tick(); await t.settle();
+    await t.beat(); await t.beat();
+    expect(t.rollout()).toHaveLength(0);
+  }, 60_000);
 });
 
 describe('the skill rollout lane row (D-8126, A9-3)', () => {

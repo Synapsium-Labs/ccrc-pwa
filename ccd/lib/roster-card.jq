@@ -19,7 +19,9 @@
 # server byte reaches it: it re-states coordinator clause 21 to a context a compaction emptied. THE CAP IS STRUCTURAL: the
 # header, that line, the collapse line at its longest and the awaiting-you line are reserved before any run line is
 # admitted; the awaiting-you list collapses into "+N more" under what is left; and the joined card is clipped at `$max`
-# last, so no reply, however long its fields or however many its runs, makes the card longer than `$max` or cuts the
+# last (at zero for a negative `$max`, which a slice would read as "all but the last N"; an `if`, because the parameter
+# `$max` also defines a filter `max` that shadows jq's builtin), so no reply, however long its
+# fields or however many its runs, makes the card longer than `$max` or cuts the
 # autonomy line (the header and the line together are about 330 characters).
 def roster_autonomy_line: "ccrc-autonomy: before asking the operator, read your goals (`ccrc-api goals show <slug>`), decide, record (`ccrc-api calls record`), continue; stop only for an operator-only act or a physical block (coordinator clause 21).";
 def roster_card($me; $now; $max):
@@ -35,4 +37,4 @@ def roster_card($me; $now; $max):
     (reduce $w[] as $x ({o: [], n: 0}; if ("awaiting you: " + (.o + [$x, "+\($w | length) more"] | join("; ")) | length) <= $fb then .o += [$x] else .n += 1 end)) as $q |
     ("awaiting you: " + (if ($w | length) > 0 then ($q.o + (if $q.n > 0 then ["+\($q.n) more"] else [] end) | join("; ")) else "nothing" end)) as $f |
     (reduce $l[] as $x ({o: [], n: 0}; if ([$h, $a] + .o + [$x, $m, $f] | join("\n") | length) <= $max then .o += [$x] else .n += 1 end)) as $k |
-    ([$h, $a] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") | .[0:$max] end;
+    ([$h, $a] + $k.o + (if $k.n > 0 then ["+\($k.n) more open runs: ccrc-api runs list"] else [] end) + [$f]) | join("\n") | .[0:(if $max < 0 then 0 else $max end)] end;
