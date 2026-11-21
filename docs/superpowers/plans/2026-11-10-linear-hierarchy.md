@@ -511,7 +511,7 @@ number from `POST /api/ledger/deviations`.
   pattern (review 3073 F7). Waiting work stays retryable; `plan take` refuses `unreachable` before effects, for Close as well
   as Return, when the handed row's owner cannot be measured (F9), and it reads the store even for a programme that names no
   project, so a readable store is never left unread there (F10).
-  The doors' two other `unreachable` arms are workspace measurements (review 3121 F1, recorded here at review 3144 F5): a take
+  The doors' two other `unreachable` arms are workspace measurements (review 3121 F1, recorded here at review 3144 F5; take's scope as ruled at review 3205 F3): a take
   into an epic, and a triage hand to the caller's own programme, refuse when the workspace of the epic cannot be measured
   (`destinationRefusal`), and a take into an epic or a close of an issue with no handed row refuses when the programme home's
   workspace cannot be measured (`upkeepLookupOf`), before the issue is looked up: either the Linear store could not be read,
