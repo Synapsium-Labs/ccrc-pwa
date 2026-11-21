@@ -2633,3 +2633,88 @@ describe('plan triage row choice, pinned before its move (D-8808)', () => {
     });
   });
 });
+
+describe('a team key two workspaces hold, on rows that name no workspace, raises one item (D-8808, review 3048 F5)', () => {
+  const holdAaaInBoth = async (r: Rig): Promise<void> => {
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
+  };
+  const waiting = (r: Rig, n: number, workspaceId: string): void => {
+    r.plan.upsertInbound({ linearId: U(n), workspaceId, teamKey: 'AAA', identifier: `AAA-${n}`, title: 'Issue', body: null, seenAt: T });
+  };
+  const pin = (r: Rig, project: string, workspaceId: string): void => {
+    r.db.prepare('UPDATE project_linking SET teamWorkspace = ? WHERE project = ?').run(workspaceId, project);
+  };
+  const shared = (r: Rig) => items(r).filter((i) => i.action !== null && (JSON.parse(i.action) as { verb: string }).verb === 'linear-team-workspace');
+
+  it('raises one item per team key, once, naming the projects and the settings page, and no owner item or mail', async () => {
+    const r = await rig({ twoWs: true });
+    await holdAaaInBoth(r);
+    waiting(r, 12, WS.a.id);
+    waiting(r, 13, WS.b.id);
+    await passAt(r, T + 1);
+    await passAt(r, T + 2);                              // a second beat raises nothing more
+    expect(items(r)).toHaveLength(1);
+    const [item] = shared(r);
+    expect(item).toMatchObject({ kind: 'do', title: 'Choose the Linear workspace of team AAA', program: LINEAR_SYNC_PROGRAMME, raisedBy: 'ccrc', options: null, state: 'open' });
+    expect(JSON.parse(item!.action!)).toEqual({ verb: 'linear-team-workspace', teamKey: 'AAA' });
+    expect(item!.why).toContain('The project project-a holds the key and names no workspace');
+    expect((JSON.parse(item!.how) as string[]).join('\n')).toContain('/settings/security');
+    expect([rowOf(r, 12)?.state, rowOf(r, 13)?.state]).toEqual(['waiting', 'waiting']);
+    expect(mails(r)).toEqual([]);
+    // the item takes no act: its remedy is the project row's setting
+    const named = await r.app.inject({ method: 'POST', url: `/api/items/${item!.id}/linear`, payload: { act: 'name', owner: OTHER } });
+    expect([named.statusCode, errorOf(named)]).toEqual([409, 'item-act-mismatch']);
+    expect(shared(r).map((i) => i.state)).toEqual(['open']);
+  });
+
+  it('settles once a workspace set on the row gives the issues an owner, and their mail goes out', async () => {
+    const r = await rig({ twoWs: true });
+    await holdAaaInBoth(r);
+    waiting(r, 12, WS.a.id);
+    await passAt(r, T + 1);
+    expect(shared(r).map((i) => i.state)).toEqual(['open']);
+    pin(r, 'project-a', WS.a.id);
+    await passAt(r, T + 2);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', mailedTo: OWNER });
+    expect(shared(r).map((i) => i.state)).toEqual(['done']);
+    await passAt(r, T + 3);                              // settled, and nothing raises it again
+    expect(shared(r).map((i) => i.state)).toEqual(['done']);
+  });
+
+  it('never settles while the routing is unread, even with nothing left waiting', async () => {
+    const r = await rig({ twoWs: true });
+    await holdAaaInBoth(r);
+    waiting(r, 12, WS.a.id);
+    await passAt(r, T + 1);
+    r.lin.store = 'unreadable';
+    await passAt(r, T + 2);                              // unmeasured: the issue waits and the item stays
+    expect(rowOf(r, 12)?.state).toBe('waiting');
+    expect(shared(r).map((i) => i.state)).toEqual(['open']);
+    pin(r, 'project-a', WS.a.id);                        // the pin owns its issue without the routing, so nothing waits now
+    await passAt(r, T + 3);
+    expect(rowOf(r, 12)?.state).toBe('mailed');
+    expect(shared(r).map((i) => i.state)).toEqual(['open']);
+    r.lin.store = 'ok';
+    await passAt(r, T + 4);
+    expect(shared(r).map((i) => i.state)).toEqual(['done']);
+  });
+
+  it.each(['unreadable', 'partial-b'] as const)('an unmeasured routing (%s) raises nothing: the issue holds and retries', async (store) => {
+    const r = await rig({ twoWs: true });
+    await holdAaaInBoth(r);
+    r.lin.store = store;
+    waiting(r, 12, WS.a.id);
+    await passAt(r, T + 1);
+    expect(rowOf(r, 12)?.state).toBe('waiting');
+    expect(items(r)).toEqual([]);
+    expect(mails(r)).toEqual([]);
+  });
+
+  it('a key one workspace holds raises no shared-key item', async () => {
+    const r = await rig({ twoWs: true });
+    waiting(r, 12, WS.a.id);
+    await passAt(r, T + 1);
+    expect(shared(r)).toEqual([]);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', mailedTo: OWNER });
+  });
+});

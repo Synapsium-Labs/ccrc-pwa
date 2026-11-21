@@ -489,3 +489,36 @@ describe('triageLookup and triageChoice (D-8808, w8-triage-l1)', () => {
     expect(triageChoice('AAA', 'nobody', [other[0]!], pinnedRows, f, routes2).row).toBeNull();
   });
 });
+
+describe('the shared-key item decision (D-8808, review 3048 F5)', () => {
+  const owner = { kind: 'owner', project: 'project-a', id: 'coord-a', source: 'named', live: false, gone: true } as const;
+  const ambiguous = { kind: 'none', reason: 'team-ambiguous' } as const;
+  const noHolder = { kind: 'none', reason: null } as const;
+  const unmeasured = { kind: 'unmeasured', possibleIds: [] } as const;
+
+  it('raises each key the owner rule measured ambiguous, once, upper-case, less the keys an open item carries', () => {
+    const v = policy.sharedKeyItemVerdict([
+      { teamKey: 'aaa', owner: ambiguous }, { teamKey: 'AAA', owner: ambiguous }, { teamKey: 'CCC', owner: ambiguous }, { teamKey: 'BBB', owner: ambiguous },
+      { teamKey: 'DDD', owner: noHolder }, { teamKey: 'EEE', owner: unmeasured }, { teamKey: 'FFF', owner },
+    ], [{ id: 7, teamKey: 'ccc' }], true);
+    expect(v).toEqual({ raise: ['AAA', 'BBB'], settle: [] });
+  });
+
+  it('settles an open item only when no waiting issue of its key is ambiguous or unmeasured, and only on a read routing', () => {
+    const open = [{ id: 1, teamKey: 'AAA' }, { id: 2, teamKey: 'BBB' }, { id: 3, teamKey: 'ccc' }, { id: 4, teamKey: 'DDD' }];
+    const verdicts = [
+      { teamKey: 'AAA', owner: ambiguous }, { teamKey: 'BBB', owner: unmeasured }, { teamKey: 'CCC', owner: noHolder }, { teamKey: 'ccc', owner },
+    ];
+    expect(policy.sharedKeyItemVerdict(verdicts, open, true)).toEqual({ raise: [], settle: [3, 4] });
+    expect(policy.sharedKeyItemVerdict(verdicts, open, false)).toEqual({ raise: [], settle: [] });
+    expect(policy.sharedKeyItemVerdict([], open, false)).toEqual({ raise: [], settle: [] });
+  });
+
+  it('names the rows holding the key that name no workspace, sorted', () => {
+    const rows = [
+      projectFacts('project-c'), projectFacts('project-a', { teamKey: 'aaa' }), projectFacts('project-b', { workspaceId: 'ws-b' }),
+      projectFacts('project-d', { teamKey: 'BBB' }),
+    ];
+    expect(policy.sharedKeyProjects('AAA', rows)).toEqual(['project-a', 'project-c']);
+  });
+});

@@ -7,7 +7,9 @@
  * the reporter's title and body (D-8705), and reads nothing else from Linear. `route` runs every beat, pass or no pass: a `waiting`
  * issue whose team's Linear owner is live or unmeasured is mailed to it, once, with the reporter's text only inside the untrusted
  * block; with no owner, or a gone one (dead or absent), it stays `waiting` and the project raises ONE *Name a Linear owner* item,
- * which settles itself in the beat that finds the owner live. A `raised` issue whose operator item is answered or closed comes back
+ * which settles itself in the beat that finds the owner live. An issue whose team key two connected workspaces hold, and whose holding
+ * projects name no workspace (the owner rule's measured `team-ambiguous`), waits too, and raises ONE item per team key asking the
+ * operator to choose the project's workspace (D-8808), which settles itself once no issue of that key waits on it. A `raised` issue whose operator item is answered or closed comes back
  * to the owner as a mail, and the item settles. `act` makes the Linear writes of a `closed` issue (one comment, with the reason or,
  * when the reason fails the public-text check at act time, a fallback with no text, then the cancel), in the issue's own flight, and records `actedAt` only after both landed.
  *
@@ -18,12 +20,12 @@ import type { CoordStore } from '../coord/store.js';
 import type { InboundRow, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { ccrcIssueIds, linearOwnerOfTeam, ownerItemReady, teamOwnerProject } from '../coord/planPolicy.js';
+import { ccrcIssueIds, linearOwnerOfTeam, ownerItemReady, sharedKeyItemVerdict, sharedKeyProjects, teamOwnerProject, type TeamOwner } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
 import {
   answeredMail, closeCommentBody, closeRefusedCommentBody, closeRefusedMail, closeTextRefusedMail, closeCommentSeedOf, closeIdOf, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
-  keyWaitMail, noCancelMail, ownerItemInput, type InboundHold, type InboundRecheck, type RetireWhy,
+  keyWaitMail, noCancelMail, ownerItemInput, sharedKeyItemInput, SHARED_KEY_SETTLED_NOTE, type InboundHold, type InboundRecheck, type RetireWhy,
 } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
@@ -195,21 +197,28 @@ export class InboundLane {
   }
 
   /** A `waiting` issue goes to its team's owner when it is live or unmeasured; otherwise it waits and its project raises the item.
-   *  An open item settles when the workspace's owner reads live and none of its team's issues still wait. */
+   *  An open item settles when the workspace's owner reads live and none of its team's issues still wait. The shared-key item
+   *  (D-8808) rides the same step: `sharedKeyItemVerdict` decides its raises and settles from the same verdicts. */
   private route(now: number, routes: TeamRoutes | null): void {
     const { plan, coord } = this.deps;
     const { rows, facts } = this.ownerFacts();
     const noOwner = new Set<string>();
     const waiting: InboundRow[] = [];
+    const verdicts: { teamKey: string; owner: TeamOwner }[] = [];
     for (const row of plan.inboundByState(null, ['waiting'])) {
       const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId, routes);
       if (owner.kind === 'owner' && owner.id !== null && !owner.gone) this.mailOwner(row, owner.id, now);
       else {
         waiting.push(row);
+        verdicts.push({ teamKey: row.teamKey, owner });
         if (owner.kind === 'owner') noOwner.add(owner.project);
       }
     }
-    const open = coord.itemsFor(LINEAR_SYNC_PROGRAMME, now).open.flatMap((i) => (i.action?.verb === 'linear-owner' ? [{ id: i.id, project: i.action.project }] : []));
+    const items = coord.itemsFor(LINEAR_SYNC_PROGRAMME, now).open;
+    const shared = sharedKeyItemVerdict(verdicts, items.flatMap((i) => (i.action?.verb === 'linear-team-workspace' ? [{ id: i.id, teamKey: i.action.teamKey }] : [])), routes !== null);
+    for (const key of shared.raise) coord.raiseItem(sharedKeyItemInput(key, sharedKeyProjects(key, rows)), now, 'ccrc');
+    for (const id of shared.settle) coord.moveItem(id, 'settle', 'ccrc', { note: SHARED_KEY_SETTLED_NOTE }, now, { programmeHasOpenRun: false });
+    const open = items.flatMap((i) => (i.action?.verb === 'linear-owner' ? [{ id: i.id, project: i.action.project }] : []));
     for (const project of noOwner) if (!open.some((i) => i.project === project)) this.raiseOwnerItem(project, now);
     for (const item of open) {
       if (!ownerItemReady(item.project, rows, facts, routes, waiting)) continue;

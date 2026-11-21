@@ -11,6 +11,7 @@
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from '../coord/untrusted.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
+import { LINEAR_PROJECTS_SETTINGS_PATH } from '../../../shared/ledgers.js';
 import { withCcrcProvenance } from './hierarchyOps.js';
 import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
 import type { InboundNote, InboundRow } from '../coord/planStore.js';
@@ -233,6 +234,25 @@ export function ownerItemInput(project: string, live: readonly string[]): RaiseI
     options: null, action: { verb: 'linear-owner', project },
   };
 }
+
+/** D-8808 (review 3048 F5): the item for a team key two connected Linear workspaces hold, whose holding projects name no workspace,
+ *  so its inbound issues wait with no owner. The remedy is a setting, the project row's Workspace, so the item takes no act; it
+ *  settles itself once the issues route (`SHARED_KEY_SETTLED_NOTE`). The team key and the project names are shape-checked. */
+export function sharedKeyItemInput(teamKey: string, projects: readonly string[]): RaiseItemInput {
+  const holders = projects.length === 1 ? `The project ${projects[0]} holds the key and names no workspace` : `The projects ${projects.join(', ')} hold the key and name no workspace`;
+  return {
+    program: LINEAR_SYNC_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', neededBy: 'later', soonLabel: null, secretSlot: null,
+    title: `Choose the Linear workspace of team ${teamKey}`,
+    why: `Issues were filed in a Linear team ${teamKey} outside ccrc, and more than one connected Linear workspace has a team with that key. ${holders}, so ccrc cannot tell which project owns these issues, and they wait.`,
+    how: [
+      `Open ${LINEAR_PROJECTS_SETTINGS_PATH} and, on the row of the project that owns team ${teamKey}, choose its Workspace, then Save.`,
+      'ccrc then routes the waiting issues to that project\'s Linear owner, or asks you to name one, and closes this item.',
+    ],
+    options: null, action: { verb: 'linear-team-workspace', teamKey },
+  };
+}
+/** The note the shared-key item settles with. */
+export const SHARED_KEY_SETTLED_NOTE = 'No issue of this team waits on the choice of workspace any more.';
 
 /** The operator's decision when the owner raises an issue that may change a programme's scope. */
 export function raisedItemInput(row: InboundText, note: string | undefined): RaiseItemInput {
