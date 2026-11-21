@@ -1,7 +1,7 @@
 import {
-  BACKUP_OP, DISK_OP, MODELS_OP, MODELS_OP_REQUEST_TIMEOUT_MS, PRESSURE_OP, READDIR_MTIMES_OP, TESTBOX_ADMIN_OP, TESTBOX_OP,
-  TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, buildModelsArgv, isReadFromRange, readModelsOpAnswer,
-  readTestboxAdminOpAnswer, readTestboxOpReply, readTestboxToolsSyncReply, testboxAdminRequestTimeoutMs, type ModelsReq, type TailData,
+  BACKUP_OP, DISK_OP, MODELS_OP, MODELS_OP_REQUEST_TIMEOUT_MS, PRESSURE_OP, READDIR_MTIMES_OP, TESTBOX_ADMIN_OP, TESTBOX_CAPTURE_OP,
+  TESTBOX_CAPTURE_REQUEST_MS, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, buildModelsArgv, isReadFromRange, readModelsOpAnswer,
+  readTestboxAdminOpAnswer, readTestboxCaptureReply, readTestboxOpReply, readTestboxToolsSyncReply, testboxAdminRequestTimeoutMs, type ModelsReq, type TailData,
   type TailReset,
 } from '../../../shared/agent-protocol.js';
 import { buildTestboxAdminArgv, testboxAdminIsLong } from '../../../shared/testbox-admin.js';
@@ -329,6 +329,19 @@ export function createIo(client: FleetClient): FleetIO {
       if (!(client.state.agentOps ?? []).includes(TESTBOX_TOOLS_SYNC_OP)) return { ok: false, reason: 'no-op' };
       try {
         const reply = readTestboxToolsSyncReply(await client.request({ t: 'req', op: TESTBOX_TOOLS_SYNC_OP }, TESTBOX_OP_REQUEST_MS));
+        return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
+      } catch {
+        return { ok: false, reason: 'unanswered' };
+      }
+    },
+
+    /** The agent's `testbox-capture` op (build capture runner spec §2.5): an agent whose `ready.ops` does not name it is never
+     *  sent it: `no-op`. A fault on the wire, the deadline or a reply `readTestboxCaptureReply` refuses for this build is
+     *  `unanswered`: a job may have gone out. */
+    async testboxCapture(build) {
+      if (!(client.state.agentOps ?? []).includes(TESTBOX_CAPTURE_OP)) return { ok: false, reason: 'no-op' };
+      try {
+        const reply = readTestboxCaptureReply(await client.request({ t: 'req', op: TESTBOX_CAPTURE_OP, build }, TESTBOX_CAPTURE_REQUEST_MS), build);
         return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
       } catch {
         return { ok: false, reason: 'unanswered' };

@@ -32,6 +32,13 @@ coordinator folds it into the ledger on its own pull request.
   transport (`server/src/testboxCapture.ts`) folds them into `no-runner` and logs the real refusal. Neither can happen in
   PR 1, because the desk answers `no-runner` before it looks at the build. The follow-up widens the words, with a
   migration, before PR 3 wires the runner. Those files are held by run 3213 today.
+- **recorder-runs-from-source-in-tests** (coordinator's ruling, mail 30078, after a hook refusal of a heredoc that wrote a
+  test). Nothing is compiled at test time. The recorder (`agent/src/testbox/captureRecord.ts`) imports no local module
+  and uses only syntax Node's type stripping erases. Its tests run its source as a process with
+  `--experimental-strip-types` passed explicitly, which the Node floor (22.16.0) needs, and every spawn has a timeout. So
+  the recorder repeats `entry.ts#startedAsProgram`'s three-line check instead of importing it: a process boundary the
+  import cannot cross without a build step. `capture.ts#captureSettings` takes the recorder's command as argv for the same
+  reason.
 - **dead-adapter-deleted** (coordinator's ruling, mail 30056). The stub `testboxCaptureTransport` in
   `server/src/buildCaptureLane.ts`, under run 3213's claim, is deleted by this pull request: the function, its doc comment
   and the `TestboxBlock` import, nothing else.
