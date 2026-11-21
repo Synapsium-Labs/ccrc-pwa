@@ -52,6 +52,7 @@ const MIN: Record<TestboxAdminSub, Record<string, unknown>> = {
   'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
   'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } }, 'settings-box': { settings: { CCRC_TESTBOX_WORKERS: '3' } },
   'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {}, 'key-rotate': {}, 'key-revoke': {},
+  'tools-home': {},
 };
 const POST_SUBS = (Object.keys(TESTBOX_ADMIN_SUB_MAP) as TestboxAdminSub[]).filter((s) => s !== 'status');
 const STEP_UP_SUBS = POST_SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp);
