@@ -70,7 +70,8 @@ The coordinator's rulings of mail 27952 (review 2929) and mail 27937 (clause 22,
 | F1 | Put "only" back. | Both plan.md sections: "refused only for a decision that binds it". Triage's list: "a hand, an Upkeep placement or a take into an epic, while a close, a raise or a return goes on". Take's: "a take into an epic, while a close or a return goes on". This is what `inboundDoorVerdict` decides. | Red with "only" cut, in each section. |
 | F2 | Row 4 of this note is true once F1 is fixed. | Row 4 says so. | |
 | F3 | The fifth case: an answer about one issue. | Checked against `InboundLane#readById` (any refusal but `not-found` is unmeasured with its word) and `inboundRecheckOf` (`malformed`). The refusal words that are about one issue are `inboundPolicy.ts`'s `ROW_WORDS` (`linear-forbidden`, `linear-invalid`, `malformed`), and `inboundDoorVerdict` refuses a binding decision `unreachable` on them. Both sections: "and when Linear answered about that one issue, refusing it as forbidden or invalid or answering outside its grammar, a retry gets the same answer until that issue changes in Linear". D-8735's retry sentence names it, in place. | Red with the case cut, in each section. |
-| F4 | D-8739's opening, and this clause's other mentions in the plan. | D-8739 opens "Task 6.1's clause (21 when planned, 22 when it lands)". Lines 93, 1080 and 1131, and Task 6.1's file list, cap, "Produces", count word, wording note and Step 1, say 22, with one sentence saying the task said 21 when planned. D-8739's last sentence says the clause lands in this round. Task 6.1's five steps are ticked. No mention of the Overlord's clause 21 changed. | None (plan text). |
+| F4 | D-8739's opening, and this clause's other mentions in the plan. | D-8739 opens "Task 6.1's clause (21 when planned, 22 when it lands)". Its mentions in What was read first (the `references/plan.md` bullet), Task 2.4's `plan put` route and Task 2.5's
+`references/plan.md` note, and Task 6.1's file list, cap, "Produces", count word, wording note and Step 1, say 22, with one sentence saying the task said 21 when planned. D-8739's last sentence says the clause lands in this round. Task 6.1's five steps are ticked. No mention of the Overlord's clause 21 changed. | None (plan text). |
 | F5 | Row 5c/5d quotes the shipped sentence, and Task 2 follows `planGate`. | Row 5c/5d above. Task 2: `plan-missing` is "no live epic and `planRequired` 1". `ticket-unavailable` adds an unknown ticket, and a named ticket when the plan has no live epic and requires none. With neither, and no named ticket, the run opens with none. | None (plan text). |
 | F6 | Record wave 8's branch as measured before the push. | See Consents. | |
 | Clause 22 | Land it with everything the note carried. | Run 1850's packet re-measured against main 42612467b8 before this round: neither file had moved since 6c8f52199c, and the packet was byte-identical (sha256 cf8ece6b…), so run 1850's yes of mail 27932 stands. Its coordinator was mailed this run id before the push. | Row 1 above. |
@@ -103,7 +104,25 @@ The coordinator's rulings of mail 27952 (review 2929) and mail 27937 (clause 22,
   - fix round 2: two hunks, yes (mail 27956); the full nine-hunk round, asked in mail 27962: yes (mail 27966). Its own plan edits (D-8808 and D-8809 after
     D-8736, and the Wave 8 heading) are not on its branch yet and do not meet these.
   - Review 2929 F6, measured just before the push: wave 8's local branch tip is 3cfa0da5ca, not pushed. Against its merge
-    base it adds 22 lines at the end of `references/plan.md`, after `plan take`. In the plan, it adds 34 lines after line
-    344 (D-8808 and D-8809 after D-8736) and changes one line near line 2061 (the Wave 8 heading). A three-way merge of
-    each file with this round is clean.
+    base 42612467b8 it adds 22 lines at the end of `references/plan.md`, after `plan take`. In the plan, it adds 34 lines
+    in Deviations found, after D-8736 (D-8808 and D-8809), and changes one line, the Wave 8 heading. A three-way merge of
+    each file with this round is clean. (Line numbers once given here, and in row F4 above, were wrong at the tip; review
+    2960 A4 measured them, and section names replace them.)
 - **api.md:** run 2810's claim ended when #3088 merged; claimed by this run.
+
+## Words after the pilot's last fixes (run 3102, ticket `w6-words`)
+
+Reviews 2960, 2998 and 3096 left wording that was no longer true of the code. A rules file is kept out of a code pull
+request, so these words were carried to this run. Words and pins only: no server or pwa code changed, and no new number
+(each change amends D-8735, D-8739 or D-8808 in place).
+
+| Item | What the code says | Done | Pin (seen red) |
+|---|---|---|---|
+| Review 2960 F1 | `malformed` is the retryable kind: `RETRY_WORDS` (`inboundPolicy.ts`) retries it, and a transport fault reads as malformed. The one deterministic `malformed` is `inboundRecheckOf`'s by-id answer missing the issue's team or state. | plan.md's `plan triage` and `plan take`: the repeat case keeps Linear's refusal of that one issue as forbidden or invalid; an answer outside Linear's grammar may clear on a retry, unless it is the issue's own answer missing its team or state. D-8735 says the same. | The shared retry regex, red in each section with the old tail put back. |
+| Review 2960 A1 | Triage binds on `upkeep \|\| hand` (`planRoutes.ts`); a take into an epic and a return are `plan take`'s. | Triage's sentence: "a hand or an Upkeep placement, while a close or a raise goes on". The take section already names its own decisions. | Triage's regex, red with the old list. |
+| Review 2960 A2 | Clause 22 carries the console-only rule. | D-8739 says, in the past tense, that the follow-up moved the sentence into clause 22. plan.md points at clause 22 rather than restating the rule. | plan.md's pointer sentence, and no "never answers one for them" there: red on the old text. |
+| Review 2960 A3 | `planGate` refuses through `ticketIsHeld`: `started`, or `open` with a run. | Task 2.5 and plan.md: "held by another run (started, or open with a run attached, a planned run included)". | plan.md's phrase, red on the old text. |
+| Review 2960 A4 | | Row F4 and the Consents entry above name sections, not line numbers. | None (note text). |
+| Review 2960 F2's residue | Clause 22 says "never files or edits a hierarchy object"; Task 6.1's text has no "or edits". | D-8739 records that the words came with wave 6's carried packet, and that the clause stands as landed. | None (plan text). |
+| Review 2998's nit | The follow-up map test (`migration-apply.test.ts`) expects `plan-bad-body` once the tick has shed the only skipped issue. | plan.md: `map-incomplete` while the follow-up map is still awaited, `plan-bad-body` once none is. | plan.md's sentence, red on the old text. |
+| Review 3096 F1 | `hierarchyStateOfRow` has no top-row condition. | D-8808 and the w8 note say "a pinned row". | None (plan and note text). |

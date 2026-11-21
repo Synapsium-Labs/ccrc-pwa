@@ -79,12 +79,23 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     }
   });
 
-  it('says the hierarchy is ccrc\'s, and that the operator acts on its items in the console, never answered for them', () => {
+  it('says the hierarchy is ccrc\'s, and points at clause 22 for the console-only rule rather than restating it (review 2960 A2)', () => {
     const text = flat(plan());
     expect(text).toContain('**The hierarchy is ccrc\'s.**');
-    expect(text).toContain('The operator acts on the hierarchy items (drift, inbound, initiatives, owner, map, report) in the console, '
-      + 'and a coordinator never answers one for them, nor asks for those approvals in its turn text.');
+    expect(text).toContain('The hierarchy items (drift, inbound, initiatives, owner, map, report) are the operator\'s, acted on in the '
+      + 'console: contract clause 22 holds that rule.');
+    // the rule's words live in clause 22 alone (`coordinator-skill.test.ts` pins it there)
+    expect(text).not.toContain('never answers one for them');
     expect(text).toContain('Never file or edit a hierarchy object');
+  });
+
+  it('ticket-unavailable names a ticket held by another run as ticketIsHeld decides it, a planned run included (review 2960 A3)', () => {
+    expect(flat(plan())).toContain('held by another run (started, or open with a run attached, a planned run included)');
+  });
+
+  it('a follow-up map naming a taken issue: map-incomplete while the map is awaited, plan-bad-body once none is (review 2998 nit)', () => {
+    expect(flat(plan())).toContain('while that follow-up map is still awaited, listing it is `map-incomplete`, and once the tick has '
+      + 'shed it as the only skipped issue, no map is awaited and a map is refused `plan-bad-body`.');
   });
 
   it('every work run of a planned programme opens with its ticket, named by its key in the runs open body (review 2590 A1)', () => {
@@ -139,7 +150,7 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3)', () => {
+  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3, 2960 F1, A1)', () => {
     for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
       const text = plan();
       const at = text.indexOf(`\n${heading}\n`);
@@ -148,13 +159,16 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       expect(at, heading).toBeGreaterThanOrEqual(0);
       // review 2885 F5 as review 2920 F2 rules it: the third case, a key Linear refused with a 401 (only a 401 is a verdict on the
       // key); review 2920 F3: the fourth, a workspace with no managed team, where nothing is re-read; review 2929 F3: the fifth, an
-      // answer about one issue (inboundPolicy.ts's ROW_WORDS: linear-forbidden, linear-invalid, malformed)
-      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again; and when Linear answered about that one issue, refusing it as forbidden or invalid or answering outside its grammar, a retry gets the same answer until that issue changes in Linear\)/);
+      // answer about one issue (inboundPolicy.ts's ROW_WORDS: linear-forbidden, linear-invalid, malformed); review 2960 F1: only
+      // the two refusals repeat, while `malformed` is in RETRY_WORDS (a transport fault reads as malformed) and repeats only as
+      // inboundRecheckOf's by-id answer missing its team or state
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again; when Linear refused that one issue as forbidden or invalid, a retry gets the same answer until that issue changes in Linear; and an answer outside Linear's grammar may clear on a retry, unless it is the issue's own answer missing its team or its state, which repeats until that issue changes in Linear\)/);
       // review 2920 F1 and 2929 F1: the clauses main's api.md pin held, now pinned where they live, "only" included: a decision
-      // that binds the issue is refused, and a close, a raise or a return goes on (`inboundDoorVerdict`)
+      // that binds the issue is refused, and the rest goes on (`inboundDoorVerdict`); review 2960 A1: each section names its own
+      // verb's decisions, triage's binding pair being `planRoutes.ts`'s `upkeep || hand`
       expect(section, heading).toMatch(heading === '## plan take'
         ? /`unreachable` \([^)]*refused only for a decision that binds it: a take into an epic, while a close or a return goes on; or, for an Upkeep ticket's take or close, the programme's home workspace could not be resolved;/
-        : /`unreachable` \([^)]*refused only for a decision that binds it: a hand, an Upkeep placement or a take into an epic, while a close, a raise or a return goes on;/);
+        : /`unreachable` \([^)]*refused only for a decision that binds it: a hand or an Upkeep placement, while a close or a raise goes on;/);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
   });
