@@ -105,9 +105,13 @@ export function backfillParentsToRead(activities: readonly DelegationActivityRow
   return [...out].sort();
 }
 
+/** The dry run's age bands, by how long a record has been quiet (slug age-bands-by-quiet). The first edge IS the positive check's seven
+ *  days of quiet (the coordinator's ruling on the seven-day census), so a record past it is one the check passes on quiet alone, and one
+ *  in `days1to7` passed by its parent's measurement (or is a bash-worktree record); the second edge is a month. */
+const DELEGATION_BACKFILL_BAND_MONTH_MS = 30 * DAY_MS;
 const bandOf = (a: DelegationActivityRow, nowMs: number): DelegationBackfillAgeBand => {
-  const age = nowMs - parseDelegationInstant(a.openedAt);
-  return age < 7 * DAY_MS ? 'days1to7' : age < 30 * DAY_MS ? 'days7to30' : 'days30plus';
+  const quiet = nowMs - parseDelegationInstant(a.lastEventAt);
+  return quiet < DELEGATION_BACKFILL_PROVEN_QUIET_MS ? 'days1to7' : quiet < DELEGATION_BACKFILL_BAND_MONTH_MS ? 'days7to30' : 'days30plus';
 };
 const zeroBands = (): Record<DelegationBackfillAgeBand, number> =>
   Object.fromEntries(DELEGATION_BACKFILL_AGE_BANDS.map((b) => [b, 0])) as Record<DelegationBackfillAgeBand, number>;

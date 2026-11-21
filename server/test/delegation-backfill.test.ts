@@ -216,20 +216,20 @@ describe('S2: the plan and the dry run\'s report (spec §7.2, condition 4)', () 
     row('a-old', { openedAt: at(0), lastEventAt: at(DAY) }),                                          // 40 days: closes (7-day quiet)
     row('a-gone', { parentId: Q, openedAt: at(36 * DAY), lastEventAt: at(36 * DAY) }),               // 4 days, parent absent: closes
     row('a-live', { openedAt: at(36 * DAY), lastEventAt: at(36 * DAY) }),                            // 4 days, same incarnation: fails
-    row('w-gone', { parentId: Q, sourceKind: 'workflow', openedAt: at(20 * DAY), lastEventAt: at(36 * DAY) }),  // opened 20 days ago
+    row('w-gone', { parentId: Q, sourceKind: 'workflow', openedAt: at(20 * DAY), lastEventAt: at(36 * DAY) }),  // opened 20 days ago, quiet 4
     row('b-old', { sourceKind: 'bash-worktree', openedAt: at(2 * DAY), lastEventAt: at(2 * DAY) }),  // 38 days
     row('b-young', { sourceKind: 'bash-worktree', openedAt: at(40 * DAY - H), lastEventAt: at(40 * DAY - H) }),
     row('a-ended', { executionState: 'ended', endedAt: at(5) }),
     row('a-done', { executionState: 'ended', endedAt: null, endBasis: 'backfill-unmeasured' }),
   ];
 
-  it('B-P1: the count it would close, by kind and by how long ago each was opened; ids sorted; the words', () => {
+  it('B-P1: the count it would close, by kind and by how long each has been quiet, from the positive check\'s seven days; ids sorted; the words', () => {
     const p = plan(fixture(), now, { parents: LIVE_P_GONE_Q });
     expect(p.close).toEqual(['a-gone', 'a-old', 'b-old', 'w-gone']);
     expect(p.report).toMatchObject({ words: DELEGATION_BACKFILL_WORDS, asOf: formatDelegationInstant(now), mode: 'first', listed: null, closes: 4 });
     expect(p.report.byKind).toEqual({
       agent: { days1to7: 1, days7to30: 0, days30plus: 1 },
-      workflow: { days1to7: 0, days7to30: 1, days30plus: 0 },
+      workflow: { days1to7: 1, days7to30: 0, days30plus: 0 },   // quiet 4 days, though opened 20 days ago
       'bash-worktree': { days1to7: 0, days7to30: 0, days30plus: 1 },
     });
   });

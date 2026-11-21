@@ -11,8 +11,8 @@ import type { DelegationActivitySourceKind } from './api.js';
 export const DELEGATION_BACKFILL_WORDS = 'closed by the one-time pass; its real end was not measured';
 
 const DELEGATION_BACKFILL_AGE_BAND_MAP = { days1to7: true, days7to30: true, days30plus: true } as const;
-/** How long ago a record the pass would close was OPENED: 1 to 7 days, 7 to 30 days, or 30 days and more. Nothing younger qualifies,
- *  because a record must have been quiet for 24 hours. */
+/** How long a record the pass would close has been QUIET: 1 to 7 days, 7 to 30 days, or 30 days and more. Nothing quieter qualifies,
+ *  because a record must have been quiet for 24 hours; from 7 days the positive check passes it on its quiet alone. */
 export type DelegationBackfillAgeBand = keyof typeof DELEGATION_BACKFILL_AGE_BAND_MAP;
 export const DELEGATION_BACKFILL_AGE_BANDS: readonly DelegationBackfillAgeBand[] = Object.keys(DELEGATION_BACKFILL_AGE_BAND_MAP) as DelegationBackfillAgeBand[];
 
@@ -57,7 +57,7 @@ export interface DelegationBackfillReport {
   readonly listed: number | null;
   /** How many records the pass would close now. */
   readonly closes: number;
-  /** Those records, by kind and by how long ago they were opened. */
+  /** Those records, by kind and by how long they have been quiet. */
   readonly byKind: { readonly [K in DelegationActivitySourceKind]: { readonly [B in DelegationBackfillAgeBand]: number } };
   /** Of those, how many a lease or a lineage row names. */
   readonly named: number;
