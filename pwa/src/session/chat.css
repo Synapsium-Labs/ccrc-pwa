@@ -1981,13 +1981,18 @@ button.metachip:active {
    the header, the open section (at most half the viewport, H2) and the
    composer were taller than the pane, the transcript already at nothing: at a
    desk the chat's `overflow: hidden` cut the composer's key-hint row at the
-   pane's foot, under Instrument's status bar (measured: 22 px at 1280 and
-   1600), and on a phone the composer fell below the window (82 px at 360).
+   pane's foot, under Instrument's status bar (measured: 22 and 24 px at 1280
+   and 1600), and on a phone the composer fell below the window (48 to 83 px
+   at 360 and 390).
    The container may shrink, and the Helpers section in it, whose rows are a
-   scroll body, never below its head; every other strip keeps its height. */
+   scroll body, never below its head; every other strip keeps its height. On
+   a screen too short even for that, the container scrolls, so a strip never
+   lies over the composer (measured at 360 x 520). */
 .chat-strips {
   flex: 0 1 auto;
   min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   min-width: 0;

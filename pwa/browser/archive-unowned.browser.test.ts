@@ -1,5 +1,7 @@
 // The Archive screen's "Work no session owns" section (desktop polish H4, D-8828), measured in a real Chrome over the
-// production build, in both skins and both palettes, at a phone's width (360) and at a desk (1280). The jsdom suite
+// production build, in both skins and both palettes, at the plan's matrix widths (360, 390, 1280, 1600 and 1920; H4 took 360
+// and 1280, session helpers HF2 the rest). HF2 also holds, in a real Chrome, the focus when the section's rows leave (review
+// 2988 F6) and the fleet foot's both-state row breaking between its halves (F8). The jsdom suite
 // (test/archive-unowned-work.test.tsx) pins the markup and the words; this file holds what it cannot: every control lies
 // inside its row, each control's hit area is at least `--tap-min`, the page never scrolls sideways, and no row carries a
 // title (a phone shows none, and a title is where a liveness word would hide).
@@ -62,7 +64,8 @@ const FIXTURE: AppFixture = {
 
 const SKINS = [REFINED, INSTRUMENT] as const;
 const THEMES = [PHOSPHOR, 'light'] as const;
-const WIDTHS = [360, 1280] as const;
+/** The plan's acceptance matrix widths (session helpers HF2, D-8877: the Archive section's matrix; H4 measured 360 and 1280). */
+const WIDTHS = [360, 390, 1280, 1600, 1920] as const;
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -101,6 +104,10 @@ describe('Archive: Work no session owns, in a real Chrome', () => {
             await opened.page.waitForSelector('[data-unowned-row]', { timeout: 20_000 });
             await opened.page.evaluate(async () => { await document.fonts.ready; });
             await opened.page.waitForTimeout(400); // the first paint's transitions settle
+            // HF2: one picture per view when `CCRC_SHOTS` names a directory, before the assertions, so the same file run over
+            // `origin/main` gives the matrix's "before" column.
+            const matrixShots = process.env['CCRC_SHOTS'];
+            if (matrixShots !== undefined && matrixShots !== '') await opened.page.screenshot({ path: path.join(matrixShots, `archive-${skin}-${theme}-${width}.png`) });
             const m = await opened.page.evaluate((): Measure => {
               const floor = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min'));
               const rows = [...document.querySelectorAll<HTMLElement>('[data-unowned-row]')];
@@ -259,7 +266,7 @@ describe('Archive: the focus when the section\'s rows leave, in a real Chrome (H
 // neither half is cut and no word of one is left alone on a line ("owns · 4" alone, before).
 describe('Fleet foot: the both-state Archived row breaks between its halves (HF2, review 2988 F8)', () => {
   for (const skin of SKINS) {
-    for (const width of [360, 390, 1280] as const) {
+    for (const width of WIDTHS) {
       it(`${skin} at ${width}px: each half whole on its line(s), the break between them`, async () => {
         const opened = await openApp(browser!, { skin, theme: PHOSPHOR, width }, FIXTURE);
         try {
@@ -267,6 +274,11 @@ describe('Fleet foot: the both-state Archived row breaks between its halves (HF2
           await opened.page.waitForSelector('.fleet-archived-row', { timeout: 20_000 });
           await opened.page.evaluate(async () => { await document.fonts.ready; });
           await opened.page.waitForTimeout(400);
+          const footShots = process.env['CCRC_SHOTS'];
+          if (footShots !== undefined && footShots !== '') {
+            await opened.page.locator('.fleet-archived-row').scrollIntoViewIfNeeded();
+            await opened.page.screenshot({ path: path.join(footShots, `foot-${skin}-${width}.png`) });
+          }
           const m = await opened.page.evaluate(() => {
             const row = document.querySelector<HTMLElement>('.fleet-archived-row')!;
             // Each drawn character's line (its box's top), and the text of each line.

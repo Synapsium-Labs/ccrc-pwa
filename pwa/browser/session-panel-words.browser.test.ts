@@ -179,6 +179,8 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
                 const r = part.getBoundingClientRect();
                 const siblings = [...part.parentElement!.children].filter((c) => c !== part).map((c) => c.getBoundingClientRect());
                 const ownLine = siblings.every((b) => b.bottom <= r.top + 1 || b.top >= r.bottom - 1);
+                // After the row's short words: every other part of the row's words ends above it.
+                const last = siblings.every((b) => b.bottom <= r.top + 1);
                 const full = r.width >= parts.width - 1;
                 // Each character's line, from its box; a line starts where a character's top moves down.
                 const chars: Array<{ c: string; top: number; at: number }> = [];
@@ -212,7 +214,7 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
                 }
                 probe.remove();
                 // A positive control: every character of the path was read, so a check of its breaks cannot pass on nothing.
-                return { ownLine, full, badBreaks, read: chars.length === str.length && str.length > 0 };
+                return { ownLine, full, last, badBreaks, read: chars.length === str.length && str.length > 0 };
               }),
               // HF2 (review 3123 F6; D-6999): a raw worktree's two chips, `inferred` and its `Bash call …`, sit side by side.
               chipPairs: [...document.querySelectorAll('.sess-worktrees .proj-work')].flatMap((row) => {
@@ -263,6 +265,7 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
             if (width < 900) {
               expect(p.ownLine, `path ${i}: on a line of its own`).toBe(true);
               expect(p.full, `path ${i}: the row's full width`).toBe(true);
+              expect(p.last, `path ${i}: after the row's short words`).toBe(true);
             }
             expect(p.read, `path ${i}: every character measured`).toBe(true);
             expect(p.badBreaks, `path ${i}: breaks only after a "/" where it can`).toEqual([]);
@@ -277,5 +280,37 @@ describe.each(SKINS)('the whole session panel in %s (H3)', (skin) => {
         }
       }, 60_000);
     }
+  }
+});
+
+// HF2 (D-8877; review 3123 F5): the strips give way before the composer, and the Helpers strip never past its head. On a phone
+// too short for the open header, the open Helpers section and the composer together, the strip keeps its head (its floor).
+describe('a short phone with every door open (HF2)', () => {
+  for (const skin of SKINS) {
+    it(`${skin} at 360 x 520: the Helpers strip keeps its head`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width: 360 }, FIXTURE);
+      try {
+        await page.setViewportSize({ width: 360, height: 520 });
+        await page.goto(`${server!.origin}/s/${ID}`);
+        await page.waitForFunction((text) => document.body.textContent?.includes(text) === true, LAST_TEXT, { timeout: 20_000 });
+        await page.waitForFunction(() => document.querySelector('.helpers-strip') !== null, null, { timeout: 20_000 });
+        const door = page.getByRole('button', { name: 'Session details' });
+        if (await door.count() > 0 && await door.getAttribute('aria-expanded') === 'false') await door.click();
+        const head = page.locator('.chat-strips .helpers-strip button[aria-expanded="false"]').first();
+        if (await head.count() > 0) await head.click();
+        await page.waitForSelector('.sess-worktrees .proj-work >> nth=1', { state: 'attached', timeout: 20_000 });
+        await page.waitForTimeout(300);
+        const m = await page.evaluate(() => {
+          const strip = document.querySelector('.chat-strips .helpers-strip')!.getBoundingClientRect();
+          const head = document.querySelector('.chat-strips .helpers-strip button[aria-expanded]')!.getBoundingClientRect();
+          return { strip: strip.height, head: head.height, shown: strip.bottom >= head.bottom - 0.5 };
+        });
+        expect(m.head, 'the head takes the tap floor').toBeGreaterThanOrEqual(44);
+        expect(m.shown, `the strip (${m.strip} px) keeps its head (${m.head} px)`).toBe(true);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
   }
 });
