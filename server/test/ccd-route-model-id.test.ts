@@ -267,7 +267,7 @@ describe('recording model=', () => {
 });
 
 // ── what the new keys must not disturb ──────────────────────────────────────────────────────────────────────────────────
-// REVIEW 2964 F12: `keep` never creates the record. A write that keeps the stamp has no stamp to keep when there is no file, so it answers 1
+// REVIEW 2964 F13c (with F12): `keep` never creates the record. A write that keeps the stamp has no stamp to keep when there is no file, so it answers 1
 // and writes nothing (every caller checks first; this pins the writer, which is where the promise is made).
 describe('_route_applied_put with keep creates nothing', () => {
   beforeEach(() => { seed(); });

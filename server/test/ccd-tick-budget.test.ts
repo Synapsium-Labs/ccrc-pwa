@@ -366,7 +366,7 @@ describe(`the supervise tick's fork budget: the real loop, ${N} ticks per fixtur
   }, 120_000);
 
   // AN UNPROMPTED PANE COSTS THE FILL ONCE, NOT EVERY TICK (review 2964 F8): an unfilled launch marker whose usage sidecar is newer
-  // than it, and no transcript yet. The first tick judges the sidecar (the fill, about 18 forks) and finds no transcript; every later
+  // than it, and no transcript yet. The first tick judges the sidecar (the fill: the sidecar read and the transcript's path, no more with no transcript) and finds no transcript; every later
   // tick reads the sidecar's bytes and tests the transcript's path with builtins, so ticks 2..N cost the idle figure. Control: the
   // fixture's first tick DID run the fill (the marker is unfilled because the transcript is absent, not because nothing read it), and
   // the run's tick 1 costs more than a steady tick.

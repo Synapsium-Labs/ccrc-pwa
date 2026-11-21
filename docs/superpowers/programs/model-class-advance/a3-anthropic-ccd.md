@@ -50,7 +50,7 @@ A3.1 to A3.5 were green: the session's usage sidecar was still the one written a
 - **A3.2:** the launch marker `$REG/<id>.aliaslaunch`, written only by a fresh alias launch, and the tick's own step,
   `_alias_observe`, which fills it once. The capability is `alias-launch-v1`.
 - **A3.3:** `_class_takes_no_effort` at the five haiku sites. The lane's files decide first, and the haiku rule answers
-  wherever they cannot say. `_route_argv_check` takes an optional first pair, `lane=<wrapper>`.
+  wherever they cannot say. `_route_argv_check` reads the caller's lane from `ROUTE_ARGV_LANE`, set for that one call, never as a route pair (D-8855).
 - **A3.4:** `_held_model_env_to`. A held class's id reaches every launch of the lane as
   `ANTHROPIC_DEFAULT_<CLASS>_MODEL='<id>'`, through both spawn lines, a swap and a resume, and `routeapplied`
   records `held=<class>:<id>[,…]`.
@@ -69,7 +69,13 @@ Every task's tests were run red first, and every mutation row named by the plan 
 - **The seventh pinned library.** `ccd/lib/model-aliases.sh` is the seventh library (the door library is the sixth).
   Every site the plan lists counts seven:
   - the redactor test's loader count (`-le 7`, and the hash count it asserts is 8);
-  - the entry reader's comment;
+  - not the entry reader's comment (`ccd/ccd-entry.py`), which still says six. This round reverts that edit: it changed
+    only a comment, yet made every box replace its live launcher on update, and it added a review-judge blocker. The
+    launcher's comment is a follow-up ticket, carried by the next launcher change of substance.
+  - the installer (`ccd/ccd-entry-install.py`), whose change is load-bearing. Review 3006 measured that it pins the
+    seventh library, stages and publishes it before the body, and re-checks the pin lines. Without it, an install of
+    this tree leaves the body's pin unrendered and every ccd start refuses, so body, library and installer cannot be
+    split. This is why the judge's `rules-mixed` on it stays.
   - the plan's wave contract;
   - README's libraries paragraph, its restore line and its pins' list, under the README holder's yes to the exact
     three-hunk packet (review 2964 F5).
@@ -89,6 +95,8 @@ Every task's tests were run red first, and every mutation row named by the plan 
   - While held, the Anthropic arm records no alias move either.
   - At the first trustworthy refresh after the release, it records the move made under the hold once: from the held-at
     id to the alias's id, with `previous` the held-at id, through the existing push (D-8857).
+  - A revert in the window reads the alias. Not moved: it holds at `previous` and drops the evidence. Moved: it holds at
+    the held-at id and keeps it. A second revert holds where the first did, in every order (review 3006 F1).
   - The first version of this note said the two arms behaved alike after a release. They did not: the Anthropic arm
     then never recorded that move. D-8857 corrects it.
 - **R1 (review 2886, then review 2964 F7).** `_dr_ma_blocked_fix`'s advance-file arm has an Anthropic branch. It says:
@@ -138,9 +146,14 @@ so do the two tick-budget cases that plant `picked=`.
 applies the haiku rule. So it can accept a pair that `ccd route`, which knows the session's lane, would bar. Such a pair
 is filtered at spawn with its floored note (review 2964 F13d).
 
-**Codex lanes at merge.** A Codex lane that already has its registry and catalogue now takes a level for a haiku class
-whose pin lists levels (D-8750's relaxation). That is the one place data changes today's behaviour at merge, and only
-toward allowing a level (review 2964 F13e).
+**Where data changes behaviour at merge.** The coordinator ruled these changes "safe at merge" (review 3006 F4): they
+are the wave's purpose, ruled, pinned and safe beside an older build.
+- **A Codex lane** that already has its registry and catalogue takes a level for a haiku class whose pin lists levels
+  (D-8750's relaxation; review 2964 F13e).
+- **An Anthropic lane** whose aliases file has ids takes a haiku effort level, at the route verb and at spawn, when the
+  model's row lists levels (D-8750).
+- **An Anthropic lane** whose aliases file records an orphaned saved level carries it on `--effort` under a record's
+  `auto` (D-8746, D-8852, D-8859).
 
 **What the reader does not check.**
 - ccd's effort-token rule is stricter than the shared parser's (`isStr`): an effort string with a space or `+` makes ccd
@@ -235,28 +248,50 @@ Measured armed, against the merge-base with `origin/main` fetched, at the end of
 
 The library carries the whole wave so that `ccd/ccd` grows only by its call sites. Its waiver, D-8832
 (`server/test/growth-waivers/D-8832-ccd-lib-model-aliases.json`), raises the program row's limit by the same figure. Its
-maxDelta was 302 at the first close. The coordinator raised it to 321 in fix round 1 for the F3, F8, F9, F12 and F13a
+maxDelta was 302 at the first close. The coordinator raised it to 321 in fix round 1 for the F3, F8, F9, F13a and F13c
 fixes: the program row's limit is 40 + 321 = 361.
+
+## Fix round 2 (review 3006): what ran
+
+Mutation rows, each run for real from a saved copy and restored, checked with `cmp`:
+
+| Finding | Mutation | Red |
+|---|---|---|
+| F1 | keep the evidence when the alias has not moved | the not-moved-then-moved second-revert case |
+| F1 | drop the rule that a revert over the revert's hold holds again | the moved-back case and the unreadable-file case |
+| F1 | (round 1 rows again) record the move at release; revert picks from history | 11 and 3 tests |
+| F2 | a `_route_type_model` call in `_alias_model_observe` | `_alias_model_observe contains no key sender` |
+| F8 | drop `model-aliases.sh` from the loader's file list and pin array | `a hashing tool that answers the loader and then prints an empty digest answers redactor-mismatch` |
+
+Run alone through the fleet test lane, all green:
+
+| Area | Suites |
+|---|---|
+| Models op | models-op 548, ccrc-models 204, ccrc-doctor-model-advance 85, lane-models-hold-race 4, lane-models-post 65, model-advance-file 134 |
+| ccd | ccd-alias-launch 30, ccd-limit-no-keys 35, ccd-docs-helper-redactor 61, ccd-route-model-id 22, ccd-tick-budget 46, ccd-lib-load 103, ccd-model-aliases-read 17, ccd-spawn-held-model 19 |
+| Installer | ccd-entry-install 136, install-census 76, ccd-install-stamp 18 |
+| Agent | ccd-entry-exec 1, deploy-verify 120 |
+
+The growth check is run armed at the tip; Growth above holds its figures.
 
 ## The live gate (read-only)
 
 - **The branch's four model-advance doctor checks** were run from the work tree against the fleet box's own files, with
-  no install and no `--fix`. Run at the first close, and again at fix round 1's tip, all four PASS:
+  no install and no `--fix`. Run at the first close, and again at each fix round's tip, all four PASS:
   - `model-advance-held-back`
   - `model-held-behind`
   - `model-sessions-behind`
   - `model-advance-blocked`
 
-  The second run found 17 lanes with a model registry or an aliases file: the box's aliases refresh had started writing
-  aliases files between the two runs.
-- **What the new branches meet at merge, measured read-only at fix round 1** (counts only, no lane named):
-  - **No hold anywhere.** No advance file holds a class, so no held key is spliced and no `held=` word is written.
-  - **12 aliases files have no id for any class yet.** On those lanes every new branch answers today's behaviour: the
+  Between the first two runs, the box's aliases refresh had started writing aliases files.
+- **What the new branches meet at merge, read-only** (behaviour only, no lane and no count):
+  - **No hold anywhere.** No held key is spliced and no `held=` word is written.
+  - **Some aliases files have no id for any class yet.** On those lanes every new branch answers today's behaviour: the
     reader answers `facts -`, the effort rule keeps the haiku rule, and no orphaned level is carried. A fresh alias
     launch is marked and stays unfilled until a reading names an id.
-  - **3 lanes have ids.** Their haiku rows list levels, so by D-8750 a haiku class there now takes an effort level, at
-    the route verb and at spawn. That is the designed change: the model's data says it takes one.
-  - **1 of those 3 lanes has an orphaned fable level.** Under a record whose effort is `auto`, its fable sessions launch
-    with that level on `--effort` (D23, D-8852, D-8859), and `routeapplied` keeps `auto`.
+  - **Some lanes have ids, and their haiku row lists levels.** By D-8750 a haiku class there takes an effort level, at
+    the route verb and at spawn.
+  - **Some lanes carry an orphaned saved level.** Under a record whose effort is `auto`, those sessions launch with it on
+    `--effort` (D23, D-8852, D-8859), and `routeapplied` keeps `auto`.
   - **Lanes with no aliases file:** every new branch answers today's behaviour, as each task's "no file" tests pin.
 - **Rollout.** The marker is written from the first spawn after install. The fleet box goes first at rollout.

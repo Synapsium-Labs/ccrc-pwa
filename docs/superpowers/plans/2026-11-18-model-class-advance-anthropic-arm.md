@@ -729,7 +729,8 @@ tests pin both), and the note records each session id.
   lists levels, rc 2 the files cannot say (`-`, `unknown`, or no lane). Each site replaces its `haiku` test with it,
   and on rc 2 applies the haiku rule as today. On a Codex lane rc 0 never arises, so data only ever relaxes the rule
   there. `_route_argv_check` receives the lane from its two callers when they have chosen one (an optional first pair
-  `lane=<wrapper>`, not a route field); without it, rc 2.
+  `lane=<wrapper>`, not a route field; D-8855 replaced the pair: the lane rides in `ROUTE_ARGV_LANE`, set for that
+  one call); without it, rc 2.
 
 - [ ] **Step 1: Write the failing tests:** `an Anthropic class that takes none refuses a level`; `an Anthropic class
   listing levels takes one`; `a Codex haiku class with levels takes one`; `a Codex empty list keeps the haiku rule`;
@@ -1231,8 +1232,9 @@ Ruled by the programme's coordinator on 2026-11-20 (slug `sheet-words-anthropic-
 (`server/test/models-verb-codes.test.ts`) reds on any code `hold`, `release` or `revert` can print without a sentence,
 so the four an Anthropic hold prints (`alias-source-absent`, `aliases-file-unreadable`, `aliases-file-invalid`,
 `settings-overrides-hold`), and D-8820's `alias-hold-not-applied`, got one each; the three codes only
-`aliases-refresh` prints are listed in the guard as another op's. Cost if wrong: Task A4.3, which rewrites the sheet
-for Anthropic lanes, may reword five sentences.
+`aliases-refresh` prints are listed in the guard as another op's. Wave A3 lifted D-8820's gate, which removed
+`alias-hold-not-applied` and its sentence (the models op's tests pin that the word is gone), so four sentences remain.
+Cost if wrong: Task A4.3, which rewrites the sheet for Anthropic lanes, may reword those four sentences.
 
 ### D-8820 — `hold` and `revert` on an Anthropic lane refuse until Task A3.4
 
@@ -1288,7 +1290,7 @@ granted by the programme's coordinator on 2026-11-20. The plan puts the whole wa
 close, and the program row +313), and nothing pays for it: no shrink, and no same-home file. The waiver
 (`server/test/growth-waivers/D-8832-ccd-lib-model-aliases.json`) raises the program row's limit by the same figure. At
 the first close the library was +302 (maxDelta 302) and `ccd/ccd` +11. Fix round 1 (review 2964), ruled on 2026-11-20,
-raised maxDelta to 321 in place: its 19 lines are the F3 (D-8856), F8 (D-8858), F9 (D-8859), F12 and F13a fixes. The
+raised maxDelta to 321 in place: its 19 lines are the F3 (D-8856), F8 (D-8858), F9 (D-8859), F13a and F13c fixes. The
 program row is +335 against a limit of 40 + 321 = 361, and `ccd/ccd` is +14. Any further library growth is a new
 question to the coordinator. Cost if wrong: a 321-line library lands in one PR, read by one review rather than
 split across several.
@@ -1454,15 +1456,28 @@ The first refresh after the release, under the existing writer and lock, settles
 The same advance write clears the evidence, so repeated refreshes add nothing. A refresh whose second write fails
 answers the move again on the next pass, so it is pushed once.
 
-Revert while the evidence stands holds at the held-at id when the alias has moved off it, and at `previous` when it has
-not. It refuses with the aliases file's own word, writing nothing, when that file cannot be read. It never lands on the
-older id in stale history.
+A revert while the evidence stands reads the class's alias (review 3006 F1 settled the second revert):
+- **The alias is still at the held-at id:** the revert holds at `previous` and drops the evidence in the same write.
+  There is no move to settle, because the alias had not moved when the hold was placed.
+- **The alias has moved off it:** the revert holds at the held-at id and keeps the evidence.
+- **A revert over that revert's hold at the held-at id:** it holds there again, without reading the aliases file.
+
+So a second revert holds where the first did, whether the alias moved before the first revert, only after it, or moved
+and came back. An unreadable aliases file refuses with its own word, and one with no launchable id refuses
+`alias-source-absent`; both write nothing. A revert never lands on the older id in stale history.
+
+A release after a revert keeps the revert's id as its evidence. So the settle records that id to the alias's id, with
+`previous` at that id: the id the class actually ran at under the hold the release lifted.
 
 The two arms do not behave alike: the Codex arm defers its advance and records it after the release, while this arm
 records the move made under the hold as one move from the held-at id.
 
-Cost if wrong: one corner loses a notification, though history stays right. If a settle's second write is cut short and
-the alias moves again before the next refresh, the X2-to-X3 notification is lost and only X3-to-X4 is pushed.
+Cost if wrong: two residuals.
+- **A lost notification.** If a settle's second write is cut short and the alias moves again before the next refresh,
+  the history stays right, but the X2-to-X3 notification is lost and only X3-to-X4 is pushed.
+- **A rollback (review 3006 F6 b).** After a box is rolled back to an older build, that build's revert ignores
+  `releasedHold` and can hold at a stale `previous`. Its `parseAdvance` keeps the field as an unknown key, so a later
+  roll forward still reads it.
 
 ### D-8858 — an observe step whose fill is undecided retries cheaply
 
@@ -1479,7 +1494,9 @@ transcript is read, and a `/model` in it still drops the marker. A transcript th
 when the sidecar changes. The recording's own memo stays separate. The tick-budget fixture measures this case: an
 unfilled marker, a newer sidecar and no transcript cost one fill, then the idle figure.
 
-Cost if wrong: a transcript that appears without the sidecar changing is noticed on the next tick, by the builtin test.
+Cost if wrong: two cases get no tick-by-tick retry. When `_transcript_path` named no path (an empty wrapper, workdir or
+uuid field), or the transcript lands at another path than the one it named, only a change in the sidecar's bytes
+re-opens the question. A prompted pane rewrites its sidecar, so the marker is judged again at its next render.
 
 ### D-8859 — an orphaned level is carried only to a usable, unheld alias id
 

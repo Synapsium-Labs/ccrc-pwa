@@ -22,7 +22,9 @@ function body(src: string, name: string): string | null {
   const close = src.indexOf('\n}\n', open);
   return close < 0 ? null : src.slice(open, close + 3);
 }
-const SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix/;
+/** ccd's own typing helpers: each sends keys to a pane (review 3006 F2), so calling one is sending a key. */
+const TYPERS = ['_route_type_model', '_route_type_effort', '_route_escape', '_answer_two_option_dialog'];
+const SENDS = new RegExp(`send-keys|_send_keys|paste-buffer|load-buffer|send-prefix|\\b(?:${TYPERS.join('|')})\\b`);
 
 describe('the limit-rescue code sends no key', () => {
   const src = ccdSource();
@@ -34,6 +36,10 @@ describe('the limit-rescue code sends no key', () => {
     // Comments may NAME the forbidden words; only code lines count.
     const code = b!.split('\n').filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/\s#\s.*$/, '')).join('\n');
     expect(code).not.toMatch(SENDS);
+  });
+
+  it.each(TYPERS)('the typing helper %s is defined in ccd/ccd (so naming it in the scan is not vacuous)', (name) => {
+    expect(body(src, name), `${name} was not found in ccd/ccd`).not.toBeNull();
   });
 
   it('the dispatch the watchdog uses starts a swap or a restart, never a key', () => {

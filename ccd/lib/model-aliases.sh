@@ -114,7 +114,7 @@ _ma_file_to() {   # var file -> var = `absent` (no such path), `unreadable` (a p
 
 _ma_answer_to() {   # var mode wrapper class file-a file-b -> var = the answer line for the class, from the per-wrapper cache; ONE jq fork answers all four classes when either file's bytes changed; rc 0
   local IFS=$' \t\n' __ma_a __ma_b __ma_key __ma_ck __ma_c __ma_cl='' __ma_out __ma_line __ma_m="$2"
-  [[ "$2" != aliases ]] || __ma_m="${ALIAS_FACTS_MODE:-aliases}"   # a launch's caller makes `ALIAS_FACTS_MODE=held` a local of its own: that is the only way in
+  [[ "$2" != aliases ]] || __ma_m="${ALIAS_FACTS_MODE:-aliases}"   # a launch's caller makes `ALIAS_FACTS_MODE=held` a local of its own; an inherited exported value is read too, and changes no answer (with no aliases file it costs one jq fork per change)
   __ma_ck="$__ma_m:$3"
   for __ma_c in $ROUTE_CLASSES; do [[ "$__ma_c" == default ]] || __ma_cl+="$__ma_c "; done
   if [[ " $__ma_cl" != *" $4 "* ]]; then printf -v "$1" '%s' 'invalid class'; return 0; fi
@@ -281,11 +281,12 @@ _alias_launch_fill() {   # id -> rc 0 decided (filled, or dropped as overruled),
 
 # `_alias_launch_observe` costs, per tick and per session: no marker, a filled one or a sidecar no newer than the marker: builtins only (a test and
 # a read). Otherwise the sidecar's bytes are read with builtins and compared with the memo, `_ALIAS_JUDGED[<id>]` = `<born>:<bytes>` last judged: a
-# judged state costs that read alone, and the fill (`_usage_sidecar_read`, `_transcript_path`, `_operator_choice_read`: about 18 forks) runs once per
+# judged state costs that read alone, and the fill (`_usage_sidecar_read`, `_transcript_path`, then `_operator_choice_read` when a transcript exists) runs once per
 # distinct sidecar. An UNDECIDED fill (rc 2: no transcript yet, or one that cannot be read) is memoed the same way, so an unprompted pane costs the
 # fill once, not every tick; the marker stays unfilled and retryable, because no transcript is no proof of no `/model`. What re-opens the question
 # with no forks: a transcript that was absent and is now a file (`_ALIAS_TWAIT[<id>]` holds the path the fill looked at, tested with `[[ -f ]]`),
-# or changed sidecar bytes. `ccd-tick-budget.test.ts` measures exactly these: the steady tick of such a pane costs the idle figure.
+# or changed sidecar bytes. When `_transcript_path` named no path (an empty wrapper, workdir or uuid field), or the transcript lands at another
+# path than the one named, only changed sidecar bytes re-open it (D-8858's cost). `ccd-tick-budget.test.ts` measures exactly these: the steady tick of such a pane costs the idle figure.
 _alias_launch_observe() {   # id -> the marker half of `_alias_observe`; always rc 0 (see the cost note above)
   local id="$1" f="$REG/$1.aliaslaunch" sc="$REG/usage/$1.json" m body='' key tp rc
   [[ -e "$f" ]] || return 0
