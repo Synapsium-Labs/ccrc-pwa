@@ -16,6 +16,7 @@ import { SkinSetProvider } from '../src/skins/frame';
 import { REFINED_SET } from '../src/skins/refined/parts';
 import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
 import { InspectorSections } from '../src/inspector/InspectorSections';
+import { InspectorRail } from '../src/skins/refined/InspectorRail';
 import { navigate } from '../src/lib/router';
 import { createSessionStore, getSessionStore, type SessionState } from '../src/stores/session';
 import type { SessionStreamMsg } from '../../shared/api';
@@ -102,6 +103,13 @@ for (const width of [360, 1280]) {
       expect(sec.textContent).toContain('2 helpers');
       open(sec);
       for (const row of sec.querySelectorAll('[data-helper-row]')) expect(row.textContent).not.toMatch(/running/);
+    });
+
+    it('collapsed: the glance takes running rows only, never a row that claims no running', () => {
+      const s = screenAt(width, { agents: [RUNNING[0]!, agent('quiet one', { state: 'unlisted' })] });
+      const glance = s.section()!.querySelectorAll('[data-helper-glance]');
+      expect(glance).toHaveLength(1);
+      expect(glance[0]!.textContent).toContain('Measure server helper sources');
     });
 
     it('collapsed: the head and line 1 of the first two running rows, each with its state word kept visible', () => {
@@ -289,6 +297,14 @@ describe('the report a finished row opens to (§4.3): asked of the server once, 
     expect(sent).toEqual([DONE.id]);
   });
 
+  it('closing and opening again before an answer asks no second time', () => {
+    const { sent, row } = opened();
+    const open1 = within(row()).getByRole('button', { name: /Measure today's session panel/ });
+    fireEvent.click(open1);
+    fireEvent.click(within(row()).getByRole('button', { name: /Measure today's session panel/ }));
+    expect(sent).toEqual([DONE.id]);
+  });
+
   it('the answer draws its first 4 lines, then "Show all (6 lines)" and Copy; Show all draws every line', () => {
     const { row } = opened({ report: REPORT, cut: false });
     const body = row().querySelector('.helper-report')!;
@@ -367,6 +383,15 @@ describe('the rail at 1600 px and up (one instance per width)', () => {
     expect(sec.textContent).toContain('3 running · 1 finished');
     expect(sec.querySelectorAll('.helpers-main [data-helper-row]')).toHaveLength(3);
     expect(within(sec as HTMLElement).getByRole('button', { name: /Finished · last 10 min \(1\)/ })).toBeTruthy();
+  });
+
+  it('Refined\'s own rail places the Helpers section at 1600', () => {
+    stubWidth(1600);
+    act(() => navigate(`/s/${ID}`));
+    act(() => getSessionStore(ID).getState().apply({ type: 'workflows', workflows: [], agents: RUNNING }));
+    const r = render(<InspectorRail />);
+    const sections = [...r.container.querySelectorAll('[data-section]')].map((e) => e.getAttribute('data-section'));
+    expect(sections).toContain('helpers');
   });
 
   it('the rail section renders nothing for a session with no helpers (a characterization pin)', () => {
