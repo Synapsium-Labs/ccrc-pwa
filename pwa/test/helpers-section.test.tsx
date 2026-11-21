@@ -18,7 +18,7 @@ import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
 import { InspectorSections } from '../src/inspector/InspectorSections';
 import { InspectorRail } from '../src/skins/refined/InspectorRail';
 import { navigate } from '../src/lib/router';
-import { createSessionStore, getSessionStore, type SessionState } from '../src/stores/session';
+import { createSessionStore, getSessionStore } from '../src/stores/session';
 import type { SessionStreamMsg } from '../../shared/api';
 import type { AgentHelperView, HelpersUnmeasured, WorkflowView } from '../../shared/workflows';
 
@@ -57,9 +57,22 @@ const DONE = agent('today\'s session panel', {
 });
 const FAILED = agent('the mockup', { state: 'failed', startedAt: NOW - 200_000, endedAt: NOW - 137_000, summary: 'headless browser not found', hasReport: false });
 
+/** What each test session's socket sent, by session id: the store's own asks, as the server would read them. */
+const SENT = new Map<string, Array<{ type: string; id?: string }>>();
+/** Each test session's newest socket, by session id: a case drops it with its `onclose`. */
+const SOCKETS = new Map<string, { onclose: (() => void) | null; onopen: (() => void) | null }>();
 function sessionWith(id: string, frame: Partial<SessionStreamMsg & { type: 'workflows' }>): ReturnType<typeof createSessionStore> {
+  const sent: Array<{ type: string; id?: string }> = [];
+  SENT.set(id, sent);
   const store = createSessionStore(id, {
-    makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket,
+    makeSocket: () => {
+      const sock = {
+        onopen: null, onmessage: null, onclose: null, onerror: null, readyState: 1, close() {},
+        send(raw: string) { sent.push(JSON.parse(raw) as { type: string; id?: string }); },
+      };
+      SOCKETS.set(id, sock);
+      return sock as unknown as WebSocket;
+    },
     api: { prompt: async () => {} },
   });
   act(() => {
@@ -76,9 +89,18 @@ function screenAt(width: number, frame: Partial<SessionStreamMsg & { type: 'work
   const id = `lane-a-project-a-h2-${width}-${Math.random().toString(36).slice(2, 8)}`;
   const store = sessionWith(id, frame);
   const r = render(<SkinSetProvider set={set}><SessionScreen id={id} store={store} /></SkinSetProvider>);
-  return { ...r, store, section: (): HTMLElement | null => r.container.querySelector('.chat-strips .helpers-strip') };
+  return { ...r, id, store, section: (): HTMLElement | null => r.container.querySelector('.chat-strips .helpers-strip') };
 }
 const open = (section: HTMLElement): void => { fireEvent.click(within(section).getByRole('button', { name: /^Helpers/ })); };
+
+/** Line 2 as a reader at `width` sees it: jsdom does not evaluate container queries, so the parts the stylesheet hides at
+ *  that width (pinned in "review 3072 F6 and F7" below) are removed here — the tokens on a phone, the inline elapsed at the
+ *  desk — and the real-Chrome `helpers-rail` file measures the same at 360 and 1280. */
+function line2At(row: Element, width: number): string {
+  const facts = row.querySelector('.helper-facts')!.cloneNode(true) as Element;
+  for (const hidden of facts.querySelectorAll(width < 480 ? '.helper-tokens' : '.helper-elapsed-inline')) hidden.remove();
+  return facts.textContent!;
+}
 
 for (const width of [360, 1280]) {
   describe(`${width} px: the section sits in the strips under the transcript`, () => {
@@ -121,18 +143,18 @@ for (const width of [360, 1280]) {
       expect(s.section()!.querySelector('.helpers-rows'), 'collapsed: no rows mounted').toBeNull();
     });
 
-    it('Table 5: an Agent row says what it does, its kind, model, effort, state, last activity and tokens; elapsed on the right', () => {
+    it(width < 480
+      ? 'Table 5 at the phone width: line 2 says kind, model, effort, state, elapsed and last activity, no tokens (§10)'
+      : 'Table 5 at the desk: an Agent row says its kind, model, effort, state, last activity and tokens; elapsed on the right of line 1', () => {
       const s = screenAt(width, { agents: [RUNNING[0]!] });
       open(s.section()!);
       const row = s.section()!.querySelector('[data-helper-row="server helper sources"]')!;
       expect(row.querySelector('.helper-what')!.textContent).toBe('Measure server helper sources');
-      const facts = row.querySelector('.helper-facts')!.textContent!;
-      expect(facts).toContain('subagent · general-purpose');
-      expect(facts).toContain('Sonnet · high');
-      expect(facts).toContain('running');
-      expect(facts).toContain('active 20s ago');
-      expect(row.querySelector('.helper-elapsed')!.textContent).toBe('12m5s');
-      expect(row.querySelector('.helper-tokens')!.textContent).toBe('↓ 41k');
+      expect(line2At(row, width)).toBe(width < 480
+        ? 'subagent · general-purpose · Sonnet · high · running · 12m5s · active 20s ago'
+        : 'subagent · general-purpose · Sonnet · high · running · active 20s ago · ↓ 41k');
+      expect(row.querySelector(':scope > .helper-elapsed')!.textContent, 'line 1\'s elapsed (the desk draws it)').toBe('12m5s');
+      expect(row.querySelector('.helper-elapsed-inline')!.textContent, 'line 2\'s elapsed (the phone draws it)').toBe(' · 12m5s');
     });
 
     it('Table 5: past ten minutes quiet, the last activity reads "quiet 11m", in the muted ink, with no state change', () => {
@@ -149,7 +171,7 @@ for (const width of [360, 1280]) {
       const s = screenAt(width, { agents: [agent('bare', { effort: null, model: null, tokens: null, lastActivityAt: null })] });
       open(s.section()!);
       const row = s.section()!.querySelector('[data-helper-row="bare"]')!;
-      expect(row.querySelector('.helper-facts')!.textContent).toBe('subagent · general-purpose · running');
+      expect(line2At(row, width)).toBe(width < 480 ? 'subagent · general-purpose · running · 12m5s' : 'subagent · general-purpose · running');
       expect(row.querySelector('.helper-tokens')).toBeNull();
     });
 
@@ -158,9 +180,10 @@ for (const width of [360, 1280]) {
       open(s.section()!);
       const row = s.section()!.querySelector('[data-helper-row="wf_00000000-aaa"]')!;
       expect(row.querySelector('.helper-what')!.textContent).toBe('review-panel');
-      const facts = row.querySelector('.helper-facts')!.textContent!;
-      expect(facts).toContain('workflow · running · phase Verify · 7/12 agents · active 4s ago');
-      expect(row.querySelector('.helper-tokens')!.textContent).toBe('↓ 2.5m tokens');
+      expect(line2At(row, width)).toBe(width < 480
+        ? 'workflow · running · phase Verify · 7/12 agents · 6m2s · active 4s ago'
+        : 'workflow · running · phase Verify · 7/12 agents · active 4s ago · ↓ 2.5m tokens');
+      expect(row.querySelector('.helper-tokens')!.textContent).toBe(' · ↓ 2.5m tokens');
       expect(row.querySelector('.meter, [data-band]')).not.toBeNull();
       expect(row.querySelector('.helper-elapsed')!.textContent).toBe('6m2s');
     });
@@ -193,6 +216,49 @@ for (const width of [360, 1280]) {
       expect(facts('stop')).toBe('stopped · 22s');
       expect(facts('fin')).toBe('finished · 6m0s');
       expect(facts('wf_00000000-bbb')).toBe('done · 12/12 agents · 6m10s');
+    });
+
+    it('review 3072 F8: a workflow whose token count misses some agents reads "↓ 2.5m+ tokens" (the floor)', () => {
+      const s = screenAt(width, { workflows: [wf('wf_00000000-aaa', { tokensUnmeasured: 2 })] });
+      open(s.section()!);
+      expect(s.section()!.querySelector('[data-helper-row="wf_00000000-aaa"] .helper-tokens')!.textContent).toBe(' · ↓ 2.5m+ tokens');
+    });
+
+    it('review 3072 F8: a row with no measured start draws no elapsed time, on line 1 or line 2', () => {
+      const s = screenAt(width, { agents: [agent('no start', { startedAt: null })] });
+      open(s.section()!);
+      const row = s.section()!.querySelector('[data-helper-row="no start"]')!;
+      expect(row.querySelector('.helper-elapsed')).toBeNull();
+      expect(row.querySelector('.helper-elapsed-inline')).toBeNull();
+      expect(line2At(row, width)).toBe('subagent · general-purpose · Sonnet · high · running · active 20s ago' + (width < 480 ? '' : ' · ↓ 41k'));
+    });
+
+    it('review 3072 F8: the collapsed glance is a list of its rows', () => {
+      const s = screenAt(width, { agents: RUNNING });
+      const glance = within(s.section()!).getByRole('list');
+      expect(within(glance).getAllByRole('listitem')).toHaveLength(2);
+    });
+
+    it('review 3072 F3: a state outside the vocabulary (a newer server\'s) draws the neutral glyph, for an Agent helper and a workflow, and never throws', () => {
+      const s = screenAt(width, {
+        agents: [agent('newer', { state: 'paused' as AgentHelperView['state'] })],
+        workflows: [
+          wf('wf_00000000-ccc', { state: 'paused' as WorkflowView['state'] }),
+          wf('wf_00000000-ddd', { agents: [{ label: 'queued-1', phase: 'Verify', state: 'queued' as WorkflowView['agents'][number]['state'] }] }),
+        ],
+      });
+      open(s.section()!);
+      const fold = within(s.section()!).queryByRole('button', { name: /Finished · last 10 min/ });
+      if (fold !== null) fireEvent.click(fold); // a state that is not running may sort into the fold
+      const g = (id: string): [string, string] => {
+        const el = s.section()!.querySelector(`[data-helper-row="${id}"] .helper-glyph`)!;
+        return [el.textContent!, el.getAttribute('data-tone')!];
+      };
+      expect(g('newer')).toEqual(['◇', 'neutral']);
+      expect(g('wf_00000000-ccc')).toEqual(['◇', 'neutral']);
+      const detail = s.section()!.querySelector('[data-helper-row="wf_00000000-ddd"]')!;
+      fireEvent.click(within(detail as HTMLElement).getByRole('button', { name: 'review-panel' }));
+      expect(detail.querySelector('.helper-phase-agent-glyph')!.textContent, 'a phase agent in an unknown state').toBe('◇');
     });
   });
 }
@@ -263,6 +329,42 @@ describe('review 2900 F16: each state\'s glyph; a state left out is neutral, nev
   });
 });
 
+describe('review 3072 F6 and F7: line 2 breaks only between its groups, and the phone layout moves elapsed into it', () => {
+  const css = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'workflow-strip.css'), 'utf8');
+  const rule = (sel: string, from = 0): string => { const i = css.indexOf(`${sel} {`, from); expect(i, sel).toBeGreaterThanOrEqual(0); return css.slice(i, css.indexOf('}', i)); };
+  const phone = css.indexOf('@container (max-width: 479px) {');
+  it('line 2 is one run of text: each fact and each word of the state group is a block no wider than the line, and only a prose fact wraps anywhere', () => {
+    expect(rule('.helpers-strip .helper-line2')).toContain('display: block');
+    expect(css).toContain('.helper-fact,\n  .helper-word {');
+    expect(rule('.helper-word')).toContain('display: inline-block');
+    expect(rule('.helper-word')).toContain('max-width: 100%');
+    expect(rule('.helper-prose')).toContain('overflow-wrap: anywhere');
+    expect(rule('.helper-prose')).not.toContain('nowrap');
+  });
+  it('the state and its times are one group, the separators between groups outside it', () => {
+    const s = screenAt(1280, { agents: [RUNNING[0]!] });
+    open(s.section()!);
+    const row = s.section()!.querySelector('[data-helper-row="server helper sources"]')!;
+    const groups = [...row.querySelectorAll('.helper-fact')].map((g) => g.textContent);
+    expect(groups).toEqual(['subagent · general-purpose', 'Sonnet', 'high', 'running · 12m5s · active 20s ago']);
+    expect(row.querySelector('.helper-state .helper-activity')).not.toBeNull();
+    // Inside the group each word is its own block, so a group wider than the line breaks between words, never inside one.
+    expect([...row.querySelectorAll('.helper-state .helper-word')].map((w) => w.textContent)).toEqual(['running', '12m5s', 'active 20s ago']);
+  });
+  it('at the desk the inline elapsed is hidden; under the phone container query line 1\'s elapsed hides, line 2\'s shows and the tokens hide', () => {
+    expect(rule('.helper-elapsed-inline')).toContain('display: none');
+    expect(phone).toBeGreaterThan(0);
+    expect(rule('.helper-row > .helper-elapsed', phone)).toContain('display: none');
+    expect(rule('.helper-elapsed-inline', phone)).toContain('display: inline');
+    expect(rule('.helper-tokens', phone)).toContain('display: none');
+  });
+  it('review 3072 F14: " · " stands before the tokens and between the report links, as the mockup draws them', () => {
+    const s = screenAt(1280, { agents: [RUNNING[0]!] });
+    open(s.section()!);
+    expect(s.section()!.querySelector('.helper-tokens')!.textContent).toBe(' · ↓ 41k');
+  });
+});
+
 describe('review 2900 F18: the fold toggle and the report\'s links clear the tap floor', () => {
   const css = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'workflow-strip.css'), 'utf8');
   const rule = (sel: string): string => { const i = css.indexOf(`${sel} {`); expect(i, sel).toBeGreaterThanOrEqual(0); return css.slice(i, css.indexOf('}', i)); };
@@ -279,14 +381,17 @@ describe('review 2900 F18: the fold toggle and the report\'s links clear the tap
 
 describe('the report a finished row opens to (§4.3): asked of the server once, first 4 lines, then Show all and Copy', () => {
   const REPORT = ['one', 'two', 'three', 'four', 'five', 'six'].join('\n');
-  const opened = (answer?: { report: string | null; cut: boolean }) => {
-    const s = screenAt(1280, { agents: [DONE] });
-    const sent: string[] = [];
-    (s.store.getState() as unknown as { requestHelperReport: (id: string) => void }).requestHelperReport = (id) => { sent.push(id); };
-    s.store.setState({ requestHelperReport: (id: string) => { sent.push(id); } } as unknown as Partial<SessionState>);
+  /** The real store on an open socket: `sent()` is the ids its asks put on the wire (the store dedupes, review 3072 F4). */
+  const opened = (answer?: { report: string | null; cut: boolean }, agents: AgentHelperView[] = [DONE]) => {
+    const s = screenAt(1280, { agents });
+    act(() => { s.store.getState().connect(); });
+    act(() => { s.store.getState().apply({ type: 'workflows', workflows: [], agents }); }); // this stream's first frame
+    const wire = SENT.get(s.id)!;
+    const sent = (): string[] => wire.filter((m) => m.type === 'helper-report').map((m) => m.id!);
     open(s.section()!);
     fireEvent.click(within(s.section()!).getByRole('button', { name: /Finished · last 10 min/ }));
     const row = (): HTMLElement => s.section()!.querySelector('[data-helper-row="today\'s session panel"]')!;
+    expect(sent(), 'a row nobody opened asks nothing').toEqual([]);
     fireEvent.click(within(row()).getByRole('button', { name: /Measure today's session panel/ }));
     if (answer !== undefined) act(() => s.store.getState().apply({ type: 'helper-report', id: DONE.id, ...answer } as unknown as SessionStreamMsg));
     return { s, sent, row };
@@ -294,7 +399,7 @@ describe('the report a finished row opens to (§4.3): asked of the server once, 
 
   it('opening asks for that one report, once', () => {
     const { sent } = opened();
-    expect(sent).toEqual([DONE.id]);
+    expect(sent()).toEqual([DONE.id]);
   });
 
   it('closing and opening again before an answer asks no second time', () => {
@@ -302,7 +407,49 @@ describe('the report a finished row opens to (§4.3): asked of the server once, 
     const open1 = within(row()).getByRole('button', { name: /Measure today's session panel/ });
     fireEvent.click(open1);
     fireEvent.click(within(row()).getByRole('button', { name: /Measure today's session panel/ }));
-    expect(sent).toEqual([DONE.id]);
+    expect(sent()).toEqual([DONE.id]);
+  });
+
+  it('review 3072 F2: done with an answer, continued, done at a new end: the row asks again and never draws the earlier report', () => {
+    const { s, sent } = opened({ report: 'the earlier report', cut: false });
+    expect(s.section()!.querySelector('.helper-report-text')!.textContent).toBe('the earlier report');
+    act(() => { s.store.getState().apply({ type: 'workflows', workflows: [], agents: [{ ...DONE, state: 'running', endedAt: null, hasReport: false }] }); });
+    const later = { ...DONE, endedAt: NOW - 20_000 };
+    act(() => { s.store.getState().apply({ type: 'workflows', workflows: [], agents: [later] }); });
+    const fold = within(s.section()!).getByRole('button', { name: /Finished · last 10 min/ });
+    if (fold.getAttribute('aria-expanded') !== 'true') fireEvent.click(fold);
+    const row = s.section()!.querySelector('[data-helper-row="today\'s session panel"]')!;
+    if (row.querySelector('.helper-report') === null) fireEvent.click(within(row as HTMLElement).getByRole('button', { name: /Measure today's session panel/ }));
+    expect(s.section()!.querySelector('.helper-report-text'), 'no earlier text under the new end').toBeNull();
+    expect(sent(), 'asked again for the new end').toEqual([DONE.id, DONE.id]);
+  });
+
+  /** Drop the session's stream and open a new one; the new stream's first frame restates the rows. */
+  const newStream = (s: ReturnType<typeof opened>['s'], agents: AgentHelperView[]): void => {
+    act(() => { SOCKETS.get(s.id)!.onclose?.(); });
+    act(() => { window.dispatchEvent(new Event('online')); });
+    act(() => { SOCKETS.get(s.id)!.onopen?.(); });
+    act(() => { s.store.getState().apply({ type: 'workflows', workflows: [], agents: agents.map((a) => ({ ...a })) }); });
+  };
+
+  it('review 3072 F4: an open row with no answer asks again after a new stream\'s first frame', () => {
+    const { s, sent } = opened();
+    expect(sent()).toEqual([DONE.id]);
+    newStream(s, [DONE]);
+    expect(sent(), 'the server could not answer the first ask; the open row asks the new stream').toEqual([DONE.id, DONE.id]);
+  });
+
+  it('review 3072 F4: a row that has its answer does not ask a new stream again', () => {
+    const { s, sent } = opened({ report: 'the report', cut: false });
+    expect(sent()).toEqual([DONE.id]);
+    newStream(s, [DONE]);
+    expect(s.section()!.querySelector('.helper-report-text')!.textContent).toBe('the report');
+    expect(sent()).toEqual([DONE.id]);
+  });
+
+  it('review 3072 F13: a report that ends in a newline counts its lines without the empty tail', () => {
+    const { row } = opened({ report: `${REPORT}\n`, cut: false });
+    within(row()).getByRole('button', { name: 'Show all (6 lines)' });
   });
 
   it('the answer draws its first 4 lines, then "Show all (6 lines)" and Copy; Show all draws every line', () => {
@@ -311,6 +458,7 @@ describe('the report a finished row opens to (§4.3): asked of the server once, 
     expect(body.querySelector('.helper-report-text')!.textContent).toBe('one\ntwo\nthree\nfour');
     const show = within(row()).getByRole('button', { name: 'Show all (6 lines)' });
     within(row()).getByRole('button', { name: 'Copy' });
+    expect(row().querySelector('.helper-report-links')!.textContent, 'review 3072 F14').toBe('Show all (6 lines) · Copy');
     fireEvent.click(show);
     expect(row().querySelector('.helper-report-text')!.textContent).toBe(REPORT);
   });

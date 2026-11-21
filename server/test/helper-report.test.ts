@@ -160,6 +160,21 @@ describe('held reports: the fold\'s own end facts, capped at parse time', () => 
     expect(M.reportAnswer(held, arm.agents, 'a1').report).toBe('the failure');
   });
 
+  it('a drawn row\'s report survives the bound while the row shows none, and is answered when the row returns to that end (review 3072 F5)', () => {
+    // Reading 1: a1 ended with a report, drawn with hasReport.
+    const one = reading(factsOf(notice('a1', NOW - 50_000, 'the first report')), ['a1']);
+    expect(one.arm.agents[0]).toMatchObject({ id: 'a1', hasReport: true });
+    // Reading 2: a1 continued (drawn running, no report), and more than HELPER_KEPT_MAX newer notifications that are no
+    // row's arrive. Every drawn row's report is protected, not only one drawn with hasReport.
+    const others = factsOf(...Array.from({ length: HELPER_KEPT_MAX + 3 }, (_, i) => notice(`t${i}`, NOW - 1_000 + i, `task ${i}`)));
+    const continued = one.arm.agents.map((a) => ({ ...a, state: 'running' as const, endedAt: null, hasReport: false }));
+    const folded = foldHelperFacts(foldHelperFacts(new Map(), factsOf(notice('a1', NOW - 50_000, 'the first report'))), others);
+    const held2 = M.boundReports(M.holdReports(one.held, others, folded), continued);
+    expect(held2.has('a1'), 'a1\'s report is still held while its row shows none').toBe(true);
+    // Reading 3: its continuation turned unmeasurable, and the row is back at its old end with hasReport.
+    expect(M.reportAnswer(held2, one.arm.agents, 'a1').report).toBe('the first report');
+  });
+
   it('a helper continued after its end (listed again with a later start) shows no report, though its old end is held', () => {
     const roster: RosterInput = { kind: 'usable', at: NOW, entries: [{ id: 'a1', name: 'Explore', startedAt: NOW - 1_000 }] };
     const { held, arm } = reading(factsOf(notice('a1', NOW - 5_000, 'the first report')), ['a1'], NOW, new Map(), roster);
@@ -176,6 +191,12 @@ beforeEach(() => { home = mkTmp('ccrc-h2-report-'); });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 describe('SessionHelpers holds the reports of the rows it drew', () => {
+  it('before its first reading it answers nothing (null): it read no id, so it cannot say one was lost (review 3072 F4)', () => {
+    const S = path.join(home, '.claude-a', 'projects', '-work-project-a', 'session-uuid-c');
+    const r = new SessionHelpers(localIO, S) as SessionHelpers & { reportOf(id: string): Answer | null };
+    expect(r.reportOf('a1')).toBeNull();
+  });
+
   it('reportOf answers the drawn row\'s report, and null for an id it never drew', async () => {
     const S = path.join(home, '.claude-a', 'projects', '-work-project-a', 'session-uuid-a');
     const sub = path.join(S, 'subagents');
@@ -205,9 +226,8 @@ const UUID = 'c'.repeat(36);
 const WORKDIR = '/work/project-a';
 const PID = 51516;
 
-describe('the session stream answers a helper-report request', () => {
-  it('a request for a drawn row is answered with its report; a request for any other id with report: null', async () => {
-    const now = Date.now();
+/** A live session whose one Agent helper (a2) ended with a report, as the stream and the socket read it. */
+function seedSession(now: number): void {
     seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
@@ -228,6 +248,12 @@ describe('the session stream answers a helper-report request', () => {
       subagents: [{ id: 'a2', name: 'Explore', startedAt: now - 300_000 }], graphQueries: 0, graphGateDenials: 0,
     }));
     appendFileSync(tfile, `${notice('a2', now - 5_000, 'the whole report')}\n`);
+}
+
+describe('the session stream answers a helper-report request', () => {
+  it('a request for a drawn row is answered with its report; a request for any other id with report: null', async () => {
+    const now = Date.now();
+    seedSession(now);
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
@@ -237,6 +263,8 @@ describe('the session stream answers a helper-report request', () => {
     const frames: SessionStreamMsg[] = [];
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK) as SessionStream & { helperReport(id: string): void };
     try {
+      stream.helperReport('a2'); // before the stream's first reading: no answer at all, never a "no longer held" (review 3072 F4)
+      expect(frames.filter((f) => (f as { type: string }).type === 'helper-report')).toEqual([]);
       await stream.start();
       expect(frames.filter((f) => f.type === 'workflows').at(-1)).toMatchObject({ agents: [{ id: 'a2', state: 'done', hasReport: true }] });
       stream.helperReport('a2');
@@ -285,12 +313,14 @@ describe('the session socket\'s message parser', () => {
 // The server's socket handler routes the request to the session stream (a real socket, `buildServer`).
 
 describe('/ws/session/:id answers a helper-report request', () => {
-  it('a request is answered on the same socket; a bad id is ignored and sets no visible claim', async () => {
+  it('a request is answered on the same socket once the stream has read; a bad id is ignored and sets no visible claim', async () => {
     const { default: WebSocket } = await import('ws');
     const { Viewers } = await import('../src/viewer.js');
-    seedRoster(home);
-    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
+    seedSession(Date.now());
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    };
     const cfg = loadConfig({ CCRC_HOME: home });
     const viewers = new Viewers(() => Date.now());
     const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, viewers };
@@ -304,11 +334,20 @@ describe('/ws/session/:id answers a helper-report request', () => {
       ws.on('message', (raw) => { try { got.push(JSON.parse(String(raw)) as { type: string }); } catch { /* not JSON */ } });
       await new Promise<void>((res, rej) => { ws.once('open', () => res()); ws.once('error', rej); });
       try {
+        const until = async (done: () => boolean): Promise<void> => {
+          const end = Date.now() + 5_000;
+          while (!done() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+        };
+        await until(() => got.some((m) => m.type === 'workflows'));
+        expect(got.some((m) => m.type === 'workflows'), 'the stream read and framed its helpers').toBe(true);
         ws.send(JSON.stringify({ type: 'helper-report', id: '../etc' }));
         ws.send(JSON.stringify({ type: 'helper-report', id: 'a7' }));
-        const end = Date.now() + 5_000;
-        while (!got.some((m) => m.type === 'helper-report') && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
-        expect(got.filter((m) => m.type === 'helper-report')).toEqual([{ type: 'helper-report', id: 'a7', report: null, cut: false }]);
+        ws.send(JSON.stringify({ type: 'helper-report', id: 'a2' }));
+        await until(() => got.filter((m) => m.type === 'helper-report').length >= 2);
+        expect(got.filter((m) => m.type === 'helper-report')).toEqual([
+          { type: 'helper-report', id: 'a7', report: null, cut: false },
+          { type: 'helper-report', id: 'a2', report: 'the whole report', cut: false },
+        ]);
         expect(viewers.isVisible(ID)).toBe(false);
       } finally {
         ws.close();

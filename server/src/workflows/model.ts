@@ -450,8 +450,9 @@ export function summaryView(id: string, f: SummaryFacts, summaryMtime: number, n
 /**
  * The workflow rows to send at `now` (H2, D-8872; spec §4.3): every running one, and a finished one while `isFinishedKept`
  * keeps it by its end time — the keep's one clock, which the Agent arm asks too. Claude Code's own 30 s retired here. A
- * finished row with no readable end time is drawn in the reading that decided it and leaves with the next (`noEndShown`,
- * the Agent arm's rule; review 2961 F8): `summaryView` always gives one, so it guards the type's null. At most
+ * finished row with no readable end time is drawn in the reading that decided it and never again (`noEndShown`, the Agent
+ * arm's rule; review 2961 F8): the memory keeps every id it drew while the run still reads finished with no end, so it is
+ * drawn once, not every other reading (review 3072 F11). `summaryView` always gives one, so it guards the type's null. At most
  * `HELPER_KEPT_MAX` finished rows, the newest by end time (a null end ranks newest, as it was decided this reading), each
  * cut to `WORKFLOW_KEPT_AGENTS_MAX` agents. Oldest start first, unknown starts last.
  */
@@ -471,10 +472,11 @@ export function keepWorkflows(views: readonly WorkflowView[], now: number, noEnd
   const rank = (v: WorkflowView): number => v.endedAt ?? Infinity;
   const kept = finals.sort((a, b) => rank(b) - rank(a) || (a.id < b.id ? -1 : 1)).slice(0, HELPER_KEPT_MAX);
   const keptIds = new Set(kept.map((v) => v.id));
+  const stillNoEnd = new Set(views.filter((v) => v.state !== 'running' && v.endedAt === null).map((v) => v.id));
   return {
     rows: [...rows, ...kept.map(capKeptWorkflow)]
       .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
-    noEndShown: new Set([...shown].filter((id) => keptIds.has(id))),
+    noEndShown: new Set([...[...noEndShown].filter((id) => stillNoEnd.has(id)), ...[...shown].filter((id) => keptIds.has(id))]),
   };
 }
 
@@ -1047,14 +1049,16 @@ export function holdReports(prev: ReadonlyMap<string, HeldReport>, facts: readon
 }
 
 /**
- * The bound of the held reports, once a reading has decided its rows (`drawn`): every report of a row drawn with
- * `hasReport` is kept (at most `HELPER_KEPT_MAX`, the finished fold's own bound), and of the rest — a helper whose row is
- * not decided yet, and the notifications of tasks that are no Agent helper (a workflow's, a shell's), which nothing here
- * can tell apart — the newest `HELPER_KEPT_MAX` by end time (a null time ranks newest). So a notification that is no row's
- * never evicts a drawn row's report. At most 40 reports of at most 16 KiB each per stream.
+ * The bound of the held reports, once a reading has decided its rows (`drawn`): every report of a DRAWN row is kept, with
+ * `hasReport` or not — a helper continued after its end is drawn running with no report, and can return to that end when
+ * its continuation turns unmeasurable, so its report must survive the readings between (review 3072 F5). Of the rest — a
+ * helper whose row is not decided yet, and the notifications of tasks that are no Agent helper (a workflow's, a shell's),
+ * which nothing here can tell apart — the newest `HELPER_KEPT_MAX` by end time (a null time ranks newest). So a
+ * notification that is no row's never evicts a drawn row's report. A held report needs an end fact, so the drawn part is at
+ * most the drawn rows that ended; the rest is at most `HELPER_KEPT_MAX`, each at most 16 KiB.
  */
 export function boundReports(held: ReadonlyMap<string, HeldReport>, drawn: readonly AgentHelperView[]): Map<string, HeldReport> {
-  const shown = new Set(drawn.filter((a) => a.hasReport).map((a) => a.id));
+  const shown = new Set(drawn.map((a) => a.id));
   const rank = (h: HeldReport): number => h.end.at ?? Infinity;
   const rest = [...held].filter(([id]) => !shown.has(id))
     .sort(([a, x], [b, y]) => rank(y) - rank(x) || (a < b ? -1 : 1)).slice(0, HELPER_KEPT_MAX);

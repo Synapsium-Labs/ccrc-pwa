@@ -8,10 +8,10 @@
 // RED FIRST: committed before the code, against origin/main, where the module does not exist.
 import { describe, expect, it } from 'vitest';
 import * as words from '../src/session/helpersWords';
-import type { AgentHelperView, HelpersUnmeasured, WorkflowView } from '../../shared/workflows';
+import { HELPER_CUT_NOTE, HELPER_FOLD_LABEL, type AgentHelperView, type HelpersUnmeasured, type WorkflowView } from '../../shared/workflows';
 
 interface Item { kind: 'agent' | 'workflow'; id: string }
-interface View { count: string | null; notes: string[]; main: Item[]; finished: Item[] }
+interface View { count: string | null; notes: string[]; main: Item[]; finished: Item[]; cutNote: string; foldLabel: string }
 interface Input {
   workflows: WorkflowView[]; workflowsUnreadable: boolean; agents: AgentHelperView[];
   agentsUnmeasured: HelpersUnmeasured | null; readEvery: { refreshed: number; of: number } | null;
@@ -29,6 +29,16 @@ const agent = (id: string, o: Partial<AgentHelperView> = {}): AgentHelperView =>
 const wf = (id: string, o: Partial<WorkflowView> = {}): WorkflowView => ({
   id, name: `flow-${id}`, state: 'running', done: 7, failed: 0, total: 12, phase: 'Verify', phases: ['Build', 'Verify'],
   startedAt: T0, endedAt: null, tokens: 2_500_000, tokensUnmeasured: 0, agents: [], agentsOmitted: 0, lastActivityAt: T0 + 4_000, ...o,
+});
+
+describe('review 3072 F12: the fold label and the cut note are handed in, written once beside their constants', () => {
+  it('the view carries both, the keep\'s minutes and the cap in them', () => {
+    const v = helpersView({ agents: [agent('a1')] })!;
+    expect(v.foldLabel).toBe(HELPER_FOLD_LABEL);
+    expect(v.foldLabel).toBe('Finished · last 10 min');
+    expect(v.cutNote).toBe(HELPER_CUT_NOTE);
+    expect(v.cutNote).toBe('The report was cut at 16 KiB.');
+  });
 });
 
 describe('Table 4: the head\'s counts', () => {
@@ -91,6 +101,12 @@ describe('Table 4: every "not known" line, said once', () => {
   it('a workflow\'s tokens not measured: "tokens not known for 1 workflow"; two: plural', () => {
     expect(helpersView({ workflows: [wf('w1', { tokens: null })] })!.notes).toEqual(['tokens not known for 1 workflow']);
     expect(helpersView({ workflows: [wf('w1', { tokens: null }), wf('w2', { tokens: null })] })!.notes).toEqual(['tokens not known for 2 workflows']);
+  });
+
+  it('review 3072 F13: a finished workflow draws no tokens, so its unmeasured count is no note', () => {
+    const done = wf('w1', { tokens: null, state: 'completed', endedAt: T0 + 60_000 });
+    expect(helpersView({ workflows: [done] })!.notes).toEqual([]);
+    expect(helpersView({ workflows: [done, wf('w2', { tokens: null })] })!.notes).toEqual(['tokens not known for 1 workflow']);
   });
 
   it('a workflow\'s progress unreadable: "progress not known for 1 workflow"', () => {

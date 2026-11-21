@@ -58,9 +58,10 @@ describe('the facts, written the way Claude Code writes them', () => {
 describe('finished rows keep Claude Code\'s last word', () => {
   it('completed → done, failed → failed, killed → stopped, clocked to the end, not to now', () => {
     const end = { endedAt: T0 + 60_000 };
-    expect(finishedFacts(item(wf({ state: 'completed', ...end })))).toEqual(['done', '19/20 agents', '1m0s']);
-    expect(finishedFacts(item(wf({ state: 'failed', ...end })))[0]).toBe('failed');
-    expect(finishedFacts(item(wf({ state: 'killed', ...end })))[0]).toBe('stopped');
+    // The outcome, the agents and the duration are one group, which never breaks across lines (review 3072 F7).
+    expect(finishedFacts(item(wf({ state: 'completed', ...end })))).toEqual({ state: ['done', '19/20 agents', '1m0s'], facts: [], prose: null });
+    expect(finishedFacts(item(wf({ state: 'failed', ...end }))).state[0]).toBe('failed');
+    expect(finishedFacts(item(wf({ state: 'killed', ...end }))).state[0]).toBe('stopped');
   });
 });
 

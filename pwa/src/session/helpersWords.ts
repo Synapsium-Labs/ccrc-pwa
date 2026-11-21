@@ -13,7 +13,7 @@
 import type { HelperItem } from '@ccrc/ui';
 import { elapsedShort } from '@ccrc/ui';
 import {
-  AGENT_HELPER_STATE_WORDS, HELPER_REPORT_MAX_BYTES, isFinalHelperState,
+  AGENT_HELPER_STATE_WORDS, HELPER_CUT_NOTE, HELPER_FOLD_LABEL, isFinalHelperState,
   type AgentHelperView, type HelpersUnmeasured, type WorkflowView,
 } from '../../../shared/workflows';
 
@@ -32,10 +32,8 @@ export interface HelpersWords {
   readonly main: HelperItem[];
   readonly finished: HelperItem[];
   readonly cutNote: string;
+  readonly foldLabel: string;
 }
-
-/** A cut report's note, with the cap the server cut it at (`HELPER_REPORT_MAX_BYTES`, one owner). */
-const CUT_NOTE = `The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`;
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
@@ -83,7 +81,8 @@ export function helpersView(i: HelpersWordsInput): HelpersWords | null {
 
   const notes: string[] = [];
   if (i.agentsUnmeasured !== null && i.agents.some((a) => a.state === 'unmeasured')) notes.push(liveStateLine(i.agentsUnmeasured));
-  const noTokens = i.workflows.filter((w) => w.tokens === null).length;
+  // Tokens are drawn only on a main-list row, so the note counts only those (review 3072 F13); a finished row draws none.
+  const noTokens = main.filter((it) => it.kind === 'workflow' && it.workflow.tokens === null).length;
   if (noTokens > 0) notes.push(`tokens not known for ${plural(noTokens, 'workflow', 'workflows')}`);
   const noProgress = i.workflows.filter((w) => w.done === null).length;
   if (noProgress > 0) notes.push(`progress not known for ${plural(noProgress, 'workflow', 'workflows')}`);
@@ -92,5 +91,5 @@ export function helpersView(i: HelpersWordsInput): HelpersWords | null {
   }
   if (i.workflowsUnreadable) notes.push(i.workflows.length > 0 ? 'workflow state not re-read: showing the last read' : 'workflow state could not be read');
 
-  return { count: counts.length === 0 ? null : counts.join(' · '), notes, main, finished, cutNote: CUT_NOTE };
+  return { count: counts.length === 0 ? null : counts.join(' · '), notes, main, finished, cutNote: HELPER_CUT_NOTE, foldLabel: HELPER_FOLD_LABEL };
 }

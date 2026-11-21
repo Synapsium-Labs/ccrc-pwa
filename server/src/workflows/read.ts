@@ -160,7 +160,7 @@ export class SessionWorkflows {
   }
 
   /** H2 (D-8872): the answer to a `helper-report` request, from what the last reading held and drew. */
-  reportOf(id: string): HelperReportAnswer { return this.helpers.reportOf(id); }
+  reportOf(id: string): HelperReportAnswer | null { return this.helpers.reportOf(id); }
 
   private get runsDir(): string { return path.join(this.sessionDir, 'subagents', 'workflows'); }
   private summaryPath(runId: string): string { return path.join(this.sessionDir, 'workflows', `${runId}.json`); }
@@ -508,8 +508,9 @@ export class SessionHelpers {
   private facts: Map<string, HelperIdFacts> = new Map();
   /** H2 (D-8872): the reports of the fold's own end facts (`model.ts#holdReports`), bounded by `boundReports`. */
   private reports: ReadonlyMap<string, HeldReport> = new Map();
-  /** The rows the last reading drew: a report is answered only for one of them (`model.ts#reportAnswer`). */
-  private drawn: AgentArm['agents'] = [];
+  /** The rows the last reading drew: a report is answered only for one of them (`model.ts#reportAnswer`); null until this
+   *  reader's first reading, when it has read no id yet. */
+  private drawn: AgentArm['agents'] | null = null;
   private memory: HelperMemory = emptyHelperMemory();
   private readonly cache = new Map<string, HelperCache>();
   /** Each id's state at the last decision: what "not final" means for the tier. */
@@ -627,8 +628,9 @@ export class SessionHelpers {
     return { arm, readEvery: refreshed < open.length ? { refreshed, of: open.length } : null };
   }
 
-  /** H2 (D-8872): the answer to a `helper-report` request for `id`. */
-  reportOf(id: string): HelperReportAnswer { return reportAnswer(this.reports, this.drawn, id); }
+  /** H2 (D-8872): the answer to a `helper-report` request for `id`; null before this reader's first reading, when it has
+   *  read no id and so cannot say one was lost (review 3072 F4): the stream then sends nothing, and the PWA asks again. */
+  reportOf(id: string): HelperReportAnswer | null { return this.drawn === null ? null : reportAnswer(this.reports, this.drawn, id); }
 
   private metaOf(id: string): { path: 'agent'; agentType: string | null } | undefined {
     const m = this.cache.get(id)?.meta;

@@ -196,27 +196,46 @@
     grid-area: bar;
     display: block;
   }
+  /* Line 2 is one run of text (review 3072 F7, spec §10): each fact, and the state with its times, is one group, an inline
+     block no wider than the line, so it moves to the next line whole and the ` · ` separators between groups are the break
+     points. Only a group wider than a whole line breaks inside itself, and then between its words (each an inline block
+     too), never inside one: the state with its times in the narrow rail. A prose fact (a finished helper's summary) is the
+     one part that wraps anywhere. */
   .helpers-strip .helper-line2 {
     grid-area: line2;
-    display: flex;
-    flex-wrap: wrap;
-    column-gap: var(--sp-2);
+    display: block;
+    min-width: 0;
     font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
     font-variant-numeric: tabular-nums;
     color: var(--ink-secondary);
   }
-  .helper-facts {
-    min-width: 0;
+  .helper-fact,
+  .helper-word {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .helper-prose {
     overflow-wrap: anywhere;
   }
   /* A fact, in the muted ink: quiet is said, never acted on (Table 5). */
   .helpers-strip .helper-activity[data-quiet] {
     color: var(--ink-tertiary);
   }
-  /* On a phone line 2 leaves the tokens out (§10). */
+  /* Elapsed sits at the right of line 1 at the desk; on a phone it moves into line 2, between the state and the activity,
+     and line 2 leaves the tokens out (§10, review 3072 F6). */
+  .helper-elapsed-inline {
+    display: none;
+  }
   @container (max-width: 479px) {
     .helper-tokens {
       display: none;
+    }
+    .helper-row > .helper-elapsed {
+      display: none;
+    }
+    .helper-elapsed-inline {
+      display: inline;
     }
   }
   .helper-detail {
@@ -267,7 +286,12 @@
   }
   .helper-report-links {
     display: flex;
-    gap: var(--sp-3);
+    align-items: center;
+    gap: var(--sp-1);
+  }
+  .helpers-strip .helper-report-sep {
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-ui);
+    color: var(--ink-tertiary);
   }
   .helpers-strip .helper-report-link {
     min-height: var(--tap-min);

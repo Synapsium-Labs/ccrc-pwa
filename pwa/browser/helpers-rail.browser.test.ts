@@ -7,7 +7,9 @@
 //     mail and task strips take); showing it again moves it back;
 //   - "1280: in the column": below 1600 it sits in the strips under the transcript, above the composer;
 //   - "360: collapsed it is the head and two lines; open it is at most half the viewport and one scroll body": §10's
-//     phone layout, with the head at least 44 px and no sideways page scroll.
+//     phone layout, with the head at least 44 px and no sideways page scroll;
+//   - review 3072 F6 and F7: at 360 a row's elapsed time is in line 2 and line 1 draws none, at 1280 it is on line 1 and
+//     line 2 draws none; at either width no fact, and no state with its times, splits across two lines.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // --maxWorkers=2 browser/helpers-rail.browser.test.ts )`.
@@ -87,6 +89,20 @@ async function openSession(v: AppView) {
   return opened;
 }
 
+/** Where each running row draws its elapsed time, and every fact group that the width split across two lines. */
+const lines = (page: Page): Promise<{ line1: boolean[]; line2: boolean[]; split: string[] }> => page.evaluate(() => {
+  const shown = (e: Element | null): boolean => e !== null && getComputedStyle(e).display !== 'none' && e.getClientRects().length > 0;
+  const rows = [...document.querySelectorAll('.chat-strips .helpers-strip .helpers-main [data-helper-row]')];
+  // A group is an inline block: it spans two lines when its box is taller than one line of its own text.
+  const split = [...document.querySelectorAll('.chat-strips .helpers-strip .helper-fact')]
+    .filter((g) => shown(g) && g.getBoundingClientRect().height > 1.5 * parseFloat(getComputedStyle(g).lineHeight)).map((g) => g.textContent ?? '');
+  return {
+    line1: rows.map((r) => shown(r.querySelector(':scope > .helper-elapsed'))),
+    line2: rows.map((r) => shown(r.querySelector('.helper-elapsed-inline'))),
+    split,
+  };
+});
+
 interface Place { rail: boolean; column: boolean; aboveComposer: boolean; sideScroll: number }
 const place = (page: Page): Promise<Place> => page.evaluate(() => {
   const composer = document.querySelector('.composer')!.getBoundingClientRect();
@@ -104,6 +120,10 @@ describe('the Helpers section\'s place, by width', () => {
     const { ctx, page, errors } = await openSession(view(1600));
     try {
       expect(await place(page)).toEqual({ rail: true, column: false, aboveComposer: false, sideScroll: 0 });
+      // Review 3072 F7: in the narrow rail no line 2 runs past its row (a group wider than the line breaks between words).
+      const overflow = await page.evaluate(() => [...document.querySelectorAll('.ref-inspector .helper-line2')]
+        .filter((l) => l.scrollWidth > l.clientWidth + 1).map((l) => l.textContent ?? ''));
+      expect(overflow).toEqual([]);
       await page.locator('[data-command="toggle-inspector"]').click();
       await page.waitForFunction(() => document.querySelector('.ref-inspector') === null);
       await page.waitForTimeout(300);
@@ -122,6 +142,13 @@ describe('the Helpers section\'s place, by width', () => {
     const { ctx, page, errors } = await openSession(view(1280));
     try {
       expect(await place(page)).toEqual({ rail: false, column: true, aboveComposer: true, sideScroll: 0 });
+      await page.locator('.chat-strips .helpers-strip button[aria-expanded]').first().click();
+      await page.waitForTimeout(200);
+      const l = await lines(page);
+      expect(l.line1.length, 'running rows drawn').toBeGreaterThan(0);
+      expect(l.line1.every(Boolean), 'at the desk elapsed is on line 1').toBe(true);
+      expect(l.line2.some(Boolean), 'and line 2 draws none').toBe(false);
+      expect(l.split, 'no fact splits across lines').toEqual([]);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();
@@ -168,6 +195,11 @@ describe('the Helpers section\'s place, by width', () => {
       expect(opened.height).toBeLessThanOrEqual(opened.vh / 2 + 1);
       expect(opened.scrolls).toBe('auto');
       expect(opened.rows).toBeGreaterThanOrEqual(5);
+      const l = await lines(page);
+      expect(l.line1.length, 'running rows drawn').toBeGreaterThan(0);
+      expect(l.line1.some(Boolean), 'on a phone line 1 draws no elapsed').toBe(false);
+      expect(l.line2.every(Boolean), 'and line 2 draws it (§10)').toBe(true);
+      expect(l.split, 'no fact splits across lines').toEqual([]);
       expect((await place(page)).sideScroll).toBe(0);
       expect(errors).toEqual([]);
     } finally {

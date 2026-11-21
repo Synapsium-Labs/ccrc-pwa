@@ -62,6 +62,11 @@ describe('keepWorkflows: the workflow keep is the helpers\' ten minutes, by its 
     expect([...first.noEndShown]).toEqual(['wf_00000000-aaa']);
     const second = keepWorkflows([v], T0 + 2_000, first.noEndShown);
     expect(second.rows).toEqual([]);
+    // Review 3072 F11: the memory keeps the id while the run still reads finished with no end, so a third reading does not
+    // draw it again (the memory of the second reading alone would have been empty: drawn 1, 0, 1, 0, ...).
+    const third = keepWorkflows([v], T0 + 4_000, second.noEndShown);
+    expect(third.rows, 'the third reading').toEqual([]);
+    expect([...third.noEndShown]).toEqual(['wf_00000000-aaa']);
   });
 
   it('the draw-once memory forgets a run that is no longer among the views', () => {

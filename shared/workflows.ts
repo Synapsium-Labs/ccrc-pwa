@@ -195,6 +195,10 @@ export const HELPER_LABEL_MAX = 64;
 export const HELPER_SUMMARY_MAX_BYTES = 200;
 /** A report is at most this many bytes, and a cut one says so. */
 export const HELPER_REPORT_MAX_BYTES = 16_384;
+/** What a cut report says under its text, with the cap in it, and the finished fold's label, with the keep's minutes in it:
+ *  each written once, from its constant, and handed to the strip by the PWA's words module (H2, review 3072 F12). */
+export const HELPER_CUT_NOTE = `The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`;
+export const HELPER_FOLD_LABEL = `Finished · last ${HELPER_FINISHED_KEEP_MS / 60_000} min`;
 /** The most ids whose launch results and notifications the fold remembers, the oldest evicted first. */
 export const HELPER_FACTS_MAX = 256;
 /** A finished (kept) workflow carries at most this many agents, failed and running first. */

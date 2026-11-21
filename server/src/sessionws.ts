@@ -577,9 +577,11 @@ export class SessionStream implements FeedSubscriber {
   }
 
   /** H2 (D-8872; spec §4.3, §8): answer the client's `helper-report` request with that one report, which the reader holds
-   *  for the rows it drew (`model.ts#reportAnswer` decides); a stream with no reader yet answers that it holds none. */
+   *  for the rows it drew (`model.ts#reportAnswer` decides). A stream whose reader has not read yet sends nothing: it read no
+   *  id, so it cannot say one was lost, and the PWA asks again after this stream's first frame (review 3072 F4). */
   helperReport(id: string): void {
-    this.send(this.workflows?.reportOf(id) ?? { type: 'helper-report', id, report: null, cut: false });
+    const answer = this.workflows?.reportOf(id) ?? null;
+    if (answer !== null) this.send(answer);
   }
 
   /**
