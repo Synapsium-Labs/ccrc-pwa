@@ -9,6 +9,7 @@
 // cannot be read, or whose id the listing refused, is held the same way: never told on a guess. A claimant with no row is
 // settled without a mail: there is no session to tell, and one revived later starts on the new cards (A9-1, A9-2).
 import type { MarkerState } from '../../../shared/api.js';
+import { MAIL_DISABLED_MARKER } from '../../../shared/switches.js';
 
 /** The revision of the coordinator skill's contract this build carries: clause 21 of `ccd/coordinator-skill/SKILL.md`
  *  (A5). A later contract change bumps this word, and every running coordinator is told once more. */
@@ -38,7 +39,7 @@ export interface RolloutFacts {
 }
 
 /** Why a pass is not settled: the mail switch, or a claimant that could not be measured. */
-export type RolloutHold = { readonly why: 'mail-disabled' } | { readonly why: 'unmeasured'; readonly id: string };
+export type RolloutHold = { readonly why: typeof MAIL_DISABLED_MARKER } | { readonly why: 'unmeasured'; readonly id: string };
 
 export interface RolloutPlan {
   readonly mails: readonly RolloutMail[];
@@ -60,7 +61,7 @@ export const rolloutMailBody = (revision: string): string =>
 
 /** The pass's decision: each distinct claimant once, in the order given. */
 export function decideRollout(f: RolloutFacts): RolloutPlan {
-  if (f.mailDisabled !== 'clear') return { mails: [], holds: [{ why: 'mail-disabled' }], settled: false };
+  if (f.mailDisabled !== 'clear') return { mails: [], holds: [{ why: MAIL_DISABLED_MARKER }], settled: false };
   const mails: RolloutMail[] = [];
   const holds: RolloutHold[] = [];
   const seen = new Set<string>();

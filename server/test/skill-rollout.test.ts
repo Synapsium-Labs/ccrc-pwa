@@ -2,7 +2,7 @@
 // system mail per coordinator per coordinator-skill revision. `decideRollout` is the L1 decision over literal facts, held
 // by a mutant set; `skillRolloutPass` is the L4 lane, proven against a real coord store in a fixture HOME. No box is
 // touched.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
@@ -11,8 +11,10 @@ import * as rollout from '../src/coord/skillRollout.js';
 import { skillRolloutPass, type RolloutListing } from '../src/coord/skillRolloutLane.js';
 import { laneRow } from '../src/laneSchedule.js';
 import type { ChildMark } from '../../shared/api.js';
+import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { mkTmp } from './tmpHelpers.js';
 import { runMutants, type MutantSet, type SuiteCase } from './sim/mutate.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const { COORDINATOR_SKILL_REVISION, decideRollout, rolloutKey, rolloutMailBody, rolloutMailSubject } = rollout;
 type RolloutModule = typeof rollout;
@@ -56,7 +58,7 @@ function decideCases(m: RolloutModule): Record<string, SuiteCase> {
     },
     'mail-disabled set, or unreadable, holds every mail and settles nothing': () => {
       for (const mailDisabled of ['set', 'unmeasurable'] as const) {
-        expect(d(facts({ mailDisabled, claimants: [c('coord-a')] }))).toEqual({ mails: [], holds: [{ why: 'mail-disabled' }], settled: false });
+        expect(d(facts({ mailDisabled, claimants: [c('coord-a')] }))).toEqual({ mails: [], holds: [{ why: MAIL_DISABLED_MARKER }], settled: false });
       }
     },
     'no claimant: settled, nothing to send': () => {
@@ -105,10 +107,20 @@ describe('decideRollout — the L1 decision', () => {
 describe('skillRolloutPass — the lane, against a real coord store', () => {
   const homes: string[] = [];
   afterEach(() => { for (const h of homes.splice(0)) fs.rmSync(h, { recursive: true, force: true }); });
+  // The migrations run once, into a template, and each case opens a copy: a fresh store per case without paying for
+  // every migration per case (about 8 s each on a loaded box).
+  let template = '';
+  beforeAll(() => {
+    const home = mkTmp('skill-rollout-template-');
+    template = path.join(home, 'coord.db');
+    openCoordDb(template).close();
+  });
+  afterAll(() => { if (template !== '') fs.rmSync(path.dirname(template), { recursive: true, force: true }); });
 
   const build = () => {
     const home = mkTmp('skill-rollout-');
     homes.push(home);
+    fs.copyFileSync(template, path.join(home, 'coord.db'));
     const coord = new CoordStore(openCoordDb(path.join(home, 'coord.db')));
     let seq = 0;
     let recordThrows = false;
@@ -268,15 +280,13 @@ describe('skillRolloutPass — the lane, against a real coord store', () => {
 
 describe('the watcher runs the lane on its tick (D-8126, A9-3)', () => {
   it('the tick calls the pass under its row, with the shipped revision, this tick\'s listing and the process memory', () => {
-    const src = fs.readFileSync(path.join(ROOT, 'server/src/watch.ts'), 'utf8');
-    const call = src.split('\n').filter((l) => l.includes("this.runLane('skillRollout'"));
-    expect(call, 'one call site').toHaveLength(1);
-    expect(call[0]).toContain('skillRolloutPass({');
-    expect(call[0]).toContain('revision: COORDINATOR_SKILL_REVISION');
-    expect(call[0]).toContain('settled: this.skillRolloutSettled');
-    const at = src.indexOf("this.runLane('skillRollout'");
-    expect(src.slice(at, src.indexOf('\n', src.indexOf('\n', at) + 1))).toContain('rolloutListingOf(registryRead)');
-    expect(src.slice(at, src.indexOf('\n', src.indexOf('\n', at) + 1))).toContain('recordAlways: true, recordOnly: true, dedupeKey');
+    const tick = sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.tick');
+    const at = tick.indexOf("this.runLane('skillRollout'");
+    expect(at, 'the tick runs the lane').toBeGreaterThan(-1);
+    expect(tick.indexOf("this.runLane('skillRollout'", at + 1), 'one call site').toBe(-1);
+    const call = tick.slice(at, tick.indexOf('?.catch(', at));
+    for (const part of ['skillRolloutPass({', 'revision: COORDINATOR_SKILL_REVISION', 'settled: this.skillRolloutSettled',
+      'recordAlways: true, recordOnly: true, dedupeKey', 'rolloutListingOf(registryRead)']) expect(call).toContain(part);
   });
 });
 
