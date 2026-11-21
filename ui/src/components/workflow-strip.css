@@ -143,8 +143,10 @@
   .helper-row:last-child {
     border-bottom: 0;
   }
-  .helpers-strip .helper-glyph {
+  .helper-row > .helper-glyph {
     grid-area: glyph;
+  }
+  .helpers-strip .helper-glyph {
     font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
     text-align: center;
     color: var(--ink-secondary);

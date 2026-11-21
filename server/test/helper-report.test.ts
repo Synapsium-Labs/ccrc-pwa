@@ -232,3 +232,41 @@ describe('the session socket\'s message parser', () => {
     expect('visible' in req).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The server's socket handler routes the request to the session stream (a real socket, `buildServer`).
+
+describe('/ws/session/:id answers a helper-report request', () => {
+  it('a request is answered on the same socket; a bad id is ignored and sets no visible claim', async () => {
+    const { default: WebSocket } = await import('ws');
+    const { Viewers } = await import('../src/viewer.js');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const viewers = new Viewers(() => Date.now());
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, viewers };
+    const app = await server.buildServer(deps, new Bus());
+    try {
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
+      const got: Array<{ type: string }> = [];
+      ws.on('message', (raw) => { try { got.push(JSON.parse(String(raw)) as { type: string }); } catch { /* not JSON */ } });
+      await new Promise<void>((res, rej) => { ws.once('open', () => res()); ws.once('error', rej); });
+      try {
+        ws.send(JSON.stringify({ type: 'helper-report', id: '../etc' }));
+        ws.send(JSON.stringify({ type: 'helper-report', id: 'a7' }));
+        const end = Date.now() + 5_000;
+        while (!got.some((m) => m.type === 'helper-report') && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+        expect(got.filter((m) => m.type === 'helper-report')).toEqual([{ type: 'helper-report', id: 'a7', report: null, cut: false }]);
+        expect(viewers.isVisible(ID)).toBe(false);
+      } finally {
+        ws.close();
+      }
+    } finally {
+      await app.close();
+    }
+  });
+});

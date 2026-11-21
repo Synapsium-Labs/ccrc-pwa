@@ -82,7 +82,7 @@ async function openSession(v: AppView) {
   const opened = await openApp(browser!, v, FIXTURE);
   await opened.page.goto(`${server!.origin}/s/${ID}`);
   await opened.page.waitForFunction((text) => document.body.textContent?.includes(text) === true, LAST_TEXT, { timeout: 20_000 });
-  await opened.page.waitForFunction(() => document.body.textContent?.includes('Measure the server sources') === true, null, { timeout: 20_000 });
+  await opened.page.waitForFunction(() => document.querySelector('.helpers-strip') !== null, null, { timeout: 20_000 });
   await opened.page.waitForTimeout(400);
   return opened;
 }
@@ -135,15 +135,29 @@ describe('the Helpers section\'s place, by width', () => {
       const collapsed = await page.evaluate(() => {
         const s = document.querySelector('.chat-strips .helpers-strip')!;
         const head = s.querySelector('button[aria-expanded]')!.getBoundingClientRect();
+        const box = s.getBoundingClientRect();
         const glance = [...s.querySelectorAll('[data-helper-glance]')].map((g) => {
           const state = g.querySelector('.helper-glance-state')!.getBoundingClientRect();
-          return { right: state.right <= s.getBoundingClientRect().right + 1, lines: Math.round(g.getBoundingClientRect().height / parseFloat(getComputedStyle(g).lineHeight || '16')) };
+          const glyph = g.querySelector('.helper-glyph')!.getBoundingClientRect();
+          const what = g.querySelector('.helper-glance-what')!.getBoundingClientRect();
+          return {
+            right: state.right <= box.right + 1,
+            // the glyph leads the line, the description takes the room between it and the state word, on one line
+            order: glyph.right <= what.left + 1 && what.right <= state.left + 1,
+            roomy: what.width >= box.width / 2,
+            oneLine: Math.abs(glyph.top - state.top) < 8 && Math.abs(what.top - state.top) < 8,
+          };
         });
         return { head: head.height, glance };
       });
       expect(collapsed.head, 'the head is the tap floor at least').toBeGreaterThanOrEqual(44);
       expect(collapsed.glance).toHaveLength(2);
-      for (const g of collapsed.glance) expect(g.right, 'the state word stays visible').toBe(true);
+      for (const g of collapsed.glance) {
+        expect(g.right, 'the state word stays visible').toBe(true);
+        expect(g.order, 'glyph, then line 1, then the state word').toBe(true);
+        expect(g.roomy, 'line 1 has the room left by the glyph and the state word').toBe(true);
+        expect(g.oneLine, 'one line').toBe(true);
+      }
       await page.locator('.chat-strips .helpers-strip button[aria-expanded]').first().click();
       await page.waitForTimeout(200);
       const opened = await page.evaluate(() => {
