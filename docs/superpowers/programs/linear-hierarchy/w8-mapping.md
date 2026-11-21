@@ -222,4 +222,13 @@ console's `LINEAR_SETTINGS_PATH` is that constant; the plan's follow-up list mov
 the item's how line no longer promises a mail or an ask on every close; this note and D-8808 say "cannot be listed" for the
 settle guard; D-8808 says what a rollback leaves.
 
+**Fix round 1 (review 3196).** F1: the console's sentence said the item closes once the team's waiting issues route,
+which is untrue when the chosen project's owner is gone (the issues then wait on a Name a Linear owner item while this one
+settles); it now says the item closes once no waiting issue of the team depends on the workspace choice, as the server's how
+line does, in `migrationWords.ts`, its pinned test and the verb's comment. F2: `single-definition/plan.test.ts` pins the
+settings path to its one declaration in `shared/ledgers.ts`, forbids a literal `LINEAR_SETTINGS_PATH`, and lists every literal
+spelling of the page (the shared constant and the two sign-in links, which name Security for passkeys); a second literal
+copy, measured by restoring the console's old one, reds it. D-8808 says the item was built before the pilot, at the
+coordinator's call.
+
 The test typecheck (`test/tsconfig.tests.json`) was killed by the test slice's memory cap here; CI's run on the tip checks it.

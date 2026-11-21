@@ -100,7 +100,8 @@ export type ItemAction =
   | { verb: 'linear-owner'; project: string }
   // D-8808 (review 3048 F5): inbound issues of a team key two connected workspaces hold wait because the projects that hold the
   // key name no workspace. One open item per team key (upper-case); the remedy is the project row's Workspace on
-  // `LINEAR_PROJECTS_SETTINGS_PATH`, so the item takes no act of its own and settles itself once the issues route.
+  // `LINEAR_PROJECTS_SETTINGS_PATH`, so the item takes no act of its own and settles itself once no waiting issue of the key
+  // depends on the workspace choice (an issue may still wait then, on its owner).
   | { verb: 'linear-team-workspace'; teamKey: string }
   | ReleaseReviewAction
   // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2): children on this Claude Code build cannot route permission prompts

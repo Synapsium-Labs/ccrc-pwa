@@ -18,7 +18,7 @@ export const LINEAR_ITEM_TEXT = {
   notQueued: 'Nothing was queued: this server has no check it can run for this workspace (no Linear key serves it, or the plan sync is off). The item stays open.',
   /** D-8808: the shared-key item has no act; its remedy is the project row's Workspace, on the page the link opens. */
   openSettings: 'Open the Linear project settings',
-  teamWorkspace: (team: string) => `On the row of the project that owns team ${team}, choose its Workspace, then Save. This item closes itself once the team's waiting issues route.`,
+  teamWorkspace: (team: string) => `On the row of the project that owns team ${team}, choose its Workspace, then Save. This item closes itself once no waiting issue of the team depends on the workspace choice.`,
 } as const;
 
 /** What each control group is called to a screen reader (the group's `aria-label`): a sentence, never the verb. */

@@ -538,7 +538,8 @@ number from `POST /api/ledger/deviations`.
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
   review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor` and `w8-overlord-skill`;
   `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
-  `w8-triage-l1` by run 3155, and `w8-ambiguous-notice` by run 3187. Record: the
+  `w8-triage-l1` by run 3155, and `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
+  coordinator's call, since it only adds an item. Record: the
   wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,

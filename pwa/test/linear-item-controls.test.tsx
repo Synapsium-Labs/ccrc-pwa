@@ -308,7 +308,7 @@ describe('the shared-key item (D-8808, review 3048 F5)', () => {
     const call = sent();
     const { container } = controls({ verb: 'linear-team-workspace', teamKey: 'AAA' });
     expect(screen.getByText(LINEAR_ITEM_TEXT.teamWorkspace('AAA'))).toBeTruthy();
-    expect(LINEAR_ITEM_TEXT.teamWorkspace('AAA')).toBe("On the row of the project that owns team AAA, choose its Workspace, then Save. This item closes itself once the team's waiting issues route.");
+    expect(LINEAR_ITEM_TEXT.teamWorkspace('AAA')).toBe("On the row of the project that owns team AAA, choose its Workspace, then Save. This item closes itself once no waiting issue of the team depends on the workspace choice.");
     const link = screen.getByRole('link', { name: LINEAR_ITEM_TEXT.openSettings });
     expect(link.getAttribute('href')).toBe(LINEAR_PROJECTS_SETTINGS_PATH);
     expect(container.querySelectorAll('button')).toHaveLength(0);
