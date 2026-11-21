@@ -6,9 +6,8 @@
 // never settles, does not change the ack's answer. With a pass in flight, the kick leaves the row due, so the next beat
 // runs one pass.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/deps.js';
@@ -17,6 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { LANE_SCHEDULE } from '../src/laneSchedule.js';
 import { MAIL_HOLD_LANE_ROW } from '../src/coord/mailHoldLane.js';
+import { parsedFile } from './scan/symbols.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -129,8 +129,9 @@ describe('the kick on a pass in flight (Task 4.4)', () => {
 });
 
 describe('the composition root wires the kick (Task 4.4)', () => {
+  // Read by the parser (`scan/symbols.ts`), never as a text pin over the source, which ARCH-06's ratchet forbids.
   it("index.ts composes Deps.onMailAcked as the watcher's kick of the mailhold row", () => {
-    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/index.ts'), 'utf8');
-    expect(src).toContain('deps.onMailAcked = () => watcher.kick(MAIL_HOLD_LANE_ROW);');
+    const kicks = parsedFile('server/src/index.ts').calls.filter((c) => c.callee === 'watcher.kick');
+    expect(kicks.map((c) => c.args.map((a) => a.text))).toEqual([['MAIL_HOLD_LANE_ROW']]);
   });
 });
