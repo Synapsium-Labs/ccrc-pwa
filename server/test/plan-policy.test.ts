@@ -269,8 +269,8 @@ describe('teamOwnerProject (D-8183)', () => {
     expect(teamOwnerProject('aaa', rows, 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
   });
   it('a key no project holds has no owning project, and another team key is not counted', () => {
-    expect(teamOwnerProject('BBB', [projectFacts('project-a', { order: 1 })], 'ws-a', null)).toEqual({ kind: 'none', reason: 'no-holder' });
-    expect(teamOwnerProject('AAA', [projectFacts('project-a', { teamKey: 'BBB', order: 1, ownsTeam: true })], 'ws-a', null)).toEqual({ kind: 'none', reason: 'no-holder' });
+    expect(teamOwnerProject('BBB', [projectFacts('project-a', { order: 1 })], 'ws-a', null)).toEqual({ kind: 'none', reason: null });
+    expect(teamOwnerProject('AAA', [projectFacts('project-a', { teamKey: 'BBB', order: 1, ownsTeam: true })], 'ws-a', null)).toEqual({ kind: 'none', reason: null });
   });
   it('a project with a key and no order still owns it when it is the only one', () => {
     expect(teamOwnerProject('AAA', [projectFacts('project-a', { order: null })], 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
@@ -285,7 +285,7 @@ describe('linearOwnerOfTeam (D-8183)', () => {
     expect(linearOwnerOfTeam('AAA', [projectFacts('project-b', { order: 2 })], f, 'ws-a', routesFor('ws-a'))).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
   });
   it('a team no project holds has no owner row at all', () => {
-    expect(linearOwnerOfTeam('CCC', [projectFacts('project-a', { order: 1 })], f, 'ws-a', null)).toEqual({ kind: 'none', reason: 'no-holder' });
+    expect(linearOwnerOfTeam('CCC', [projectFacts('project-a', { order: 1 })], f, 'ws-a', null)).toEqual({ kind: 'none', reason: null });
   });
 });
 

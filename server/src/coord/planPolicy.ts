@@ -807,8 +807,8 @@ function rankHolders(holders: readonly HierarchyProjectFacts[]): HierarchyProjec
 }
 
 const teamHolders = (team: string, rows: readonly HierarchyProjectFacts[]) => rows.filter((r) => r.teamKey?.toUpperCase() === team.toUpperCase());
-const NO_HOLDER = { kind: 'none', reason: 'no-holder' } as const;
-type NoTeamOwner = { kind: 'none'; reason: 'no-holder' | 'team-ambiguous' };
+const NO_HOLDER = { kind: 'none', reason: null } as const;
+type NoTeamOwner = { kind: 'none'; reason: 'team-ambiguous' | null };
 type ProjectPick = { kind: 'owner'; row: HierarchyProjectFacts } | NoTeamOwner | { kind: 'unmeasured'; possible: readonly HierarchyProjectFacts[] };
 
 /** The one workspace-qualified owner rule (D-8808). Unpinned holders can all join this workspace or none can;

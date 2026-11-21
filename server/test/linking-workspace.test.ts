@@ -31,7 +31,7 @@ describe('teamOwnerProject with a workspace', () => {
     expect(teamOwnerProject('AAA', [facts('project-c', { order: 1 }), ...rows], WS_B, null)).toMatchObject({ kind: 'unmeasured' });
   });
   it('a workspace nobody holds the key in owns nothing', () => {
-    expect(teamOwnerProject('AAA', rows, '00000000-0000-4000-8000-0000000000c3', null)).toEqual({ kind: 'none', reason: 'no-holder' });
+    expect(teamOwnerProject('AAA', rows, '00000000-0000-4000-8000-0000000000c3', null)).toEqual({ kind: 'none', reason: null });
   });
 });
 
