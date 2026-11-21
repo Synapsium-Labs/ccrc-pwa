@@ -1556,6 +1556,9 @@ describe('the session\'s worktree section shrinks below its rows (delegation vis
     expect(declValue(rule, 'min-width')).toBe('0');
     expect(declValue(rule, 'padding'), 'room for the focus ring inside a clipping rail').toBe('var(--sp-1)');
     expect(declValue(ruleIn(chatCss, '.chat-facts .sess-worktrees > .proj-work'), 'flex-wrap'), 'a row wraps: its controls drop under its words').toBe('wrap');
+    // H3 (D-8875): the row's free-text part is its path, which wraps anywhere rather than sizing the header to its length.
+    const pathRule = ruleIn(chatCss, '.chat-facts .sess-worktrees .proj-work-name-text');
+    expect([declValue(pathRule, 'white-space'), declValue(pathRule, 'overflow-wrap')], 'the path wraps, anywhere').toEqual(['normal', 'anywhere']);
     const refined = readFileSync(path.join(import.meta.dirname, '..', 'src', 'skins', 'refined', 'refined.css'), 'utf8');
     expect(declValue(ruleIn(refined, '.chat-head .ref-chip-rail:has(.sess-worktrees)'), 'flex-wrap')).toBe('wrap');
     expect(declValue(ruleIn(refined, '.chat-head .ref-chip-rail .sess-worktrees .chat-fact'), 'white-space')).toBe('normal');

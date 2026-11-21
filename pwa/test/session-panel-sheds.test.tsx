@@ -254,3 +254,40 @@ describe('the focus when the last worktree leaves with the row\'s other fact (re
     expect(document.activeElement, 'the focus rests on the header\'s title').toBe(document.querySelector('.chat-head .chat-title'));
   });
 });
+
+// Found by the mutation run (`details-drawn-shown-only` survived): the details region is drawn at a desk and behind its door on
+// a phone, so whether it stays is the width's answer too. A desk turned phone width with the door closed (a window narrowed)
+// while the focus is in a worktree control removes the region; the focus rests on the header's title. Red at `main` as well.
+describe('the focus when the details go behind their door (H3, review 2995 F2)', () => {
+  it('H3-5: a desk narrowed to a phone with the focus in a worktree control rests it on the title', () => {
+    let width = 1280;
+    type Listener = (e: { matches: boolean; media: string }) => void;
+    const listeners = new Map<Listener, () => boolean>();
+    vi.stubGlobal('matchMedia', (q: string) => {
+      const min = /min-width:\s*(\d+(?:\.\d+)?)px/.exec(q);
+      const max = /max-width:\s*(\d+(?:\.\d+)?)px/.exec(q);
+      const now = (): boolean => (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1])) && !q.includes('pointer: coarse');
+      return {
+        get matches() { return now(); },
+        media: q, onchange: null, dispatchEvent: () => false,
+        addListener(f: Listener) { listeners.set(f, now); }, removeListener(f: Listener) { listeners.delete(f); },
+        addEventListener(_: string, f: Listener) { listeners.set(f, now); }, removeEventListener(_: string, f: Listener) { listeners.delete(f); },
+      };
+    });
+    const w = readDelegation(frame({ leases: [lease({ leaseId: 'lease-x', parentId: 'coord-a', disposition: 'retained', expiresAt: null })] }));
+    const key = worktreeSidesKey('coord-a', w, [SELF]);
+    // A workspace session whose details hold its tasks and its worktree: the row has facts at both widths.
+    const session = { ...SELF, workspace: 'still-pond', name: null, subagents: null };
+    render(<SessionHeaderHost session={session} status={session.status} statusUpdatedAt={null}
+      facts={sessionFacts({ session, now: NOW, worktrees: worktreesOf(w.leases, key) })}
+      onInterrupt={vi.fn()} onOpenTerminal={vi.fn()} onBack={vi.fn()} onChangeModel={vi.fn()} onChangeEffort={vi.fn()}
+      onMoveAccount={vi.fn()} onArchive={vi.fn()} onRestore={vi.fn()} onOpenHistory={vi.fn()} onReapWorkspace={vi.fn()} />);
+    const keep = screen.getByRole('button', { name: /^Keep worktree/ });
+    act(() => keep.focus());
+    expect(document.activeElement).toBe(keep);
+    act(() => { width = 360; for (const [f, now] of [...listeners]) f({ matches: now(), media: '' }); });
+    expect(document.querySelector('.chat-facts'), 'on a phone the details wait behind their door').toBeNull();
+    expect(screen.getByRole('button', { name: 'Session details' }).getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement, 'the focus rests on the header\'s title').toBe(document.querySelector('.chat-head .chat-title'));
+  });
+});

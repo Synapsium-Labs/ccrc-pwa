@@ -54,7 +54,9 @@ const SESSIONS = [
   session('port-coord', 'project-a', { role: 'coordinator' }),
   // Real subagents on a card session (D-8771): the no-count pin below can fail for them. At `main` the card already drew none (D-5545).
   session('port-w1', 'project-a', { role: 'child', subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] }),
-  session('lone-tidy-pass', 'project-a'),
+  // Its task tally keeps its details row when its last worktree leaves (the focus cases below): since H3 (D-8875) its recorded
+  // entry no longer does.
+  session('lone-tidy-pass', 'project-a', { tasks: { done: 1, total: 3, running: 0, active: null } }),
 ];
 
 const DELEGATION = frame({

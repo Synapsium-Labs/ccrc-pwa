@@ -112,9 +112,13 @@
 /* D-8782 (review 2864 F6): the session's worktrees, a full-width flex item of .chat-facts, whose automatic minimum would be
    its min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long row
    would push the header past the screen's edge, or the section would shrink to nothing in a nowrap rail; with it, the row
-   keeps the section's width, its path ends in an ellipsis and its other words wrap whole (`.proj-work-part`, fleet.css;
-   D-7783). Its rows carry chips, controls and an alert sentence too. */
+   keeps the section's width and its other words wrap whole (`.proj-work-part`, fleet.css; D-7783). Its rows carry chips,
+   controls and an alert sentence too. */
 .chat-facts .sess-worktrees { flex-basis: 100%; min-width: 0; padding: var(--sp-1); }
+/* H3 (D-8875): a row's free-text part is its path, which is long and often one unbroken run. Cut to one line, its text still
+   sized Instrument's phone header to the whole path (measured: 42 and 72 px of sideways scroll at 360 and 390); here it wraps,
+   anywhere, so the path is drawn whole on every width and no header grows past the screen. */
+.chat-facts .sess-worktrees .proj-work-name-text { white-space: normal; overflow-wrap: anywhere; }
 /* The padding is the focus ring's room: the controls' box draws a ring 4px outside itself (2px outline, 2px offset), and
    Refined's phone rail scrolls sideways, so it clips whatever it holds at its own edge: a ring on a box flush with that edge
    was cut (measured in a real Chrome at 360 and 390, review 2864 F4). */
