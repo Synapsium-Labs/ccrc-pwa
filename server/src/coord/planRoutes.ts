@@ -216,7 +216,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** Each project's workspace id, from its team key and the Linear store: null where either is unknown. */
   const workspaces = async (projects: ReadonlySet<string>): Promise<{ ws: Map<string, string | null>; routes: TeamRoutes | null }> => {
     const out = new Map<string, string | null>();
-    if (opts.coord === undefined || projects.size === 0) return { ws: out, routes: null };
+    // The store is read whenever a coord store stands, even for no project: a readable store never answers `unreachable` (F10).
+    if (opts.coord === undefined) return { ws: out, routes: null };
     const { routes } = await readTeamSnapshot();
     for (const p of projects) {
       const l = opts.coord.linkingOf(p);

@@ -48,6 +48,27 @@ describe('the migration proposal (D-8186)', () => {
     expect(r.db.prepare('SELECT planRequired FROM programs WHERE slug = ?').get('prog-b')).toMatchObject({ planRequired: 1 });
   });
 
+  it('a proposing migration whose owner is unmeasured mails nobody and raises no owner item; it proposes once the routing reads (F3)', async () => {
+    let partial = false;
+    const r = await migRig({ routing: (store) => !partial || store.kind !== 'listed' ? store : {
+      ...store, slots: store.slots.map((slot) => slot.id === WS.a.id ? { ...slot, record: { kind: 'unreadable', code: 'EIO' } } : slot),
+    } });
+    r.addIssue(1);
+    expect(r.mig.start('project-a', await r.mig.workspaceOfProject('project-a')).ok).toBe(true);
+    // a live programme of the team with no declared plan: the same method would mail its coordinator to declare one
+    r.addProgramme('prog-x', 'active');
+    r.openRun('prog-x', 'working');
+    partial = true;
+    await r.tick();
+    await r.tick();
+    expect(r.db.prepare('SELECT subject, toId FROM mail').all()).toEqual([]);
+    expect(r.db.prepare("SELECT id FROM operator_items WHERE action LIKE '%linear-owner%'").all()).toEqual([]);
+    expect(r.plan.migrationsOf()[0]).toMatchObject({ state: 'proposing' });
+    partial = false;                                         // control: once the routing reads, the owner is mailed
+    await r.tick();
+    expect(mailsTo(r, OWNER).length).toBeGreaterThan(0);
+  });
+
   it('a project with no team key cannot start', async () => {
     const r = await migRig();
     expect(r.mig.start('project-nokey', { ok: true, workspaceId: WS.a.id })).toMatchObject({ ok: false, word: 'no-team-key' });
