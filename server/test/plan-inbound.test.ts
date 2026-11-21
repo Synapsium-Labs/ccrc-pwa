@@ -2610,7 +2610,7 @@ describe('plan triage row choice, pinned before its move (D-8808)', () => {
   });
 
   describe('a team no project holds', () => {
-    it('the identifier lookup then the key-only diagnostic', async () => {
+    it('the identifier lookup finds the row; no project holds the key, so it has no owner', async () => {
       const r = await rig();
       seed(r, 5, WS.a.id, 'CCC-5', 'CCC');
       const o = await run(r, [5], { issue: 'CCC-5', decision: 'raise', note: 'scope' }, OWNER, 'CCC');

@@ -843,7 +843,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const snapshot = await readTeamSnapshot();
     const { routes } = snapshot;
     const rows = who.plan.hierarchyProjectsOf();
-    const holders = [...new Set(rows.filter((r) => r.teamKey?.toUpperCase() === team).map((r) => r.workspaceId ?? null))];
+    const holders = [...new Set(teamHolders(team, rows).map((r) => r.workspaceId ?? null))];
     const facts = ownerFacts(who.plan);
     const verdict = mapProposerVerdict(who.id, migration.waitingWorkspaces(team), holders,
       (ws) => ws === null ? teamOwnerDiagnostic(team, rows, facts) : linearOwnerOfTeam(team, rows, facts, ws, routes));
