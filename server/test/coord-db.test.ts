@@ -775,9 +775,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[114] (approval_parks, four approvals columns and the approval-park lane row, approvals PR 3),
     // and MIGRATIONS[115] (project_linking.teamWorkspace, teamSuggestions and teamCallId, the project row's Linear workspace,
     // Linear hierarchy wave 8),
-    // and MIGRATIONS[116] (runs.inPlace, the in-place bind, D-6096).
-    expect(COORD_SCHEMA_VERSION).toBe(117);
-    expect(MIGRATIONS.length).toBe(117);
+    // and MIGRATIONS[116] (runs.inPlace, the in-place bind, D-6096),
+    // and MIGRATIONS[117] (delegation_activities.endBasis, what a broker activity's end rests on, session helpers S1, D-8830).
+    expect(COORD_SCHEMA_VERSION).toBe(118);
+    expect(MIGRATIONS.length).toBe(118);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -920,8 +921,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[113] (the per-team migration's columns, Linear hierarchy wave 7),
     // and MIGRATIONS[114] (approval_parks, approvals PR 3),
     // and MIGRATIONS[115] (project_linking's three linking columns, Linear hierarchy wave 8),
-    // and MIGRATIONS[116] (runs.inPlace, D-6096); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(117);
+    // and MIGRATIONS[116] (runs.inPlace, D-6096),
+    // and MIGRATIONS[117] (delegation_activities.endBasis, D-8830); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(118);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1188,7 +1190,7 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     expect(PREDECESSOR, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
     expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     expect(SLOT).toBeLessThanOrEqual(MIGRATIONS.length);
-    expect(MIGRATIONS.filter((m) => m.includes('delegation_')), 'one migration, not several').toHaveLength(1);
+    expect(MIGRATIONS.filter((m) => m.includes('CREATE TABLE delegation_')), 'one migration, not several').toHaveLength(1);
     const ddl = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
     const statements = ddl.split(';').map((s) => s.trim()).filter((s) => s !== '');
     expect(statements.every((s) => /^CREATE (UNIQUE )?(TABLE|INDEX) /.test(s)),
@@ -1241,6 +1243,7 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
       ['activityId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['sourceKind', 'TEXT', 1, 0],
       ['upstreamId', 'TEXT', 1, 0], ['identityJournalId', 'TEXT', 1, 0], ['displayName', 'TEXT', 0, 0],
       ['executionState', 'TEXT', 1, 0], ['openedAt', 'INTEGER', 1, 0], ['endedAt', 'INTEGER', 0, 0], ['lastEventAt', 'INTEGER', 1, 0],
+      ['endBasis', 'TEXT', 0, 0],
     ]);
     expect(cols(db, 'delegation_leases')).toEqual([
       ['leaseId', 'TEXT', 1, 1], ['generation', 'INTEGER', 1, 0], ['creatingJournalSequence', 'INTEGER', 1, 0],

@@ -4214,6 +4214,29 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE runs ADD COLUMN inPlace INTEGER;
   `,
+
+  // ── 118: user_version 117 -> 118 ──────────────────────────────────────────
+  // What a broker activity's end rests on (session helpers S1, D-8830; spec 2026-11-19-session-helpers-design.md §7.1,
+  // Table 9): `endBasis` is `observed`, `task-report` (an Agent's final task notification) or `backfill-unmeasured` (S2's
+  // one-time pass). NULL means `observed`: every row written before this entry, and every row the fold ends observed (it
+  // writes the basis as absence). The CHECK holds the three words and Table 9's two rules, which
+  // `delegation-end-basis.ts#endBasisDefect` mirrors for the checkpoint: a task report has an `endedAt`, a backfill has none.
+  // ONE NULLABLE COLUMN, nothing else: SQLite tests an added column's CHECK against every row, and every row is NULL here.
+  // An older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing); its
+  // reads and writes name their columns and never this one. The slot is the next free one by position on `main`
+  // (66c63606c3 holds 117; this entry took 112 at d0b7467b9 and 116 at 5041cf1733, and moved up each time other entries
+  // landed first); whoever lands second renumbers (the coordinator rules a collision at landing). RE-MEASURE the slot
+  // before merge (it must print 117, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE delegation_activities ADD COLUMN endBasis TEXT CHECK (
+    endBasis IS NULL
+    OR endBasis = 'observed'
+    OR (endBasis = 'task-report' AND endedAt IS NOT NULL)
+    OR (endBasis = 'backfill-unmeasured' AND endedAt IS NULL)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
