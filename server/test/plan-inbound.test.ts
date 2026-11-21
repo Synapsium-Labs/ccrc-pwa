@@ -231,20 +231,22 @@ describe('mixed owner routing unreadable regressions', () => {
     expect.soft(writes(r)).toEqual([]);
   });
 
-  it('refuses triage of an unreadable workspace even while another holder resolves', async () => {
+  it("a pinned top holder of an unreadable workspace is the owner: its raise is taken, with no Linear call (F8)", async () => {
     const r = await rig({ twoWs: true });
     await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
     r.db.prepare('UPDATE project_linking SET teamKey = ?, teamWorkspace = ? WHERE project = ?').run('AAA', WS.a.id, 'project-a');
     r.db.prepare('UPDATE project_linking SET teamKey = ?, teamWorkspace = ? WHERE project = ?').run('AAA', WS.b.id, 'project-b');
     r.plan.upsertInbound({ linearId: U(12), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-12', title: 'Issue', body: null, seenAt: T });
     r.plan.setInboundState(U(12), { state: 'mailed', mailedTo: OWNER, mailedAt: T });
-    const before = rowOf(r, 12);
     r.lin.store = 'partial-a';
     const res = await triage(r, { issue: 'AAA-12', decision: 'raise', note: 'scope' });
-    expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
-    expect(rowOf(r, 12)).toEqual(before);
+    expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+    expect(res.json()).toEqual({ ok: true, state: 'raised' });
+    expect(rowOf(r, 12)).toMatchObject({ state: 'raised', itemId: 1, actedAt: null });
+    expect(items(r)).toHaveLength(1);
+    // A raise reads and writes ccrc's own store only: no Linear call of any kind, a write least of all.
     expect(r.asks).toEqual([]);
-    expect(items(r)).toEqual([]);
+    expect(writes(r)).toEqual([]);
   });
 
   it('finds an inbound row in the readable workspace without treating an unpinned holder as measured', async () => {

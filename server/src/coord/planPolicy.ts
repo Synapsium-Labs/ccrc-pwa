@@ -811,8 +811,9 @@ const NO_HOLDER = { kind: 'none', reason: null } as const;
 type NoTeamOwner = { kind: 'none'; reason: 'team-ambiguous' | null };
 type ProjectPick = { kind: 'owner'; row: HierarchyProjectFacts } | NoTeamOwner | { kind: 'unmeasured'; possible: readonly HierarchyProjectFacts[] };
 
-/** The one workspace-qualified owner rule (D-8808). Unpinned holders can all join this workspace or none can;
- *  rank both possibilities before using a failed read. The candidates on `unmeasured` are for refusals only. */
+/** The one workspace-qualified owner rule (D-8808). A holder pinned to this workspace that outranks every row naming the key is the
+ *  owner whatever the routing says (a failed listing and an unreadable slot answer alike); the answer is unmeasured only when an
+ *  unpinned row that outranks it exists and its routing cannot be read. The candidates on `unmeasured` are for refusals only. */
 export function teamOwnerProject(team: string, rows: readonly HierarchyProjectFacts[], workspace: string, routes: TeamRoutes | null): ProjectPick {
   const holders = teamHolders(team, rows).filter((r) => r.workspaceId == null || r.workspaceId === workspace);
   const best = rankHolders(holders);
@@ -821,7 +822,6 @@ export function teamOwnerProject(team: string, rows: readonly HierarchyProjectFa
   const unmeasured = (): ProjectPick => ({ kind: 'unmeasured', possible: pinned === undefined || pinned === best ? [best] : [best, pinned] });
   const own = best.workspaceId == null ? measuredProjectTeam(routes, { teamKey: team, workspaceId: null }) : null;
   if (pinned === undefined && own?.kind === 'refused' && own.word === 'team-ambiguous') return { kind: 'none', reason: 'team-ambiguous' };
-  if (routes !== null && measuredProjectTeam(routes, { teamKey: team, workspaceId: workspace }).kind === 'unmeasured') return unmeasured();
   if (own === null) return { kind: 'owner', row: best };
   if (own.kind === 'unmeasured') return unmeasured();
   if (own.kind === 'slot' && own.slot.workspaceId === workspace) return { kind: 'owner', row: best };
