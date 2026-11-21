@@ -221,7 +221,9 @@ server of a pane answer, and the server reconstructs that decision from timing. 
   a lead only), and the gate then let the search through.
 - Fix round 2 (review 3037, the coordinator's rulings): F1 by direction (a), the hook's drop at the park deny, red first and
   mutation-measured; F2 a comment on the restart re-seed; F3, F4 and F5 on the arming list. New claim, taken first: the hook
-  and its park suite.
+  and its park suite. The round's first fast run was red on one guard, `single-definition/ask-digest.test.ts`, which matches
+  the hook's `parked` arm by its exact text; the pattern now carries the drop (claim taken first). I had run the brief's suites
+  and every `session-hook` suite, not the whole-tree guards; after the red I ran every `single-definition` suite, all green.
 - Fix round 1 (review 3022, the coordinator's rulings): F1, F2 fixed with red-first cases; F3 kept and pinned; F4's slack
   lowered to 1.5 s; F5 and the nits in this note; `main` absorbed once at the coordinator's word. Co-edit agreed with W1-4b on
   `store.ts` (their mail 28828, one comment in `lastRunBySession`; my answer 28826: yes).
