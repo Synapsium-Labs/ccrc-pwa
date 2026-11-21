@@ -18,7 +18,7 @@ import type { CoordStore } from '../coord/store.js';
 import type { InboundRow, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam, teamOwnerProject } from '../coord/planPolicy.js';
+import { ccrcIssueIds, linearOwnerOfTeam, ownerItemReady, teamOwnerProject } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
 import {
@@ -195,20 +195,24 @@ export class InboundLane {
   }
 
   /** A `waiting` issue goes to its team's owner when it is live or unmeasured; otherwise it waits and its project raises the item.
-   *  An open item settles when its project's owner reads live. A team no project holds has no owner row: its issues wait quietly. */
+   *  An open item settles when the workspace's owner reads live and none of its team's issues still wait. */
   private route(now: number, slots: readonly LinearRouteSlot[] | null): void {
     const { plan, coord } = this.deps;
     const { rows, facts } = this.ownerFacts();
     const noOwner = new Set<string>();
+    const waiting: InboundRow[] = [];
     for (const row of plan.inboundByState(null, ['waiting'])) {
       const owner = linearOwnerOfTeam(row.teamKey, rows, facts, row.workspaceId, slots);
-      if (owner === null) continue;
-      if (owner.id !== null && !owner.gone) this.mailOwner(row, owner.id, now); else noOwner.add(owner.project);
+      if (owner !== null && owner.id !== null && !owner.gone) this.mailOwner(row, owner.id, now);
+      else {
+        waiting.push(row);
+        if (owner !== null) noOwner.add(owner.project);
+      }
     }
     const open = coord.itemsFor(LINEAR_SYNC_PROGRAMME, now).open.flatMap((i) => (i.action?.verb === 'linear-owner' ? [{ id: i.id, project: i.action.project }] : []));
     for (const project of noOwner) if (!open.some((i) => i.project === project)) this.raiseOwnerItem(project, now);
     for (const item of open) {
-      if (!linearOwnerOfProject(item.project, rows, facts, slots).live) continue;
+      if (!ownerItemReady(item.project, rows, facts, slots, waiting)) continue;
       coord.moveItem(item.id, 'settle', 'ccrc', { note: 'A Linear owner is live: the waiting issues were mailed to it.' }, now, { programmeHasOpenRun: false });
     }
   }

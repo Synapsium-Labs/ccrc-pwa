@@ -71,6 +71,16 @@ export function routableSlots(store: Listed): LinearRouteSlot[] {
   return out;
 }
 
+/** Ordinary routing can ignore an unreadable slot. A Return that may change its recipient cannot: preserve the
+ *  uncertainty rather than treating a failed key or team-record read as a workspace that holds no teams. */
+export function measuredTeamRoutes(store: Listed): LinearRouteSlot[] | null {
+  const unread = (kind: string): boolean => kind === 'unreadable' || kind === 'malformed';
+  const legacy = store.legacy;
+  if (store.slots.some((s) => s.key.kind === 'unreadable' || (s.key.kind === 'key' && unread(s.record.kind)))
+      || (legacy !== null && !legacy.superseded && (legacy.key.kind === 'unreadable' || (legacy.key.kind === 'key' && unread(legacy.teamsFile))))) return null;
+  return routableSlots(store);
+}
+
 /** A file slot's record while it describes the key now in the file (the digest rule), else null. */
 export function currentDetails(s: Listed['slots'][number]) {
   return s.key.kind === 'key' && s.record.kind === 'details' && s.record.details.keyDigest === s.key.digest ? s.record.details : null;

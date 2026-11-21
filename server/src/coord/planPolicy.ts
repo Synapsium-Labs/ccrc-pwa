@@ -830,19 +830,43 @@ export function linearOwnerOfTeam(
   return { ...linearOwnerOf(project, { named: row.linearOwner, ownsTeamProject: null, ...f }), project };
 }
 
-/** The Linear owner that applies to one project (design §7.5): its team's owning project's (`linearOwnerOfTeam`) when it holds a
- *  key, else its own named owner or its latest programme's coordinator; with the project the owner was decided for. */
+/** A Return without a routing read cannot choose a recipient if unpinned rows could win. Rank them using the same rule,
+ *  hypothetically in this workspace; this is a test for uncertainty, not an owner selection. */
+export function teamOwnerNeedsRouting(teamKey: string, rows: readonly HierarchyProjectFacts[], workspaceId: string): boolean {
+  const candidates = rows.filter((r) => r.workspaceId == null || r.workspaceId === workspaceId);
+  const best = teamOwnerProject(teamKey, candidates);
+  return best !== null && candidates.find((r) => r.project === best)?.workspaceId == null;
+}
+
+/** Read the project's team owner without falling back to a per-project owner. An unresolved team is not a team owner. */
+function projectTeamOwner(row: HierarchyProjectFacts | undefined, rows: readonly HierarchyProjectFacts[], f: OwnerReads, slots?: readonly LinearRouteSlot[] | null) {
+  if (row === undefined || row.teamKey === null) return null;
+  let workspaceId = row.workspaceId ?? null;
+  if (workspaceId === null && slots !== undefined) {
+    const route = slots === null ? null : routeProjectTeam(slots, { teamKey: row.teamKey, workspaceId: null });
+    if (route?.kind !== 'slot') return null;
+    workspaceId = route.slot.workspaceId;
+  }
+  return linearOwnerOfTeam(row.teamKey, rows, f, workspaceId, slots ?? null);
+}
+
+/** The Linear owner that applies to one project (design §7.5): its team's owner when resolved, else its own named owner
+ *  or its latest programme's coordinator. The fallback is for display and handoff, not proof of a routed issue. */
 export function linearOwnerOfProject(
   project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, slots?: readonly LinearRouteSlot[] | null,
 ): ReturnType<typeof linearOwnerOf> & { project: string } {
   const row = rows.find((r) => r.project === project);
-  let workspaceId = row?.workspaceId ?? null;
-  if (slots !== undefined && workspaceId === null && row?.teamKey != null && slots !== null) {
-    const route = routeProjectTeam(slots, { teamKey: row.teamKey, workspaceId: null });
-    if (route.kind === 'slot') workspaceId = route.slot.workspaceId;
-  }
-  const viaTeam = row === undefined || row.teamKey === null || (slots !== undefined && workspaceId === null) ? null : linearOwnerOfTeam(row.teamKey, rows, f, workspaceId, slots ?? null);
-  return viaTeam ?? { ...linearOwnerOf(project, { named: row?.linearOwner ?? null, ownsTeamProject: null, ...f }), project };
+  return projectTeamOwner(row, rows, f, slots) ?? { ...linearOwnerOf(project, { named: row?.linearOwner ?? null, ownsTeamProject: null, ...f }), project };
+}
+
+/** An owner item cannot settle on the project fallback or with an issue for its current team still waiting. */
+export function ownerItemReady(
+  project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads, slots: readonly LinearRouteSlot[] | null,
+  waiting: readonly { teamKey: string; workspaceId: string }[],
+): boolean {
+  const row = rows.find((r) => r.project === project);
+  return row !== undefined && projectTeamOwner(row, rows, f, slots)?.live === true && !waiting.some((issue) =>
+    projectOnTeam({ teamKey: row.teamKey, workspaceId: row.workspaceId ?? null }, issue.teamKey, issue.workspaceId, slots));
 }
 
 // ── The inbound path's bodies and verdict (Task 4.3) ──

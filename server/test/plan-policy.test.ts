@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   diffPlan, epicForWave, epicIsDone, linearOwnerOf, listedWaves, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
-  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, parsePlanTake, parsePlanTriage, teamOwnerProject, triageVerdict,
+  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, ownerItemReady, parsePlanTake, parsePlanTriage, teamOwnerProject, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
 import * as policy from '../src/coord/planPolicy.js';
@@ -288,6 +288,15 @@ describe('linearOwnerOfProject (D-8183)', () => {
   });
   it('a project that is in no row has no named owner and only the default', () => {
     expect(linearOwnerOfProject('project-z', [], f)).toMatchObject({ project: 'project-z', id: 'coord-of-project-z', source: 'default' });
+  });
+});
+
+describe('ownerItemReady (D-8183)', () => {
+  it('does not settle on a live qualified owner while its workspace still has a waiting issue', () => {
+    const rows = [projectFacts('project-a', { workspaceId: 'ws-a', linearOwner: 'coord-a' })];
+    const facts = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
+    expect(ownerItemReady('project-a', rows, facts, null, [{ teamKey: 'AAA', workspaceId: 'ws-a' }])).toBe(false);
+    expect(ownerItemReady('project-a', rows, facts, null, [{ teamKey: 'AAA', workspaceId: 'ws-b' }])).toBe(true);
   });
 });
 

@@ -307,6 +307,26 @@ describe('no live owner (D-8183)', () => {
     expect(r.plan.inboundWaiting('project-a')).toBe(0);
   });
 
+  it('keeps the owner item open when the new live owner cannot yet be routed', async () => {
+    const r = await rig();
+    r.presence[OWNER] = 'dead';
+    await detect(r, [node(12)]);
+    const [item] = items(r);
+    expect(item?.state).toBe('open');
+    expect((await r.app.inject({ method: 'POST', url: `/api/items/${item!.id}/linear`, payload: { act: 'name', owner: OTHER } })).statusCode).toBe(200);
+
+    r.lin.store = 'unreadable';
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)?.state).toBe('waiting');
+    expect(mails(r)).toEqual([]);
+    expect(items(r)[0]?.state).toBe('open');
+
+    r.lin.store = 'ok';
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', mailedTo: OTHER });
+    expect(items(r)[0]?.state).toBe('done');
+  });
+
   it('with no owner named and no programme, the issue waits and one item is raised', async () => {
     const r = await rig({ named: null, progs: false });
     await detect(r, [node(12)]);

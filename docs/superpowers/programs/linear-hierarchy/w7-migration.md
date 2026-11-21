@@ -223,7 +223,9 @@ D-8796's paragraph is amended under the head commit's `Ledger-Edit` trailer, as 
 | A2 (closed, small) | the close's stamp (`appliedAt`) and the tick's report with the issue taken are one transaction (`closeIssue` takes the tick's own report save as `persist`, called only for a held issue), and put back's `revertedAt` and its report are one transaction (`putBackTaken`); the reconcile's take has no stamp to pair | `migration-apply.test.ts` "A2 (review 3016): a take found after the state write …" and `migration-putback.test.ts` "A2: a take found by put back is marked handled and listed taken together …": each fails the report save, expects the stamp rolled back, then the next tick lists the issue taken; each red with its transaction alone removed |
 
 Every new test was also mutation-checked by the run: eight mutations of `migration.ts` (four for the workspace half, four for
-this one), each red in the migration suites.
+this one), each red in the migration suites. In the fix round for review 3038, the plain put-back case also checks that no
+write flight is opened for an issue taken during the read. That case now goes red without the after-read check, even when the
+issue is not reopened.
 
 ## Follow-ups and open points
 

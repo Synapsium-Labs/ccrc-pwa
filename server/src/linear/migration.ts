@@ -28,7 +28,7 @@ import type { MigrationRow, MoveRowStored, PlanStorePort } from '../coord/planSt
 import { EMPTY_MIGRATION_REPORT, IssueHeldError, MIGRATION_PLAN_BY } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { diffPlan, linearOwnerOfTeam, teamOwnerProject } from '../coord/planPolicy.js';
+import { diffPlan, linearOwnerOfTeam, teamOwnerNeedsRouting, teamOwnerProject } from '../coord/planPolicy.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from './ccrcCall.js';
 import type { LinearJournal } from './journal.js';
 import type { LinearWritePolicy } from './policy.js';
@@ -304,7 +304,7 @@ export class LinearMigration {
   // ── The operator's acts (Tasks 7.2 and 7.4; inside the mutex) ──
 
   act(itemId: number, migrationId: number, act: 'approve' | 'return' | 'put-back' | 'done', note: string | null, slots: readonly LinearRouteSlot[] | null = null):
-    { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'item-act-mismatch' | 'migration-in-flight'; detail: string } {
+    { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'item-act-mismatch' | 'migration-in-flight' | 'unreachable'; detail: string } {
     const { plan, coord } = this.deps;
     const now = this.deps.now();
     const m = plan.migrationById(migrationId);
@@ -326,6 +326,9 @@ export class LinearMigration {
       }
       case 'return': {
         if (m.state !== 'proposed' || m.itemId !== itemId) return { ok: false, word: 'not-open', detail: `the migration is ${m.state}` };
+        if (slots === null && teamOwnerNeedsRouting(m.teamKey, plan.hierarchyProjectsOf(), m.workspaceId)) {
+          return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured; retry Return with your note' };
+        }
         const owner = this.ownerOf(m.teamKey, m.workspaceId, slots);
         const back = m.appliedAt === null ? 'proposing' as const : 'applied' as const;
         const mail = returnMail(m.id, m.teamKey, note ?? '', now);
@@ -385,9 +388,9 @@ export class LinearMigration {
     return { ok: true, id: m.id, team: m.teamKey, state: m.state, counts, entries: map.entries, structure, report: m.report };
   }
   /** The project row's hierarchy state (§11.1): the newest migration of its team in ITS workspace (`migrationOfProject`, D-8808). */
-  async stateOfProject(row: { teamKey: string | null; workspaceId: string | null }): Promise<ReturnType<typeof hierarchyStateOf>> {
-    const { slots } = row.teamKey !== null && row.workspaceId === null ? await this.routable() : { slots: null };
-    return hierarchyStateOf(migrationOfProject(row, this.deps.plan.migrationsOf(), slots));
+  async stateOfProject(row: { teamKey: string | null; workspaceId: string | null }, slots?: readonly LinearRouteSlot[] | null): Promise<ReturnType<typeof hierarchyStateOf>> {
+    const routing = slots === undefined && row.teamKey !== null && row.workspaceId === null ? await this.routingSlots() : slots ?? null;
+    return hierarchyStateOf(migrationOfProject(row, this.deps.plan.migrationsOf(), routing));
   }
   /** Whether a project's team is `team` in `workspaceId` (`projectOnTeam` over the project's row). */
   private onTeam(project: string, team: string, workspaceId: string, slots: readonly LinearRouteSlot[] | null): boolean {

@@ -480,11 +480,20 @@ number from `POST /api/ledger/deviations`.
   preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
   another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
   it into the policy. The migration lane (wave 7's code) and the plan-map route resolve a team through the project row's
-  workspace since run 3027 built `w8-migration-workspace` (review 2997 F1, F2): start, the open-issue read, the console's
-  state, the Linear owner (start's, the lane's and the plan-map route's, judged in each workspace whose migration waits for a
-  map) and the programme matches go through `routeProjectTeam` or the row's stored workspace, none falls back to the first
-  workspace holding the key, and a key two workspaces hold with no workspace on the row is refused `team-ambiguous`. Nothing
-  of this entry holds a team's migration back any more. Follow-ups this wave leaves:
+  workspace since run 3027 built `w8-migration-workspace` (reviews 2997 and 3038). The start, open-issue read and console
+  state never select the first workspace holding a key. Reshape returns the routing refusal before checking migration state:
+  a shared key on a row with no workspace is `team-ambiguous`, even when another workspace has already migrated it. For a
+  known workspace, the inbound and migration lanes use one owner rule: `teamOwnerProject` shares `projectOnTeam` with the
+  migration's programme matches. A pinned row counts in its own workspace; an unpinned row counts only where its key routes
+  uniquely, and in neither workspace when two hold it. Plan-map authorization uses that rule in each waiting workspace.
+  The hierarchy owner display, drift handoff and Upkeep notification now use the same rule with measured routing facts;
+  the first two read once outside the coordination hold, and the notification reuses the sync snapshot. Map Return refuses
+  `unreachable` before settlement if an unpinned holder could own the team and the facts cannot be read (including a listed
+  but unreadable slot record). The item and map stay intact so the operator can retry with the note. A Name a Linear owner
+  item settles only on a workspace-qualified, live owner and no issue for that team left waiting. The plan-map route's
+  fixtures pin diagnostic-only no-wait results, the selected workspace and read/write boundary, and a refusal without a
+  read when two owned workspaces await a map.
+  Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
   review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and `w8-triage-l1`;
   `w8-write-ambiguous` was built in the review's fix round and dropped, and `w8-migration-workspace` by run 3027. Record: the

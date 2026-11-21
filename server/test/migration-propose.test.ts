@@ -1,5 +1,8 @@
 // D-8186 (Linear hierarchy plan, Task 7.2): the migration's start, the owner's proposal and the operator's Approve and Return.
 import { afterEach, describe, expect, it } from 'vitest';
+import Fastify from 'fastify';
+import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
+import { readLinearStore } from '../src/linear/store.js';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, fail, leaf, migRig, OWNER, SLUG, U } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
@@ -95,6 +98,61 @@ describe('the migration proposal (D-8186)', () => {
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1')] }, open)).toMatchObject({ ok: true });
   });
 
+  it('return with unmeasured routing preserves the map and item until the note can be delivered', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
+    const before = r.plan.migrationById(migrationId);
+    const mailBefore = mailsTo(r, OWNER);
+    const note = 'Place the issue under the other epic';
+    expect(r.mig.act(itemId, migrationId, 'return', note, null)).toMatchObject({ ok: false, word: 'unreachable' });
+    expect(r.plan.migrationById(migrationId)).toEqual(before);
+    expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'open' })]);
+    expect(mailsTo(r, OWNER)).toEqual(mailBefore);
+
+    expect(r.mig.act(itemId, migrationId, 'return', note, await r.mig.routingSlots())).toEqual({ ok: true });
+    expect(itemsOf(r)).toEqual([expect.objectContaining({ id: itemId, state: 'done' })]);
+    expect(mailsTo(r, OWNER).filter((m) => m.subject.includes('came back'))).toEqual([
+      expect.objectContaining({ body: expect.stringContaining(note) }),
+    ]);
+  });
+
+  it.each([false, true])('Return preserves the note when a listed workspace record cannot be read (pinned fallback: %s)', async (pinned) => {
+    const r = await migRig();
+    r.addIssue(1);
+    const { migrationId, itemId } = await r.propose([leaf(1, 'k1')]);
+    if (pinned) r.db.prepare("INSERT INTO project_linking (project, teamKey, teamWorkspace, linearOwner) VALUES ('project-b', 'AAA', ?, 'coord-b')").run(WS.a.id);
+    const before = r.plan.migrationById(migrationId);
+    const mailBefore = mailsTo(r, OWNER);
+    const note = 'Place the issue under the other epic';
+    let unreadable = true;
+    const app = Fastify();
+    try {
+      registerHierarchyRoutes(app, {
+        plan: r.plan, serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive', migration: r.mig,
+        itemOf: (id) => r.coord.itemById(id), readLinearStore: async () => {
+          const store = await readLinearStore(r.ccrcDir);
+          if (!unreadable || store.kind !== 'listed') return store;
+          return { ...store, slots: store.slots.map((slot) => ({ ...slot, record: { kind: 'unreadable', code: 'EIO' } })) };
+        },
+      });
+      const post = () => app.inject({ method: 'POST', url: `/api/items/${itemId}/linear`, payload: { act: 'return', note } });
+      const refused = await post();
+      expect([refused.statusCode, refused.json().error]).toEqual([503, 'unreachable']);
+      expect(r.plan.migrationById(migrationId)).toEqual(before);
+      expect(itemsOf(r)[0]?.state).toBe('open');
+      expect(mailsTo(r, OWNER)).toEqual(mailBefore);
+      expect(mailsTo(r, 'coord-b')).toEqual([]);
+
+      unreadable = false;
+      expect((await post()).statusCode).toBe(200);
+      expect(itemsOf(r)[0]?.state).toBe('done');
+      expect(mailsTo(r, OWNER).filter((m) => m.subject.includes('came back'))).toEqual([
+        expect.objectContaining({ body: expect.stringContaining(note) }),
+      ]);
+    } finally { await app.close(); }
+  });
+
   it('a proposing row mails the owner once for its map', async () => {
     const r = await migRig();
     r.addIssue(1);
@@ -140,7 +198,7 @@ describe('the migration proposal (D-8186)', () => {
     if (!open.ok) throw new Error('read');
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open)).toMatchObject({ ok: true });
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.act(m.itemId!, id, 'return', 'not yet')).toEqual({ ok: true });
+    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingSlots())).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.state).toBe('applied');
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-2']);
   });
@@ -246,7 +304,7 @@ describe('review 2892 fix round 1: the follow-up map and the row state (D-8186)'
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: true });
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
     const m = r.plan.migrationById(id)!;
-    expect(r.mig.act(m.itemId!, id, 'return', 'not yet')).toEqual({ ok: true });
+    expect(r.mig.act(m.itemId!, id, 'return', 'not yet', await r.mig.routingSlots())).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
   });
 
