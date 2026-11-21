@@ -132,7 +132,8 @@ export function clearedCallPlace(trail: readonly ClearedEntry[], id: number): { 
   return found === undefined ? null : { beyond: at >= CLEARED_SHOWN, program: found.program };
 }
 
-/** A key that changes when the target's place in the trail does (D-8808), so the trail remounts with the right initial state. */
+/** A key that changes when the target's place in the trail does (D-8808), so the trail can tell a new place and expand to it,
+ *  keeping the operator's own Show all and open groups (review 3217 A2). */
 export const clearedCallPlaceKey = (place: { beyond: boolean; program: string | null } | null): string =>
   place === null ? 'none' : `${place.beyond ? 'beyond' : 'shown'}:${place.program ?? ''}`;
 
