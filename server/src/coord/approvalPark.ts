@@ -50,8 +50,10 @@ export interface ParkRulingFacts {
   readonly spent: boolean;
 }
 
-/** A park as the decisions read it. `void` is the park's run closed, or a pane answer voided it (F4, F16). */
+/** A park as the decisions read it. `runId` is the park's own run, the child's live binding run its key names (review
+ *  2889 F2), never the run the child's mark names; `void` is that run closed, or a pane answer voided it (F4, F16). */
 export interface ParkFacts {
+  readonly runId: number;
   readonly horizon: number | null;
   readonly void: boolean;
   readonly ruling: ParkRulingFacts | null;
@@ -62,12 +64,12 @@ export interface ParkFacts {
 /** A stored park as the deciders read it (`approvalParkStore.ts#ParkRow`'s fields), with the run's closure folded into
  *  `void`: the caller read the run, and a run it could not read is passed as closed where doubt must refuse. */
 export function parkFactsOf(
-  p: { readonly horizon: number | null; readonly voided: boolean; readonly coordDenied: boolean; readonly coordDeclined: boolean;
+  p: { readonly runId: number; readonly horizon: number | null; readonly voided: boolean; readonly coordDenied: boolean; readonly coordDeclined: boolean;
     readonly ruling: { readonly verdict: 'allow' | 'deny'; readonly authority: ApprovalRulingAuthority; readonly spent: boolean } | null },
   runClosed: boolean,
 ): ParkFacts {
   return {
-    horizon: p.horizon, void: p.voided || runClosed, coordDenied: p.coordDenied, coordDeclined: p.coordDeclined,
+    runId: p.runId, horizon: p.horizon, void: p.voided || runClosed, coordDenied: p.coordDenied, coordDeclined: p.coordDeclined,
     ruling: p.ruling === null ? null : { verdict: p.ruling.verdict, authority: p.ruling.authority, spent: p.ruling.spent },
   };
 }
@@ -162,10 +164,12 @@ export function signingRefusal(f: SigningFacts): ApprovalRefusal | null {
 export const parkHorizonFrom = (parkedAt: number): number => parkedAt + APPROVAL_PARK_HORIZON_MS;
 
 /** The parked rows Waiting on you lists, oldest first: each `parked` row whose park is open at `now` (a void park's rows
- *  are staled by the sweep, F16, so they leave the list). A row whose park cannot be read is listed with no horizon. */
+ *  are staled by the sweep, F16, so they leave the list). Each names its park's run (approvals PR 3c, F-D: a resumed
+ *  child's row still carries the mark's run, wave 1's). A row whose park cannot be read is listed with no horizon and no
+ *  run, never the mark's. */
 export function parkedApprovalViewOf(
   rows: readonly {
-    readonly id: number; readonly childId: string; readonly parentId: string; readonly runId: number | null;
+    readonly id: number; readonly childId: string; readonly parentId: string;
     readonly agentId: string; readonly tool: string; readonly inputRedacted: string | null; readonly class: string;
     readonly denyCurrent: boolean; readonly askAt: number; readonly state: string; readonly park: ParkFacts | null;
   }[],
@@ -174,7 +178,7 @@ export function parkedApprovalViewOf(
   return rows
     .filter((r) => r.state === 'parked' && (r.park === null || parkOpen(r.park, now)))
     .map((r) => ({
-      id: r.id, childId: r.childId, parentId: r.parentId, runId: r.runId, agentId: r.agentId, tool: r.tool,
+      id: r.id, childId: r.childId, parentId: r.parentId, runId: r.park?.runId ?? null, agentId: r.agentId, tool: r.tool,
       input: r.inputRedacted, class: r.class, denyCurrent: r.denyCurrent, askAt: r.askAt,
       horizon: r.park?.horizon ?? null, holder: 'coordinator' as const,
       ruled: r.park !== null && parkHasUnspentRuling(r.park) && r.park.ruling !== null

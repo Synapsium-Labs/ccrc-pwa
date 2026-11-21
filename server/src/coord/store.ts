@@ -10229,7 +10229,7 @@ export class CoordStore {
 
   // The park (approvals PR 3): its SQL is `approvalParkStore.ts`'s, every write in this store's transaction. `parkApprovalRow`
   // is the one write of `parked`; `meetApprovalParkRuling` is the spend (F6); see each function there.
-  parkApprovalRow(id: number, now: number): boolean { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now)); }
+  parkApprovalRow(id: number, now: number, runClosed: (runId: number) => boolean): parks.ParkMove { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now, runClosed)); }
   /** The last-poll move's read (F2): ruled rows minted `live` at or after `sinceAskAt` whose ruling the hook never fetched. */
   approvalsUnfetchedLive(sinceAskAt: number): ApprovalsReadResult {
     return this.approvalRows("WHERE state IN ('allowed','denied') AND parkWord = 'live' AND fetchedAt IS NULL AND askAt >= ? ORDER BY id", sinceAskAt);
@@ -10266,7 +10266,9 @@ export class CoordStore {
   }
 
   /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`; or a
-   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. */
+   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. The other writers of `stale`
+   *  are `approvalParkStore.ts`'s `meetParkRuling` (a met key's parked rows) and `parkApprovalRow` (a `held` row whose key's
+   *  park is closed at its window's end, approvals PR 3c F-B), each inside its own transaction. */
   staleApproval(id: number): boolean {
     const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released','parked')").run(id);
     return Number(res.changes) > 0;

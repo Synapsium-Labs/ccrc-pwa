@@ -1,14 +1,17 @@
 // The park's L1 deciders, case by case (approvals plan 2026-11-18, §3.3 and Tasks 3.1 to 3.3; approvals PR 3). Two lists of
 // named cases: `APPROVAL_PARK_CASES` over `server/src/coord/approvalPark.ts` (the mint's word, the key, a retry's class, the
 // doors' recording refusals, the one signing site's guard, Waiting on you's view) and `APPROVAL_LAPSE_PARK_CASES`
-// over `server/src/coord/questionPolicy.ts` (`decideApprovalLapse`'s park arms and the deferred push's parked drop). Run by
+// over `server/src/coord/questionPolicy.ts` (`decideApprovalLapse`'s park arms, the deferred push's parked entry and, approvals
+// PR 3c, the rows a cleared dialog settles). Run by
 // `approval-park-policy.test.ts` and by the mutation floors' `sim/approvalParkSets.ts` over a mutated copy of each module.
 // Neutral fixtures only.
 import { expect } from 'vitest';
 import type { ApprovalRefusal } from '../../shared/api.js';
 import type { ApprovalParkWord, ParkedApprovalView } from '../../shared/approval-park.js';
 import type { ParkFacts, SigningFacts } from '../src/coord/approvalPark.js';
-import type { ApprovalLapse, ApprovalLapsePark, ApprovalLapseRow, DeferredApprovalPush, DeferredApprovalRows } from '../src/coord/questionPolicy.js';
+import type {
+  ApprovalLapse, ApprovalLapsePark, ApprovalLapseRow, ClearSettleRows, DeferredApprovalPush, DeferredApprovalRows, HeldPrompt, PressHookState,
+} from '../src/coord/questionPolicy.js';
 
 export interface ApprovalParkModule {
   parkWordAt(laneLive: boolean, signedIn: boolean, slotsTaken: number, keyOpen: boolean): ApprovalParkWord;
@@ -26,13 +29,15 @@ export interface ApprovalParkModule {
 export interface ApprovalLapseModule {
   decideApprovalLapse(row: ApprovalLapseRow, now: number, graceMs?: number, park?: ApprovalLapsePark | null): ApprovalLapse;
   decideDeferredApprovalPush(entry: { rowIds: readonly number[] }, rows: DeferredApprovalRows, now: number, painted: boolean, graceMs: number): DeferredApprovalPush;
+  clearSettledApprovalIds(rowIds: readonly number[], rows: ClearSettleRows, now: number): number[];
+  pressAnswersHeldPrompt(held: HeldPrompt, hs: PressHookState | null): boolean;
 }
 
 interface Case<M> { readonly name: string; readonly run: (mod: M) => void }
 
 const NOW = 1_786_000_000_000;
 const H = 2 * 60 * 60 * 1000;
-const open = (over: Partial<ParkFacts> = {}): ParkFacts => ({ horizon: NOW + 1_000, void: false, ruling: null, coordDenied: false, coordDeclined: false, ...over });
+const open = (over: Partial<ParkFacts> = {}): ParkFacts => ({ runId: 11, horizon: NOW + 1_000, void: false, ruling: null, coordDenied: false, coordDeclined: false, ...over });
 const parked = (cls = 'ordinary', denyCurrent = true) => ({ state: 'parked', class: cls, denyCurrent });
 const sign = (over: Partial<SigningFacts> = {}): SigningFacts => ({
   authority: 'coordinator', verdict: 'allow', ruler: 'project-a-calm-mesa', rowClass: 'ordinary', freshClass: 'ordinary',
@@ -175,6 +180,14 @@ export const APPROVAL_PARK_CASES: readonly Case<ApprovalParkModule>[] = [
     ], NOW);
     expect(v.map((x) => [x.id, x.ruled, x.horizon])).toEqual([[1, { verdict: 'allow', authority: 'operator' }, NOW + 1_000], [2, null, NOW + 1_000], [3, null, null]]);
   } },
+  { name: 'the view names the park\'s run, never the run the child\'s mark names (approvals PR 3c F-D: a resumed child)', run: (m) => {
+    // The child's mark still names wave 1 (run 7); the park was taken on wave 2's binding run (11). A park that cannot be
+    // read names no run: never the mark's.
+    const base = { childId: 'project-a-quiet-basin', parentId: 'project-a-calm-mesa', runId: 7, agentId: '', tool: 'Bash', inputRedacted: null,
+      class: 'escalate', denyCurrent: true, askAt: NOW, state: 'parked' };
+    const v = m.parkedApprovalViewOf([{ ...base, id: 1, park: open() }, { ...base, id: 2, park: null }], NOW);
+    expect(v.map((x) => [x.id, x.runId])).toEqual([[1, 11], [2, null]]);
+  } },
 ];
 
 const CEIL = 540 * 1000;
@@ -218,8 +231,66 @@ export const APPROVAL_LAPSE_PARK_CASES: readonly Case<ApprovalLapseModule>[] = [
     expect(m.decideApprovalLapse(lrow({ state: 'allowed', parkWord: 'live', askAt: NOW - CEIL }), NOW, GRACE)).toBe('none');
     expect(m.decideApprovalLapse(lrow({ state: 'allowed', parkWord: 'live', askAt: NOW - CEIL + 1 }), NOW, GRACE)).toBe('park');
   } },
-  { name: 'the deferred push drops an entry covering a parked row, painted or not (F4, F16)', run: (m) => {
+  { name: 'the deferred push never sends an entry covering a parked row: kept while its dialog is painted, dropped once not (F4, F16; PR 3c F-A)', run: (m) => {
+    // Kept while painted so an operator's press on that dialog still reaches the parked row and voids its park (the plan's
+    // "a press in that interval"); the parked row's push is sent at park time, never by this entry.
     const rows: DeferredApprovalRows = { ok: true, rows: [{ id: 1, state: 'parked', notifyAt: NOW - 1, ruledAt: null }, { id: 2, state: 'held', notifyAt: NOW + 1, ruledAt: null }] };
-    expect(m.decideDeferredApprovalPush({ rowIds: [1, 2] }, rows, NOW, true, GRACE)).toBe('drop');
+    expect(m.decideDeferredApprovalPush({ rowIds: [1, 2] }, rows, NOW, true, GRACE)).toBe('wait');
+    expect(m.decideDeferredApprovalPush({ rowIds: [1, 2] }, rows, NOW, false, GRACE)).toBe('drop');
+    const parkedOnly: DeferredApprovalRows = { ok: true, rows: [{ id: 1, state: 'parked', notifyAt: NOW - 1, ruledAt: null }] };
+    expect(m.decideDeferredApprovalPush({ rowIds: [1] }, parkedOnly, NOW, true, GRACE)).toBe('wait');
+    expect(m.decideDeferredApprovalPush({ rowIds: [1] }, parkedOnly, NOW, false, GRACE)).toBe('drop');
+  } },
+  // ── the rows a cleared dialog settles (approvals PR 3c, F-A) ──
+  { name: 'a clear settles the held and released rows it covers, and no other row', run: (m) => {
+    const rows: ClearSettleRows = { ok: true, rows: [
+      { id: 1, state: 'held', notifyAt: NOW + 60_000, parkWord: 'shadow' }, { id: 2, state: 'released', notifyAt: NOW - 1, parkWord: null },
+      { id: 3, state: 'held', notifyAt: NOW + 60_000, parkWord: null }, { id: 4, state: 'allowed', notifyAt: NOW + 60_000, parkWord: 'live' },
+    ] };
+    expect(m.clearSettledApprovalIds([1, 2, 4], rows, NOW)).toEqual([1, 2]);
+  } },
+  { name: 'a clear never settles a held live row at or past notifyAt less the slack: the hook\'s park deny cleared it, and the sweep parks it', run: (m) => {
+    const at = (notifyAt: number): ClearSettleRows => ({ ok: true, rows: [{ id: 1, state: 'held', notifyAt, parkWord: 'live' }] });
+    expect(m.clearSettledApprovalIds([1], at(NOW + 1_500), NOW)).toEqual([]);
+    expect(m.clearSettledApprovalIds([1], at(NOW - 5_000), NOW)).toEqual([]);
+    expect(m.clearSettledApprovalIds([1], at(NOW + 1_501), NOW), 'earlier than the slack, the clear is a press').toEqual([1]);
+  } },
+  { name: 'a clear settles a held shadow, capped or unworded row whatever its window (nothing told its child "parked")', run: (m) => {
+    const rows: ClearSettleRows = { ok: true, rows: [
+      { id: 1, state: 'held', notifyAt: NOW, parkWord: 'shadow' }, { id: 2, state: 'held', notifyAt: NOW, parkWord: 'capped' },
+      { id: 3, state: 'held', notifyAt: NOW, parkWord: null },
+    ] };
+    expect(m.clearSettledApprovalIds([1, 2, 3], rows, NOW)).toEqual([1, 2, 3]);
+  } },
+  { name: 'a clear never settles a parked row: after the park, a clear is the park deny, and only a press voids the park', run: (m) => {
+    const rows: ClearSettleRows = { ok: true, rows: [{ id: 1, state: 'parked', notifyAt: NOW - 60_000, parkWord: 'live' }] };
+    expect(m.clearSettledApprovalIds([1], rows, NOW)).toEqual([]);
+  } },
+  { name: 'an unreadable read settles nothing: the sweep rules each held row by its own clock', run: (m) => {
+    expect(m.clearSettledApprovalIds([1, 2], { ok: false }, NOW)).toEqual([]);
+  } },
+  // ── whether a press answers the held entry's own prompt (approvals PR 3c, review 3022 F1) ──
+  { name: 'a press answers the main thread\'s held prompt while hook state keeps its wait\'s stamp and an approval ask', run: (m) => {
+    const ask = { approval: { tool: 'Bash', summary: 'rm -rf build' } };
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask, updatedAt: NOW - 60_000 })).toBe(true);
+  } },
+  { name: 'a press does not answer the main thread\'s held prompt once a later prompt stamped hook state (the same menu, another command)', run: (m) => {
+    const ask = { approval: { tool: 'Bash', summary: 'rm -rf dist' } };
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask, updatedAt: NOW - 1_000 })).toBe(false);
+  } },
+  { name: 'a press does not answer the main thread\'s held prompt when hook state holds no approval ask', run: (m) => {
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask: null, updatedAt: NOW - 60_000 })).toBe(false);
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW - 60_000 }, { ask: { questions: [] }, updatedAt: NOW - 60_000 })).toBe(false);
+  } },
+  { name: 'a press answers a subagent\'s held prompt only while the hook\'s list keeps that agent\'s entry at its stamp', run: (m) => {
+    const held = { agentId: 'a0000000000000001', at: NOW - 60_000 };
+    const ask = { approval: { tool: 'Bash', summary: 'ls' } };
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW, approvals: [{ agentId: 'a0000000000000001', at: NOW - 60_000 }] })).toBe(true);
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW - 60_000, approvals: [{ agentId: 'a0000000000000002', at: NOW - 60_000 }] })).toBe(false);
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW - 60_000, approvals: [{ agentId: 'a0000000000000001', at: NOW - 1 }] })).toBe(false);
+    expect(m.pressAnswersHeldPrompt(held, { ask, updatedAt: NOW - 60_000 }), 'no list: the main thread\'s stamp does not stand in').toBe(false);
+  } },
+  { name: 'no hook state read: a press answers no held prompt', run: (m) => {
+    expect(m.pressAnswersHeldPrompt({ agentId: '', at: NOW }, null)).toBe(false);
   } },
 ];

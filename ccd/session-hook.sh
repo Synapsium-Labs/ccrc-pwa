@@ -6641,9 +6641,9 @@ _hook_approval_route_patch() {   # <word> -> rc 0 always
   mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
 }
 # THE TIE'S DROP (approvals plan Task 2.1): the wait saw this subagent prompt's tool_result (a pane Yes or No, the
-# auto-deny, a hook decision), so its entry in `approvals` goes: the entry with this agent's id and this write's stamp,
-# read from the file as it stands NOW (later events have written since), never another agent's. Written only when that
-# entry is there; a write landing inside the one-jq-fork window is overwritten, as every two hook writes race (no lock).
+# auto-deny, a hook decision) or printed its park deny (its dialog goes with it, review 3037 F1), so its entry in
+# `approvals` goes: this agent's id and this write's stamp, read from the file as it stands NOW (later events have
+# written since), never another agent's; only when it is there, and a write in the one-jq-fork window is lost (no lock).
 _hook_approvals_drop() {   # -> rc 0 always
   local new="" tmp
   [[ -n "$aid" && -z "$hs_skip" && -f "$f" && ! -L "$f" ]] || return 0
@@ -6679,7 +6679,7 @@ _hook_approval_wait() {
   apr_tie="" apr_off=0 apr_seen=-1
   while :; do
     now=$(_hook_epoch_ms)
-    (( now < deadline )) || { [[ "$pk" == live ]] && _apr_park_print "$rid"; return 0; }
+    (( now < deadline )) || { [[ "$pk" == live ]] && { _apr_park_print "$rid"; _hook_approvals_drop; }; return 0; }
     if _apr_scan; then _hook_approvals_drop; return 0; fi
     if (( tick % apr_poll == 0 )); then
       if _apr_call approvals ruling "$rid" --nonce "$apr_nonce"; then
@@ -6687,7 +6687,7 @@ _hook_approval_wait() {
           200)
             state=$(jq -r '.state // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || state=""
             for st in $APPROVAL_HOOK_STOP_STATES; do [[ "$state" == "$st" ]] && return 0; done
-            [[ "$state" == parked ]] && { _apr_park_print "$rid"; return 0; }
+            [[ "$state" == parked ]] && { _apr_park_print "$rid"; _hook_approvals_drop; return 0; }
             j=$(jq -c '.ruling // empty' <<<"$APR_BODY" 2>/dev/null) || j=""
             if [[ -n "$j" ]]; then
               verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$apr_digest" "$apr_nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""

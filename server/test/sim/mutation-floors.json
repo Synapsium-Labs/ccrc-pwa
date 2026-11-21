@@ -242,6 +242,8 @@
   "server/src/coord/approvalPark.ts#signingRefusal": 1,
   "server/src/coord/approvalPark.ts#parkedApprovalViewOf": 1,
   "server/src/coord/questionPolicy.ts#decideApprovalLapse": 1,
+  "server/src/coord/questionPolicy.ts#clearSettledApprovalIds": 1,
+  "server/src/coord/questionPolicy.ts#pressAnswersHeldPrompt": 1,
   "server/src/coord/untrustedBuildItem.ts#untrustedBuildItemOf": 1,
   "server/src/coord/untrustedBuildItem.ts#untrustedBuildItemsToSettle": 1,
   "server/src/coord/programmeHealth.ts#programmeHealth": 1,

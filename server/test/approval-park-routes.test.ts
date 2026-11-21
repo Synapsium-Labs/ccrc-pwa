@@ -1,8 +1,9 @@
 // The route file's park hunks (approvals PR 3, the packet item 486 lets run 1850's holder take): H1, the request route's `201`
 // carries the park's word; H2, the ruling read records `fetchedAt`; H3, the operator door's `approval-<n>` arm reaches its
 // handler (the account gate first); H4, the claimant door's deps carry the deny standing, so the one signing site re-checks
-// it at signing. Through the real server over a fixture HOME (the approvals harness). Neutral fixtures only.
-import { describe, it, expect, afterEach } from 'vitest';
+// it at signing. Through the real server over a fixture HOME (the approvals harness). Approvals PR 3c F-C: a ruling whose
+// `fetchedAt` mark throws is withheld. Neutral fixtures only.
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CHILD_DENY_SETTINGS_FILE } from '../../shared/api.js';
@@ -40,6 +41,24 @@ describe('H2: the ruling read records fetchedAt', () => {
     expect(at).not.toBeNull();
     await f.ruling(m.id, m.nonce);
     expect(rowOf(f, m.id).fetchedAt).toBe(at);
+  });
+  it('a throwing fetchedAt mark serves no allow: the route withholds the ruling and warns once (approvals PR 3c F-C)', async () => {
+    f = await standardFixture();
+    const m = await mint(f);
+    expect((await f.rule(m.id, PARENT, 'allow')).statusCode).toBe(200);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const mark = vi.spyOn(f.coord, 'markApprovalFetched').mockImplementation(() => { throw new Error('the fixture store throws'); });
+    try {
+      const res = await f.ruling(m.id, m.nonce);
+      expect(res.statusCode, 'not a 200: the hook reads no ruling and polls again').not.toBe(200);
+      expect(res.body).not.toContain('"ruling"');
+      expect(res.body).not.toContain('allow');
+      expect(rowOf(f, m.id).fetchedAt).toBeNull();
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes(`fetchedAt for approval ${m.id}`))).toHaveLength(1);
+    } finally { mark.mockRestore(); warn.mockRestore(); }
+    // The mark answers again: the next poll is served the allow, and fetchedAt is recorded.
+    expect((await f.ruling(m.id, m.nonce)).json()).toMatchObject({ state: 'allowed', ruling: { record: { rowId: m.id } } });
+    expect(rowOf(f, m.id).fetchedAt).not.toBeNull();
   });
   it('a held row serves no ruling and records nothing', async () => {
     f = await standardFixture();
