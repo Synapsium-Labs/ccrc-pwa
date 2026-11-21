@@ -4824,6 +4824,135 @@ every mutant of every decision branch goes red. `tsc` passes for `server` and `p
 
 **Rollback.** A plain revert: nothing reads these pieces yet.
 
+### Task H1c: the bounded start scan (D-8873) — now
+
+**What.** The start scan that H1b split out (D-8862's `start-scan-and-report-request-split`; spec
+`docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1 "The start scan", §5, Table 13's scan tests), and the
+carries of review 3033 (H1b's round 2). At stream start, each reader scans the session transcript backwards from the
+stream's own seam for helper facts only, so a reload and a reconnect draw the same rows within the scan's bound. Nothing is
+drawn by this task. Built red first: the branch's first commit holds the tests, and the note records which failed on `main`.
+
+- `server/src/workflows/helperScan.ts` (new, L3, C3; its header says L3): `HelperStartScan`, `scanCutoff`, `HelperScanSeam`,
+  `HELPER_SCAN_BYTES` (8 MiB), `HELPER_SCAN_CHUNKS` (32) and `HELPER_SCAN_CHUNKS_PER_READING` (4). It walks back with the
+  shared back-reader (`backread.ts#walkBack`) and parses with the tailer's parser (`transcript/parse.ts#helperFactsOf`).
+- `server/src/workflows/read.ts` (L3, C3): the one call site, in `SessionWorkflows.readAll`: the scan's facts join the
+  stream's before the Agent arm reads. The reader owns the scan, so a new session dir rebuilds both. Review 3033 F1 in
+  `markLastWriteUnreadable`. Both by co-edit with the holder of claim 6169, the H2 worker (consent of 2026-11-21: the
+  call site in `readAll`, the field and constructor line, the import, and F1's method).
+- `server/src/transcript/tail.ts` (L3, C3): `BacklogRead.scanEnd` (the window's first byte) and `BacklogRead.cut` (the
+  partial line the window starts in, which the backlog drops).
+- `server/src/sessionws.ts` (L4, C3): the stream's seam, from the backlog or the client's offset on a resume, carried to
+  `readAll`. Four net code lines of its 40 (measured: six code lines in, two out). Review 3033 F8's comment. By co-edit (the H2 worker's consent of 2026-11-21).
+- `server/src/workflows/model.ts` (L1, C3): the fold's ties and bound (review 2900 F4), `orderHelperHook`'s bound (review
+  3033 F4) and the display strip (review 3033 F5). By co-edit (the H2 worker's consent of 2026-11-21).
+- `server/src/sessionFeed.ts` (L4, C3): `PUBLISHED_FRESH_MS` exported and handed to `orderHelperHook`.
+
+**The seam, so no byte is read twice (review 2900 F4).** The scan ends where the stream's forward reading begins: the
+backlog window's first byte on a backlog stream, the client's offset on a resumed one. The backlog drops the partial line its
+window starts in and hands it over as `cut`; the scan's newest read ends in that line's head, and the two are joined, so the
+line is parsed once. A character the seam splits reads as U+FFFD in that one line's text. A resume offset inside a line
+loses that line, for the scan as for the chat (a residual). The scan starts once per reader: a later backlog on the same
+transcript (a re-point) does not restart it.
+
+**Legitimately different from the tailer (review 2900 F4).** The tailer is the other reader of the session transcript. It
+reads forward from the seam, for the chat and its helper facts, for the stream's life. The scan reads backward from the same
+seam, once, for helper facts only, bounded by time and bytes. The two read disjoint bytes and share the parser and the
+back-reader. The record is in `helperScan.ts`' header.
+
+**The pace and the cost (review 2900 F10).** The scan reads in `READ_FROM_MAX_BYTES` (256 KiB) reads, the agent link's own
+cap, not the spec's 64 KiB: 32 reads at most, at most 4 a reading (1 MiB, the spec's pace), so it ends within 8 readings,
+about 16 s at the 2 s tick. It runs OUTSIDE the feed's polling gate: `step` grants the reads and returns the facts found so
+far, and never awaits a read. So a reading never waits for the scan, and the feed's next reading is not held back for any
+socket on the session. A read still in flight counts against the next grant, so at most one read per scan is in flight. A scan
+nobody steps stops after its last grant. Each open socket has its own reader, so two sockets on one session run two scans:
+at most 16 MiB, 2 MiB a reading over the same 8 readings, two reads in flight. **Measured** on this box (local reads, load
+about 9, 2026-11-21), at stream start on four real transcripts of 2.0 MB, 2.8 MB, 11.5 MB and 1.05 GB: each scan stopped on
+time after one 256 KiB read (each window's oldest lines were older than ten minutes), in at most 3 ms. With a listed helper
+that started long ago (the worst case), the two large files read 8 MiB in 32 reads over 8 readings, with 32 and 46 ms of read
+time in all for two sockets. The two small files read their whole prefix below the seam, 0.98 MB and 1.8 MB, in 4 and 7
+reads. A `step` took at most 0.21 ms. **Inferred:** in remote mode each read is one agent round trip, which this local
+measurement does not cover.
+
+**The same rows, only within the bound (review 2900 F11).** A reload and a reconnect draw the same rows once their scans
+end, when every fact a row needs lies within the bound. Until a scan ends, rows fill in. Beyond the bound:
+
+- a helper the roster lists draws `running`, its start from the roster;
+- a listed helper whose meta says finished draws `finished`, ending at its last write, with no summary or report;
+- a helper neither listed nor named by any fact the stream read is unknown to the reader and draws no row, while a socket
+  that was open when it ran may still show it in the keep.
+
+A drop is a second difference. A socket that saw a helper drop off the roster draws it `no longer listed`. A new reader
+has no earlier roster to compare with, so that helper's state is left out (`agentsUnmeasured: unseen`) until a final fact or
+its meta's marker decides it. Likewise, a row already drawn once with no end time leaves an old socket on the next
+reading, and a new reader draws it once again.
+
+**The carries of review 3033.**
+
+- F1 taken: a failed final stat or range read keeps a last write already measured, so the row ends at it and is kept.
+  Only a helper whose last write was never measured ends with no time.
+- F2, F3 and F6 taken as cases: the early reserve against a burst of twelve new ids, the 12-call bound with every range
+  read failing (open and final helpers), and a held helper stat'ed once.
+- F4 taken: `orderHelperHook(last, next, lagMs)` holds an older read only within `lagMs`, the feed's freshness window
+  (`PUBLISHED_FRESH_MS`, 10 s). A read older by more is a clock step and is taken, so the helper roster freezes for at most
+  10 s after the clock steps back. **Inferred** bound: a published copy older than the window is not the reading, and the
+  fallback read is stamped when it returns, so a lag cannot be longer under a monotonic clock.
+- F5 taken: display text is `shared/unprintable.ts#stripLine` after lone surrogates are removed. A run of the set is now a
+  space, where it was nothing, and format, bidi, line-separator and U+2060-U+206F characters are removed too. The frame's
+  byte bound is unchanged or lower: the strip never lengthens a string.
+- F7 and F8 corrected. F9 (this plan's H1b slug) and F10 (`h1b.md`'s `model.ts` row) are records for the coordinator to
+  fold: the memory is one per feed, and `model.ts` also exports `workflowLastActivity`, `orderHelperHook` and the strip. F11:
+  this branch's commits carry their trailer as a trailer. F12 to F14 are H1b's records.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1b's kind of adapter, one test file per
+process in a scratch copy of the tree): round 1 killed 45 of 52 mutants. Seven survived: a seam line longer than one read,
+the summary and report ranks, the tie of evicted ids, the stream's cut, and the stream's seam offset each got a case. The
+`from` rank was equivalent and was removed. Round 2 killed 42 of 42. The tables are in
+`docs/superpowers/programs/desktop-polish/h1c.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8873** — `bounded-start-scan`: Task H1c, issued on 2026-11-21. The bounded start scan, and the carries of review
+  3033. It departs from the spec in these places:
+  - `scan-in-its-own-file`: the scan is `server/src/workflows/helperScan.ts`, not part of `read.ts` as Table 12 says. It is
+    called from `read.ts` once (`SessionWorkflows.readAll`), so the helper reads and the scan change for their own reasons.
+  - `scan-reads-at-the-link-cap` (review 2900 F10): reads of `READ_FROM_MAX_BYTES` (256 KiB), at most 4 a reading, not 64
+    KiB chunks, at most 16 a reading. The bytes per reading are the spec's.
+  - `scan-outside-the-polling-gate` (review 2900 F10): a reading starts the scan's reads and never awaits them. Their facts
+    reach the next reading.
+  - `scan-ends-at-the-seam` (review 2900 F4): the scan reads only below the stream's own reading (the backlog window's first
+    byte, or the client's offset), and parses the line the window cut, from the backlog's `cut`. The spec says only
+    "backwards".
+  - `scan-once-per-reader`: a second backlog on the same transcript does not restart the scan. A new session dir rebuilds
+    the reader, and its scan with it.
+  - `scan-cutoff-is-listed-agent-helpers`: the time bound counts only roster entries with a helper id that are not a
+    workflow's agent.
+  - `fold-is-order-independent` (review 2900 F4): ties are broken by one rule (the more telling outcome, then a summary,
+    then a report, then content) and the fold keeps the ids with the newest facts. This replaces H1a's "the newer read" and
+    "the least recently touched". Past `HELPER_FACTS_MAX` ids, an evicted id's later fact starts it afresh (a residual).
+  - `measured-last-write-survives` (review 3033 F1): both arms of a failed final read keep a measured last write. This
+    reverses D-8862's `finished-held-until-its-last-write-attempt` "with no last write or end time" for a helper whose last
+    write was already measured.
+  - `helper-roster-freeze-bounded` (review 3033 F4): `orderHelperHook` takes the feed's freshness window as its bound.
+  - `display-text-is-the-shared-strip` (review 3033 F5): one rule with every other one-line string.
+  - `same-rows-within-the-bound` (review 2900 F11): the spec's equality holds only within the bound, as said above.
+
+Spec corrections for the coordinator to fold:
+
+- §3.1, "The start scan": the seam; the reads of 256 KiB; outside the polling gate; and, where it says "So a reload and a
+  reconnect get the same rows within that bound", what a helper beyond the bound and an unseen drop draw (above).
+- §5, Table 7's "A reload or a reconnect" row: "The same rows once the scan ends, within its bound; a drop the new reader
+  did not see is left out".
+- §5's start-scan paragraph: 256 KiB reads, 4 a reading, the two-socket cost, and the measurement above, which replaces
+  "Measured cost of a typical case is unknown until H1b builds it".
+- Table 12: a `helperScan.ts` row (L3, C3), and the scan leaves the `read.ts` row.
+- Table 13: the scan's tests move from H1b's row to an H1c row.
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or is recorded as equivalent, and `tsc` passes for `server`, its tests and `pwa`.
+
+**Rollback.** A plain revert. The scan only adds facts the fold already accepts. The fold's new tie rule and bound, the
+bounded order and the strip go back to H1b's.
+
 ### Task H1b: the helpers reach the frame and the store (D-8862) — now
 
 **What.** C49's H1b row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1, §5, §8, Table 12 and Table
