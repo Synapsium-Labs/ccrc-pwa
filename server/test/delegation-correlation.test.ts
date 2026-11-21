@@ -2401,8 +2401,10 @@ describe('D-WF: a workflow run ends on its task notification (D-6269)', () => {
   });
 
   it('D-WF7: an Agent launch is never indexed: a notification naming its tool-use id leaves the agent active; only its own task id ends it (D-8830)', () => {
-    // Green by design at base; the "Agent-index mutant" reds the first world. Since session helpers S1 (D-8830) an Agent's final
-    // notification ends its record on the natural key (its task id is its agent id), never through the launch index or the tool-use id.
+    // Green by design at base. Since session helpers S1 (D-8830) an Agent's final notification ends its record on the natural key
+    // (its task id is its agent id), never through the launch index or the tool-use id. The "Agent-index mutant" reds the second
+    // world: an indexed launch matches a notification only when its task id matches too, so only the second world's notification
+    // reaches the index at all (review 3026 F8).
     const w = world([agentLaunch(1, AGENT), subagentStart(2, AGENT), notification(3, 'toolu_1', 'task_other', 'completed')]);
     expect(w.activities).toHaveLength(1);
     expect(w.activities[0]!.sourceKind).toBe('agent');

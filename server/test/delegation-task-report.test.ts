@@ -4,9 +4,12 @@
 // index. `endedAt` is the notification's observed time and `endBasis` is `task-report`. `endBasis` is optional (absence means
 // `observed`), and a later measured end replaces a `backfill-unmeasured` one, basis and `endedAt` together.
 //
-// Every row here is red on `main` (d0b7467b9) unless it is labelled a CHARACTERIZATION PIN, which pins behaviour `main` already has.
-// The new module and the new key are reached by behaviour only (the builder, recovery, the codec, SQLite), never imported, so each row
-// reds on its own assertion at the base. Every file is in a FIXTURE directory: nothing reads or writes the live `~/.ccrc`.
+// Against `main` (measured at 66c63606c3) the file's 24 cases are 19 red and 5 green. The green ones are the two CHARACTERIZATION
+// PINS (PIN-1, PIN-2), which pin behaviour `main` already has, and three GUARDS that are green there by design, because each pins
+// what the arm must leave alone: S1-A4, S1-A6 and S1-C2 (each goes red under its own mutant, listed in the task note). Three red cases
+// are red on `main` for a reason other than the missing arm, said at each: S1-W4, S1-C3 and S1-M2. The new module and the new key are
+// reached by behaviour only (the builder, recovery, the codec, SQLite), never imported, so each case reds on its own assertion at the
+// base. Every file is in a FIXTURE directory: nothing reads or writes the live `~/.ccrc`.
 import { afterEach, describe, it, expect } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -147,6 +150,7 @@ describe('S1: an Agent\'s final task notification ends its record (spec §7.1)',
     expect(x).toMatchObject({ executionState: 'ended', endedAt: T(5), endBasis: 'task-report' });
   });
 
+  // GUARD, green on main by design: no other key ends anything (red under EB11, the key without its incarnation).
   it('S1-A4: the key is the whole natural key: another session or incarnation, or an unmapped agent id, ends nothing and refuses nothing', () => {
     const other = { sessionId: 'lane-b-demo' };
     const otherInc = { parentIncarnation: 'g2' };
@@ -166,6 +170,7 @@ describe('S1: an Agent\'s final task notification ends its record (spec §7.1)',
     expect(y, 'the notification first: the later Stop does not move a task-report end').toMatchObject({ endedAt: T(4), endBasis: 'task-report', lastEventAt: T(6) });
   });
 
+  // GUARD, green on main by design: a Workflow's own notification ends its run as before (red under EB4).
   it('S1-A6: a Workflow\'s own notification still ends its run as before, and an agent of the same session is untouched by it', () => {
     const cp = liveFold(chain([sessionStart(1), workflowLaunch(2, RUN), subagentStart(3, X), notification(5, 'task_1', 'completed', 'toolu_2')])).build(1);
     expect(wfRow(cp, RUN)).toMatchObject({ executionState: 'ended', endedAt: T(5) });
@@ -290,11 +295,14 @@ describe('S1: endBasis in the checkpoint (spec Table 9)', () => {
     expect(agentRow(decodeDelegationCheckpoint(encodeDelegationCheckpoint(observed)), X)?.endBasis, 'observed, written out, reads back').toBe('observed');
   });
 
+  // GUARD, green on main by design: the closed codec refuses a word outside the three (red under CP2, any string accepted).
   it('S1-C2: the codec refuses a basis outside the three words', () => {
     const bad = editRows(ended(), () => true, (a) => ({ ...a, endBasis: 'guessed' } as unknown as Row));
     expect(failureCode(() => decodeDelegationCheckpoint(encodeDelegationCheckpoint(bad)))).toBe('bad-shape');
   });
 
+  // Red on main because main has no projectability rule for the key (its first refusal is accepted there); its fixture row is not
+  // ended by a task report on main either, since main has no arm.
   it('S1-C3: the projectability rule binds rows that carry the key only: task-report needs an endedAt, backfill-unmeasured a null one', () => {
     const cp = ended();
     expect(failureCode(() => assertDelegationCheckpointProjectable(cp)), 'the arm\'s own row').toBe('accepted');
@@ -344,6 +352,8 @@ describe('S1: a later measured end replaces a backfill one, basis and endedAt to
     }
   });
 
+  // Red on main for its fixture, not its arm: main's closed reader refuses the hand-written `endBasis` key, so recovery fails
+  // before the replay runs.
   it('S1-W4: a backfill row the boot replay meets: its covered task report replaces it and counts as a covered end', () => {
     const records = chain([sessionStart(1), subagentStart(2, X), notification(5, X)]);
     const stale = editRows(liveFold(records).build(1), (a) => a.upstreamId === X, backfilled);
@@ -395,6 +405,8 @@ describe('S1: the endBasis column (spec Table 9, the projection row)', () => {
     }
   });
 
+  // Red on main only because main has no endBasis entry for SLOT to find: the refusal it then asserts (a failing migration keeps
+  // the file's version and rows) is behaviour main already has for every migration.
   it('S1-M2: a migration that cannot apply refuses to start rather than open empty: the file keeps its version and its row', () => {
     expect(SLOT, 'a MIGRATIONS entry adds delegation_activities.endBasis').toBeGreaterThan(0);
     // A file that already carries a column of that name (a hand edit): the ALTER fails, so the open must refuse, not start empty.
@@ -407,6 +419,24 @@ describe('S1: the endBasis column (spec Table 9, the projection row)', () => {
     } finally {
       raw.close();
     }
+  });
+});
+
+describe('S1: which checkpoints an older server can read (spec Table 13, the rollback)', () => {
+  it('S1-K1: against a frozen copy of main\'s activity key list, a row a task report ended carries exactly endBasis outside it, and a checkpoint whose ends are all observed carries no key outside it', () => {
+    // The activity keys `readActivity` closes over at main d0b7467b9, copied here and never derived, so a widening shows up as a red.
+    const MAIN_ACTIVITY_KEYS = ['activityId', 'parentId', 'parentIncarnation', 'sourceKind', 'upstreamId', 'identityJournalId', 'displayName',
+      'executionState', 'openedAt', 'endedAt', 'lastEventAt'];
+    const outside = (cp: DelegationCheckpointV1): string[] =>
+      [...new Set(cp.activities.flatMap((a) => Object.keys(a)).filter((k) => !MAIN_ACTIVITY_KEYS.includes(k)))].sort();
+    const reported = liveFold(chain([sessionStart(1), subagentStart(2, X), notification(5, X)])).build(1);
+    expect(agentRow(reported, X), 'X is ended by its task report').toMatchObject({ executionState: 'ended', endBasis: 'task-report' });
+    expect(outside(reported), 'the keys outside main\'s list, on a row a task report ended').toEqual(['endBasis']);
+    // Every end here is measured: X's own Stop, and Y's Stop before its notification (A5's order). An older server reads this one.
+    const observed = liveFold(chain([sessionStart(1), subagentStart(2, X), subagentStop(3, X), subagentStart(4, Y), subagentStop(5, Y),
+      notification(6, Y)])).build(1);
+    expect([agentRow(observed, X)?.executionState, agentRow(observed, Y)?.executionState], 'both records are ended').toEqual(['ended', 'ended']);
+    expect(outside(observed), 'no key outside main\'s list when every end is observed').toEqual([]);
   });
 });
 
@@ -432,15 +462,11 @@ describe('S1 characterization pins', () => {
     }
   });
 
-  it('PIN-2: a frozen copy of main\'s activity key list does not hold endBasis, and a closed reader refuses an unknown activity key with bad-shape; recovery reports that rather than open empty', () => {
-    // The activity keys `readActivity` closes over at main d0b7467b9, copied here and never derived, so a widening shows up as a red.
-    const MAIN_ACTIVITY_KEYS = ['activityId', 'parentId', 'parentIncarnation', 'sourceKind', 'upstreamId', 'identityJournalId', 'displayName',
-      'executionState', 'openedAt', 'endedAt', 'lastEventAt'];
+  it('PIN-2: a closed reader refuses an unknown activity key with bad-shape, and recovery reports that rather than open empty (the refusal an older server gives S1\'s checkpoint)', () => {
     const records = chain([sessionStart(1), subagentStart(2, X), notification(5, X)]);
-    // A checkpoint whose one activity carries a key outside the list a reader knows: what an older server meets in S1's checkpoint.
+    // A checkpoint whose one activity carries a key outside the list the reader knows: the shape of what an older server meets
+    // once some row carries `endBasis` (S1-K1 shows which rows do). The key is hand-written, so the pin is green on main too.
     const tip = editRows(liveFold(records).build(1), () => true, (a) => ({ ...a, zzUnknownKey: 'x' } as Row));
-    const unknown = Object.keys(tip.activities[0]!).filter((k) => !MAIN_ACTIVITY_KEYS.includes(k)).sort();
-    expect(unknown, 'the keys outside main\'s list').toEqual(expect.arrayContaining(['zzUnknownKey']));
     const bytes = encodeDelegationCheckpoint({ ...tip, revision: 1 });
     expect(failureCode(() => decodeDelegationCheckpoint(bytes))).toBe('bad-shape');
     const report = recoverDelegation(bytes, records);
