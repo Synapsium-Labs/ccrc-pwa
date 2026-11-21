@@ -282,14 +282,19 @@ describe('the wiring, pinned after the first mutation round', () => {
 // it draws from the roster and its meta alone. RED FIRST, against origin/main, where neither stream reads past its window.
 describe('the start scan: a reload and a reconnect draw the same rows within its bound (H1c)', () => {
   const MIB = 1024 * 1024;
-  const launch = (id: string, at: number): string => line({
+  const launch = (id: string, at: number, pad = 0): string => line({
     type: 'user', uuid: `l-${id}`, timestamp: iso(at),
-    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${id}`, content: 'launched' }] },
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${id}`, content: `launched${'p'.repeat(pad)}` }] },
     toolUseResult: { isAsync: true, status: 'async_launched', agentId: id, description: 'd', resolvedModel: 'model-b', prompt: 'p' },
   });
   const fill = (at: number, total: number): string => {
     const one = line({ type: 'user', uuid: `f-${at}`, timestamp: iso(at), message: { role: 'user', content: 'x'.repeat(64 * 1024) } });
     return one.repeat(Math.ceil(total / one.length));
+  };
+  /** One line of exactly `bytes` bytes. */
+  const exact = (at: number, bytes: number): string => {
+    const base = line({ type: 'user', uuid: `e-${at}`, timestamp: iso(at), message: { role: 'user', content: '' } }).length;
+    return line({ type: 'user', uuid: `e-${at}`, timestamp: iso(at), message: { role: 'user', content: 'x'.repeat(bytes - base) } });
   };
   type Scanned = Priv & { workflows: { startScan?: { done: boolean; cost: { bytes: number; reads: number; stop: string | null } } } | null };
   /** Readings until the reader's scan has stopped, then one more, so its last facts are folded; the last frame's rows. */
@@ -307,10 +312,15 @@ describe('the start scan: a reload and a reconnect draw the same rows within its
   };
 
   it('a launch and a notification behind the backlog\'s window reach both: the same rows, from the scan', async () => {
+    // a2's launch line straddles the backlog window's first byte (the reload's seam): the scan joins it to the backlog's cut
+    const a2 = launch('a2', now - 240_000, 20_000);
     writeFileSync(tfile, launch('a1', now - 480_000) + fill(now - 420_000, 1.5 * MIB) + noticeLine('a1', now - 360_000)
-      + fill(now - 300_000, 1.2 * MIB) + launch('a2', now - 240_000) + fill(now - 180_000, 1.2 * MIB));
+      + fill(now - 300_000, 1.2 * MIB) + a2 + exact(now - 180_000, MIB - 10_000 - 200 * 1024));
     const resumeAt = statSync(tfile).size;
-    appendFileSync(tfile, fill(now - 120_000, 200 * 1024));
+    appendFileSync(tfile, exact(now - 120_000, 200 * 1024));
+    const seam = statSync(tfile).size - MIB;
+    expect(seam).toBeGreaterThan(resumeAt - (MIB - 10_000 - 200 * 1024) - a2.length);
+    expect(seam).toBeLessThan(resumeAt - (MIB - 10_000 - 200 * 1024));
     hook([{ id: 'a2', name: 'Explore', startedAt: now - 239_000 }]);
     seedHelper(S, 'a1', { finished: true });
     seedHelper(S, 'a2');
@@ -324,7 +334,7 @@ describe('the start scan: a reload and a reconnect draw the same rows within its
       await reload.stream.start();
       const got = await settle(reload.stream, reload.frames);
       expect(got.rows).toEqual(want);
-      expect(got.scan?.startScan?.cost.stop).toBe('start');
+      expect(got.scan?.startScan?.cost).toMatchObject({ stop: 'start', bytes: seam }); // every byte below the seam, once
     } finally { reload.stream.stop(); }
 
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -337,6 +347,7 @@ describe('the start scan: a reload and a reconnect draw the same rows within its
       expect(frames.some((f) => f.type === 'backlog')).toBe(false); // a resume: no backlog
       const got = await settle(reconnect, frames);
       expect(got.rows).toEqual(want);
+      expect(got.scan?.startScan?.cost).toMatchObject({ stop: 'start', bytes: resumeAt });
     } finally { reconnect.stop(); }
   });
 

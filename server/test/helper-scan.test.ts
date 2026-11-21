@@ -161,6 +161,17 @@ describe('where it reads: backwards from the seam, in READ_FROM_MAX_BYTES reads,
     expect(facts.map((f) => f.id)).toEqual(['a1']);
   });
 
+  it('(added after the first mutation round) a seam line longer than one read: the newest read holds no newline, and the line is still joined once', async () => {
+    const big = launchLine('a1', NOW - 60_000, 400 * KIB);
+    const tail = filler(NOW - 30_000, MIB - 50 * KIB);
+    writeFileSync(file, fillerBlock(NOW - 90_000, 200 * KIB) + big + tail);
+    const b = await readBacklog(localIO, file, 50);
+    const seamInBig = size() - MIB - (size() - Buffer.byteLength(big) - Buffer.byteLength(tail));
+    expect(seamInBig).toBeGreaterThan(READ_FROM_MAX_BYTES); // the newest read lies wholly inside the line
+    const { facts } = await drain(new HelperStartScan(localIO, file), { file, end: b.scanEnd!, cut: b.cut });
+    expect(facts.filter((f) => f.id === 'a1')).toHaveLength(1);
+  });
+
   it('a resumed stream\'s seam (the client\'s offset, no cut) reads only below it', async () => {
     writeFileSync(file, launchLine('a1', NOW - 60_000) + fillerBlock(NOW - 30_000, 500 * KIB));
     const end = size();
@@ -355,6 +366,21 @@ describe('the fold of the scan\'s, the backlog\'s and the tail\'s facts is the s
     expect(m.get('a1')!.launch).toEqual({ at: NOW - 300_000, model: 'model-b', async: true, durationMs: null });
     expect(m.get('a3')!.end).toMatchObject({ outcome: 'done', at: NOW - 60_000, summary: 'second', hasReport: true });
     expect(m.get('a4')!.end).toMatchObject({ outcome: 'failed', at: null, summary: 'y', hasReport: true });
+    expect(m.get('a5')!.end).toMatchObject({ outcome: 'done', at: NOW - 30_000, summary: 's', from: 'notification' }); // a summary first
+  });
+
+  it('(added after the first mutation round) a summary ranks above a report, and a report above content', () => {
+    const at = NOW - 60_000;
+    const withReport = fact({ id: 'a6', source: 'notification', status: 'completed', at, summary: 'a', report: 'r' });
+    const without = fact({ id: 'a6', source: 'notification', status: 'completed', at, summary: 'z' });
+    for (const order of [[withReport, without], [without, withReport]]) {
+      expect(foldHelperFacts(new Map(), order).get('a6')!.end).toMatchObject({ summary: 'a', hasReport: true });
+    }
+    const summarised = fact({ id: 'a7', source: 'notification', status: 'completed', at, summary: 'a' });
+    const reported = fact({ id: 'a7', source: 'launch', status: 'completed', at, report: 'r' });
+    for (const order of [[summarised, reported], [reported, summarised]]) {
+      expect(foldHelperFacts(new Map(), order).get('a7')!.end).toMatchObject({ summary: 'a', hasReport: false });
+    }
   });
 
   it('past HELPER_FACTS_MAX ids the fold keeps the newest by fact time, whatever the order', () => {
@@ -364,6 +390,13 @@ describe('the fold of the scan\'s, the backlog\'s and the tail\'s facts is the s
     expect(want).not.toContain('m0');
     expect(want).toContain('m299');
     expect([...foldHelperFacts(new Map(), [...many].reverse()).keys()].sort()).toEqual(want);
+  });
+
+  it('(added after the first mutation round) past the bound, ids whose newest facts tie in time are kept by id, whatever the order', () => {
+    const tied = Array.from({ length: 300 }, (_, k) => fact({ id: `t${k}`, source: 'launch', status: 'async_launched', at: NOW }));
+    const want = [...foldHelperFacts(new Map(), tied).keys()].sort();
+    expect([...foldHelperFacts(new Map(), [...tied].reverse()).keys()].sort()).toEqual(want);
+    expect([...foldHelperFacts(new Map(), [...tied.slice(150), ...tied.slice(0, 150)]).keys()].sort()).toEqual(want);
   });
 });
 
