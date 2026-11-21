@@ -892,8 +892,9 @@ export function ownerItemReady(
 /** D-8808 (review 3048 F5): the shared-key item's decision, over the inbound route step's owner verdicts for the `waiting` issues.
  *  `raise`: the team keys (upper-case, sorted) whose issues wait because the owner rule MEASURED them `team-ambiguous` (the holders
  *  that could serve the issue's workspace are rows naming no workspace, and two readable workspaces hold the key), less the keys an
- *  open item already carries. `settle`: the open items whose key no waiting issue still measures ambiguous or unmeasured (its
- *  issues routed, or none waits); none while the routing is unread, so an item never settles on unmeasured. */
+ *  open item already carries. `settle`: the open items whose key no waiting issue still measures ambiguous or unmeasured (the item
+ *  settles once no waiting issue of the team depends on the workspace choice: its issues routed, waiting on their owner, as when the
+ *  chosen project's owner is gone, or none waiting); none while the routing is unread, so an item never settles on unmeasured. */
 export function sharedKeyItemVerdict(
   verdicts: readonly { teamKey: string; owner: TeamOwner }[], open: readonly { id: number; teamKey: string }[], routesRead: boolean,
 ): { raise: string[]; settle: number[] } {

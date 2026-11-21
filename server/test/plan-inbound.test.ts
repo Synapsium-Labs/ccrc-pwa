@@ -2623,13 +2623,15 @@ describe('plan triage row choice, pinned before its move (D-8808)', () => {
       expect(writes(r)).toEqual([]);
     });
     // A team no project holds answers the same refusal whether or not a row is found: this pins the answer only.
-    it('a team no project holds is refused for any caller, and its row does not move', async () => {
-      const r = await rig();
-      seed(r, 5, WS.a.id, 'CCC-5', 'CCC');
-      const o = await run(r, [5], { issue: 'CCC-5', decision: 'raise', note: 'scope' }, OWNER, 'CCC');
-      expect(o.answer).toEqual([403, 'not-linear-owner']);
-      expect(o.moved).toEqual([]);
-      expect(writes(r)).toEqual([]);
+    it('a team no project holds is refused for both callers it runs, OWNER and OTHER, and its row does not move', async () => {
+      for (const who of [OWNER, OTHER]) {
+        const r = await rig();
+        seed(r, 5, WS.a.id, 'CCC-5', 'CCC');
+        const o = await run(r, [5], { issue: 'CCC-5', decision: 'raise', note: 'scope' }, who, 'CCC');
+        expect(o.answer, `caller ${who}`).toEqual([403, 'not-linear-owner']);
+        expect(o.moved, `caller ${who}`).toEqual([]);
+        expect(writes(r), `caller ${who}`).toEqual([]);
+      }
     });
   });
 });
