@@ -300,6 +300,12 @@ function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[]
 const sameTranscript = (was: string | null | undefined, now: string | null | undefined): boolean =>
   typeof was === 'string' && was !== '' && was === now;
 
+/** D-5560: the helper rows belong to the session dir (the transcript path minus `.jsonl`), so a backlog onto ANOTHER transcript
+ *  resets them; a reconnect, or a rotation in place, onto the same one keeps them. One decision, read by the reducer (the rows)
+ *  and by the store (the asks with them), so the two cannot disagree (session helpers HF2, D-8877; review 3123 F14). */
+const resetsHelpers = (file: string | null | undefined, msg: SessionStreamMsg): boolean =>
+  msg.type === 'backlog' && !sameTranscript(file, msg.file);
+
 /** H1b (D-8862): the helper members as none, fresh each time, where every reset site clears them with the workflow rows. */
 const noHelpers = (): Pick<SessionState, 'agents' | 'agentsUnmeasured' | 'readEvery' | 'reports'> =>
   ({ agents: [], agentsUnmeasured: null, readEvery: null, reports: {} });
@@ -333,7 +339,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         // until the server's restated frame replaces them: clearing there
         // unmounted the strip, collapsed it and jumped the conversation on
         // every foregrounding of the PWA.
-        ...(sameTranscript(s.file, msg.file) ? {} : { workflows: [], workflowsUnreadable: false, ...noHelpers() }),
+        ...(resetsHelpers(s.file, msg) ? { workflows: [], workflowsUnreadable: false, ...noHelpers() } : {}),
         missingFile: msg.missing ? msg.file : null,
         // Unconditional, where `missingFile` above is gated: the file is the
         // address this `offset` is measured in, and a reconnect has to echo
@@ -916,7 +922,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // helper rows (a backlog onto another transcript) forgets every ask with them. The other reset, `disconnect()`,
         // needs no clear of its own: it drops `framed`, so the next stream's first frame forgets them (above).
         if (msg.type === 'helper-report') asked.delete(msg.id);
-        if (msg.type === 'backlog' && !sameTranscript(get().file, msg.file)) asked.clear();
+        if (resetsHelpers(get().file, msg)) asked.clear();
         set((s) => {
           const confirmed = clearConfirmed(s.pending, msg);
           for (const key of confirmed.cleared) {

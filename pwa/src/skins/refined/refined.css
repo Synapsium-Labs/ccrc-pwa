@@ -69,6 +69,19 @@
   .chat-head .ref-chip-rail .sess-worktrees {
     flex: 1 1 100%;
   }
+  /* While it wraps, the rail is a block, not a sideways row (session helpers HF2, D-8877; review 3184 F1): each item and chip
+     is capped at the row's width and its text wraps inside, as at a desk, so nothing is wider than the rail. A chip wider
+     than the closed rail scrolled it to reach the door; with nothing left to scroll to, the open rail is back at its start,
+     and every line, the door's and each worktree path's, starts on the screen (measured: they sat 80 px left of it). */
+  .chat-head .ref-chip-rail:has(.sess-worktrees) > *,
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .chat-fact,
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .sess-meta > * {
+    max-width: 100%;
+    white-space: normal;
+  }
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .chat-coord {
+    flex-wrap: wrap;
+  }
 }
 
 /* Desktop polish T3c (D-6333): the header names the session. The project is a small crumb above the title (the shared
@@ -88,6 +101,14 @@
   .chat-head .ref-chip-rail .status-line--coordinator,
   .chat-head .ref-chip-rail .status-line-name {
     max-width: none;
+  }
+  /* The wrapping rail (above) gives them the shared caps back. */
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .metachip,
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .status-line-name {
+    max-width: 100%;
+  }
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .status-line--coordinator {
+    max-width: calc(100% - 8px - var(--sp-2));
   }
 }
 

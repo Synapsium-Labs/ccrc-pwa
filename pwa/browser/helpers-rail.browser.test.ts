@@ -10,7 +10,11 @@
 //     phone layout, with the head at least 44 px and no sideways page scroll;
 //   - review 3072 F6 and F7: at 360 a row's elapsed time is in line 2 and line 1 draws none, at 1280 it is on line 1 and
 //     line 2 draws none; at either width no fact splits across two lines, and a state with its times wider than the line
-//     breaks only between its words, never inside one (review 3099 F2 and F3, session helpers H3).
+//     breaks only between its words, never inside one (review 3099 F2 and F3, session helpers H3);
+//   - review 3123 F13 (session helpers HF2, D-8877): in the 1600 px rail, with a state group wider than its line, the group
+//     takes two lines and breaks only between its words, and no fact or word splits. (A separator of line 2 can start a line
+//     there: Chrome breaks after any inline block, whatever follows it, which a no-break space cannot close; measured, and
+//     recorded by the plan's slug, review 3123 F4.)
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // --maxWorkers=2 browser/helpers-rail.browser.test.ts )`.
@@ -81,8 +85,8 @@ afterAll(async () => {
 
 const view = (width: number): AppView => ({ skin: REFINED, theme: PHOSPHOR, width });
 
-async function openSession(v: AppView) {
-  const opened = await openApp(browser!, v, FIXTURE);
+async function openSession(v: AppView, fixture: AppFixture = FIXTURE) {
+  const opened = await openApp(browser!, v, fixture);
   await opened.page.goto(`${server!.origin}/s/${ID}`);
   await opened.page.waitForFunction((text) => document.body.textContent?.includes(text) === true, LAST_TEXT, { timeout: 20_000 });
   await opened.page.waitForFunction(() => document.querySelector('.helpers-strip') !== null, null, { timeout: 20_000 });
@@ -203,6 +207,46 @@ describe('the Helpers section\'s place, by width', () => {
       expect(l.line2.every(Boolean), 'and line 2 draws it (§10)').toBe(true);
       expect(l.split, 'no fact splits across lines').toEqual([]);
       expect((await place(page)).sideScroll).toBe(0);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+});
+
+/** A workflow whose state group (running, its phase, its agents, its failures and its times) is wider than the rail's line, so
+ *  the case below measures what H3's helpers-rail never reached: the rail, and a group that breaks (review 3123 F13). */
+const WIDE_FIXTURE: AppFixture = {
+  ...FIXTURE,
+  socketFrames: {
+    [`/ws/session/${ID}`]: [backlogFrame(EVENTS), { type: 'workflows', agents: AGENTS, workflows: [workflow, {
+      ...workflow, id: 'wf_00000000-bbb', name: 'reader-sweep', failed: 2, phase: 'Verify readers', lastActivityAt: ms - 9_000,
+    }] }],
+  },
+};
+
+/** In `root`'s Helpers section: every fact, or word of a state group, that its width split across two lines, and every state
+ *  group that took two lines. */
+const railLines = (page: Page, root: string): Promise<{ split: string[]; twoLine: string[] }> => page.evaluate((root) => {
+  const scope = document.querySelector(root);
+  if (scope === null) return { split: ['no section'], twoLine: [] };
+  const shown = (e: Element): boolean => getComputedStyle(e).display !== 'none' && e.getClientRects().length > 0;
+  const tall = (e: Element): boolean => e.getBoundingClientRect().height > 1.5 * parseFloat(getComputedStyle(e).lineHeight);
+  const split = [...scope.querySelectorAll('.helper-fact:not(.helper-state), .helper-state .helper-word')]
+    .filter((g) => shown(g) && tall(g)).map((g) => g.textContent ?? '');
+  const twoLine = [...scope.querySelectorAll('.helper-state')].filter((g) => shown(g) && tall(g)).map((g) => g.textContent ?? '');
+  return { split, twoLine };
+}, root);
+
+describe('the 1600 px rail\'s line 2 (review 3123 F13, session helpers HF2)', () => {
+  it('a state group wider than the line takes two lines, and no fact or word splits across lines', async () => {
+    const { ctx, page, errors } = await openSession(view(1600), WIDE_FIXTURE);
+    try {
+      expect(await place(page)).toEqual({ rail: true, column: false, aboveComposer: false, sideScroll: 0 });
+      await page.waitForFunction(() => document.querySelector('.ref-inspector [data-helper-row="wf_00000000-bbb"]') !== null, null, { timeout: 20_000 });
+      const r = await railLines(page, '.ref-inspector [data-section="helpers"]');
+      expect(r.twoLine.length, 'the fixture holds a state group wider than the rail\'s line').toBeGreaterThan(0);
+      expect(r.split, 'no fact or word splits across lines').toEqual([]);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();
