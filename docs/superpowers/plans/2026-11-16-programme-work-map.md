@@ -942,13 +942,13 @@ Task WM5 departs under its own number:
   `ticket-required` refuses it (below)", since a run with no ticket is not always given an auto ticket); `api-md-ticket-wording` (review 2975 F4), two clauses of that list are brought to what the code does after all:
   `ticket-required` says "an open ticket with no run attached that is not an auto ticket" (`runMustNameTicket`), in `plan.md` too, and `ticket-unavailable`
   says "open with none unless `ticket-required` refuses that" and lists what `planGate` refuses with that word (done, dropped, held by another run, started or
-  attached to one not yet dispatched, not in this programme's plan, or an Upkeep ticket), in `plan.md` and `api.md` alike (review 3112 F4); `work-map-verbs-empty`, the brief removes `ticket-done` from `WORK_MAP_VERBS`, and
+  attached to one not yet dispatched, not in this programme's plan, or an Upkeep ticket), in the section of `plan.md` and in `api.md` (the refusal-list bullet keeps #3151's wording; review 3112 F4, review 3143 F1); `work-map-verbs-empty`, the brief removes `ticket-done` from `WORK_MAP_VERBS`, and
   `phase-ref`, whose row is on `main` and which the same section documents, leaves it too, so the set is empty and the verb check covers both;
   `closed-table-pin`, `server/test/ccrc-api-closed.test.ts` is named by WM0's and WM1's Test lines and by this task's Step 3, and by its Files line since fix round 1:
   the sorted list of the corpus's client commands gains `plan.phase-ref` and `plan.ticket-done`, which the new section is the first to run;
   `examples-run-through-the-routes` (review 2975 F1, F2, F6), a parse of an example is not an acceptance of it (the first examples parsed and the
   server refused the `plan put`), so the new `server/test/coordinator-plan-examples.test.ts` sends the section's examples, in order, on the plan the `plan put`
-  example at the top of the file leaves, to the real plan routes over a real coord.db, and each must answer 200; the section states that rule, that a put
+  example under `## plan put` leaves, to the real plan routes over a real coord.db, and each must answer 200; the section states that rule, that a put
   restates what it keeps, before its examples; `section-words-pinned` (F6; review 3112 F3), `coordinator-plan-reference.test.ts` pins the section's refusal words, its
   recovery bullets and their remedies, the evidence rule and the capability sentences inside the section itself, not by a whole-file substring, and parses the
   one body the back-fill line gives (`plan ticket-move` with a drop); `examples-keep-their-shape` (review 3112 F2, F5), the examples test replaces only the run

@@ -121,12 +121,19 @@ export function mainFacts(it: HelperItem): string[] {
     const a = it.agent;
     return present([a.agentType === null ? 'subagent' : `subagent · ${a.agentType}`, a.model, a.effort]);
   }
+  return ['workflow'];
+}
+
+/** A row's state group before its times: an Agent helper's state word, and a workflow's `running` with its phase, progress
+ *  and failures, so the state stays with its times (review 3099 F3). */
+const mainState = (it: HelperItem): string[] => {
+  if (it.kind === 'agent') return present([it.stateWord]);
   const w = it.workflow;
   return present([
-    'workflow', 'running', w.phase !== null && `phase ${w.phase}`,
+    'running', w.phase !== null && `phase ${w.phase}`,
     w.done !== null && w.total !== null && `${w.done}/${w.total} agents`, (w.failed ?? 0) > 0 && `${w.failed} failed`,
   ]);
-}
+};
 
 /** A finished row's one line (Table 6): its outcome with its duration as one group (a workflow's agents between them), then
  *  for an Agent helper the notification's summary (prose, which may wrap). */
@@ -158,6 +165,8 @@ function Glyph({ it }: { it: HelperItem }): ReactNode {
 }
 
 const SEP = ' · ';
+/** Inside the state group a no-break space goes before each `·`, so a separator ends a line and never starts one (F2). */
+const GSEP = '\u00A0· ';
 /** The state with its times: one line-2 group (`.helper-fact`) that the cases find as `.helper-state`. */
 const STATE_GROUP = 'helper-fact helper-state';
 
@@ -174,18 +183,18 @@ function Line2({ facts, state, elapsed, activity, prose, tokens }: {
   const lead = facts.length > 0 ? SEP : '';
   const steady = state.length > 0 || activity !== null; // the group has a part every width draws
   if (steady) {
-    const inner: ReactNode[] = state.map((w, i) => <Fragment key={`s${i}`}>{i > 0 ? SEP : ''}<span className="helper-word">{w}</span></Fragment>);
+    const inner: ReactNode[] = state.map((w, i) => <Fragment key={`s${i}`}>{i > 0 ? GSEP : ''}<span className="helper-word">{w}</span></Fragment>);
     if (elapsed !== null) {
       inner.push(
         <span key="e" className="helper-elapsed-inline">
-          {state.length > 0 ? SEP : ''}<span className="helper-word">{elapsed}</span>{state.length === 0 ? SEP : ''}
+          {state.length > 0 ? GSEP : ''}<span className="helper-word">{elapsed}</span>{state.length === 0 ? GSEP : ''}
         </span>,
       );
     }
     if (activity !== null) {
       inner.push(
         <Fragment key="a">
-          {state.length > 0 ? SEP : ''}
+          {state.length > 0 ? GSEP : ''}
           <span className="helper-word helper-activity" data-quiet={activity.quiet ? '' : undefined}>{activity.text}</span>
         </Fragment>,
       );
@@ -322,7 +331,7 @@ function HelperRow({ it, now, finished, cutNote, reports, onReport }: {
           ? <Line2 {...finishedFacts(it)} elapsed={null} activity={null} tokens={null} />
           : (
             <Line2
-              facts={mainFacts(it)} state={present([it.kind === 'agent' ? it.stateWord : null])} elapsed={elapsed} prose={null} tokens={tokens}
+              facts={mainFacts(it)} state={mainState(it)} elapsed={elapsed} prose={null} tokens={tokens}
               activity={activityWords(it.kind === 'agent' ? it.agent.lastActivityAt : it.workflow.lastActivityAt, now)}
             />
           )}

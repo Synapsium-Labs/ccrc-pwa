@@ -912,6 +912,11 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
       apply(msg) {
         if (msg.type === 'workflows' && !framed) { framed = true; asked.clear(); }
+        // `asked` is an ask with no answer yet (review 3099 F1): an answer, kept or dropped, ends it, and a reset of the
+        // helper rows (a backlog onto another transcript) forgets every ask with them. The other reset, `disconnect()`,
+        // needs no clear of its own: it drops `framed`, so the next stream's first frame forgets them (above).
+        if (msg.type === 'helper-report') asked.delete(msg.id);
+        if (msg.type === 'backlog' && !sameTranscript(get().file, msg.file)) asked.clear();
         set((s) => {
           const confirmed = clearConfirmed(s.pending, msg);
           for (const key of confirmed.cleared) {
