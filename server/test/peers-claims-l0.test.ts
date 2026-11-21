@@ -191,7 +191,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { BoxTokenView } from './box-token.js';",
       "import type { ReadFailure } from './agent-protocol.js';",
       "import type { PerfHealth } from './perf.js';",
-      "import type { WorkflowView } from './workflows.js';",
+      "import type { HelperFrameMembers, WorkflowView } from './workflows.js';",
       "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
       "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",

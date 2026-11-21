@@ -194,6 +194,22 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       const f = base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 2 * MIN }) }, roster: listedFrom(NOW - MIN) });
       expect(stateOf(run(f), A)).toBe('finished');
     });
+
+    // H1b (review 2978 F1): the narrowness of the rule, pinned. Characterization pins, not reds: H1a's code already answers so.
+    it('an UNMEASURED process is asked the roster like a live one (Figure 2\'s "no, or unmeasured" edge): a later listing reads running', () => {
+      const arm = run(base({ facts: { [A]: facts(endedAt('done', NOW - 15 * MIN)) }, roster: listedFrom(NOW - MIN), proc: { kind: 'unmeasured' } }));
+      expect(stateOf(arm, A)).toBe('running');
+    });
+
+    it('an UNLISTED helper whose meta was written after its end is not a continuation: a transcript write is no listing, so the end stands', () => {
+      const f = base({
+        facts: { [A]: facts(endedAt('done', NOW - 2 * MIN)) },
+        metas: { [A]: meta({ lastWriteAt: NOW - 30_000 }) },
+        roster: usable(['other']),
+      });
+      expect(stateOf(run(f), A)).toBe('done');
+      expect(row(run(f), A)).toMatchObject({ endedAt: NOW - 2 * MIN, summary: 'one line', hasReport: true });
+    });
   });
 
   describe('the meta\'s finished marker comes next', () => {

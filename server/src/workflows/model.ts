@@ -35,6 +35,7 @@ import {
   isHelperId,
   type AgentHelperState,
   type AgentHelperView,
+  type HelperFrameMembers,
   type HelpersUnmeasured,
   type WorkflowAgentState,
   type WorkflowAgentView,
@@ -127,6 +128,18 @@ export interface JournalFold {
 }
 
 export const emptyFold = (): JournalFold => ({ keys: new Map(), starts: [] });
+
+/** The newest measured write in the journal or a running agent's transcript. */
+export function workflowLastActivity(journalMtime: number, fold: JournalFold, activity: ReadonlyMap<string, number>): number;
+export function workflowLastActivity(journalMtime: number | null, fold: JournalFold, activity: ReadonlyMap<string, number>): number | null;
+export function workflowLastActivity(journalMtime: number | null, fold: JournalFold, activity: ReadonlyMap<string, number>): number | null {
+  let at = journalMtime;
+  for (const k of fold.keys.values()) {
+    const a = k.last === 'started' ? activity.get(k.agentId) : undefined;
+    if (a !== undefined && (at === null || a > at)) at = a;
+  }
+  return at;
+}
 
 type JournalLine = { type: string; key: string; agentId: string; label: string | null; phase: string | null };
 
@@ -500,9 +513,9 @@ export function workflowsFrame(
 }
 
 /**
- * Whether the frame is due (D-5560): the gate H1b MOVES here. H1a states it and nothing calls it yet, so until H1b deletes
- * `checkWorkflows`'s inline copy (`sessionws.ts`) there are two copies of one decision, and H1b pins in a characterization
- * case that the two agree on today's inputs (review 2961 F9). "Never had": the session has
+ * Whether the frame is due (D-5560): the gate's one copy. H1a moved it here and H1b deleted `checkWorkflows`' inline copy
+ * (`sessionws.ts`), pinning first that the two agreed on every input the inline one had (`helpers-frame.test.ts`, review
+ * 2961 F9); `helpersFrame` calls it. "Never had": the session has
  * no workflows directory, no known Agent helper id, and no frame was ever sent — a session that never ran a helper gets
  * no frame. An absent read made `unreadable` by the hook's word, an unreadable read, a read and a known helper are all
  * due, and so is any frame after one was sent (its rows must be cleared). Whether the JSON changed is delivery's.
@@ -531,6 +544,19 @@ export function frameDue(a: {
 
 /** What a workflow's agents are called on the roster: no Agent row. */
 export const isWorkflowAgentName = (name: string): boolean => name === WORKFLOW_AGENT_TYPE;
+
+/** Whether an id is an Agent helper, the ONE rule (the decision's, and since H1b the reader's, which spends its tier on Agent
+ *  helpers only): a launch result names it (positive evidence); else its meta sits at the Agent path with another type than
+ *  a workflow's, and the roster (`rosterName`, when it lists the id) does not call it a workflow's agent. */
+export function isAgentHelper(
+  facts: { launch: unknown } | undefined,
+  meta: { path: 'agent' | 'workflow'; agentType: string | null } | undefined,
+  rosterName: string | undefined,
+): boolean {
+  if (facts?.launch != null) return true;
+  if (meta === undefined || meta.path !== 'agent' || meta.agentType === WORKFLOW_AGENT_TYPE) return false;
+  return !(rosterName !== undefined && isWorkflowAgentName(rosterName));
+}
 
 /** The facts of one id, folded from the transcript's `HelperFact`s. `launch` is the Agent launch result's; `end` is the
  *  final task notification, or a foreground launch's completed result (`from`). */
@@ -667,6 +693,10 @@ export function capKeptWorkflow(v: WorkflowView): WorkflowView {
   return { ...v, agents: cut.agents, agentsOmitted: v.agentsOmitted + cut.omitted };
 }
 
+/** Remove controls and unpaired UTF-16 surrogates from display text; valid supplementary characters survive. */
+const helperDisplayText = (v: unknown): string | null =>
+  typeof v === 'string' ? v.replace(/[\p{Cc}\p{Cs}]/gu, '') || null : null;
+
 const capChars = (s: string | null, max: number): string | null => {
   if (s === null) return null;
   if (s.length <= max) return s;
@@ -723,8 +753,12 @@ function rosterIds(entries: ReadonlyArray<{ id: string | null }>): Set<string> {
  * usable roster that this roster no longer lists is a seen drop when nothing else could have taken it: both rosters have
  * room (fewer than `HELPER_LISTED_MAX` ENTRIES, counting those with no id, as the hook's cap does), the process did not
  * restart between the readings (`Proc.live.startedAt` changed), and an id that sat BEFORE it in the last roster is still
- * listed. A reset empties the roster whole and the cap evicts the OLDEST entries first, so a surviving older id proves
- * neither happened. The cost is recorded: a real stop of the oldest entry is left out, as is the last listed id's.
+ * listed. A reset empties the roster whole and the cap evicts the OLDEST entries first, so a surviving older id is the
+ * witness that neither happened. The cost is recorded: a real stop of the oldest entry is left out, as is the last listed
+ * id's. NOT A PROOF (review 2978 F3): an older id that was stopped and re-added since (a continued helper, listed again
+ * with a new start) still counts as a survivor, because the memory keeps ids, not their starts; so a reset followed by a
+ * continued older helper's new SubagentStart, both between two readings, reads the newer ids as `unlisted` rather than
+ * left out. That label claims no end, and H1b keeps the memory's shape (a recorded residual).
  */
 export function seenDrops(memory: HelperMemory, roster: RosterInput, proc: Proc): ReadonlySet<string> {
   const none: ReadonlySet<string> = new Set();
@@ -766,15 +800,7 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
   for (const e of entries) if (isHelperId(e.id)) entryById.set(e.id, e);
   const listedFull = entries.length >= HELPER_LISTED_MAX;
 
-  // Which ids are Agent helpers. A launch result names one (positive evidence); else its meta sits at the Agent path with
-  // another type than a workflow's, and the roster does not call it a workflow's agent.
-  const isAgent = (id: string): boolean => {
-    if (i.facts.get(id)?.launch != null) return true;
-    const m = i.metas.get(id);
-    if (m === undefined || m.path !== 'agent' || m.agentType === WORKFLOW_AGENT_TYPE) return false;
-    const e = entryById.get(id);
-    return !(e !== undefined && isWorkflowAgentName(e.name));
-  };
+  const isAgent = (id: string): boolean => isAgentHelper(i.facts.get(id), i.metas.get(id), entryById.get(id)?.name);
   const ids = new Set<string>();
   for (const [id, f] of i.facts) if (isHelperId(id) && f.launch !== null && isAgent(id)) ids.add(id);
   for (const id of i.metas.keys()) if (isHelperId(id) && isAgent(id)) ids.add(id);
@@ -827,14 +853,14 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
       id,
       description: capChars(m?.description ?? null, HELPER_DESCRIPTION_MAX),
       agentType: capChars(m?.agentType ?? null, HELPER_LABEL_MAX),
-      model: capChars(m?.model ?? launch?.model ?? null, HELPER_LABEL_MAX),
+      model: capChars(m?.model ?? helperDisplayText(launch?.model), HELPER_LABEL_MAX),
       effort: capChars(m?.effort ?? null, HELPER_LABEL_MAX),
       state,
       startedAt: fromLaunch ?? entryById.get(id)?.startedAt ?? null,
       endedAt, // only a final branch above sets it
       lastActivityAt: m?.lastWriteAt ?? null,
       tokens: m?.tokens ?? null,
-      summary: capBytes(shownEnd?.summary ?? null, HELPER_SUMMARY_MAX_BYTES),
+      summary: capBytes(helperDisplayText(shownEnd?.summary), HELPER_SUMMARY_MAX_BYTES),
       hasReport: shownEnd?.hasReport ?? false,
     });
   }
@@ -865,4 +891,99 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
       noEndShown: boundedSet([...prev.noEndShown, ...[...shownNoEnd].filter((id) => shown.has(id))]),
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Session helpers H1b (D-8862; spec 2026-11-19-session-helpers-design §3.1, §8): the reads' facts, and the frame.
+
+/** The raw hook read the roster comes from, as the stream holds it: `hookstate.ts#HookStateRawRead`, structurally, so this
+ *  L1 file imports nothing from the adapter that reads it. */
+export type HookRosterRead =
+  | { ok: false; reason: 'absent' | 'unmeasured' | 'malformed' }
+  | {
+    ok: true;
+    identity: 'current' | 'foreign' | 'unregistered';
+    aliveAt?: number;
+    state: { updatedAt: number; subagents: ReadonlyArray<{ id?: string; name: string; startedAt: number }> };
+  };
+
+export interface HelperHookReading { readonly uuid: string; readonly at: number; readonly raw: HookRosterRead }
+
+/** A lagged roster publication must not fabricate a drop. Apply this to the helper arm only, never the hook ask. */
+export function orderHelperHook(last: HelperHookReading | null, next: HelperHookReading): HelperHookReading {
+  return last !== null && last.uuid === next.uuid && next.at < last.at ? last : next;
+}
+
+/**
+ * The decision's roster from the stream's RAW hook read and the time it was read (`FeedReading.helperHook`), each reason the
+ * roster cannot be used told apart, never the aged fold's one "no state" (`foldHookStateRead` folds five of them). The order
+ * and the clock are the aged fold's own: identity first, then age from the later of `updatedAt` and `aliveAt`, stale only
+ * PAST `freshMs` (`HOOKSTATE_FRESH_MS`, passed in, so this file imports no adapter). No read this reading (no hook, or no
+ * read time) is `unreadable`: it is never a roster that lists nothing. An entry with no id lists none (its `id` is null).
+ */
+export function rosterInputOf(raw: HookRosterRead | null, at: number | null, now: number, freshMs: number): RosterInput {
+  if (raw === null || at === null) return { kind: 'unusable', why: { why: 'unreadable' } };
+  if (!raw.ok) return { kind: 'unusable', why: raw.reason === 'absent' ? { why: 'absent' } : { why: 'unreadable' } };
+  if (raw.identity !== 'current') return { kind: 'unusable', why: { why: raw.identity } };
+  const age = now - Math.max(raw.state.updatedAt, raw.aliveAt ?? raw.state.updatedAt);
+  if (age > freshMs) return { kind: 'unusable', why: { why: 'stale', hookAgeMs: age } };
+  return { kind: 'usable', at, entries: raw.state.subagents.map((e) => ({ id: e.id ?? null, name: e.name, startedAt: e.startedAt })) };
+}
+
+/** An Agent helper's meta file (`subagents/agent-<id>.meta.json`), narrowed: the facts a row shows and the one on-disk end
+ *  marker, `finished` (true only when the file says `true`). Null for bytes that are not a JSON object. */
+export function parseHelperMeta(raw: string): { agentType: string | null; description: string | null; model: string | null; effort: string | null; finished: boolean } | null {
+  let o: unknown;
+  try { o = JSON.parse(raw); } catch { return null; }
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) return null;
+  const r = o as Record<string, unknown>;
+  return {
+    agentType: helperDisplayText(r.agentType), description: helperDisplayText(r.description),
+    model: helperDisplayText(r.model), effort: helperDisplayText(r.effort), finished: r.finished === true,
+  };
+}
+
+/** The newest `timestamp` among the whole JSON lines of `text`, epoch ms: a helper transcript's last write. A tail read that
+ *  starts mid-line skips its fragment like any line that does not parse (`lastUsageTokens`' reason). Null: none. */
+export function lastLineTime(text: string): number | null {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i]!;
+    if (!t.includes('"timestamp"')) continue;
+    let o: unknown;
+    try { o = JSON.parse(t); } catch { continue; }
+    const ts = (o as { timestamp?: unknown } | null)?.timestamp;
+    const ms = typeof ts === 'string' ? Date.parse(ts) : NaN;
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
+
+/** The `workflows` frame, as the wire carries it (`shared/api.ts`'s member, the intersection with `HelperFrameMembers`). */
+export type WorkflowsFrameMsg = { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true } & HelperFrameMembers;
+
+/**
+ * The session frame for one reading, and whether it is due: the workflow arm is `workflowsFrame`'s, the Agent arm is the
+ * decision's, and the gate is `frameDue` (the copy `checkWorkflows` held inline is deleted, review 2961 F9). Each helper
+ * member is present only when it says something, so a session with no helper sends today's frame byte for byte. Whether
+ * the JSON changed is delivery's.
+ */
+export function helpersFrame(a: {
+  read: WorkflowsRead;
+  hookSaysWorkflow: boolean;
+  lastRead: readonly WorkflowView[];
+  arm: AgentArm;
+  readEvery: { refreshed: number; of: number } | null;
+  sentBefore: boolean;
+}): { due: boolean; frame: WorkflowsFrameMsg } {
+  const w = workflowsFrame(a.read, a.hookSaysWorkflow, a.lastRead);
+  const frame: WorkflowsFrameMsg = {
+    type: 'workflows',
+    workflows: w.workflows,
+    ...(w.unreadable ? { unreadable: true as const } : {}),
+    ...(a.arm.agents.length > 0 ? { agents: a.arm.agents } : {}),
+    ...(a.arm.unmeasured !== null ? { agentsUnmeasured: a.arm.unmeasured } : {}),
+    ...(a.readEvery !== null ? { readEvery: a.readEvery } : {}),
+  };
+  return { due: frameDue({ workflows: a.read.kind, unreadable: w.unreadable, knownHelpers: a.arm.known, sentBefore: a.sentBefore }), frame };
 }
