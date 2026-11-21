@@ -540,7 +540,8 @@ Linear project. The work then runs as a normal run of that programme.
 
 Operator items that belong to no programme (map approvals §10.3, the initiatives-off item §9, *Name a Linear owner*
 §7.5) are raised under one reserved programme slug, `linear-sync`, that ccrc creates and the runs screen does not
-list. The slug holds items only: there is no run path under it, and `runs open` refuses it (§4.3). **Builder:**
+list. The slug holds items and the Overlord's team-link calls (§3.1, D-8809), and nothing else: there is no run path
+under it, and `runs open` refuses it (§4.3). **Builder:**
 `operator_items.program` is `NOT NULL`; the reserved slug is how such items get a programme without a schema change to
 items.
 
@@ -694,8 +695,9 @@ Only teams that some ccrc project names by its team key are migrated. A team no 
   team is managed yet or not (§7.1). They need no migration.
 - **Before the apply,** the team's existing issues stay as they are, including every issue on a proposed or approved
   map, and no drift pass, inbound mail or `plan-owned` refusal reaches the team (§7.1).
-- **Programmes already done** are given a completed initiative only when they still own open issues to place.
-  Otherwise their closed issues are left as they are. **Design call.**
+- **Programmes already done** are given an initiative only when they still own open issues to place. That initiative
+  follows its plan like any other (active while its placed tickets are open, D-8796), never a forced Completed.
+  Otherwise their closed issues are left as they are. **Design call** (amended 2026-11-20).
 
 ### 10.6 Cost
 
@@ -853,7 +855,8 @@ Every call the author made without a ruling, for the operator to check:
 17. Persistent drift is three restores in seven days; while open, one restore per pass and one comment per day (§7.4).
 18. For a shared team key, the team's Linear owner is the owning project's (§7.5).
 19. The Upkeep epic holds only untaken issues and is never a run's programme; a taken issue moves into the taker's
-    programme and epic; the reserved `linear-sync` slug holds items only (§7.6).
+    programme and epic; the reserved `linear-sync` slug holds items and the Overlord's team-link calls, never a run
+    (§7.6, ruled 2026-11-20).
 20. Session `create` and managed `update` are refused `plan-owned` in managed teams (§7.7).
 21. No delete or archive document in the proxy (§8.1).
 22. The hierarchy writes are server-internal, not session verbs (§8.2).

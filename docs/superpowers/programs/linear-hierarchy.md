@@ -43,12 +43,14 @@ They decide every question the plan leaves open.
 | 3 fix | Linear's 255-character description cap; the cancel comment's journal field | D-8708 | #2973 | **merged** 2026-11-17 as `d3f357f24` (head `640458837`; run 2358 closed done; reviews 2364 and 2368; dequeued once on a collector test's load timeout and re-enqueued) |
 | 4 | drift, inbound and public text: migration (landed as **95**), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | #2982 | **merged** 2026-11-18 as `98d3b29d4` (head `9c9e42614`, by the merge queue; run 2337 closed done): Tasks 4.1–4.4 plus Task 4.5, wave 3's carried findings; six review rounds (2386, 2394, 2408, 2427, 2435 withdrawn, 2443), the cap lifted by the operator after round 3; dequeued once on a migration conflict with #2987 and ejected for one merge of main |
 | 4 follow-ups | the gaps wave 4's reviews carried (D-8725): restores honour every hold, drift scope follows the binding, the page cursor, retired inbound rows, lost-reply creates, the read order, and the advisories | D-8183 | #3021 | **merged** 2026-11-19 as `04b297898` (head `11788af93`, by the merge queue; run 2446 closed done): D-8733..D-8736 defined; five review rounds (2457, 2524, 2571, 2753, 2798), the cap lifted by the operator for rounds 4 and 5; dropped by the queue once on a migration conflict, then five merges of main as other PRs took slots 101 to 106, landing as migration **107** |
-| 4 follow-ups, second set | the findings rounds 3 to 5 carried (below) | D-8183 | #3088 | **in review** 2026-11-19: run 2810 (ticket `w4-follow-ups-2`), a fresh child; wave-done at `fd1592dea` (items 1 to 13 fixed, 14 carried while #3075 is open; 8740 and 8741 unused); review run 2834 (the held-out panel); lands before wave 7's pilot |
+| 4 follow-ups, second set | the findings rounds 3 to 5 carried (below) | D-8183 | #3088 | **merged** 2026-11-20 as `b60aeefd2` (head `4098b57c3`, by the merge queue; run 2810 closed done): three review rounds (2834, 2874, 2885); round 3's minors went to the clause follow-up |
 | 5 | the console: the project row's hierarchy settings, the epic and Upkeep pages, the five hierarchy items' controls (Tasks 5.1, 5.3, 5.4; the Plan section is the work map's Work card) | D-8184 | #3022 | **merged** 2026-11-18 as `8d6e5c03c` (head `f36c800fc`, by the merge queue; run 2447 closed done): three review rounds (2453, 2462, 2491); accepted at round 3 with one dormant finding and the advisories carried to wave 7 |
 | 6 | the coordinator, worker and Linear skills (without the coordinator's plan clause, D-8739) | D-8185 | #3040 | **merged** 2026-11-18 as `6f5421139` (head `3a40c558b`, by the merge queue; run 2505 closed done): three review rounds (2580, 2590, 2597) |
-| 6 clause | the coordinator's plan clause, its count word and the matching README and CLAUDE.md words (D-8739) | D-8185 | — | ticket `w6-clause`, not started: it waits for the Overlord's autonomy clause (D-8126), which takes number 21; this clause becomes 22 |
-| 7 | the per-team migration: start, map propose and check, approve, apply, report, follow-up maps, put back; then the pilot team | D-8186 | — | not started |
-| 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence, a coordinator's suggestion, the Overlord's link as a call made for the operator, the console and the skill | its number at run-open | — | not started; runs alongside wave 7's pilot and never blocks it |
+| 6 clause | the coordinator's plan clause (22), its count words in README and CLAUDE.md, the Linear skill's wording, `api.md`'s pointer to `plan.md`, and #3088's leftover words and pins (D-8739) | D-8185 | #3119 | **merged** 2026-11-20 as `9c3c5dddf` (head `fab3d9cf6`, by the merge queue; run 2878 closed done): three review rounds (2920, 2929, 2960); accepted at the cap with its last words carried to ticket `w6-words` |
+| 7 | the per-team migration: start, map propose and check, approve, apply, report, follow-up maps, put back | D-8186 | #3109 | **merged** 2026-11-20 as `7d517766f` (head `983ffcd67`, by the merge queue; run 2846 closed done): D-8795 to D-8802 defined; three review rounds (2892, 2918, 2955); accepted at the cap, migration **114**; round 3's findings went to `w7-fixes` |
+| 7 fixes | review 2955's findings: the report keeps a level closed with no relation, an issue the owner has taken leaves the migration (listed taken), a close asks again before each write, put back leaves a held issue alone | D-8186 | #3137 | **merged** 2026-11-21 as `4ef2c2518` (head `085a48a14`, by the merge queue; run 2984 closed done): three review rounds (2998, 3004, 3016); accepted at the cap, two narrow windows carried to `w7-race`; its two issued numbers unused |
+| pilot fixes | the migration resolves a project's team through its workspace (`w8-migration-workspace`), a take during put back's or reconcile's read (`w7-race`), and review 3020's words | D-8186, D-8808 | — | **in progress**: run 3027; numbers 8870 and 8871 issued; no team's migration is started before it lands |
+| 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence (built, off), a coordinator's suggestion, the Overlord's link as a call made for the operator, the console | D-8808, D-8809 | #3123 | **merged** 2026-11-21 as `6c3ea2c55` (head `dbc6483eb`, by the merge queue; run 2862 closed done): three review rounds (2971, 2997, 3020); accepted at the cap, migration **116**; six follow-up tickets, one dropped as built |
 
 ## Decisions & deviations
 
@@ -316,6 +318,37 @@ They decide every question the plan leaves open.
   ones) and when a run with no ticket is refused `ticket-required`. The plan's wave-epic-mismatch lines and Task 2.1's
   wire contract (`waves?` on `PlanEpicBody`) are run 2810's item 14, taken into its fix round.
 
+- **2026-11-20 — the operator answers item 496 (the landing-order programme).** Its coordinator then accepted additive
+  packets from every programme. The clause follow-up landed clause 22 in #3119 itself rather than in a run of its own,
+  and waves 7 and 8 set README's lane count word through the same packets. The coordinator's item 502, which pointed at item 496, was
+  withdrawn as moot.
+
+- **2026-11-20 — wave 7's rulings (the coordinator).** D-8795 (the migration's policy interfaces), D-8796 (the
+  migration goes through the plan sync, charged to lane `migration` with a per-tick budget), D-8797 (the Upkeep link
+  shows whenever there is a team key), D-8798 (apply sets planRequired only for programmes the map names or that have
+  declared a plan), D-8799 (the map item settles on Approve), D-8800 (the migration's columns), D-8801 (a finished
+  entry carries a pull request or a one-line reason) and D-8802 (planBy follows the last put). Review round 3 (run
+  2955) found defects that cannot fire until the operator starts a team's migration, so #3109 landed at the cap and a
+  follow-up run fixed them: an issue the team's Linear owner has taken through inbound leaves the migration, is listed
+  taken, is never written over, and is never named in the owner's map mail.
+
+- **2026-11-20 — the live capture (the operator, item 498).** The operator said go: one read-only capture of the issues
+  attached to this repository's pull requests, through the central key, once Task 8.3's read is merged and deployed.
+  The coordinator runs it, records the answer as a scrubbed fixture in a follow-up, and only then may the evidence be
+  wired (ticket `w8-attached-wire`).
+
+- **2026-11-20 — wave 8's rulings (the coordinator).** D-8808 (the mapping wave's departures) and D-8809 (the
+  Overlord's confirm: act kind `link-team` at the full rung only, its calls filed under `linear-sync`, the link stored as
+  source `auto` plus its call id, one function deriving the wire's source). In review: a key written with no workspace
+  is stored only when one connected workspace holds it (two is refused `team-ambiguous`, an unreadable store
+  `unavailable`); an unchanged Save is not the operator's decision; only a session that claims an open run may suggest
+  a team, one suggestion each; the Overlord's call names no session.
+
+- **2026-11-21 — what waits before the pilot (the coordinator).** Review 2997 found the migration lane and the plan-map
+  route still resolve a team by its key alone, and review 3016 found two windows where an owner's take lands during one
+  read. Both are wave 7's code; run 3027 fixes them with review 3020's words. The pilot team's migration is not started
+  before that run lands, and its report goes to the operator before any other team.
+
 ## Carried constraints
 
 Reviewers of every wave get these.
@@ -355,36 +388,15 @@ Reviewers of every wave get these.
 
 ## Next-wave brief
 
-The second follow-up run (run 2810) is under way, and lands before wave 7's pilot touches another team.
+Every planned wave has landed. Run 3027 (tickets `w8-migration-workspace` and `w7-race`) is the last fix before the
+pilot: every team lookup the migration makes goes through the project row's workspace, put back and the reconcile read
+ask again after their read whether the owner has taken the issue, and D-8808 and the wave 8 note take review 3020's
+words.
 
-The wave 6 clause follow-up (ticket `w6-clause`) waits for the Overlord's autonomy clause (D-8126, clause 21) to land.
-It then adds this programme's clause as 22, with its count word ("twenty-two"), rebuilt against main, and takes the four
-findings wave 6's round 3 carried: the clause package's size against the skill's growth cap, the Linear skill's
-"creates, moves and closes" wording for a team that is not managed, a pointer from `references/api.md` to
-`references/plan.md`, and the coordinator being told of a worker's follow-up ticket.
+Then the pilot, the operator's alone: the operator picks the pilot team and starts its migration from the console; its
+map is approved there; its report goes to the operator before any other team is started.
 
-Wave 7 (D-8186), the migration, is the first wave to touch teams beyond this programme's own. Its brief carries:
-- wave 3's A5 (`ticketOfRun` reads tickets that were put back) and the F3/F5 interaction (a bound ticket put back may
-  take its held team off its project);
-- D-8737's handover: the map and report bodies are wired to wave 7's read, and the map item gains spec §11.3's
-  per-programme epics and checkpoints section;
-- from wave 5's review round 3: the stuck act bar's bottom offset must be the shell's `--safe-bottom` (the inset plus
-  the phone bar), with the browser test emulating a safe-area inset so it can go red (F1, with A4 and the note's
-  no-phone-bar point);
-- wave 5's minor carries:
-  - re-read the project list after a linking write whose outcome is unknown (A1, D-8147);
-  - the add-project sheet resets its coordinator read when it closes (A3, A8);
-  - the React-singleton pin checks the `inline` list (A2);
-  - the Upkeep link's visibility rule is recorded as a departure or tied to the inbound line (A5);
-  - the dead `write-failed` sentence and the two tests that pin a 4xx for it (A6);
-  - a 503 `unavailable` answered before any write reads as unconfirmed (A7);
-- task notes under `docs/superpowers/programs/linear-hierarchy/`;
-- the pilot team first, the pilot's report to the operator before any other team, and approvals in the console only.
-
-Wave 8 (spec §3.1), team and workspace mapping, runs alongside wave 7's pilot and never blocks it. Its brief carries:
-`shared/api.ts` may only shrink, so the team evidence and link source maps move to `shared/linking.ts` before they grow;
-the attached-issues read is built on fixtures and stays off until the operator's go for its one live capture (an item
-raised when Task 8.3 starts); the Overlord's link acts within its authority and is recorded as a call made for the
-operator.
-
-One number of the block allocated on 2026-11-18 is still free (8742). Waves 7 and 8 each take a new block at run-open.
+Open follow-up tickets: `w6-words` (skill reference words after review 2960, with the `plan.md` sentence on a follow-up
+map naming a taken issue), `w8-attached-wire` (after the live capture), `w8-overlord-skill`, `w8-call-anchor`,
+`w8-triage-l1` (the triage row choice moves into the policy) and `w8-skill-section` (the coordinator skill's linking
+section, reviewed text in the wave 8 note). Each is a rules or small code change of its own, after the pilot fixes.
