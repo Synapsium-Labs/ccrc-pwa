@@ -11,6 +11,7 @@
 // the `BuildCaptureResult` the record stores. A capture that cannot be judged (it did not finish) is no verdict here: the
 // runner answers none, and the lane keeps the build queued.
 import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';
+import { HOOK_EVENTS, hookEventIs, isHookEvent, type HookEvent } from './hook-events.js';
 
 // ── the job kind's words ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -104,14 +105,14 @@ export function readCaptureRecords(text: string): { readonly records: CaptureRec
 // ── the grammar ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Every hook event ccrc installs (`ccd/install-session-hooks.sh`'s `EVENTS_JSON`, plus `PreToolUse`, which gets its own
- *  matcher entry), in the order the drive raises them. Every one must be recorded for a pass. */
-export const CAPTURE_EVENTS: readonly string[] = Object.freeze([
-  'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Stop',
-  'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'StopFailure', 'SessionEnd',
-]);
+ *  matcher entry): the one vocabulary, `shared/hook-events.ts#HOOK_EVENTS`, not a second list. Every one must be recorded
+ *  for a pass. */
+export const CAPTURE_EVENTS: readonly HookEvent[] = HOOK_EVENTS;
 
 /** A JSON value's kind, as a rule names it. `present` admits any value but `undefined`. */
 export type CaptureFieldType = 'string' | 'number' | 'boolean' | 'object' | 'present';
+export const CAPTURE_FIELD_TYPE_MAP: Record<CaptureFieldType, true> = { string: true, number: true, boolean: true, object: true, present: true };
+export const CAPTURE_FIELD_TYPES: readonly CaptureFieldType[] = Object.keys(CAPTURE_FIELD_TYPE_MAP) as CaptureFieldType[];
 
 /** One field a reader relies on: its dotted path, its kind, and whether the reader needs it (an optional field is checked
  *  only for its kind when present). */
@@ -126,7 +127,7 @@ export const HOOK_COMMON_RULES: readonly CaptureFieldRule[] = Object.freeze([
 ]);
 
 /** What `ccd/session-hook.sh` reads from each event's payload beyond the common fields. */
-export const HOOK_EVENT_RULES: Readonly<Record<string, readonly CaptureFieldRule[]>> = Object.freeze({
+export const HOOK_EVENT_RULES: Readonly<Record<HookEvent, readonly CaptureFieldRule[]>> = Object.freeze({
   SessionStart: [req('source', 'string'), opt('model', 'present')],
   UserPromptSubmit: [req('prompt', 'string')],
   PreToolUse: [req('tool_name', 'string'), req('tool_input', 'object'), opt('tool_use_id', 'string')],
@@ -208,13 +209,13 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
     const where = r.kind === 'hook' ? `#${i + 1} ${r.event}` : `#${i + 1} statusline`;
     if (r.kind === 'hook') {
       seen.add(r.event);
-      const rules = HOOK_EVENT_RULES[r.event];
+      const rules = isHookEvent(r.event) ? HOOK_EVENT_RULES[r.event] : undefined;
       if (rules === undefined) lines.push(`${where}: not an event ccrc installs`);
       for (const b of ruleBreaks(r.payload, [...HOOK_COMMON_RULES, ...(rules ?? [])])) lines.push(`${where}: ${b}`);
       if (at(r.payload, 'hook_event_name') !== undefined && at(r.payload, 'hook_event_name') !== r.event) {
         lines.push(`${where}: hook_event_name does not name ${r.event}`);
       }
-      if (r.event === 'PermissionRequest' && at(r.payload, 'cwd') === rec.cdDir) cwd = true;
+      if (hookEventIs(r.event, 'PermissionRequest') && at(r.payload, 'cwd') === rec.cdDir) cwd = true;
     } else {
       statuslines++;
       for (const b of ruleBreaks(r.payload, STATUSLINE_RULES)) lines.push(`${where}: ${b}`);

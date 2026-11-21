@@ -13,6 +13,7 @@
 // - THE STAND-IN'S REPLIES: one rule per request, keyed on what the request carries, never on a model.
 import path from 'node:path';
 import { CAPTURE_EVENTS } from '../../../shared/claudeBuildCapture.js';
+import type { HookEvent } from '../../../shared/hook-events.js';
 import { SYSTEM_PATH } from './spec.js';
 
 // ── the paths ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -60,7 +61,7 @@ export const captureWrites = (p: CapturePaths): readonly string[] => [p.dir, p.h
 // ── the seeded config ────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The events whose hook entry takes a tool matcher. */
-const MATCHED = new Set(['PreToolUse', 'PostToolUse', 'PermissionRequest']);
+const MATCHED: ReadonlySet<HookEvent> = new Set<HookEvent>(['PreToolUse', 'PostToolUse', 'PermissionRequest']);
 
 /** A shell word, single-quoted. */
 const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -108,7 +109,7 @@ export const CAPTURE_MARK = {
 
 /** One step: the text typed (then Enter; null types nothing), and the events that must be recorded before the next
  *  step (the drive waits for every one, each after the step began). */
-export interface CaptureStep { readonly type: string | null; readonly waitFor: readonly string[] }
+export interface CaptureStep { readonly type: string | null; readonly waitFor: readonly HookEvent[] }
 
 /** The drive (spec Table 1). The build's start raises SessionStart; `/exit` ends it with SessionEnd. */
 export const CAPTURE_STEPS: readonly CaptureStep[] = Object.freeze([

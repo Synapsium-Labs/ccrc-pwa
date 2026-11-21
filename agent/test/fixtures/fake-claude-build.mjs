@@ -7,11 +7,13 @@
 // It reads its VERSION from its own file name. Broken variants are chosen by that name (the environment is built from
 // empty, so no switch can ride in it): a patch of 999 never raises SubagentStop; a patch of 998 hangs at step two, never
 // answering that prompt; a patch of 997 raises everything but never exits on `/exit`.
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
-import readline from 'node:readline';
-import { randomUUID } from 'node:crypto';
+// It is written as CommonJS on purpose: the copy has no extension (its name is the version), and Node reads such a file as
+// CommonJS; it is only ever run from that copy.
+const { spawnSync } = require('node:child_process');
+const { mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const path = require('node:path');
+const readline = require('node:readline');
+const { randomUUID } = require('node:crypto');
 
 const version = path.basename(process.argv[1]);
 const patch = version.split('.')[2];
@@ -29,7 +31,7 @@ function writeStatus(status) {
 }
 
 function sh(command, payload) {
-  const r = spawnSync('/bin/sh', ['-c', command], { input: JSON.stringify(payload), encoding: 'utf8', env: process.env, cwd: shellCwd });
+  const r = spawnSync('/bin/sh', ['-c', command], { input: JSON.stringify(payload), encoding: 'utf8', env: process.env, cwd: shellCwd, timeout: 20_000, killSignal: 'SIGKILL' });
   return r.stdout ?? '';
 }
 
@@ -47,7 +49,7 @@ function statusline() {
 
 async function post(messages, tools) {
   const r = await fetch(`${base}/v1/messages?beta=true`, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_AUTH_TOKEN ?? '' },
+    method: 'POST', signal: AbortSignal.timeout(20_000), headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_AUTH_TOKEN ?? '' },
     body: JSON.stringify({ model: 'fake-model', max_tokens: 64, stream: false, messages, tools }),
   });
   return { status: r.status, body: await r.json() };
@@ -100,6 +102,7 @@ async function compact() {
   hook('PostCompact', { trigger: 'manual' });
 }
 
+async function main() {
 writeStatus('idle');
 hook('SessionStart', { source: 'startup' });
 statusline();
@@ -115,3 +118,5 @@ for await (const raw of readline.createInterface({ input: process.stdin })) {
   else if (line.includes('step two') && patch === '998') continue;
   else if (line.includes('ccrc capture step')) await turn(line);
 }
+}
+main().catch((e) => { console.error(e); process.exit(1); });
