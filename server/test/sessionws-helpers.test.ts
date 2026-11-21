@@ -7,7 +7,7 @@
 //
 // RED FIRST: committed before the code, against origin/main, where the frame carries the workflow rows only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Deps } from '../src/server.js';
 import { NO_TICK, SessionStream } from '../src/sessionws.js';
@@ -273,5 +273,94 @@ describe('the wiring, pinned after the first mutation round', () => {
       await p.feed?.poll();                                  // an empty directory: due, the same JSON
     } finally { stream.stop(); }
     expect(wfFrames(frames)).toEqual([]);
+  });
+});
+
+// Session helpers H1c (D-8873): the bounded start scan, end to end (spec §3.1 "The start scan", Table 13's scan tests). A
+// reload (no `since`: a backlog) and a reconnect (a matching `since`: no backlog, the tail resumes at the client's offset)
+// each rebuild the reader, which scans back from its own seam; within the bound they draw the same rows, and a helper beyond
+// it draws from the roster and its meta alone. RED FIRST, against origin/main, where neither stream reads past its window.
+describe('the start scan: a reload and a reconnect draw the same rows within its bound (H1c)', () => {
+  const MIB = 1024 * 1024;
+  const launch = (id: string, at: number): string => line({
+    type: 'user', uuid: `l-${id}`, timestamp: iso(at),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${id}`, content: 'launched' }] },
+    toolUseResult: { isAsync: true, status: 'async_launched', agentId: id, description: 'd', resolvedModel: 'model-b', prompt: 'p' },
+  });
+  const fill = (at: number, total: number): string => {
+    const one = line({ type: 'user', uuid: `f-${at}`, timestamp: iso(at), message: { role: 'user', content: 'x'.repeat(64 * 1024) } });
+    return one.repeat(Math.ceil(total / one.length));
+  };
+  type Scanned = Priv & { workflows: { startScan?: { done: boolean; cost: { bytes: number; reads: number; stop: string | null } } } | null };
+  /** Readings until the reader's scan has stopped, then one more, so its last facts are folded; the last frame's rows. */
+  const settle = async (stream: SessionStream, frames: SessionStreamMsg[]): Promise<{ rows: unknown[]; scan: Scanned['workflows'] }> => {
+    const p = stream as unknown as Scanned;
+    for (let k = 0; k < 80 && p.workflows?.startScan?.done !== true; k++) {
+      await new Promise((r) => setTimeout(r, 10));
+      await p.feed?.poll();
+    }
+    await p.feed?.poll();
+    const rows = (wfFrames(frames).at(-1)?.agents ?? []).map((a) => ({
+      id: a.id, state: a.state, startedAt: a.startedAt, endedAt: a.endedAt, summary: a.summary, hasReport: a.hasReport,
+    }));
+    return { rows, scan: p.workflows };
+  };
+
+  it('a launch and a notification behind the backlog\'s window reach both: the same rows, from the scan', async () => {
+    writeFileSync(tfile, launch('a1', now - 480_000) + fill(now - 420_000, 1.5 * MIB) + noticeLine('a1', now - 360_000)
+      + fill(now - 300_000, 1.2 * MIB) + launch('a2', now - 240_000) + fill(now - 180_000, 1.2 * MIB));
+    const resumeAt = statSync(tfile).size;
+    appendFileSync(tfile, fill(now - 120_000, 200 * 1024));
+    hook([{ id: 'a2', name: 'Explore', startedAt: now - 239_000 }]);
+    seedHelper(S, 'a1', { finished: true });
+    seedHelper(S, 'a2');
+    const want = [
+      { id: 'a2', state: 'running', startedAt: now - 240_000, endedAt: null, summary: null, hasReport: false },
+      { id: 'a1', state: 'done', startedAt: now - 480_000, endedAt: now - 360_000, summary: 'all done', hasReport: true },
+    ];
+
+    const reload = open();
+    try {
+      await reload.stream.start();
+      const got = await settle(reload.stream, reload.frames);
+      expect(got.rows).toEqual(want);
+      expect(got.scan?.startScan?.cost.stop).toBe('start');
+    } finally { reload.stream.stop(); }
+
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const run: Runner = async (_cmd, args) => ({ ran: true, code: 0, stdout: args[0] === 'list-panes' ? `${PID}\n` : '', stderr: '' });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
+    const frames: SessionStreamMsg[] = [];
+    const reconnect = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID, offset: resumeAt, file: tfile }, NO_TICK);
+    try {
+      await reconnect.start();
+      expect(frames.some((f) => f.type === 'backlog')).toBe(false); // a resume: no backlog
+      const got = await settle(reconnect, frames);
+      expect(got.rows).toEqual(want);
+    } finally { reconnect.stop(); }
+  });
+
+  it('a helper whose launch lies beyond HELPER_SCAN_BYTES draws from the roster and its meta alone; one inside it from its launch', async () => {
+    writeFileSync(tfile, launch('far', now - 300_000) + launch('done-far', now - 299_000) + noticeLine('done-far', now - 298_000)
+      + fill(now - 290_000, 8 * MIB + 512 * 1024) + launch('near', now - 200_000) + fill(now - 100_000, 1.5 * MIB));
+    hook([
+      { id: 'far', name: 'Explore', startedAt: now - 299_500 },
+      { id: 'done-far', name: 'Explore', startedAt: now - 298_500 },
+      { id: 'near', name: 'Explore', startedAt: now - 199_500 },
+    ]);
+    seedHelper(S, 'far');
+    seedHelper(S, 'done-far', { finished: true });
+    seedHelper(S, 'near');
+    const { stream, frames } = open();
+    try {
+      await stream.start();
+      const got = await settle(stream, frames);
+      expect(got.scan?.startScan?.cost).toMatchObject({ stop: 'bytes', bytes: 8 * MIB });
+      expect(got.rows).toEqual([
+        { id: 'far', state: 'running', startedAt: now - 299_500, endedAt: null, summary: null, hasReport: false },
+        { id: 'near', state: 'running', startedAt: now - 200_000, endedAt: null, summary: null, hasReport: false },
+        { id: 'done-far', state: 'finished', startedAt: now - 298_500, endedAt: now - 20_000, summary: null, hasReport: false },
+      ]);
+    } finally { stream.stop(); }
   });
 });
