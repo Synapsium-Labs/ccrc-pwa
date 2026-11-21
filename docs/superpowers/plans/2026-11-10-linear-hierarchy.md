@@ -304,10 +304,14 @@ number from `POST /api/ledger/deviations`.
   held because the coordinator skill's pin file and README.md are frozen by the landing-order programme's run 1850 (#2837),
   which refused a co-edit on 2026-11-18. Wave 6's PR ships the rest of Tasks 6.1 and 6.2; the tests for
   `references/plan.md`, the open step and the ledger template's epic column live in a new file,
-  `server/test/coordinator-plan-reference.test.ts`. Until the follow-up lands, the rule that the operator acts on hierarchy
+  `server/test/coordinator-plan-reference.test.ts`. Until the follow-up landed, the rule that the operator acts on hierarchy
   items in the console, and that a coordinator never answers one for them nor asks for those approvals in its turn text,
-  lives in the coordinator SKILL.md's Linear section and `references/plan.md`, not in the contract (amended in review
-  round 1, run 2580 F1). In the same commit, the follow-up's caps hunk sets the coordinator skill's size cap to the
+  was kept outside the contract (amended in review round 1, run 2580 F1). The follow-up moved that sentence out of
+  SKILL.md's Linear section into clause 22, which is why the cap rose by 490 bytes for a 635-byte clause line, and
+  `references/plan.md` now points at the clause rather than restating the rule (amended by review 2960 A2). Clause 22 as
+  landed says this session "never files or edits a hierarchy object", where Task 6.1's text says "never files a hierarchy
+  object"; the words "or edits" came with wave 6's carried packet (the wave 6 note), not with run 2878's own range, and
+  the clause stands as landed (review 2960 F2's residue). In the same commit, the follow-up's caps hunk sets the coordinator skill's size cap to the
   file's measured size with the clause, measured when it lands, never a figure carried from an older tree; wave 6's PR
   shrank that file below `main`'s cap first, so the cap moves by less than the clause's bytes (amended in review round 2,
   run 2590 A2). The Overlord's clause took 21, so this clause lands as 22; run 2878's carried packet measured 24829
@@ -336,10 +340,18 @@ number from `POST /api/ledger/deviations`.
   `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. When the
   doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused, no managed team in the issue's
   workspace), a decision that binds the issue (a take into an epic, an Upkeep placement, a hand) is refused `unreachable`
-  (503, the Linear read's existing word; a retry helps only when Linear or ccrc's Linear store could not be read: a missing
-  key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to replace it, a
-  workspace with no managed team is not re-read at all, and an answer about that one issue (`linear-forbidden`,
-  `linear-invalid`, `malformed`) repeats until the issue changes in Linear; amended by review 2920 F4 and review 2929 F3), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  (503, the Linear read's existing word, with one detail whatever the cause, so `references/plan.md` tells a coordinator
+  only to try once more and then tell the operator. By cause, a retry helps only when Linear or ccrc's Linear store could
+  not be read: a missing key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to
+  replace it, and a workspace with no managed team is not re-read at all. Linear's answer, as ccrc reads it, repeats
+  until the issue changes in Linear when Linear refused that one issue (`linear-forbidden`, `linear-invalid`), or when
+  ccrc's shaper reads it `malformed` because a field of the issue is outside the grammar (the by-id read shapes the whole
+  issue); it may clear on a retry when the body could not be read (a transport fault), or when a readable response
+  carried no `data` or no issue, which the shaper reads `malformed` too. A door re-reads the issue on every call and, for a
+  decision that binds the issue, refuses `unreachable` on any unmeasured answer, reading no retry table
+  (`inboundDoorVerdict`). `RETRY_WORDS` is the close lane's, and that lane gives `malformed` up past its last backoff
+  step, whether it came from its write or from its own by-id re-read; amended by review 2920 F4, review 2929 F3, review
+  2960 F1, review 3106 F1 and F2, and review 3110 F1 to F4), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
   before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
@@ -501,9 +513,9 @@ number from `POST /api/ledger/deviations`.
   project, so a readable store is never left unread there (F10). Drift Hand refuses `unreachable`
   when it needs the team owner and cannot measure it. The hierarchy card says both the owner and the migration state are not measured whenever the row's team owner cannot be
   measured (an unpinned row's routing unread, with no listing at all as well, or a pinned row outranked by such a row), and
-  offers no Reshape then (F1). A pinned top row whose own workspace cannot be measured (its slot unreadable or its listing
+  offers no Reshape then (F1). A pinned row whose own workspace cannot be measured (its slot unreadable or its listing
   failed, the measurement Reshape makes) shows its measured owner and a migration state of not measured, with no Reshape
-  (review 3087 F1); Upkeep suppresses the notice;
+  (review 3087 F1; any pinned row, not only the top one, as built: review 3096 F1); Upkeep suppresses the notice;
   the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
   workspace-qualified owner with no issues for that team still waiting.
   Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
@@ -1350,8 +1362,9 @@ every file found. The fix:
   epic lists waves; or the named ticket is available and its epic lists waves and is not the wave's, since at a wave a live
   epic lists an unavailable ticket answers `ticket-unavailable` first); `ticket-required`
   (programme work map WM6, D-8780, with WM1's word: a run that names no ticket, at a wave no live epic lists, in a plan where
-  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is unknown, `done`, `dropped`, `started` by another run,
-  or an Upkeep ticket; or the plan has no live epic, does not require one, and the run names a ticket); with no live epic,
+  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is unknown, `done`, `dropped`, held by another run (`started`,
+  or `open` with a run attached, a planned run included, as `ticketIsHeld` decides; amended by review 2960 A3), or an
+  Upkeep ticket; or the plan has no live epic, does not require one, and the run names a ticket); with no live epic,
   no `planRequired` and no named ticket, the run opens with none (`planGate`, amended by review 2929 F5). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
   run attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's
   project, the run's title, key `run-<runId>`, which `UNIQUE (program, key)` needs and a retry derives again) in the
