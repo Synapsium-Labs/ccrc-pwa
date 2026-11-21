@@ -35,10 +35,15 @@ const fx = (): Approvals & { runId: number } => { if (f === undefined) throw new
 interface Prompt { readonly at: number; readonly summary: string }
 const PROMPT_A: Prompt = { at: T0 + 500, summary: 'rm -rf build' };
 let prompt: Prompt = PROMPT_A;
+/** A subagent's prompts live in hook state's per-agent list, each entry stamped by its own write, and the newest one's
+ *  write set the wait (`waitBy`); null: the main thread's. */
+let entries: readonly (Prompt & { readonly agentId: string })[] | null = null;
 const hookstate = (): void => {
+  const wait = entries === null ? prompt : entries[entries.length - 1] ?? prompt;
   writeFileSync(path.join(fx().home, '.cc-sessions', `${CHILD}.hookstate.json`), JSON.stringify({
-    v: 1, state: 'waiting', event: 'PermissionRequest', sessionId: uuidOf(CHILD), pid: 1, updatedAt: prompt.at,
-    ask: { approval: { tool: 'Bash', summary: prompt.summary } }, subagents: [],
+    v: 1, state: 'waiting', event: 'PermissionRequest', sessionId: uuidOf(CHILD), pid: 1, updatedAt: wait.at,
+    ask: { approval: { tool: 'Bash', summary: wait.summary } }, subagents: [],
+    ...(entries === null ? {} : { waitBy: 'subagent', approvals: entries.map((e) => ({ agentId: e.agentId, tool: 'Bash', summary: e.summary, at: e.at })) }),
   }));
 };
 const tickAt = async (ms: number, pane: string): Promise<void> => {
@@ -71,10 +76,11 @@ const parkPushes = (id: number) => fx().sent.filter((p) => p.body.includes(`appr
 /** Boot (the priming tick), store the park lane live, mint one main-thread request through the watcher's own questions
  *  instance with the lane's gate opened and sign-in armed (its window is 60 s), then paint its prompt and tick once: the
  *  painted prompt is held for the claimant, covering the row. Answers the row's id. */
-const boot = async (o: { closeRunAt?: number } = {}): Promise<number> => {
+const boot = async (o: { closeRunAt?: number; agentId?: string } = {}): Promise<number> => {
   vi.useFakeTimers({ toFake: ['Date'] });
   at(0);
   prompt = PROMPT_A;
+  entries = o.agentId === undefined ? null : [{ ...PROMPT_A, agentId: o.agentId }];
   f = await standardFixture();
   f.coord.db.prepare("UPDATE lane_arm_settings SET choice = 'live' WHERE lane = ?").run(APPROVAL_PARK_LANE);
   await f.watcher.tick();
@@ -84,11 +90,11 @@ const boot = async (o: { closeRunAt?: number } = {}): Promise<number> => {
     signerFor: () => signer, rulingsAllowedHere, heldFor, denyStanding: async () => 'current', liveVersionOf: async () => '2.1.302',
     journalDigestMismatch: () => {}, parkGate: () => null,
   };
-  const b = requestBody(hookInput({ command: 'rm -rf build' }));
+  const b = requestBody(hookInput({ command: 'rm -rf build', ...(o.agentId === undefined ? {} : { agentId: o.agentId }) }));
   const v = await f.watcher.questions.raiseApproval({ sessionId: CHILD, digest: b.digest, nonce: b.nonce, canonical: b.canonical }, deps, Date.now());
   if (v.kind !== 'minted') throw new Error(`fixture: not minted: ${JSON.stringify(v)}`);
   expect(v.park).toBe('live');
-  expect(rowOf(v.id).notifyAt).toBe(T0 + 60_000);
+  if (o.agentId === undefined) expect(rowOf(v.id).notifyAt).toBe(T0 + 60_000);
   await tickAt(1_000, PERMISSION_PANE);
   if (o.closeRunAt !== undefined) {
     // The abandon door closes the run `failed` while the prompt is still inside its window.
@@ -162,6 +168,20 @@ describe('after the park, the dialog still painted (F-A, the press in the clear 
     // The deny cleared the first prompt and the model asked again before the poll saw the clear: the same labels and
     // title (so the same id), another command, a new wait in hook state.
     prompt = { at: T0 + 60_400, summary: 'rm -rf dist' };
+    hookstate();
+    const res = await press();
+    expect(res.statusCode).toBe(200);
+    expect(rowOf(id).state).toBe('parked');
+    expect(parkOf(id)?.voided).toBe(false);
+  });
+  it('a subagent\'s: a press on a queued sibling\'s prompt under the same menu voids no park once the hook dropped the parked entry (review 3037 F1)', async () => {
+    const id = await boot({ agentId: 'a0000000000000013' });
+    const end = rowOf(id).notifyAt - T0; // a subagent's own window
+    await tickAt(end, PERMISSION_PANE);
+    expect(rowOf(id).state).toBe('parked');
+    // The park deny printed and dropped the first agent's entry (ccd/session-hook.sh, `_hook_approval_wait`); the sibling's
+    // prompt, the same command (so the same dialog id), painted at once, so the poll saw no clear edge.
+    entries = [{ at: T0 + end + 400, summary: 'rm -rf build', agentId: 'a0000000000000019' }];
     hookstate();
     const res = await press();
     expect(res.statusCode).toBe(200);
