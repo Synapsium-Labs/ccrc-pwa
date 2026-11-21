@@ -227,7 +227,10 @@ const expectWords = (words: readonly PartsFit[]): void => {
     // Review 1435 F2: every mid-line separator is drawn in the gap between its part and the one before.
     expect(w.missingSeparators, `${w.text}: every mid-line separator is drawn in its gap`).toEqual([]);
   }
-  expect(words.reduce((n, w) => n + w.midLine, 0), 'some separator is measured mid-line').toBeGreaterThan(0);
+  // A positive control: some separator was measured, mid-line or at a line's start (where the check above asks it is not
+  // drawn). Since HF2 (D-8877; review 3123 F3) a path takes a line of its own below the desk, so a two-part row there has no
+  // mid-line separator at all: its one separator starts the path's line.
+  expect(words.reduce((n, w) => n + w.midLine + w.lineStarts, 0), 'some separator is measured').toBeGreaterThan(0);
 };
 
 describe.each(SKINS)('the fleet list draws no delegation row on a card in %s (D-8782)', (skin) => {
@@ -651,6 +654,10 @@ describe.each(SKINS)('the session header sheds its broker lists in %s (H3)', (sk
         }
         const sideScroll = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         expect(sideScroll, 'sideways scroll').toBe(0);
+        // Refined's phone rail scrolls sideways, and this fixture's branch chip is wider than it, so the tap on the door leaves the
+        // rail scrolled (on `main` too: its controls were cut at the left there, measured by HF2). The paths are read at the
+        // rail's own start, where a reader scrolls back to: since HF2 a path below the desk starts its own line, at the row's left.
+        await page.evaluate(() => { for (const r of document.querySelectorAll<HTMLElement>('.ref-chip-rail')) r.scrollLeft = 0; });
         const read = await page.evaluate(() => {
           const head = document.querySelector<HTMLElement>('.chat-head')!;
           const texts = [head.innerText];
