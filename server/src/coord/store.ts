@@ -2587,18 +2587,19 @@ export class CoordStore {
    * meant is the human reading it. Recorded here rather than opened; an operator
    * door that re-points one by id is a decision somebody makes on purpose.
    *
-   * AN URGENT MAIL TO A DISPLACED CLAIMANT MOVES TOO, by session id (mid-turn mail, review 2833 F3): the rule admits one
-   * to a claimant only about a run it claims (`urgentMail.ts`, the Overlord arm), and the hold derives from the delivery
-   * (`urgentHolds`). So it is a mail to the CHAIR of a run in this programme, whatever its `toId` says; left on the
-   * displaced id, it would hold a session that is no longer the chair and never hold the heir. Its run names the
-   * programme (`r.program`), so nothing is guessed. A worker's urgent mail never moves, since a worker is not displaced,
-   * and an abandoned urgent park stays where it is, as every park does (slug `urgent-park-not-moved`).
+   * THE OVERLORD'S URGENT MAIL TO A DISPLACED CLAIMANT MOVES TOO, by session id (mid-turn mail, review 2833 F3): the rule
+   * marks a mail `overlord` only when its recipient claims the run it names (`urgentMail.ts`, the Overlord arm), and the
+   * hold derives from the delivery (`urgentHolds`). So it is a mail to the CHAIR of a run in this programme, whatever its
+   * `toId` says; left on the displaced id, it would hold a session that is no longer the chair and never hold the heir.
+   * Its run names the programme (`r.program`), so nothing is guessed. A `coordinator` urgent mail is a run's worker's,
+   * and never moves, even when that worker later becomes the claimant and is displaced (review 3069 F3). An abandoned
+   * urgent park stays where it is, as every park does (slug `urgent-park-not-moved`).
    */
   private repointCoordinatorMail(program: string, to: string, displaced: readonly string[]): DeliveryBulkWrite {
     return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding',
       `toId IN (${placeholders(displaced.length)}) AND mailId IN (` +
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
-      "WHERE (m.toId = 'coordinator' OR m.urgentAs IS NOT NULL) AND r.program = ?)",
+      "WHERE (m.toId = 'coordinator' OR m.urgentAs = 'overlord') AND r.program = ?)",
       [...displaced, program]) };
   }
 

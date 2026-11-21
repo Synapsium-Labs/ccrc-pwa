@@ -4,7 +4,7 @@
 // urgent mail, and `urgentSenderVerdict` (L1) decides: who may mark a mail urgent, and one outstanding urgent mail per
 // sender and recipient (P4). `POST /api/mail` reads `urgent`, asks that verdict, stores the role and echoes the mark.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -248,6 +248,7 @@ describe('POST /api/mail: the urgent ingress (plan Task 2.4)', () => {
       expect(urgentAsOf(r.coord, body.id)).toBeNull();
     }
     expect(r.coord.urgentHolds().size).toBe(0);
+    expect(counts(r.coord)).toEqual({ mail: 3, deliveries: 3 });
   });
 
   it('urgent that is not a boolean is refused bad-kind, and writes no mail', async () => {
@@ -286,6 +287,17 @@ describe('POST /api/mail: the urgent ingress (plan Task 2.4)', () => {
     const r = await rig(); app = r.app;
     writeFileSync(path.join(r.home, '.cc-sessions', `${WORKER}.child`), 'not a run id');
     const res = await urgentTo(r, COORD, WORKER);
+    expect(res.statusCode, res.body).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'urgent-unmeasured' });
+    expect(counts(r.coord)).toEqual({ mail: 0, deliveries: 0 });
+  });
+
+  it("a role address whose resolved session is listed but whose row cannot be built is urgent-unmeasured (review 3069 F2)", async () => {
+    const r = await rig(); app = r.app;
+    // WORKER's `.uuid` stays listed, but a missing field means its row cannot be built, so check 8.5 reads its mark as
+    // unreadable. A literal id would be refused registry-unmeasurable at check 7; only a role address reaches this arm.
+    rmSync(path.join(r.home, '.cc-sessions', `${WORKER}.workdir`));
+    const res = await urgentTo(r, COORD, 'worker');
     expect(res.statusCode, res.body).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'urgent-unmeasured' });
     expect(counts(r.coord)).toEqual({ mail: 0, deliveries: 0 });
@@ -389,6 +401,17 @@ describe("a reclaim carries an urgent mail to the displaced coordinator, and its
     expect(holds.has(OTHER_COORD)).toBe(false);
     expect(holds.get(COORD)).toEqual([{ deliveryId: toWorker, role: 'coordinator' }]);
     expect(r.coord.delivery(plainDelivery)?.toId).toBe(OTHER_COORD);
+  });
+
+  it("a run coordinator's urgent mail to its worker stays put when that worker is later displaced as claimant (review 3069 F3)", async () => {
+    const r = await rig(); app = r.app;
+    // OTHER_COORD's urgent mail to its worker COORD about the outer run. A reclaim hands the programme to COORD itself,
+    // its own live worker (D-3028), and a second reclaim displaces COORD: the mail is a worker's, so it never moves.
+    const toWorker = writeUrgent(r.coord, OTHER_COORD, COORD, r.outer);
+    expect(r.coord.reclaimProgram(r.outer, COORD, NOW, null)).toMatchObject({ ok: true });
+    expect(r.coord.reclaimProgram(r.outer, PEER, NOW + 1, null)).toMatchObject({ ok: true });
+    expect(r.coord.urgentHolds().get(COORD)).toEqual([{ deliveryId: toWorker, role: 'coordinator' }]);
+    expect(r.coord.urgentHolds().has(PEER)).toBe(false);
   });
 
   it("another programme's reclaim leaves it where it is", async () => {

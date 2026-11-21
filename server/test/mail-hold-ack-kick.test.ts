@@ -17,6 +17,7 @@ import { LaneRunner } from '../src/laneRunner.js';
 import { LANE_SCHEDULE } from '../src/laneSchedule.js';
 import { MAIL_HOLD_LANE_ROW } from '../src/coord/mailHoldLane.js';
 import { parsedFile } from './scan/symbols.js';
+import { nameWrites, parseSource } from './scan/parse.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -129,9 +130,12 @@ describe('the kick on a pass in flight (Task 4.4)', () => {
 });
 
 describe('the composition root wires the kick (Task 4.4)', () => {
-  // Read by the parser (`scan/symbols.ts`), never as a text pin over the source, which ARCH-06's ratchet forbids.
+  // Read by the parser (`scan/parse.ts`'s `nameWrites`), never as a text pin over the source, which ARCH-06's ratchet
+  // forbids. Tied to the assignment (review 3069 F7): another kick elsewhere in index.ts changes nothing here.
   it("index.ts composes Deps.onMailAcked as the watcher's kick of the mailhold row", () => {
-    const kicks = parsedFile('server/src/index.ts').calls.filter((c) => c.callee === 'watcher.kick');
+    const writes = nameWrites(parsedFile('server/src/index.ts')).filter((w) => w.name === 'deps' && w.member === 'onMailAcked');
+    expect(writes).toHaveLength(1);
+    const kicks = parseSource(writes[0]!.value).calls.filter((c) => c.callee === 'watcher.kick');
     expect(kicks.map((c) => c.args.map((a) => a.text))).toEqual([['MAIL_HOLD_LANE_ROW']]);
   });
 });
