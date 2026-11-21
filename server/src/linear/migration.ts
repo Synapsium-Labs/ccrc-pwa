@@ -394,8 +394,7 @@ export class LinearMigration {
   /** The project row's hierarchy state (§11.1): the newest migration of its team in ITS workspace (`migrationOfProject`, D-8808). */
   async stateOfProject(row: { teamKey: string | null; workspaceId: string | null }, routes?: TeamRoutes | null): Promise<ReturnType<typeof hierarchyStateOfRow>> {
     const routing = routes === undefined && row.teamKey !== null && row.workspaceId === null ? await this.routingFacts() : routes ?? null;
-    const measured = row.teamKey === null || row.workspaceId !== null || measuredProjectTeam(routing, { teamKey: row.teamKey, workspaceId: null }).kind !== 'unmeasured';
-    return hierarchyStateOfRow(row, this.deps.plan.migrationsOf(), routing?.slots ?? null, measured);
+    return hierarchyStateOfRow(row, this.deps.plan.migrationsOf(), routing);
   }
   /** Whether a project's team is `team` in `workspaceId` (`projectOnTeam` over the project's row). */
   private onTeam(project: string, team: string, workspaceId: string, routes: TeamRoutes | null): boolean | 'unmeasured' {

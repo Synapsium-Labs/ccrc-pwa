@@ -10,7 +10,7 @@ import type { StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
 import { normalText } from './driftPolicy.js';
 import { publicTextVerdict } from '../linking/policy.js';
-import { routeProjectTeam, type LinearRouteSlot } from './route.js';
+import { measuredProjectTeam, routeProjectTeam, type LinearRouteSlot, type TeamRoutes } from './route.js';
 
 export type IssueSnapshotRow = IssueSnapshot & { linearId: string; identifier: string };
 export interface IssueAfter {
@@ -397,12 +397,12 @@ export function hierarchyStateOf(m: MigrationFacts | null): { state: HierarchySt
 
 /** F1 (D-8186, D-8808): the console state of a project row. An unpinned row with a team key whose routing is not measured (no
  *  listing, or an unreadable slot) says `unmeasured`, never "not-migrated"; a pinned row needs no routing, and a row with no
- *  team key has none to measure. `routingMeasured` is the caller's reading of `measuredProjectTeam` for the row. */
+ *  team key has none to measure. It reads the routing itself (`measuredProjectTeam`); the caller only supplies it. */
 export function hierarchyStateOfRow<M extends MigrationFacts & { id: number; workspaceId: string; teamKey: string }>(
-  row: { teamKey: string | null; workspaceId: string | null }, migrations: readonly M[], slots: readonly LinearRouteSlot[] | null, routingMeasured: boolean,
+  row: { teamKey: string | null; workspaceId: string | null }, migrations: readonly M[], routing: TeamRoutes | null,
 ): { state: HierarchyState; at: number | null; itemId: number | null } {
-  if (row.teamKey !== null && row.workspaceId === null && !routingMeasured) return { state: 'unmeasured', at: null, itemId: null };
-  return hierarchyStateOf(migrationOfProject(row, migrations, slots));
+  if (row.teamKey !== null && row.workspaceId === null && measuredProjectTeam(routing, { teamKey: row.teamKey, workspaceId: null }).kind === 'unmeasured') return { state: 'unmeasured', at: null, itemId: null };
+  return hierarchyStateOf(migrationOfProject(row, migrations, routing?.slots ?? null));
 }
 
 /** Put back is offered until the team's next migration starts (§10.4): a later row for the same team refuses it. */
