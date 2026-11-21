@@ -954,7 +954,8 @@ export function parsePlanTake(body: unknown): { ok: true; take: PlanTakeBody } |
 /** `plan triage`'s lookup (D-8808): the workspaces whose inbound row under the identifier the route reads — each holder's resolved
  *  workspace, every workspace the listing could not read, every slot listing the key while an unpinned holder's routing is unmeasured,
  *  and each pinned holder's workspace whose routing is unmeasured (a stored pin can name an unmeasured legacy workspace). With no
- *  workspace candidate it answers `[null]`: an identifier unique across workspaces. */
+ *  workspace candidate it answers `[null]`: an identifier unique across workspaces. `team` must be upper-cased, as the route
+ *  passes it: a slot's `teamKeys`, upper-cased when listed, are compared to it exactly. */
 export function triageLookup(
   team: string, rows: readonly HierarchyProjectFacts[], ws: ReadonlyMap<string, string | null>, routes: TeamRoutes | null,
 ): readonly (string | null)[] {
