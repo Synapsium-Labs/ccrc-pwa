@@ -22,9 +22,9 @@ import { withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
 import { autoLinkAllowed } from './teamLink.js';
 import {
   confirmedCandidate, confirmedWorkspaceName, overlordLinkCallBody, parseLinkingWrite, parseTeamConfirm, parseTeamSuggestion,
-  suggesterVerdict, suggestionReasonVerdict, teamPairVerdict, workspaceAfterWrite, writeReadsStore,
+  measuredPairRoute, suggesterVerdict, suggestionReasonVerdict, teamPairVerdict, workspaceAfterWrite, writeReadsStore,
 } from './policy.js';
-import { measuredProjectTeam, measuredTeamRoutes, routableSlots, routableTeams, routeProjectTeam } from '../linear/route.js';
+import { measuredProjectTeam, measuredTeamRoutes, routableTeams } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
 
 export interface LinkingRouteOpts {
@@ -94,17 +94,16 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
         return refuseRoute(reply, 'override-private-public');
       }
       // D-8808: the workspace stored beside the key, decided once (`workspaceAfterWrite`), from the Linear store read when the
-      // decision needs it (`writeReadsStore`); an unread or unreadable store answers `unmeasured`.
+      // decision needs it (`writeReadsStore`); a store not read, or a slot the answer depends on that cannot be read, answers
+      // `unmeasured` (`measuredPairRoute`), so the write is `unavailable`, never stored as none.
       const w = parsed.write;
       const prior = { teamKey: before.teamKey, workspace: before.teamWorkspace ?? null };
       let store: LinearStoreRead | null = null;
       if (writeReadsStore(prior, w) && opts.readLinearStore !== undefined) {
         try { store = await opts.readLinearStore(); } catch { store = null; }
       }
-      const slots = store !== null && store.kind === 'listed' ? routableSlots(store) : null;
       const decided = workspaceAfterWrite({
-        before: prior, written: w,
-        route: (teamKey, workspace) => (slots === null ? 'unmeasured' : routeProjectTeam(slots, { teamKey, workspaceId: workspace })),
+        before: prior, written: w, route: measuredPairRoute(store === null ? null : measuredTeamRoutes(store)),
       });
       if (!decided.ok) return refuseRoute(reply, decided.error);
       coord.setLinking(project, { ...w, workspace: decided.workspace }, opts.by(req), now());

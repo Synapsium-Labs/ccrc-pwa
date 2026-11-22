@@ -189,7 +189,9 @@ export function writeReadsStore(before: { teamKey: string | null }, written: { t
   return written.teamKey !== null && !(written.workspace === undefined && written.teamKey === before.teamKey);
 }
 
-/** D-8808: the workspace a write stores beside the key, from the LIVE Linear store (`route`, asked only when `writeReadsStore`).
+/** D-8808: the workspace a write stores beside the key, from the LIVE Linear store (`route`, asked only when `writeReadsStore`),
+ *  asked through the MEASURED route (`measuredPairRoute`): a slot the answer depends on that cannot be read is `unavailable`, never
+ *  stored as none; with no connected workspace the answers are today's (named: `team-unknown`; none named: stored with none).
  *  A key's workspace is set in the same write (spec §3.1.1, review 2971 F4):
  *  - a named workspace must hold the key (`team-unknown`);
  *  - with none named (`workspace` omitted or null), an omitted one keeps the stored workspace while it holds the key; otherwise
