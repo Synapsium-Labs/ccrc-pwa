@@ -29,6 +29,7 @@ import {
   AUTHORITY_STATE_CAUSES, AUTHORITY_STATE_WHYS, AUTHORITY_STATE_WORDS, authorityCoherence, authorityTailHeal,
   type AuthorityFileSeen, type AuthorityRowsSeen, type AuthorityState, type CoherenceCause, type CoherenceVerdict,
 } from './overlordAuthorityCoherence.js';
+import { TERM_RAISED_WORDS, type ConfirmEntry } from './overlordRestore.js';
 
 /** The journal's one file binding: A0's chained-journal adapter over `<ccrcDir>/overlord-authority.jsonl` with this journal's
  *  format. `ops` is the port's test seam; production passes the directory alone. */
@@ -117,6 +118,7 @@ const AUTHORITY_HEAL_KINDS: Readonly<Record<AuthorityHeal['kind'], true>> = {
 export function isOverlordAuthorityKebab(w: string): boolean {
   const own = (o: object): boolean => Object.hasOwn(o, w);
   return own(OVERLORD_AUTHORITY_KINDS) || own(AUTHORITY_APPEND_ERRORS) || own(AUTHORITY_APPEND_KINDS) || own(AUTHORITY_HEAL_KINDS)
+    || own(CONFIRM_APPEND_ERRORS) || own(TERM_RAISED_WORDS)
     || own(AUTHORITY_STATE_WORDS) || own(AUTHORITY_STATE_CAUSES) || own(AUTHORITY_STATE_WHYS) || own(AUTHORITY_UNREADABLE)
     || w === OVERLORD_AUTHORITY_TORN_DIR;
 }
@@ -128,6 +130,25 @@ class Halt {
 
 const HEAD_READ = 'SELECT sequence, journalId, digest FROM overlord_authority_head WHERE id = 1';
 const HEX64 = /^[0-9a-f]{64}$/;
+
+/** The head row's one writer: `appendInTx`'s apply step and `appendConfirmInTx`, each in the caller's transaction, after the
+ *  record is durable. */
+function writeHeadRow(db: DatabaseSync, rec: ChainedJournalRecord<OverlordAuthorityEntry>): void {
+  db.prepare(`INSERT INTO overlord_authority_head (id, sequence, journalId, digest, at) VALUES (1, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET sequence = excluded.sequence, journalId = excluded.journalId, digest = excluded.digest,
+    at = excluded.at`).run(rec.sequence, rec.journalId, rec.digest, Date.parse(rec.acceptedAt));
+}
+
+/** `appendConfirmInTx`'s answer. `changed` is a file that no longer holds what the plan read (the door's facts are stale). */
+export type ConfirmAppend =
+  | { ok: true; record: ChainedJournalRecord<OverlordAuthorityEntry> }
+  | { ok: false; error: ConfirmAppendError; detail: string };
+export type ConfirmAppendError = 'not-in-transaction' | 'bad-entry' | 'changed' | 'journal-unreadable' | 'journal-append';
+const CONFIRM_APPEND_ERRORS: Readonly<Record<ConfirmAppendError, true>> = {
+  'not-in-transaction': true, 'bad-entry': true, changed: true, 'journal-unreadable': true, 'journal-append': true,
+};
+/** What the Confirm append must still find: the whole file set aside first (question 17), and the head it appends after. */
+export interface ConfirmExpect { readonly cutWhole: boolean; readonly head: ChainedPosition | null }
 
 export class OverlordAuthorityJournal {
   constructor(
@@ -292,10 +313,7 @@ export class OverlordAuthorityJournal {
         apply: () => {
           const rec = appended;
           if (rec === null) throw new Error('apply reached with no appended record');
-          // The head row's one writer: the apply step, in the caller's transaction, after the record is durable.
-          db.prepare(`INSERT INTO overlord_authority_head (id, sequence, journalId, digest, at) VALUES (1, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET sequence = excluded.sequence, journalId = excluded.journalId, digest = excluded.digest,
-            at = excluded.at`).run(rec.sequence, rec.journalId, rec.digest, Date.parse(rec.acceptedAt));
+          writeHeadRow(db, rec);
           return { ok: true, kind: 'appended', record: rec };
         },
       }, phase);
@@ -309,6 +327,65 @@ export class OverlordAuthorityJournal {
       // guard is not told (row 5w, review F6).
       if (!narrows) return { ok: false, error: 'authority-unmeasured', detail: `failed before the append: ${detail}` };
       return failed('journal-unreadable', 'authority-unmeasured', `failed before the append: ${detail}`);
+    }
+  }
+
+  /**
+   * Confirm the restore's one append (Task 8, step 3; question 17; ruling F5): the only append allowed over an incoherent
+   * journal, and only of `authority-restore-confirmed`, inside the caller's `tx()`, never outside, and it never throws. It does
+   * not read the guard: the door's plan (`overlordRestore.ts#confirmRestorePlan`) already did. With `cutWhole` it first sets
+   * the whole file aside under `~/.ccrc/overlord-authority-torn/` through the adapter's one cut, and the record becomes record 1
+   * of a new chain. The append re-reads and verifies the file and refuses `changed` unless its head is still `expect.head`
+   * (null: an empty file), so a plan read over other bytes never appends. Then the head row moves to the record.
+   *
+   * A failure before the append (and a cut that kept nothing) writes nothing. A failure at or after it (or a cut that may have
+   * cut) tells the guard `trailing` and answers `journal-append`: the record may stand, so the next Confirm folds it in and
+   * counts its generation (review F14).
+   */
+  appendConfirmInTx(db: DatabaseSync, entry: ConfirmEntry, expect: ConfirmExpect): ConfirmAppend {
+    let inTx: boolean;
+    try { inTx = db.isTransaction; } catch { inTx = false; }
+    if (!inTx) return { ok: false, error: 'not-in-transaction', detail: 'the Confirm record is appended only inside the caller\'s tx()' };
+    let e: OverlordAuthorityEntry;
+    try {
+      e = authorityEntry(entry);
+      if (e.kind !== 'authority-restore-confirmed') throw new OverlordAuthorityError('bad-field', 'only the Confirm record is appendConfirmInTx\'s');
+    } catch (err) {
+      return { ok: false, error: 'bad-entry', detail: err instanceof Error ? err.message : String(err) };
+    }
+    const afterAppend = (detail: string): ConfirmAppend => {
+      this.guard.writerFailed('trailing');
+      return { ok: false, error: 'journal-append', detail };
+    };
+    if (expect.cutWhole) {
+      const cut = this.file.cutAside({ kind: 'whole' }, OVERLORD_AUTHORITY_TORN_DIR);
+      if (!cut.ok) {
+        if (cut.mayApply) return afterAppend(`the whole-file cut failed (${cut.error}); the file may be cut`);
+        return { ok: false, error: cut.error === 'changed' ? 'changed' : 'journal-unreadable', detail: `the whole-file cut failed (${cut.error})` };
+      }
+    }
+    const want = expect.cutWhole ? null : expect.head;
+    let entered = false;
+    try {
+      const r = this.file.appendNext<'changed'>((seen) => {
+        if (seen.kind === 'malformed' || (seen.kind === 'records' && seen.tail !== null)) return { stop: 'changed' };
+        const last = seen.kind === 'records' ? seen.records[seen.records.length - 1] : undefined;
+        const same = last === undefined ? want === null
+          : want !== null && last.sequence === want.sequence && last.journalId === want.journalId && last.digest === want.digest;
+        if (!same) return { stop: 'changed' };
+        entered = true;
+        return { go: { entry: e, acceptedAt: new Date(this.time.clock.wall()).toISOString() } };
+      });
+      if (r.ok) {
+        writeHeadRow(db, r.record);
+        return { ok: true, record: r.record };
+      }
+      if ('stopped' in r) return { ok: false, error: 'changed', detail: 'the journal no longer holds the head Confirm read' };
+      if (!r.mayApply) return { ok: false, error: 'journal-unreadable', detail: `the journal could not be read (${r.error})` };
+      return afterAppend(`the append failed (${r.error}); the record may stand`);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return entered ? afterAppend(`failed after the append: ${detail}`) : { ok: false, error: 'journal-unreadable', detail };
     }
   }
 }
