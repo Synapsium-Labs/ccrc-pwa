@@ -25,7 +25,9 @@ function body(src: string, name: string): string | null {
 }
 /** ccd's own typing helpers: each sends keys to a pane (review 3006 F2), so calling one is sending a key. */
 const TYPERS = ['_route_type_model', '_route_type_effort', '_route_escape', '_answer_two_option_dialog'];
-const SENDS = new RegExp(`send-keys|_send_keys|paste-buffer|load-buffer|send-prefix|\\b(?:${TYPERS.join('|')})\\b`);
+/** A raw tmux key sender (the pattern `ccd-typing-check.test.ts` refuses too, so the censuses agree on what a key is). */
+const RAW_SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix/;
+const SENDS = new RegExp(`${RAW_SENDS.source}|\\b(?:${TYPERS.join('|')})\\b`);
 
 describe('the limit-rescue code sends no key', () => {
   const src = ccdSource();
@@ -81,7 +83,6 @@ describe('the model-aliases library sends no key', () => {
 // The protected code (the limit rescue above, the watchdog's dispatch, and every function of the model-aliases library, the
 // passive observe path among them) must reach none.
 type Fn = { file: string; line: number; code: string };
-const RAW_SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix/;
 const HEADER = /^([A-Za-z_][A-Za-z0-9_-]*)\(\)\s*\{(.*)$/;
 const CODE = (l: string): string => l.replace(/\s#\s.*$/, '');
 
@@ -133,19 +134,18 @@ function keySenderGraph(sources: ReadonlyArray<[string, string]>) {
   return { fns, calls, raw, senders: next, pathTo };
 }
 
-/** The two edges the graph cannot read, ruled on by the coordinator (no-keys-transitive). Each holds only while its `holds`
- *  condition reads true in the source, and each must still be an edge, so a cut cannot outlive its reason or go stale. */
+/** The two edges the graph cannot read, cut by the coordinator's ruling on no-keys-transitive. Each must still be an edge and its
+ *  reason must still read in the source, so a cut cannot go stale and hide a new path; every other path to a key sender reds,
+ *  a new one through `cmd_ensure` or `cmd_route` included. */
 const CUT: ReadonlyArray<{ from: string; to: string; why: string; holds: (code: string) => boolean }> = [
   {
     from: '_watchdog_resume_run', to: 'cmd_ensure',
-    why: 'the resume kills the old tmux session (the one the rate-limit menu is on) before it ensures a fresh one, so the startup '
-      + 'gates `_accept_first_run_prompts` answers are a NEW process\'s, as after every swap',
+    why: 'it types only into the fresh session\'s startup dialogs, after the old session is killed, and stands down on a limit banner',
     holds: (code) => /kill-session/.test(code) && code.search(/kill-session/) < code.search(/\bcmd_ensure\b/),
   },
   {
     from: '_operator_choice_promote', to: 'cmd_route',
-    why: 'the promote writes the route record only: it never passes `--apply`, and `cmd_route` returns before `_route_apply_now` '
-      + 'without it',
+    why: 'it calls `cmd_route` without `--apply`, so nothing is typed',
     holds: (code) => !/--apply\b/.test(code),
   },
 ];
@@ -171,6 +171,23 @@ describe('no key sender is reachable from the protected code (transitive, review
   it.each(CUT)('the cut edge $from -> $to is still an edge and its reason still reads in the source', ({ from, to, holds }) => {
     expect(g.calls.get(from)?.has(to), `${from} no longer calls ${to}: drop the cut`).toBe(true);
     for (const d of g.fns.get(from)!) expect(holds(d.code), `${from} (${d.file}:${d.line}) no longer meets the cut's condition`).toBe(true);
+  });
+
+  // The first cut's last clause: the fresh session's startup dialogs are answered by `_accept_first_run_prompts`, which stands down
+  // on a limit banner (`_pane_hard_blocked`, rc 5). The check must stand, return at once, and be followed by no key of any kind.
+  it('the first cut stands only while the startup dialogs stand down on a limit banner, before any key', () => {
+    const [prompts] = g.fns.get('_accept_first_run_prompts') ?? [];
+    expect(prompts, '_accept_first_run_prompts was not found').toBeDefined();
+    const lines = prompts!.code.split('\n').map((l) => l.trim()).filter(Boolean);
+    const at = lines.findIndex((l) => /^if _pane_hard_blocked "\$pane"; then$/.test(l));
+    expect(at, 'the limit-banner stand-down is gone from _accept_first_run_prompts').toBeGreaterThan(0);
+    expect(lines[at + 1], 'the stand-down no longer returns at once').toBe('return 5');
+    const rest = lines.slice(at).join('\n');
+    const names = [...rest.matchAll(/(?<![A-Za-z0-9_$-])[A-Za-z_][A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g)].map((t) => t[0]);
+    expect(RAW_SENDS.test(rest) ? 'a raw key sender' : names.find((n) => g.senders.has(n)) ?? null, 'a key follows the stand-down').toBeNull();
+    const [blocked] = g.fns.get('_pane_hard_blocked') ?? [];
+    expect(blocked?.code, '_pane_hard_blocked no longer reads a limit banner').toMatch(/limit reached/);
+    expect(blocked!.code).toMatch(/rate limit/);
   });
 
   it.each(PROTECTED)('%s reaches no key sender', (name) => {
