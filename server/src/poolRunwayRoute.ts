@@ -23,7 +23,7 @@ export interface PoolRunwayRouteDeps {
 export function registerPoolRunwayRoute(app: FastifyInstance, deps: PoolRunwayRouteDeps): void {
   app.get('/api/pools/runway', async (_req, reply) => {
     const coord = deps.coord;
-    if (coord === undefined) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    if (coord === undefined) return refuseRoute(reply, 'not-configured');
     try {
       const nowS = Math.floor(deps.clock.wall() / 1000);
       const pools = runwayPools(deps.roster(), await deps.limits(), coord.accountPoolEdges());
