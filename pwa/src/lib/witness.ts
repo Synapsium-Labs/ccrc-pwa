@@ -43,8 +43,8 @@ export async function exchangeWitness({ ask = api.overlordWitness, from = pageSt
     answer = await ask(held);
   } catch (e) {
     if (!(e instanceof ApiError)) return { kind: 'failed' };
-    const b = e.body as { error?: unknown } | null;
-    return { kind: 'refused', status: e.status, error: typeof b?.error === 'string' ? b.error : null };
+    const word = (e.body as { error?: unknown } | null)?.error;
+    return { kind: 'refused', status: e.status, error: typeof word === 'string' ? word : null };
   }
   const p = parseWitnessTuple((answer as { offer?: unknown } | null)?.offer);
   if (!p.ok) return { kind: 'malformed' };
