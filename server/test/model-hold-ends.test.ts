@@ -188,7 +188,7 @@ describe('the op\'s helpers over the decider', () => {
     expect(holdEndFor({ c: cls(), pin: G56, choice: choice(G62), to: G62 })).toBeNull();
     expect(holdEndFor({ c: held, pin: G56, choice: choice(G62), to: G62 })).toEqual({ ends: true, why: 'newer', from: G61 });
     expect(holdEndFor({ c: held, pin: G56, choice: choice(G62), to: G61 })).toEqual({ ends: false, why: null, from: G61 });
-    expect(holdEndFor({ c: held, pin: G56, choice: choice(G61), to: G61 }).ends).toBe(false);
+    expect(holdEndFor({ c: held, pin: G56, choice: choice(G61), to: G61 })?.ends).toBe(false);
   });
   it('holdEndEntry says why a move ended a hold, and nothing for any other move', () => {
     expect(holdEndEntry(null, G56, G62)).toEqual({});
