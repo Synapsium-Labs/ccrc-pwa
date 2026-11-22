@@ -756,6 +756,29 @@ describe('characterization: unread and unconnected workspaces (w8-confirm-unmeas
         }
       });
     }
+
+    // Review 3286 F1 (the coordinator's ruling: review 2971 F2 holds): a row stored with no workspace, its unchanged key sent back
+    // naming a workspace whose own slot holds it, keeps the stored none and its source, whether or not ANOTHER slot is unread; the
+    // named slot unread is `unavailable`, and the row is left as it was.
+    const KEPT: ReadonlyArray<readonly [string, Store, string, string, number, 'kept' | string]> = [
+      ['stored none, every slot read, its holder named', 'readable', 'BBB', WS_B, 200, 'kept'],
+      ['stored none, another slot unread, its holder named', 'one-readable-one-unread', 'AAA', WS_A, 200, 'kept'],
+      ['stored none, the named slot unread', 'one-readable-one-unread', 'AAA', WS_C, 503, 'unavailable'],
+    ];
+    for (const [name, store, team, workspace, status, expected] of KEPT) {
+      it(name, async () => {
+        await stand(store);
+        app = await open({ coord });
+        const evidence = { kind: 'name-match', matched: 'project', on: 'name' } as const;
+        expect(coord!.linkTeamAuto('project-a', { key: team, name: `Team ${team}`, evidence }, 5)).toBe(true);
+        const before = coord!.linkingOf('project-a');
+        expect(before).toMatchObject({ teamKey: team, teamWorkspace: null, teamLink: { source: 'auto' } });
+        const res = await post(app, 'project-a', { teamKey: team, override: null, workspace });
+        expect(res.statusCode, res.body).toBe(status);
+        if (expected !== 'kept') expect(res.json()).toMatchObject({ error: expected });
+        expect(coord!.linkingOf('project-a')).toMatchObject({ teamKey: team, teamWorkspace: null, teamLink: before.teamLink });
+      });
+    }
   });
 
   describe('POST /api/linking/suggest', () => {

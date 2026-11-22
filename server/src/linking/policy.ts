@@ -135,8 +135,8 @@ export function confirmedCandidate(candidates: readonly TeamCandidateWire[], tea
  *  (`measuredProjectTeam`) means for a suggestion or a confirm: the workspace of the one slot that holds it; `unavailable` when a
  *  slot the answer depends on could not be read (never `team-unknown`: the pair may well be held there); `team-ambiguous` for a key
  *  two connected workspaces hold with no workspace named (storing it with none would resolve nowhere); `not-configured` when no
- *  Linear workspace is connected at all; every other refusal `team-unknown` (every workspace was read, none holds the pair). A
- *  refusal carries its fixed `detail`, decided here. */
+ *  Linear workspace is connected at all; every other refusal `team-unknown` (every workspace the pair depends on was read, and none
+ *  holds it: for a named workspace, that workspace alone). A refusal carries its fixed `detail`, decided here. */
 export function teamPairVerdict(route: LinearRoute | { kind: 'unmeasured' }):
   { ok: true; workspaceId: string } | { ok: false; error: 'team-unknown' | 'team-ambiguous' | 'unavailable' | 'not-configured'; detail: string } {
   if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId };
@@ -201,7 +201,10 @@ export function writeReadsStore(before: { teamKey: string | null }, written: { t
  *  - no key stores none (a named workspace with no key is `team-unknown`).
  *  A row stored with no workspace whose key one connected workspace holds already resolves to it, so the unchanged key sent back
  *  with that workspace (or with none) keeps the stored none (review 2971 F2): the pair is the same, and its source, team name,
- *  evidence and time stay. The ONE writer of which workspace a row stores. */
+ *  evidence and time stay. The keep is decided from what the write measures (review 3286 F1): the key is unchanged and the named
+ *  slot holds it; another slot that cannot be read does not undo it, because naming a holder of the stored key changes nothing.
+ *  Only two readable holders of the key do (the stored none resolves nowhere, so naming one of them is a real change). The ONE
+ *  writer of which workspace a row stores. */
 export function workspaceAfterWrite(a: {
   before: { teamKey: string | null; workspace: string | null };
   written: { teamKey: string | null; workspace?: string | null };
@@ -211,14 +214,14 @@ export function workspaceAfterWrite(a: {
   const key = written.teamKey;
   if (key === null) return typeof written.workspace === 'string' ? { ok: false, error: 'team-unknown' } : { ok: true, workspace: null };
   if (!writeReadsStore(before, written)) return { ok: true, workspace: before.workspace };
-  // The workspace the stored none resolves to: the unchanged key's one holder (F2).
-  const keptNone = (workspace: string): boolean => key === before.teamKey && before.workspace === null
-    && soleHolder(a.route(key, null)) === workspace;
+  // The stored none is kept for the unchanged key sent back with a workspace that holds it (F2), unless two readable workspaces hold
+  // the key (review 3286 F1: an unread other slot does not undo the keep; asked only once a holder is measured).
+  const keptNone = (): boolean => key === before.teamKey && before.workspace === null && !twoHolders(a.route(key, null));
   if (typeof written.workspace === 'string') {
     const named = a.route(key, written.workspace);
     if (named === 'unmeasured') return { ok: false, error: 'unavailable' };
     if (named.kind !== 'slot') return { ok: false, error: 'team-unknown' };
-    return { ok: true, workspace: keptNone(written.workspace) ? null : written.workspace };
+    return { ok: true, workspace: keptNone() ? null : written.workspace };
   }
   if (written.workspace === undefined && before.workspace !== null) {
     const kept = a.route(key, before.workspace);
@@ -227,12 +230,12 @@ export function workspaceAfterWrite(a: {
   }
   const any = a.route(key, null);
   if (any === 'unmeasured') return { ok: false, error: 'unavailable' };
-  if (any.kind === 'slot') return { ok: true, workspace: keptNone(any.slot.workspaceId) ? null : any.slot.workspaceId };
+  if (any.kind === 'slot') return { ok: true, workspace: keptNone() ? null : any.slot.workspaceId };
   return any.word === 'team-ambiguous' ? { ok: false, error: 'team-ambiguous' } : { ok: true, workspace: null };
 }
 
-/** The one workspace a route answered, or null. */
-const soleHolder = (r: LinearRoute | 'unmeasured'): string | null => (r !== 'unmeasured' && r.kind === 'slot' ? r.slot.workspaceId : null);
+/** Whether a route measured two readable workspaces holding the key (`team-ambiguous`). */
+const twoHolders = (r: LinearRoute | 'unmeasured'): boolean => r !== 'unmeasured' && r.kind === 'refused' && r.word === 'team-ambiguous';
 
 /** D-8809 (review 2971 F5): the workspace name the Overlord's confirm stores: the routed slot's own name for the pair in the live
  *  store, else the candidate's, else none. */
