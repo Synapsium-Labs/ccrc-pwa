@@ -1,6 +1,6 @@
 // The build capture runner's two store rules (spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §5
 // Table 7, PR 3; review 3226 F8). THE TMUX SOCKET: the capture's private tmux server's socket lives in a short directory of
-// its own under the service's temporary directory (`/tmp`, private to the unit), never under `<CCRC_TESTBOX_ROOT>`, so no
+// its own under the service's temporary directory (`/tmp`, private to the unit), never under the test box root, so no
 // root is too long for a unix socket path; the production path is exercised here as it is built, with no shortening.
 // THE BUILDS STORE: `captures/builds/` keeps the newest builds and every build a capture still needs, and nothing else
 // that names a build.
