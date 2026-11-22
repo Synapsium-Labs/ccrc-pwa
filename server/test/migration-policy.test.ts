@@ -393,6 +393,11 @@ describe('parseMapProposal and resolveMapProposal (D-8186: the visible identifie
     expect(refusal(resolveMapProposal(proposal([{ issue: U(2), identifier: 'AAA-1', class: 'leaf' }]), eligible))).toEqual({ ok: false, word: 'plan-bad-body', detail: 'issue-mismatch:AAA-1' });
     expect(refusal(resolveMapProposal(proposal([{ issue: U(77), identifier: 'AAA-1', class: 'leaf' }]), eligible))).toEqual({ ok: false, word: 'plan-bad-body', detail: 'issue-mismatch:AAA-1' });
   });
+  it('folds ASCII letters only: a character whose Unicode upper case is ASCII matches nothing', () => {
+    const ff = [{ ...row(1), identifier: 'FF-1' }];
+    expect(resolveMapProposal(proposal([{ identifier: 'ff-1', class: 'stale' }]), ff)).toMatchObject({ ok: true });
+    expect(refusal(resolveMapProposal(proposal([{ identifier: 'ﬀ-1', class: 'stale' }]), ff))).toEqual({ ok: false, word: 'map-incomplete', detail: 'not-open:ﬀ-1' });
+  });
   it('two rows with one identifier: ambiguous', () => {
     const dup = [...eligible, { ...row(1), linearId: U(190) }];
     expect(refusal(resolveMapProposal(proposal([{ identifier: 'AAA-1', class: 'leaf' }]), dup))).toEqual({ ok: false, word: 'map-incomplete', detail: 'ambiguous:AAA-1' });

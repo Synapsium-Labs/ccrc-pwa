@@ -3,7 +3,7 @@
 // pair that disagrees, a twice-listed issue or an identifier that is not an open row of the migration is refused at the route.
 import { afterEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { registerPlanRoutes } from '../src/coord/planRoutes.js';
+import { registerPlanRoutes, type PlanRouteOpts } from '../src/coord/planRoutes.js';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket } from '../src/coord/planStore.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { NO_SESSION } from '../src/auth/gate.js';
@@ -27,12 +27,13 @@ async function routed(setup: (r: MigRig) => void = (r) => { r.addIssue(1); r.add
   const started = r.mig.start('project-a', await r.mig.workspaceOfProject('project-a'));
   if (!started.ok) throw new Error(`start refused: ${started.word}`);
   const app = Fastify();
-  registerPlanRoutes(app, {
+  const opts: PlanRouteOpts = {
     coord: r.coord, plan: r.plan, serial: (fn) => fn(), mailToken: () => TOKEN, attribute: async () => ({ ok: true }),
     otherLaneReads: NOT_DESIGNATED_READS, sessionAuth: () => NO_SESSION, authEnabled: false,
     readLinearStore: () => readLinearStore(r.ccrcDir), runOfSession: () => null, now: () => r.t.now, presenceOf: () => 'alive',
     migration: r.mig,
-  } as never);
+  };
+  registerPlanRoutes(app, opts);
   await app.ready();
   apps.push(app);
   r.asks.length = 0;

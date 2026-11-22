@@ -487,6 +487,9 @@ export function parseMapProposal(body: unknown, team: string): { ok: true; propo
   };
 }
 
+/** Upper case for ASCII letters only: no other character folds, so no two different identifiers can compare equal by a
+ *  locale's or Unicode's case rules. */
+const asciiUpper = (s: string): string => s.replace(/[a-z]/gu, (c) => c.toUpperCase());
 /** A proposal's entries resolved against the measured eligible rows (D-8186): each entry's issue is the row its identifier names
  *  (ASCII case-insensitive), with the row's own UUID and identifier, never the caller's spelling. A UUID the caller sent must
  *  be that row's. Coverage of a missing row stays `checkMap`'s. The first refusal, in the order sent, wins. */
@@ -495,8 +498,8 @@ export function resolveMapProposal(p: MapProposal, eligible: readonly IssueSnaps
   const entries: MapEntry[] = [];
   const seen = new Set<string>();
   for (const e of p.entries) {
-    const want = e.identifier.toUpperCase();
-    const candidates = eligible.filter((r) => r.identifier.toUpperCase() === want);
+    const want = asciiUpper(e.identifier);
+    const candidates = eligible.filter((r) => asciiUpper(r.identifier) === want);
     const mismatch = { ok: false as const, word: 'plan-bad-body' as const, detail: `issue-mismatch:${e.identifier}` };
     if (candidates.length === 0) {
       if (e.issue !== undefined && eligible.some((r) => r.linearId === e.issue)) return mismatch;
