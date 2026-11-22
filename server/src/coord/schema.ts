@@ -4298,6 +4298,27 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
   ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
   `,
+
+  // ── 121: user_version 120 -> 121 ──────────────────────────────────────────
+  // Overlord W1 serviceability PR B (run 3296; spec C57 "A history of limits", Table 11.1a): `limit_samples`, one row per
+  // Anthropic account reading, keyed on the reading's own time, so one reading is one row however many beats see it. ONE
+  // writer, the sampler (`limitSampler.ts`) through `coord/limitSamplesStore.ts`'s insert and prune; kept 30 days. A NEW
+  // TABLE only: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates
+  // nothing) and never names it; a restored older file has a gap, which `poolRunway` reads as `thin` or `no-sample`. The
+  // slot is the next free one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 120 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE limit_samples (
+    account TEXT NOT NULL, ts INTEGER NOT NULL,        -- the reading's own time, from its limits file (epoch s)
+    five REAL, seven REAL, five_reset_at INTEGER, seven_reset_at INTEGER,
+    five_rolled INTEGER NOT NULL, seven_rolled INTEGER NOT NULL, five_window_minutes INTEGER,
+    sampled_at INTEGER NOT NULL,                       -- the beat's time (epoch s)
+    PRIMARY KEY (account, ts)
+  ) WITHOUT ROWID;
+  CREATE INDEX limit_samples_ts ON limit_samples(ts);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
