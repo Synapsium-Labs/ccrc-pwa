@@ -13,13 +13,27 @@
 // replacing an older) and handed to the next service with the queued runs, which runs it (D-7559). A run resolves the
 // tool set once, so the service names, in each spec, the set every live run started under, and the tools unit keeps
 // those; a prepare's set is pinned when its spec is built, before the prepare awaits anything.
+//
+// D-8913 (spec docs/superpowers/specs/2026-11-22-test-box-managed-node-design.md §2.8 "One mover per box, from its
+// first act"): a MANAGED box, one whose updater has written its node files, is moved by the update act alone. There a
+// `tools.sync` is answered as one with nothing to do, starts nothing and keeps nothing, and no failed sync is retried:
+// the tools unit is the box's installed release fetching a release, the old code the act keeps out of the path, and
+// the act's render removes it. `syncsHere` is that rule's one definition. The versions a managed box answers are the
+// ones its updater measured (`parseMeasuredTools`, spec §2.6 "Measured, not copied"), never the set's copy of a spec.
+//
+// D-8907 (the same spec, §2.5 "The drain"): a box no act has adopted yet is still this sync's to move, and its first
+// act asks the service to drain. While that request stands (`held`, the drain's lease) the sync starts nothing: a
+// frame is kept (`requested`) and a failed sync is not retried (`retryDue`), so the old mover never switches a box the
+// updater is about to switch. The lease over, the kept frame is requested again (`released`). The service is stopped
+// by the updater with the frame still kept only when the act goes on, and the box is managed after it.
 import {
-  TESTBOX_TOOLS,
+  isVersion, TESTBOX_TOOLS,
   type StatusAnswer, type TestboxSync, type TestboxTool, type TestboxToolVersions, type ToolsSync,
 } from '../../../shared/testbox.js';
 import path from 'node:path';
+import { tabFields, type SmallRead } from './boxFiles.js';
 import { retryDelay } from './pristine.js';
-import { degradedReasons } from './status.js';
+import { degradedReasons, type MeasuredTools } from './status.js';
 
 /** The three settings the tool sync reads (`config.ts`'s `lines`, through `toolsSettings`). */
 export const TOOLS_KNOBS = ['CCRC_TESTBOX_PRISTINE_RETRY', 'CCRC_TESTBOX_REGISTRY_PROXY', 'CCRC_TESTBOX_OS_MIRROR'] as const;
@@ -50,11 +64,27 @@ export function toolsSettings(
   };
 }
 
-/** What the box has: the installed release's tag, the current set's versions and the current set's name. */
+/** Whether the box's updater has adopted it (D-8913): `managed` when its node id is there, `unmanaged` when it is
+ *  proven absent, `unreadable` when the file is there in some form but tells nothing. */
+export type BoxManaged = 'managed' | 'unmanaged' | 'unreadable';
+export const BOX_MANAGED_MAP: Record<BoxManaged, true> = { managed: true, unmanaged: true, unreadable: true };
+
+/** The node id's read (`<tools>/node-state/node-id`) to what it says of the box. An empty file is no identity yet. */
+export function managedOf(nodeId: SmallRead): BoxManaged {
+  if (nodeId.t === 'absent') return 'unmanaged';
+  return nodeId.t === 'text' && nodeId.text.trim() !== '' ? 'managed' : 'unreadable';
+}
+
+/** Whether the tool sync is this box's mover (D-8913): only on a box proven unmanaged. A managed box is the update
+ *  act's, and one whose node files cannot be read may be: the sync starts nothing on either. */
+export const syncsHere = (managed: BoxManaged): boolean => managed === 'unmanaged';
+
+/** What the box has: the installed release's tag, the current set's versions and name, and whether it is managed. */
 export interface BoxTools {
   readonly release: string | null;
   readonly versions: TestboxToolVersions | null;
   readonly set: string | null;
+  readonly managed: BoxManaged;
 }
 
 export interface ToolsState {
@@ -88,11 +118,20 @@ export interface Decision { readonly state: ToolsState; readonly start: ToolsSyn
 
 const syncing = (at: string, detail: string | null = null): TestboxSync => ({ state: 'syncing', detail, at });
 
-/** A `tools.sync` frame (the update lane's, or the card's **Bring tools up to date**). */
-export function requested(s: ToolsState, f: ToolsSync, box: BoxTools, at: string): Decision {
+/** A `tools.sync` frame (the update lane's, or the card's **Bring tools up to date**). `held`: a drain request stands
+ *  (D-8907). */
+export function requested(s: ToolsState, f: ToolsSync, box: BoxTools, at: string, held: boolean = false): Decision {
+  // D-8913: not this box's mover. Answered as a frame with nothing to do: nothing starts and the frame is not kept
+  // (a sync or a takeover already in flight ends as it would have). A failed sync is over, since nothing retries it.
+  if (!syncsHere(box.managed)) {
+    if (s.running || s.takeover) return { state: s, start: null };
+    return { state: { ...s, sync: s.sync.state === 'failed' ? { state: 'idle', detail: null, at } : s.sync, attempts: 0, nextAt: null, last: null }, start: null };
+  }
   // D-7559: never dropped; the takeover hands it to the next service.
   if (s.takeover) return { state: { ...s, pending: f }, start: null };
   if (s.running) return { state: { ...s, pending: f }, start: null };
+  // D-8907: a drain request stands, so nothing starts; the frame is kept (the newest) until the request is over.
+  if (held) return { state: { ...s, pending: f }, start: null };
   if (sameAsBox(f, box)) {
     // Nothing to do, and nothing changes on the box; a failed sync for another set is over, since the fleet host
     // now asks for what the box has.
@@ -101,10 +140,20 @@ export function requested(s: ToolsState, f: ToolsSync, box: BoxTools, at: string
   return { state: { ...s, running: true, sync: syncing(at), last: f, attempts: 0, nextAt: null }, start: f };
 }
 
-/** The failed sync whose next attempt has come, or `null`. */
-export function retryDue(s: ToolsState, now: number): ToolsSync | null {
+/** The failed sync whose next attempt has come, or `null`. Never on a box the tool sync does not move (D-8913: the
+ *  update act is the mover there, and the failed sync is not run again), and never while a drain request stands
+ *  (`held`, D-8907): it is due again once the request is over. */
+export function retryDue(s: ToolsState, now: number, managed: BoxManaged = 'unmanaged', held: boolean = false): ToolsSync | null {
+  if (!syncsHere(managed) || held) return null;
   if (s.running || s.takeover || s.sync.state !== 'failed' || s.last === null || s.nextAt === null) return null;
   return s.nextAt <= now ? s.last : null;
+}
+
+/** A drain request is over (D-8907): the frame it kept, to be requested again as a frame from the door is, and the
+ *  state without it. None while a sync runs or a takeover has begun: a frame that waits for those is theirs to run. */
+export function released(s: ToolsState): { readonly state: ToolsState; readonly frame: ToolsSync | null } {
+  if (s.pending === null || s.running || s.takeover) return { state: s, frame: null };
+  return { state: { ...s, pending: null }, frame: s.pending };
 }
 
 /** A retry starts: the attempts counted so far are kept. */
@@ -126,11 +175,7 @@ export interface SyncReport {
 }
 
 export function parseReport(text: string | null): SyncReport {
-  const m = new Map<string, string>();
-  for (const line of (text ?? '').split('\n')) {
-    const i = line.indexOf('\t');
-    if (i > 0) m.set(line.slice(0, i), line.slice(i + 1));
-  }
+  const m = tabFields(text ?? '');
   const r = m.get('result');
   const word = (k: string): string | null => { const v = m.get(k); return v === undefined || v === '' ? null : v; };
   return {
@@ -233,6 +278,18 @@ export function parseVersions(text: string | null): TestboxToolVersions | null {
   return TESTBOX_TOOLS.every((t) => out[t] !== undefined) ? (out as TestboxToolVersions) : null;
 }
 
+/** A managed box's `<tools>/node-state/tools.json` (spec §2.6): the versions its updater measured, as root, after the
+ *  switch. A JSON object keyed by the tool's name; a key that is no tool is ignored. A tool that is absent, or whose
+ *  value is not a version as a frame carries one, is not measured (`null`), alone: the others stand. `null` for the
+ *  whole when the text is not a JSON object, so nothing was measured. */
+export function parseMeasuredTools(text: string): MeasuredTools | null {
+  let v: unknown;
+  try { v = JSON.parse(text); } catch { return null; }
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  return Object.fromEntries(TESTBOX_TOOLS.map((t) => { const x = o[t]; return [t, isVersion(x) ? x : null]; })) as unknown as MeasuredTools;
+}
+
 /** The spec header the tools unit takes (`deploy/testbox/bin/tools-sync`). */
 export const TOOLS_SPEC_HEADER = 'ccrc-testbox-tools-spec';
 /** The order the tools unit names the six tools in. */
@@ -263,4 +320,11 @@ export function withSync(a: StatusAnswer, sync: TestboxSync): StatusAnswer {
   if (reasons.length === 0 || a.state === 'down') return { ...a, sync };
   const own = a.reason === null ? [] : [a.reason];
   return { ...a, sync, state: 'degraded', reason: [...reasons, ...own].join('; ') };
+}
+
+/** The status answer while a drain request stands (`held`, D-8907): the runs handed over to disk (`onDisk`) still wait
+ *  for this box, so they count in the queue's depth, a field the answer always carried. With no request the answer is
+ *  as it was: a hand-over file that waits for the timer is not counted. */
+export function withHandedOver(a: StatusAnswer, held: boolean, onDisk: number): StatusAnswer {
+  return held ? { ...a, queueDepth: a.queueDepth + onDisk } : a;
 }

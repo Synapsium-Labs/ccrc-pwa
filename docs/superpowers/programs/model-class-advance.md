@@ -12,13 +12,15 @@ family after a newer one was released, and asked for this work to become a progr
 ## Goal
 
 Every lane's model classes follow new model releases on their own. The hourly refresh moves a class to its family's
-newest model once a test request to it passes. A per-class hold is the only brake. `ccrc doctor` says when a class is
-held, behind or blocked, and the phone shows and steers it. Codex lanes come first, then Anthropic lanes. OpenRouter
+newest model once a test request to it passes. Classes always advance: the one brake is a Revert, whose hold ends by
+itself when a newer model appears (the owner's ruling of 2026-11-22, below). `ccrc doctor` says when a class is held,
+behind or blocked, and the phone shows it and reverts a class. Codex lanes come first, then Anthropic lanes. OpenRouter
 comes later, by the owner's ruling. Nobody runs `set-class` by hand to keep up.
 
 ## Done when
 
 The same eight statements are pinned as the programme's definition of done (`ccrc-api goals show model-class-advance`).
+Statements 5 and 6 read as modification 94 rewrote them on 2026-11-22.
 
 1. A Codex lane's catalogue lists the models OpenAI offers the current Codex client, and keeps doing so across Codex
    releases with no version raised by hand.
@@ -28,10 +30,10 @@ The same eight statements are pinned as the programme's definition of done (`ccr
    session still on a replaced model a day after the move, and a lane or class that cannot advance.
 4. The console reads a lane's models only through the agent's `models` op; the agent's file-read grant for model files
    is retired.
-5. The phone's Models sheet shows each lane's classes, pins and advance state, and holds, releases and reverts a class;
-   #1441 is closed.
+5. The phone's Models sheet shows each lane's classes, pins and advance state, and reverts a class, which then holds
+   until a newer model appears; #1441 is closed.
 6. On an Anthropic lane, the class labels and the effort setting follow Claude Code's alias when it resolves to a new
-   model, and a class can be held.
+   model, and a class can be reverted.
 7. At a real new model release, the class moves on its own, a new session replies on the new model, and doctor shows no
    sessions-behind warning 24 hours later.
 8. The README and the spec describe what shipped, and #2607 is closed.
@@ -55,6 +57,14 @@ The same eight statements are pinned as the programme's definition of done (`ccr
 | Follow-up | `transient-beside-kept-answer`: the picker and the sheet name a transient answer beside a kept one | #3086 | merged 2026-11-19 |
 | Wave 7 | The Anthropic arm's aliases file, holds, refresh and doctor causes (D-8818 to D-8822) | #3107 | merged 2026-11-20 |
 | Follow-up | `usage-user-agent`: the usage poll sends the Codex client version the catalogue probe asks as (D-8781) | #3085 | merged 2026-11-21 |
+| Wave 3 | The retire grace, the effort fallback, Revert's refusals before any write, and the release lookup warning (D-8838 to D-8843, D-8865, D-8866) | #3118 | merged 2026-11-22 |
+| Wave 8 | ccd on an Anthropic lane: the launch marker, the held id at launch, effort from data, the model id in the record (D-8832, D-8833, D-8846 to D-8859) | #3122 | merged 2026-11-22 |
+| Follow-up | `release-lookup-pins`: the release lookup's verdict follows the auth library's record | #3216 | merged 2026-11-22 |
+| Follow-up | `effort-fallback-pins`: each term of the effort file's rule pinned, and wave 3's refusals beside a released hold | #3217 | merged 2026-11-22 |
+| Follow-up | `doctor-caps-one-reader`: one reader of `ccd caps` in doctor; an unmeasured read is never a PASS | #3222 | merged 2026-11-22 |
+| Follow-up | `no-keys-transitive`: the no-key guard follows calls through ccd's own call graph | #3219 | merged 2026-11-22 |
+| Follow-up | `cache-row-skip`: one bad row in Claude Code's catalogue cache no longer blinds the whole file | #3223 | merged 2026-11-22 |
+| Wave 9 | An Anthropic lane's labels and Models sheet from its aliases file, one push per class move (D-8921 to D-8930) | #3221 | merged 2026-11-22 |
 
 The hourly advance has moved classes by itself, each move after a passing canary: one class on both Codex lanes on
 2026-10-26, and on one lane an opus class that stepped to an older model on 2026-11-10 and back two hours later (wave 3
@@ -95,74 +105,53 @@ and acceptance.
 |---|---|---|---|---|---|
 | 1 | catalogue-current | client-version-now | Raise the catalogue probe's Codex client version to the current Codex release | #3023 | merged; measured |
 | 2 | catalogue-current | client-version-tracks | Track that version automatically, with the shipped constant as a floor | #3025 | merged |
-| 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | #3118 | accepted at 71bf2644 after five review rounds (run 2455); waits for a DevOps approval |
+| 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | #3118 | merged 2026-11-22 |
 | - | doctor | doctor-land | Land #2943 | #2943 | merged 2026-11-19; the plan's ticket stays open (below) |
 | 4 | models-sheet | models-sheet | `POST /api/models/:lane` hold, release and revert, and the Models sheet; closes #1441 | #3028 | merged |
+| - | models-sheet | revert-ends-itself | A Revert records the model it left, and the refresh ends its hold by itself when a newer model appears, on both kinds of lane; doctor's hold remedies go | | building (run 3405) |
+| - | models-sheet | revert-holds-until-newer | Hold and Release leave the sheet and the door; Revert returns on Anthropic lanes where the box reports that it ends holds | | after `revert-ends-itself` |
 | 5 | read-path | retire-grant | Retire the model-file read grant; an unknown advance state reads `invalid` with the classes kept | #3041 | merged |
 | 6 | anthropic-arm | anthropic-plan | Amend the spec's D18 with the measured alias evidence, and plan the arm | #3027 | merged |
 | 7 | anthropic-arm | anthropic-writer | The alias file, holds and doctor causes on Anthropic lanes | #3107 | merged 2026-11-20 |
-| 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | accepted at 5f937866 after three review rounds (run 2910); waits for the owner's two items (below) |
-| 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | | planned |
+| 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | merged 2026-11-22 |
+| 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | #3221 | merged 2026-11-22, with no Hold, Release or Revert on an Anthropic lane yet (below) |
 | 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | planned |
 | - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | merged 2026-11-21 |
 | - | models-sheet | transient-beside-kept-answer | The sheet names a transient answer beside a kept one; a session-screen case and two text corrections | #3086 | merged 2026-11-19 |
 | - | models-sheet | revert-writes-before-refusing | A refused Revert must not leave the class held | #3118 | folded into wave 3 |
-| - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | | after waves 3 and 8 |
+| - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | | folds into `revert-holds-until-newer`, which edits the same files |
 | - | doctor | release-lookup-warn | Doctor warns when the Codex release lookup has failed for over a day | #3118 | folded into wave 3 |
-| - | anthropic-arm | repick-landing-notes | Six notes for the id re-pick, read with A3.6's re-check | #3122 | read in wave 8, whose A3.0 left the re-pick unmeasured |
+| - | anthropic-arm | repick-landing-notes | Six notes for the id re-pick, read with A3.6's re-check | | dropped: no typed re-pick is built (below) |
 | - | acceptance | natural-move | Watch the next real release through: canary, move, a new session, no sessions-behind warning | | watched from wave 1's rollout |
-| - | anthropic-arm | cache-row-skip | One bad row in Claude Code's model cache must not make the whole file unreadable (wave 7's review, F5) | | after wave 8 |
-| - | doctor | doctor-caps-one-reader | One reader of `ccd caps` in doctor; an unmeasured answer is never a PASS (wave 7's review, F6) | | after wave 8 |
-| - | doctor | effort-fallback-pins | Pin the two terms of the effort-file claim that wave 3's last review found unpinned, with three note corrections | | after wave 8 |
-| - | anthropic-arm | typed-repick | The re-pick measured with a hand-typed `/model`, which wave 8's A3.0 left unmeasured | | after wave 8; the owner types it |
+| - | anthropic-arm | cache-row-skip | One bad row in Claude Code's model cache must not make the whole file unreadable (wave 7's review, F5) | #3223 | merged 2026-11-22 |
+| - | doctor | doctor-caps-one-reader | One reader of `ccd caps` in doctor; an unmeasured answer is never a PASS (wave 7's review, F6) | #3222 | merged 2026-11-22 |
+| - | doctor | effort-fallback-pins | Pin the two terms of the effort-file claim that wave 3's last review found unpinned, with three note corrections | #3217 | merged 2026-11-22 |
+| - | anthropic-arm | typed-repick | Move a running Anthropic session onto its class's new id with no hand keystroke: a session behind its class's id is relaunched at idle by the existing roll | | building (run 3403) |
 | - | catalogue-current | effort-level-dropped | A dropped effort level must not stop a lane's hourly refresh (wave 1's review, F2) | #3118 | folded into wave 3 |
-| - | doctor | release-lookup-pins | Pin the release lookup's library read with a stand-in library, and two text corrections (wave 3's fifth review) | | after wave 3 |
-| - | anthropic-arm | no-keys-transitive | Guard passive alias observation against indirect key senders (wave 8's third review) | | after wave 8, before `typed-repick` |
+| - | doctor | release-lookup-pins | Pin the release lookup's library read with a stand-in library, and two text corrections (wave 3's fifth review) | #3216 | merged 2026-11-22 |
+| - | anthropic-arm | no-keys-transitive | Guard passive alias observation against indirect key senders (wave 8's third review) | #3219 | merged 2026-11-22 |
 | - | anthropic-arm | entry-comment-seven | The launcher's comment names its seven libraries, with the launcher's next change of substance | | with that change |
 | - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10 |
 
-Order: #2943 merged on 2026-11-19, which opened waves 3 and 7. They share five files: the models op
-(`deploy/models-op.mjs`), the advance rule (`shared/model-advance.mjs`), the registry reader (`shared/models.mjs`),
-doctor's checks (`ccd/ccrc-doctor-checks`) and `ccd/ccrc`. Wave 7 went first, because it starts the longest chain:
-wave 8 waits on wave 7, wave 9 on waves 4 and 7, and wave 10 is last. Wave 3 dispatches when wave 7 lands, or beside
-wave 8 with its holder's consent on the files they share. Wave 5 built on wave 4 (the same server reader and word
-lists). The three follow-ups marked "after wave 7" touch wave 7's files too, so they follow it or fold into wave 3.
-
-Wave 7 merged on 2026-11-20 (#3107). Waves 3 and 8 then ran side by side, each built on `main` after #3107. They share
-the advance rule, its declaration file, `ccd/ccrc` and two test files, and each edits only the hunks the other's worker
-consented to in writing, one round at a time; a consent releases no claim. The Codex bridge's check week closed on
-2026-11-21 and its evidence was handed over, and `usage-user-agent` (#3085) merged within the hour. That merge made wave 3's
-accepted head conflict with `main`, in one comment of the catalogue probe.
-
-Wave 8 passed its third review round at 5f937866 and waits for the owner. Wave 3 was to absorb `main` after wave 8 landed,
-but it no longer waits (below): it merged `main` once, moved its doctor check onto the release record's one reader, and
-passed its fifth review round at 71bf2644. Waves 3 and 8 still conflict with each other in the advance rule and its
-declaration file. Whichever lands second absorbs the other with one merge of `main`, keeps both waves' optional record
-members and checks, and gets a focused review before it lands.
+Order: waves 3 and 8 merged on 2026-11-22 (#3118, then #3122), and wave 9 built on both and merged that evening
+(#3221). Five follow-ups ran beside wave 9, each on files wave 9 did not hold, and all merged the same day. What
+remains runs side by side on separate files: `typed-repick` (the roll's decider and the shared model reader) and
+`revert-ends-itself` (the advance rule, the models op and doctor), whose two workers trade written consent for the one
+rule both need. `revert-holds-until-newer` follows `revert-ends-itself`, because removing Release before a Revert's hold
+ends by itself would leave every Codex revert held for good. Wave 10 is last.
 
 ## Waiting on the owner
 
-Four items are open. The review judge marks waves 3 and 8 as infrastructure changes (`devops-approval-needed`), so each
-lands only with such a review on its final head, asked for once that head has passed review.
+Nothing. On 2026-11-22 the owner ruled that no pull request waits for a human review: a PR lands on its required
+checks and the programme's own independent review, and the review judge's codes that ask for a person outside the
+author set (`devops-approval-needed`, `code-owner`, `rules-mixed`) hold nothing, and neither does `proof-not-built`. The items that asked
+the owner for such reviews were withdrawn: 542 (#3118) and 523 (#3122). Item 522, on #3122's coupled installer and
+libraries, closed that day. Item 505, which asked the owner to type one `/model` line so the re-pick could be
+measured, was withdrawn under the owner's other ruling of that day, never to hand the operator a chore: `typed-repick`
+was re-scoped to need no keystroke (call 176, then call 409, below).
 
-- Item 542: an approving review of #3118 from the DevOps team, outside its author set, at its accepted head 71bf2644.
-  Items 517 and 519 asked for one on wave 3's earlier heads; 517 was withdrawn when its round sent the head back for a
-  fix, and 519 when #3085's merge made its head conflict with `main`. The coordinator suggested taking 542 before 523,
-  so that #3122 absorbs wave 3 in one merge and 523's reviews are given once, on #3122's final head.
-- Item 522: wave 8 changes the launcher's installer together with the libraries it installs, and the two must move
-  together. An older installer with the newer tree reports success without the seventh library, and the session start
-  then refuses; a newer installer refuses the older tree. Splitting the PR is unsafe in either order, and the review
-  judge still blocks on `rules-mixed`. The item asks the owner to accept the coupled change where the repository's
-  policy permits it, which the coordinator recommends, or to require a redesign and a fresh review.
-- Item 523: approving reviews of #3122 from the DevOps team and its code owners, outside its author set, at its final
-  head. If #3118 lands first, #3122's head changes with its absorbing merge, and the item then names the new head.
-- Item 505: one typed `/model` line in a prepared throwaway session, so that the re-pick can be measured. Wave 8 took
-  the plan's fallback without it, and `typed-repick` waits on it.
-
-Items 406 (the server box on v0.0.1259 or later), 407 (both Codex lanes marked as Codex lanes in the server box's
-roster) and 423 (the fleet box on v0.0.1288 or later) were ticked by the owner and confirmed on 2026-11-18. A session
-cannot read the server box's roster, so 407 was confirmed on the owner's tick and the fleet box's copy. Wave 4's sheet
-is its first live check: if a Codex lane reads as unmanaged there, a new item goes to the owner.
+Items 406, 407 and 423 were ticked by the owner and confirmed on 2026-11-18 (the server box on v0.0.1259 or later, both
+Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or later).
 
 ## Decisions & deviations
 
@@ -178,10 +167,48 @@ is its first live check: if a Codex lane reads as unmanaged there, a new item go
 
   D-8781 was issued on 2026-11-19 for `usage-user-agent`, and #3085 defines it in wave 2's plan. `transient-beside-kept-answer` departed twice, from no plan of its own, so its two
   departures are named by slug in its task note (`model-class-advance/fu-transient-beside-kept-answer.md`):
-  `sheet-anthropic-no-transient-line` and `absent-anthropic-key-unreadable`. Waves 3 and 8 were issued numbers of
-  their own, defined in their PRs' plan edits (#3118 in the Codex arm's plan, #3122 in the Anthropic arm's plan); they
-  are named here once those PRs land.
-- **A pin gone from the catalogue (wave 3, in review as #3118).** Done-when 2's "never to an older version" governs a
+  `sheet-anthropic-no-transient-line` and `absent-anthropic-key-unreadable`. Waves 3, 8 and 9 define their numbers in
+  their PRs' plan edits: D-8838 to D-8843, D-8865 and D-8866 in the Codex arm's plan (#3118); D-8832, D-8833 and
+  D-8846 to D-8859 in the Anthropic arm's plan (#3122); D-8921 to D-8930 in the Anthropic arm's plan (#3221).
+- **The owner's rulings of 2026-11-22.** Three, each applied to this programme the same day:
+  - No pull request waits for a human review (above).
+  - Never hand the operator a chore: no item asks the owner to type, tap or run something the system can do.
+  - Classes always advance (the settings audit, `docs/superpowers/specs/2026-11-22-settings-audit.md`): the Models
+    sheet's Hold and Release go, and a Revert holds a class until a newer model appears. Big call 297 adopted it,
+    modification 94 rewrote done-when 5 and 6, and this ledger's PR amends the spec to match.
+- **Revert withheld on an Anthropic lane in wave 9 (call 374, big).** Wave 9's review found that a Revert there wrote a
+  hold the console could not end: no Release on that lane by the always-advance ruling, and the refresh passes over a
+  held class. Wave 9 therefore offers no Hold, Release or Revert on an Anthropic lane (D-8922, D-8930). A class held
+  from the shell still reads as held there, and its words name no control the sheet does not draw. Revert returns on
+  Anthropic lanes with `revert-holds-until-newer`, offered on both kinds of lane only where the box ends holds.
+- **A Revert's hold ends by itself (calls 411 and 412).** A Revert records the model it moved away from. One decider in
+  the advance rule ends the hold: on a Codex lane when a newer version of the same family appears, on an Anthropic lane
+  when the alias, seen after the hold began, names a third id. A hold that records nothing derives it, from the
+  history on a Codex lane, else the held id, so an old hand hold ends at the next newer model. The refresh clears the
+  hold in the same write as the move. A held pin the catalogue has retired ends its hold and takes the move an unheld
+  class would take. Doctor warns only when a hold should have ended and still stands. The read gains a fact that the
+  box ends holds, and the sheet offers Revert only where it is present, so a new console never strands a hold on an
+  older fleet box. No hold stood on the fleet box when this was decided. The work is two runs, the automatic end first.
+- **`typed-repick` without a keystroke (calls 176 and 409).** Nothing acts on a running Anthropic session when its
+  class's alias moves; any relaunch lands on the new id, because every spawn passes the class alias. Whether a typed
+  `/model` re-pick re-resolves the alias in an old process was never measured and may do nothing. So a session behind
+  its class's id becomes one more reason for the existing idle roll, which resumes the same conversation and types no
+  key, once per target id. `repick-landing-notes` was dropped with the typed arm.
+- **Known limits, recorded rather than built.** #3219's call-graph guard stops at these, judged contrived after two
+  rounds (call 381): a function whose body is a subshell, `pkg::fn` names, tmux's `pipe-pane -I`, the `tmux paste`
+  prefix, option forms before `send` that it does not parse, control-mode here-strings, wrappers held in variables, a
+  text-level cutter, the literal `--apply` read, a supervisor started through the service manager, and a bare
+  `ccd <verb>`, which is not an edge. #3222's one-reader guard reads the spellings it names, not every way to write a
+  second call.
+- **Carried to later work.** From wave 9: a lane whose kind is unknown is drawn as a Codex lane (the window is narrow,
+  and the server refuses behind it); a push dropped for lack of the strong timeout capability writes no log line. From
+  `no-keys-transitive` (call 299): `_watchdog_resume_run`'s header comment says it types nothing, which needs a
+  correction at `ccd/ccd`'s next change, and the stand-downs of the supervisor's typing paths (auto-compact, the route
+  typers) want pins of their own. Wave 10 takes the `ccrc-models` test's stale title, D-8751's prose after wave 9's one
+  push per class move, and the over-cap log wording. Done-when 3 still says doctor warns on a held class behind a newer
+  model, which a Revert's hold now is by design until its end comes; its wording goes to the owner with wave 10's
+  docs as a proposed modification of the definition of done.
+- **A pin gone from the catalogue (wave 3, #3118).** Done-when 2's "never to an older version" governs a
   release advance, and wave 3 keeps it: a `newer` move goes only to a version strictly above the pin, and it never
   waits for the grace below. The one step that can still choose an older model is the retirement of a pin the catalogue no longer lists.
   Wave 3 allows it only after six hours of continuous fresh catalogue sightings of that absence, timed by the
@@ -206,8 +233,8 @@ is its first live check: if a Codex lane reads as unmanaged there, a new item go
 - **The Anthropic arm's re-pick (wave 6).** The plan's step that moves a running Anthropic session to its class's new
   id took six review rounds. Rounds 3 to 6 each found a defect in a guard the previous round had added. Round 5 replaced
   those guards with one bound: a `picked=` key, so a given id is acted on at most once per session, and only a positive
-  hand pick stands it down (D-8744). The last round's minor points are a follow-up ticket (`repick-landing-notes`), read
-  with A3.6's re-check against the A3.0 measurements before wave 8 dispatches.
+  hand pick stands it down (D-8744). The last round's minor points became a follow-up ticket
+  (`repick-landing-notes`), dropped on 2026-11-22 with the typed re-pick itself (below).
 - **Two changes were to wait for the Codex bridge's check week to close (2026-11-21); one landed early.** The week reads
   the doctor and the GPT lanes' usage units every day, and a merge reaches the fleet within hours. On 2026-11-19 the
   operator amended D-8689 for #2943: its four checks were measured PASS on both Codex lanes, read-only; the week's
@@ -241,7 +268,7 @@ is its first live check: if a Codex lane reads as unmanaged there, a new item go
   text-closable findings. The coordinator checked each with two independent Opus readers (one for conformance to the
   rulings, one for correctness) and landed it, rather than spend another review round.
 - **Workers and reviews:** each wave is a dispatched worker on its own branch, read by a review run with the held-out
-  panel, and merged through the queue by the coordinator. Rollout stays the owner's.
+  panel, and merged through the queue by the coordinator. Rollout rides the release lane; nothing here moves a box by hand.
 
 ## Carried constraints
 
@@ -251,17 +278,20 @@ is its first live check: if a Codex lane reads as unmanaged there, a new item go
   `Co-Authored-By:` so that git reads it as a trailer.
 - D-8693's rulings stand: the argv-grammar refusal words stay `unreadable`. Since wave 5, an advance state word the
   server does not know reads `invalid`, with the classes kept.
-- #2943's files were held for it until it merged on 2026-11-19. They are open now. Waves 3 and 8 share several of
-  them (Order, above), and neither edits a shared hunk without the other's written consent. The second of the two to
-  land keeps both waves' optional members of the advance record and their parser checks, and reruns the advance file's
-  tests against the combined parser.
+- No human review holds a pull request; each lands on its required checks and the programme's own independent
+  review, through the merge queue, at the head that review read.
+- No remedy, item or brief hands the owner a step the system can take.
 
-## Next-wave brief (wave 9, after wave 8)
+## Next-wave brief (after wave 9)
 
-- Ticket `anthropic-pwa` (epic anthropic-arm): the class labels and the Models sheet on Anthropic lanes. It waits for
-  wave 8 to merge, because it reads what wave 8's launch and hold record, and it builds on wave 4's sheet. It also
-  waits for wave 3, which changes the models op that wave 9 extends.
-- It carries two findings from wave 7's review: the notification's wording, and one push per class move rather than
-  one per lane.
-- It states, without adding a gate, the caveat wave 8 documents for a degraded supervisor sweep.
-- Each change carries a test that reds without it, and the wave is safe in the mixed-version window at merge.
+- `revert-ends-itself` (run 3405) and `typed-repick` (run 3403) are building; their briefs carry calls 409, 411 and
+  412.
+- `revert-holds-until-newer` follows `revert-ends-itself`: Hold and Release leave the sheet, the door's vocabulary and
+  every word that names them; Revert returns on Anthropic lanes, offered only where the read says the box ends holds;
+  Revert's confirm and the held row name what ends the hold; `CLAUDE.md`'s sentence on the Models sheet's write door
+  and the route census change with the door; `ccrcdir-param-drop` rides along. When it lands, the Overlord programme
+  gets the landing evidence: it left the Models sheet's row of the settings audit to this programme.
+- Wave 10 (`docs-and-issues`, `readme-anthropic-arm`) is last: the README's lines for both arms, the spec's status, #2607,
+  and the carries above.
+- Live checks still owed: `moves-only-forward` measured on the fleet box once a release with wave 3 is there, the
+  sheet's live acceptance after `revert-holds-until-newer` ships, and `natural-move` at the next real model release.
