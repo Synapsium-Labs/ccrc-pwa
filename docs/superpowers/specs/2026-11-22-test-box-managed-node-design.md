@@ -952,27 +952,27 @@ the plan; none is invented here.
 
 | # | Decision | Chosen, and why | Number |
 |---|---|---|---|
-| A1 | What the box is | A third node, role `testbox`, in the one inventory | D-TBD-testbox-node-role |
-| A2 | What runs on the box | Its own updater sharing the lane's report, lock and gate | D-TBD-box-updater-own-spine |
-| A3 | Where its target comes from | The fleet node's settled release; no intent | D-TBD-box-follows-fleet |
-| A4 | Halt and lease | A follower lane; core never reads it | D-TBD-follower-lane |
-| A5 | Whose updater runs | The target release's, never the installed one | D-TBD-no-old-code-in-path |
-| A6 | Who measures the tools | One measurer on the fleet host, for every caller | D-TBD-one-tool-measurer |
-| A7 | Which tool difference matters | The one a run falls back on; one function | D-TBD-one-tool-comparison |
-| A8 | The measurement path | Root reads the node files; mirrored on the fleet host | D-TBD-carrier-reads-node-files |
-| A9 | A second report file | The driver's verdict, matched by act id | D-TBD-carrier-report |
-| A10 | Order | The fleet, then the server and the box apart | D-TBD-box-after-fleet |
-| A11 | Retry | Deferred, bounded retries; nothing waits for a tap | D-TBD-deferred-class |
-| A12 | Deadlines | One table, enforced by systemd, summed | D-TBD-admin-deadlines |
-| A13 | The one fact | `testboxReady`, in `server/src/testbox.ts` | D-TBD-testbox-ready |
-| A14 | Caps | Words of the box's own; the sweep drops core words | D-TBD-box-caps-own-words |
-| A15 | No manual rollback of the box | It rolls back when the fleet does | D-TBD-no-box-rollback-door |
-| A16 | The first caller | The fleet host's own update and rollback | D-TBD-fleet-update-starts-act |
-| A17 | New wire content | Never on a frame an exact reader reads | D-TBD-no-new-field-on-exact-frames |
-| A18 | The drain's channel | Two files; the request is a lease | D-TBD-drain-by-file |
-| A19 | The token and the gate | Placed inside the act, before the gate | D-TBD-token-before-gate |
-| A20 | The operator's acts and the lock | They stop an automatic act | D-TBD-operator-acts-first |
-| A21 | Health and convergence | Apart; one repair per tag and cause | D-TBD-health-not-convergence |
+| A1 | What the box is | A third node, role `testbox`, in the one inventory | D-8917 (testbox-node-role) |
+| A2 | What runs on the box | Its own updater sharing the lane's report, lock and gate | D-8903 (box-updater-own-spine) |
+| A3 | Where its target comes from | The fleet node's settled release; no intent | D-8902 (box-follows-fleet) |
+| A4 | Halt and lease | A follower lane; core never reads it | D-8909 (follower-lane) |
+| A5 | Whose updater runs | The target release's, never the installed one | D-8913 (no-old-code-in-path) |
+| A6 | Who measures the tools | One measurer on the fleet host, for every caller | D-8915 (one-tool-measurer) |
+| A7 | Which tool difference matters | The one a run falls back on; one function | D-8914 (one-tool-comparison) |
+| A8 | The measurement path | Root reads the node files; mirrored on the fleet host | D-8904 (carrier-reads-node-files) |
+| A9 | A second report file | The driver's verdict, matched by act id | D-8905 (carrier-report) |
+| A10 | Order | The fleet, then the server and the box apart | D-8900 (box-after-fleet) |
+| A11 | Retry | Deferred, bounded retries; nothing waits for a tap | D-8906 (deferred-class) |
+| A12 | Deadlines | One table, enforced by systemd, summed | D-8899 (admin-deadlines) |
+| A13 | The one fact | `testboxReady`, in `server/src/testbox.ts` | D-8918 (testbox-ready) |
+| A14 | Caps | Words of the box's own; the sweep drops core words | D-8901 (box-caps-own-words) |
+| A15 | No manual rollback of the box | It rolls back when the fleet does | D-8911 (no-box-rollback-door) |
+| A16 | The first caller | The fleet host's own update and rollback | D-8908 (fleet-update-starts-act) |
+| A17 | New wire content | Never on a frame an exact reader reads | D-8912 (no-new-field-on-exact-frames) |
+| A18 | The drain's channel | Two files; the request is a lease | D-8907 (drain-by-file) |
+| A19 | The token and the gate | Placed inside the act, before the gate | D-8919 (token-before-gate) |
+| A20 | The operator's acts and the lock | They stop an automatic act | D-8916 (operator-acts-first) |
+| A21 | Health and convergence | Apart; one repair per tag and cause | D-8910 (health-not-convergence) |
 
 *Table 18. The author's decisions. A2, A9 and A16 each add a second mechanism and record why it is legitimately
 different: another host and root scope for A2; a witness that outlives the service for A9; for A16, a caller
