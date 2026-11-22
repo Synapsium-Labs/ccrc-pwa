@@ -8,6 +8,7 @@ import {
   type CaptureFieldRule, type CaptureRecord, type CaptureRecording,
 } from '../../shared/claudeBuildCapture.js';
 import { BUILD_CAPTURE_OUTPUT_MAX } from '../../shared/claudeBuildTrust.js';
+import { isHookEvent } from '../../shared/hook-events.js';
 
 const BUILD = '2.1.320';
 const CD = '/scratch/capture/work/sub';
@@ -28,7 +29,7 @@ function built(rules: readonly CaptureFieldRule[]): Record<string, unknown> {
 }
 const status = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ ...built(STATUS_FILE_RULES), version: BUILD, ...over });
 const hook = (event: string, over: Record<string, unknown> = {}): CaptureRecord => ({
-  kind: 'hook', event, payload: { ...built([...HOOK_COMMON_RULES, ...(HOOK_EVENT_RULES[event] ?? [])]), hook_event_name: event, ...over }, status: status(),
+  kind: 'hook', event, payload: { ...built([...HOOK_COMMON_RULES, ...(isHookEvent(event) ? HOOK_EVENT_RULES[event] : [])]), hook_event_name: event, ...over }, status: status(),
 });
 const statusline = (): CaptureRecord => ({ kind: 'statusline', payload: built(STATUSLINE_RULES), status: status() });
 const goodRecords = (): CaptureRecord[] => [...CAPTURE_EVENTS.map((e) => hook(e, e === 'PermissionRequest' ? { cwd: CD } : {})), statusline()];

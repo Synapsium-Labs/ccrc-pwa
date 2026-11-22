@@ -14,6 +14,7 @@ import {
   CAPTURE_SOCKET, CAPTURE_STEPS, CAPTURE_TMUX_SESSION, captureClaudeJson, captureEnv, capturePaths, captureSettings, stepDone,
 } from './capture.js';
 import type { StandIn } from './captureStub.js';
+import { tmuxName, tmuxTarget } from '../../../shared/tmux-target.js';
 import { boundedExec } from './exec.js';
 
 /** What a launcher is handed: the build, where it starts, its WHOLE environment, and its own tmux server's names. */
@@ -129,16 +130,18 @@ export function tmuxLauncher(tmux: string, boundMs = 15_000): CaptureLauncher {
         const r = await exec(tmux, [...base, ...args]);
         return { status: r.killed ? 124 : r.status, stderr: r.stderr };
       };
-      const made = await call(['-f', '/dev/null', 'new-session', '-d', '-s', spec.session, '-x', '200', '-y', '50', '-c', spec.cwd, spec.binary]);
+      // The session is created and addressed in ccrc's one spelling (`shared/tmux-target.ts`): its name, then the anchored
+      // target, so no `-t` can prefix-match another session even on this private server.
+      const made = await call(['-f', '/dev/null', 'new-session', '-d', '-s', tmuxName(spec.session), '-x', '200', '-y', '50', '-c', spec.cwd, spec.binary]);
       if (made.status !== 0) throw new Error(`tmux new-session exited ${made.status}: ${made.stderr.trim()}`);
       return {
         async type(text) {
-          const t = await call(['send-keys', '-t', spec.session, '-l', text]);
+          const t = await call(['send-keys', '-t', tmuxTarget(spec.session), '-l', text]);
           if (t.status !== 0) throw new Error(`tmux send-keys exited ${t.status}`);
-          const e = await call(['send-keys', '-t', spec.session, 'Enter']);
+          const e = await call(['send-keys', '-t', tmuxTarget(spec.session), 'Enter']);
           if (e.status !== 0) throw new Error(`tmux send-keys exited ${e.status}`);
         },
-        alive: async () => (await call(['has-session', '-t', spec.session])).status === 0,
+        alive: async () => (await call(['has-session', '-t', tmuxTarget(spec.session)])).status === 0,
         stop: async () => { await call(['kill-server']); },
       };
     },
