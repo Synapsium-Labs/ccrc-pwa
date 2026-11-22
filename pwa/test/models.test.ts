@@ -461,6 +461,16 @@ describe('asLaneModelsRead: the advance key', () => {
     for (const canary of CANARY_RESULTS) expect(state(withHaiku({ lastMove: move({ canary }) })), canary).toBe('ok');
     expect(state(withHaiku({ hold: { at: 'x', by: 'later' } }))).toBe('invalid');
   });
+
+  it('a hold keeps the id it holds', () => {
+    // An Anthropic lane's hold carries `hold.model` (Task A2.3); the Models sheet reads the held id from it (Task A4.3).
+    const ok = okAdvance();
+    const read = (hold: Record<string, unknown>) => (asLaneModelsRead(answer({ ...ok, classes: { ...(ok.classes as object),
+      haiku: { ...classAdv(), hold } } })) as Extract<LaneModelsRead, { kind: 'read' }>).advance?.classes?.haiku.hold;
+    expect(read({ at: 'x', by: HOLD_BY[0], model: 'claude-haiku-9-1' })).toEqual({ at: 'x', by: HOLD_BY[0], model: 'claude-haiku-9-1' });
+    expect(read({ at: 'x', by: HOLD_BY[0] })).toEqual({ at: 'x', by: HOLD_BY[0] });
+    expect(read({ at: 'x', by: HOLD_BY[0], model: 7 })).toEqual({ at: 'x', by: HOLD_BY[0] });
+  });
 });
 
 // ── Anthropic lane's labels and effort levels from the lane's own aliases (model-class Anthropic arm, Task A4.1/A4.2) ──

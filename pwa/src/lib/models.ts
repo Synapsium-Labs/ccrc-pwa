@@ -269,7 +269,9 @@ const INVALID_ADVANCE: LaneAdvanceRead = { state: 'invalid', detail: null, pendi
 const asHold = (v: unknown): Hold | null | undefined => {
   if (v === null) return null;
   if (!isObj(v) || typeof v.at !== 'string' || !inList(HOLD_BY, v.by)) return undefined;
-  return { at: v.at, by: v.by as Hold['by'] };
+  // An Anthropic lane's hold names the id it holds (`hold.model`, Task A2.3), which the Models sheet shows; the server has
+  // already held it to the model-id grammar, so a value that is not a string is dropped and the hold is kept.
+  return { at: v.at, by: v.by as Hold['by'], ...(typeof v.model === 'string' ? { model: v.model } : {}) };
 };
 const asPrevious = (v: unknown): Previous | null | undefined => {
   if (v === null) return null;
