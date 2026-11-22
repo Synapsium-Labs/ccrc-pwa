@@ -67,10 +67,16 @@ export interface CaptureAnswer {
 
 // ── the recording ────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** The drive's write (spec Table 1, step 2): the Bash command the stand-in asks for after `cd sub`. It writes a file, so
+ *  the build raises a permission prompt for it, and that prompt is the one that proves the `cwd` fact and the approval
+ *  wait's output side. The stand-in (`agent/src/testbox/capture.ts#standInReply`) and the replay read this one value. */
+export const CAPTURE_WRITE_COMMAND = 'touch ccrc-capture-mark';
+
 /** One line of the recording, as the recorder writes it: what a hook or the statusline command was given on its stdin,
- *  and a copy of the live status file taken at that moment (null when none could be read). */
+ *  and a copy of the live status file taken at that moment (null when none could be read). A hook line that the
+ *  recorder answered carries `answer`, the decision it printed (`allow` for a PermissionRequest). */
 export type CaptureRecord =
-  | { readonly kind: 'hook'; readonly event: string; readonly payload: unknown; readonly status: unknown }
+  | { readonly kind: 'hook'; readonly event: string; readonly payload: unknown; readonly status: unknown; readonly answer?: string }
   | { readonly kind: 'statusline'; readonly payload: unknown; readonly status: unknown };
 
 /** A whole recording: its lines, the directory the drive's `cd` moved into (the PermissionRequest's expected `cwd`), and
@@ -93,8 +99,11 @@ export function readCaptureRecords(text: string): { readonly records: CaptureRec
     if (typeof v !== 'object' || v === null || Array.isArray(v)) { unreadable++; continue; }
     const o = v as Record<string, unknown>;
     const status = Object.prototype.hasOwnProperty.call(o, 'status') ? o['status'] : null;
-    if (o['kind'] === 'hook' && typeof o['event'] === 'string' && Object.keys(o).sort().join() === 'event,kind,payload,status') {
+    const keys = Object.keys(o).sort().join();
+    if (o['kind'] === 'hook' && typeof o['event'] === 'string' && keys === 'event,kind,payload,status') {
       records.push({ kind: 'hook', event: o['event'], payload: o['payload'], status });
+    } else if (o['kind'] === 'hook' && typeof o['event'] === 'string' && typeof o['answer'] === 'string' && keys === 'answer,event,kind,payload,status') {
+      records.push({ kind: 'hook', event: o['event'], payload: o['payload'], status, answer: o['answer'] });
     } else if (o['kind'] === 'statusline' && Object.keys(o).sort().join() === 'kind,payload,status') {
       records.push({ kind: 'statusline', payload: o['payload'], status });
     } else {
@@ -193,11 +202,20 @@ export function ruleBreaks(v: unknown, rules: readonly CaptureFieldRule[]): stri
 
 // ── the replay ───────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** Whether a hook payload is the drive's write: Bash, running {@link CAPTURE_WRITE_COMMAND}. */
+const isWrite = (payload: unknown): boolean => at(payload, 'tool_name') === 'Bash' && at(payload, 'tool_input.command') === CAPTURE_WRITE_COMMAND;
+
+/** The recorder's answer to a permission prompt that lets the tool run. */
+const ALLOW = 'allow';
+
 /** THE replay suite: the recording checked against the grammar, as the verdict the record stores. It passes when the
  *  drive finished, no line was unreadable, every event in {@link CAPTURE_EVENTS} was recorded, every hook payload,
  *  statusline JSON and status file copy fits its rules, at least one statusline JSON and one status file copy were
- *  recorded, and a status file names `build` as its `version`. It proves the `cwd` fact when a PermissionRequest's `cwd`
- *  is the drive's `cd` directory. The output names every break, one per line, and ends with the verdict. */
+ *  recorded, a status file names `build` as its `version`, and the approval wait's output side held: the write's
+ *  PermissionRequest was answered `allow` by the recorder and the write's PostToolUse was recorded after it (spec §2.6,
+ *  review 3226 F7), so the build obeyed the hook's answer. It proves the `cwd` fact only when THE WRITE's
+ *  PermissionRequest names the drive's `cd` directory as its `cwd` (review 3226 F5): any other prompt naming it proves
+ *  nothing. The output names every break, one per line, and ends with the verdict. */
 export function replayCapture(rec: CaptureRecording, build: string): BuildCaptureResult {
   const lines: string[] = [];
   if (!rec.finished) lines.push('drive: did not finish every step');
@@ -207,6 +225,9 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
   let statuses = 0;
   let versionSeen = false;
   let cwd = false;
+  let writeAsked = false;
+  let allowedAt = -1;
+  let writeRan = false;
   rec.records.forEach((r, i) => {
     const where = r.kind === 'hook' ? `#${i + 1} ${r.event}` : `#${i + 1} statusline`;
     if (r.kind === 'hook') {
@@ -217,7 +238,12 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
       if (at(r.payload, 'hook_event_name') !== undefined && at(r.payload, 'hook_event_name') !== r.event) {
         lines.push(`${where}: hook_event_name does not name ${r.event}`);
       }
-      if (hookEventIs(r.event, 'PermissionRequest') && at(r.payload, 'cwd') === rec.cdDir) cwd = true;
+      if (hookEventIs(r.event, 'PermissionRequest') && isWrite(r.payload)) {
+        writeAsked = true;
+        if (at(r.payload, 'cwd') === rec.cdDir) cwd = true;
+        if (r.answer === ALLOW && allowedAt < 0) allowedAt = i;
+      }
+      if (hookEventIs(r.event, 'PostToolUse') && isWrite(r.payload) && allowedAt >= 0 && i > allowedAt) writeRan = true;
     } else {
       statuslines++;
       for (const b of ruleBreaks(r.payload, STATUSLINE_RULES)) lines.push(`${where}: ${b}`);
@@ -229,6 +255,9 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
     }
   });
   for (const e of CAPTURE_EVENTS) if (!seen.has(e)) lines.push(`event ${e}: never recorded`);
+  if (!writeAsked) lines.push('approval: the write raised no permission prompt');
+  else if (allowedAt < 0) lines.push("approval: the hook's allow answer to the write's prompt was not recorded");
+  else if (!writeRan) lines.push('approval: the write never ran after the hook answered allow');
   if (statuslines === 0) lines.push('statusline: never recorded');
   if (statuses === 0) lines.push('status file: never recorded');
   else if (!versionSeen) lines.push(`status file: no copy names version ${build}`);

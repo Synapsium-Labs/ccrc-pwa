@@ -12,7 +12,7 @@
 // - THE DRIVE: the keys typed at each step and the events that must be recorded before the next.
 // - THE STAND-IN'S REPLIES: one rule per request, keyed on what the request carries, never on a model.
 import path from 'node:path';
-import { CAPTURE_EVENTS } from '../../../shared/claudeBuildCapture.js';
+import { CAPTURE_EVENTS, CAPTURE_WRITE_COMMAND } from '../../../shared/claudeBuildCapture.js';
 import type { HookEvent } from '../../../shared/hook-events.js';
 import { SYSTEM_PATH } from './spec.js';
 
@@ -130,8 +130,8 @@ export function stepDone(step: CaptureStep, events: readonly string[]): boolean 
 
 /** The first tool call's command: moves the shell into {@link CAPTURE_CD_DIR}. */
 export const CAPTURE_CD_COMMAND = `cd ${CAPTURE_CD_DIR}`;
-/** The second: writes a file, so it raises a permission prompt, after the shell moved. */
-export const CAPTURE_WRITE_COMMAND = 'touch ccrc-capture-mark';
+// The second, the write that raises the permission prompt after the shell moved, is `CAPTURE_WRITE_COMMAND`, in
+// `shared/claudeBuildCapture.ts` beside the replay that reads it (review 3226 F5).
 
 /** What the stand-in answers one request with. `tool`: one tool call; `text`: a text reply; `error`: an HTTP error the
  *  build does not retry (400, `invalid_request_error`), which ends the turn with StopFailure. */
