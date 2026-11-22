@@ -206,15 +206,53 @@ describe('resolveAliases: one bad row or target in the cache (cache-row-skip)', 
     expect(resolve({ own: [r] })).toEqual(clean);
   });
 
-  it('one beta minimum on a target row: that class reads as a target with no row, the others exactly as before', () => {
-    const r = catalogue((c) => { c.models[4].min_claude_code_version = '2.1.300-beta'; });
-    expect(r.format === 'current' && r.skipped)
-      .toEqual([{ at: 'models[4].min_claude_code_version', why: 'is not a version' }]);
+  const beta = (c: any) => { c.models[4].min_claude_code_version = '2.1.300-beta'; };
+  const missing = (c: any) => { c.models.splice(4, 1); };
+  const blocked = { id: null, source: null, cacheTarget: null, unobserved: true };
+
+  it('one beta minimum on a target row removes only that class’s cache candidate', () => {
+    const r = catalogue(beta);
     const a = resolve({ own: [r] });
-    const noRow = resolve({ own: [catalogue((c) => { c.models.splice(4, 1); })] });
-    expect(a.classes.fable).toEqual(noRow.classes.fable);
-    expect(a.classes.fable).toMatchObject({ id: F1, source: 'cache', row: null, rowFrom: null, unlaunchable: null });
+    expect(a.classes.fable).toMatchObject(blocked);
     for (const c of others('fable')) expect(a.classes[c]).toEqual(clean.classes[c]);
+    expect(a.cache).toEqual(clean.cache);
+  });
+
+  it('a skipped own target row preserves prior or launch evidence, even when a box row is readable', () => {
+    const own = [catalogue(beta)];
+    const box = [catalogue()];
+    const oldId = 'claude-fable-9-0';
+    const launches = [launch('fable', oldId, T3)];
+    const prior = resolve({ launches });
+    const kept = { id: oldId, source: 'use', evidenceAt: T3, cacheTarget: null };
+    expect(resolve({ own, box, prior }).classes.fable).toMatchObject(kept);
+    expect(resolve({ own, box, launches }).classes.fable).toMatchObject(kept);
+  });
+
+  it.each([{ id: 42 }, null])('an unidentifiable row (%j) blocks only targets without readable rows', (bad) => {
+    const r = catalogue((c) => { c.models[4] = bad; });
+    const a = resolve({ own: [r] });
+    expect(a.classes.fable).toMatchObject(blocked);
+    for (const c of others('fable')) expect(a.classes[c]).toEqual(clean.classes[c]);
+    expect(resolve({ own: [catalogue((c) => { c.models.push(bad); })] })).toEqual(clean);
+  });
+
+  it('an absent target row with no relevant skip still counts as launchable', () => {
+    const a = resolve({ own: [catalogue(missing)] });
+    expect(a.classes.fable).toMatchObject({ id: F1, source: 'cache', row: null, rowFrom: null, unlaunchable: null });
+  });
+
+  it('a skipped target row in a box cache needs a readable row from another cache', () => {
+    const own = [catalogue(missing)];
+    const skipped = catalogue(beta);
+    const readable = catalogue();
+    expect(resolve({ own, box: [skipped] }).classes.fable).toMatchObject(blocked);
+    for (const box of [[skipped, readable], [readable, skipped]]) {
+      expect(resolve({ own, box }).classes.fable)
+        .toMatchObject({ id: F1, source: 'cache', row: { id: F1 }, rowFrom: 'box' });
+    }
+    const belowMinimum = resolve({ own, box: [skipped, readable], laneVersion: '9.0.0' });
+    expect(belowMinimum.classes.fable).toMatchObject({ id: null, source: null, cacheTarget: F1, unobserved: true });
   });
 
   it('a malformed target for one class: that class loses the cache source, the others resolve from it exactly as before', () => {

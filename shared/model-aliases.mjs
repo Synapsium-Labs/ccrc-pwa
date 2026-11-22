@@ -48,12 +48,12 @@ function fetchedIso(v) {
 
 /** The row of one model: `efforts` is `[]` only when the row SAYS the model takes none (`thinking.type` "none"), the
  *  row's own list when it has one, and `null` when it carries no effort field at all. The two are never folded
- *  (D-8750). `{row}`, or `{skip: {at, why}}` naming the field that breaks it when a field is present and unusable: one
- *  row Claude Code added that this build cannot read is that row's loss, never the file's (cache-row-skip). */
+ *  (D-8750). `{row}`, or `{skip}` with the broken field and its reason. A skip carries `rowId` if the id was
+ *  valid, `null` if the id was unreadable, and no `rowId` if the string cannot name a valid target. */
 function readRow(m, f) {
-  const skip = (at, why) => ({ skip: { at, why } });
-  if (!isObj(m)) return skip(f, 'is not an object');
-  if (typeof m.id !== 'string') return skip(`${f}.id`, 'is not a string');
+  const skip = (at, why, rowId) => ({ skip: { at, why, ...(rowId === undefined ? {} : { rowId }) } });
+  if (!isObj(m)) return skip(f, 'is not an object', null);
+  if (typeof m.id !== 'string') return skip(`${f}.id`, 'is not a string', null);
   const id = bareModelId(m.id);
   if (!MODEL_ID_RE.test(id)) return skip(`${f}.id`, 'is not a model id');
   const runtime = isObj(m.runtime) ? m.runtime : {};
@@ -64,7 +64,7 @@ function readRow(m, f) {
   let minVersion = null;
   if (m.min_claude_code_version !== undefined && m.min_claude_code_version !== null) {
     if (typeof m.min_claude_code_version !== 'string' || !VERSION_RE.test(m.min_claude_code_version)) {
-      return skip(`${f}.min_claude_code_version`, 'is not a version');
+      return skip(`${f}.min_claude_code_version`, 'is not a version', id);
     }
     minVersion = m.min_claude_code_version;
   }
@@ -85,8 +85,8 @@ function readRow(m, f) {
  *  the file is never a source), and `{format:'invalid', why}` for anything that is not a cache file or breaks a field
  *  of the FILE: not an object, no `catalog.config` object, a `fetchedAt` that is not a time, `models` not a list.
  *  A field of ONE row or ONE class's target is read row by row (cache-row-skip): a row that breaks a field is left out
- *  of `rows`, a class whose target is not a model id has a null target, and each is one `{at, why}` in `skipped`, in
- *  file order (targets first), so every other row and class reads exactly as it would without it. */
+ *  of `rows`, a class whose target is not a model id has a null target, and each has an entry in `skipped` (targets
+ *  first). The resolver uses the skips to distinguish a target whose row failed to parse from one with no row. */
 export function parseCatalogueCache(json) {
   if (!isObj(json)) return { format: 'invalid', why: 'a catalogue cache is a JSON object' };
   if (!isObj(json.catalog) || !isObj(json.catalog.config)) {
@@ -186,18 +186,23 @@ function newestOwnReading(own) {
   return best;
 }
 
-/** The row of `id` as a plain object, and where it came from: the lane's own cache first (any own current file, the
- *  newest first), else the newest box cache that lists it. A box reading's targets are never read, only its rows. */
+/** With no readable row here, did a skipped row name this id or have no readable id at all? A string that cannot
+ *  name a valid target (or a skipped alias target, not a row) is irrelevant to this lookup. */
+const skippedRowFor = (cache, id) => !cache.rows.has(id)
+  && cache.skipped.some((s) => s.rowId === id || s.rowId === null);
+
+/** Prefer the newest readable own row, then the newest readable box row. If neither can provide one, distinguish
+ *  a genuinely absent row from a skip that may have hidden a build requirement. Box targets are never read. */
 function findRow(id, own, box) {
-  for (const r of currentsNewestFirst(own)) {
-    const row = r.rows.get(id);
-    if (row !== undefined) return { row: plainRow(row), from: 'own' };
+  let skipped = false;
+  for (const [readings, from] of [[own, 'own'], [box, 'box']]) {
+    for (const r of currentsNewestFirst(readings)) {
+      const row = r.rows.get(id);
+      if (row !== undefined) return { row: plainRow(row), from, skipped: false };
+      skipped ||= skippedRowFor(r, id);
+    }
   }
-  for (const r of currentsNewestFirst(box)) {
-    const row = r.rows.get(id);
-    if (row !== undefined) return { row: plainRow(row), from: 'box' };
-  }
-  return { row: null, from: null };
+  return { row: null, from: null, skipped };
 }
 const plainRow = (r) => ({ ...r, efforts: r.efforts === null ? null : [...r.efforts] });
 
@@ -243,8 +248,12 @@ export function resolveAliases({ own, box, launches, prior, holds, laneVersion, 
       if (seenAt === null || l.bornAt > seenAt) { seenId = l.id; seenAt = l.bornAt; }
     }
 
-    const target = ownCache === null ? null : ownCache.aliasTargets[c];
-    const cacheCand = target !== null && launchable(findRow(target, own, box).row, lane)
+    const rawTarget = ownCache === null ? null : ownCache.aliasTargets[c];
+    // The file that names the alias must not hide its target's minimum behind a skip. Other files can supply a
+    // readable row, but if all they have is a relevant skip, that is not proof that there was no minimum either.
+    const targetRow = rawTarget === null || skippedRowFor(ownCache, rawTarget) ? null : findRow(rawTarget, own, box);
+    const target = targetRow === null || targetRow.skipped ? null : rawTarget;
+    const cacheCand = target !== null && launchable(targetRow.row, lane)
       ? { id: target, at: ownCache.fetchedAt, source: 'cache' } : null;
     const useCand = seenId === null ? null : { id: seenId, at: seenAt, source: 'use' };
     // The newer wins; a tie goes to the cache.

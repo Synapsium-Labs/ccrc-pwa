@@ -67,15 +67,15 @@ describe('parseCatalogueCache', () => {
     const badId = parseCatalogueCache(small({}, [{ id: 'bad id with spaces' }]));
     expect(badId.format === 'current' && badId.skipped).toEqual([{ at: 'models[0].id', why: 'is not a model id' }]);
     const noId = parseCatalogueCache(small({}, [{ name: 'x' }]));
-    expect(noId.format === 'current' && noId.skipped).toEqual([{ at: 'models[0].id', why: 'is not a string' }]);
+    expect(noId.format === 'current' && noId.skipped).toEqual([{ at: 'models[0].id', why: 'is not a string', rowId: null }]);
     const badTarget = parseCatalogueCache(small({ provider_alias_targets: { opus: { default: 'no good' } } }));
     expect(badTarget.format === 'current' && badTarget.skipped)
       .toEqual([{ at: 'provider_alias_targets.opus.default', why: 'is not a model id' }]);
     const badMin = parseCatalogueCache(small({}, [{ id: 'claude-opus-9-1', min_claude_code_version: 'soon' }]));
     expect(badMin.format === 'current' && badMin.skipped)
-      .toEqual([{ at: 'models[0].min_claude_code_version', why: 'is not a version' }]);
+      .toEqual([{ at: 'models[0].min_claude_code_version', why: 'is not a version', rowId: 'claude-opus-9-1' }]);
     const notObj = parseCatalogueCache(small({}, [7]));
-    expect(notObj.format === 'current' && notObj.skipped).toEqual([{ at: 'models[0]', why: 'is not an object' }]);
+    expect(notObj.format === 'current' && notObj.skipped).toEqual([{ at: 'models[0]', why: 'is not an object', rowId: null }]);
   });
 
   it('a current file whose fetch time cannot be read is invalid, an ISO string is accepted', () => {
@@ -157,13 +157,13 @@ describe('parseCatalogueCache: one bad row or target among good ones (cache-row-
   });
 
   it('one beta minimum version: that row is skipped, every other row and every target read as before', () => {
-    const r = edited((c) => { c.models[4].min_claude_code_version = '2.1.300-beta'; });
+    const r = edited((c) => { c.models[4].id += '[1m]'; c.models[4].min_claude_code_version = '2.1.300-beta'; });
     if (r.format !== 'current') throw new Error(JSON.stringify(r));
     expect(r.aliasTargets).toEqual(clean.aliasTargets);
     const expected = new Map(clean.rows);
     expected.delete('claude-fable-9-1');
     expect(r.rows).toEqual(expected);
-    expect(r.skipped).toEqual([{ at: 'models[4].min_claude_code_version', why: 'is not a version' }]);
+    expect(r.skipped).toEqual([{ at: 'models[4].min_claude_code_version', why: 'is not a version', rowId: 'claude-fable-9-1' }]);
   });
 
   it('a malformed target loses that class its target only', () => {
@@ -178,7 +178,7 @@ describe('parseCatalogueCache: one bad row or target among good ones (cache-row-
     const r = edited((c) => { c.models.unshift({ id: 'claude-opus-9-2', min_claude_code_version: 'next' }); });
     if (r.format !== 'current') throw new Error(JSON.stringify(r));
     expect(r.rows).toEqual(clean.rows);
-    expect(r.skipped).toEqual([{ at: 'models[0].min_claude_code_version', why: 'is not a version' }]);
+    expect(r.skipped).toEqual([{ at: 'models[0].min_claude_code_version', why: 'is not a version', rowId: 'claude-opus-9-2' }]);
   });
 });
 

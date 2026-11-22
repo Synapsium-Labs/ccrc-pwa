@@ -13,13 +13,13 @@ Programme `model-class-advance`, epic `anthropic-arm`, ticket `cache-row-skip`. 
     that is left out does not hide a later readable row with the same id;
   - a class whose `provider_alias_targets.<class>.default` is present but is not a model id gets a null target. Only
     that class loses the cache as a source. The other classes keep their targets.
-- **The reading names what it skipped.** A current reading now carries `skipped`, a list of `{at, why}` in file order,
-  targets first. `at` is the field that breaks, for example `models[3].min_claude_code_version` or
-  `provider_alias_targets.opus.default`. `why` says what is wrong with it. The list is `[]` when nothing was skipped.
-  The type is `CacheSkip`, in `shared/model-aliases.d.mts`.
+- **The reading names what it skipped.** Each `skipped` entry carries `at` (the bad field) and `why` (the reason).
+  A skipped row also carries its normalized `rowId` if valid, or `rowId: null` if the row or its id was unreadable.
+  A malformed target or a rejected string id cannot hide a valid target's row, so neither carries `rowId`. These
+  are in-memory readings only.
 - **These still make the whole file `invalid`**, because they are about the file and not one row: a file that is not
-  an object, a missing or non-object `catalog.config`, a `fetchedAt` that is not a time, and a `models` field that is
-  not a list.
+  an object, a missing or non-object `catalog.config`, or a current-format file with an unreadable `fetchedAt` or
+  a `models` field that is not a list. Older-format readings still cannot supply a target.
 - **Nothing new is written to disk.** The aliases file records the cache's reading as `cache: {fetchedAt, format}`,
   and this change adds no field to it. The skip list exists only in the reading in memory.
 - **There is still one reader.** Nothing else parses Claude Code's catalogue cache. `deploy/models-anthropic.mjs` calls
@@ -27,12 +27,15 @@ Programme `model-class-advance`, epic `anthropic-arm`, ticket `cache-row-skip`. 
 
 ## A target whose row was skipped
 
-Such a target reads exactly as a target with no row does today. The class keeps the target as its cache candidate.
-The row is looked up in the box's other caches, and if none of them has it, the class has `row: null` and
-`rowFrom: null`. A target with no row names no minimum build, so the lane counts it as launchable on any build:
-`unlaunchable` stays null. So a target whose own row carries a minimum this build cannot read, such as a beta version,
-is treated as launchable. The resolver case for a beta minimum pins this: the class equals the same file with that row
-deleted.
+A skipped row may hide a minimum build; it is not evidence that no minimum exists. If the file naming the target has
+no readable row for it, a skip for that id removes the class's cache candidate. If the skipped row's id could not be
+read, the same rule applies to every target without a readable row in that file. The class still uses its prior or
+launch evidence when available. With no such evidence it remains unobserved. Other classes keep their readings.
+
+If the file naming the alias genuinely lacks a row, the resolver still looks for a readable row in other caches.
+One skipped row there does not stop the resolver using a readable row from another cache and checking its minimum.
+If no readable row exists and a skip may have hidden it, there is no cache candidate. A genuinely absent row with
+no relevant skip still has no minimum, as before.
 
 ## Existing cases that changed
 
@@ -42,6 +45,10 @@ deleted.
   file-level case for a `models` field that is not a list.
 - The hand-built current readings in three test helpers gained `skipped: []` for the new required field: `at` in the
   cache tests, `cache` in the resolve tests and `example` in the aliases-file tests. No assertion changed in them.
+
+- Fix round 1 changed the resolver case “one beta minimum on a target row”: it now asserts that the class loses
+  its cache candidate rather than treating the target as launchable. Cache assertions now pin the normalized id on
+  a version skip and `rowId: null` when the id cannot be read.
 
 ## Measured
 
@@ -57,14 +64,16 @@ deleted.
   - a malformed target blinds every class: red, 3 failing.
 
   The unmutated copy is green.
+- **Fix round 1.** The resolver cases cover prior and launch evidence, an unreadable id beside both absent and
+  readable target rows, and a box cache that has a skipped target row alongside another box cache with a readable
+  one. Three independent mutations in an archive copy each failed their targeted assertion: omitting the skipped
+  row's id, accepting a target despite a skipped row, and ignoring unreadable ids. Each unmutated case passed.
 
 ## Carries (not this ticket)
 
 - **Surfacing a skipped row.** Doctor and the models sheet do not show the skip list yet. A lane whose cache has a row
   this build cannot read gives no sign of it.
-- **A skipped row's minimum build.** As said above, a target whose row was skipped counts as launchable on any build.
-  If that matters, a later ticket could treat it as unlaunchable, or unobserved.
 
 ## Notes for the ledger
 
-- No departure from the brief, and no new number.
+- Fix round 1 corrects the initial brief: a skipped row is not equivalent to an absent row. No new deviation number.
