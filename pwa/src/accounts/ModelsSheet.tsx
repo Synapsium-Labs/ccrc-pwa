@@ -1,6 +1,9 @@
 // THE MODELS SHEET (programme model-class-advance, wave R4; plan 2026-10-15-model-class-auto-advance-codex-arm.md, Task 20
-// as re-planned, D-8686, D-8690): one Codex lane's four classes as the lane's own files say them, with the advance record
-// beside them, and Hold, Release and Revert for each class. Drawn in `AccountSheet`'s shell, as the re-auth and switch sheets
+// as re-planned, D-8686, D-8690): one lane's four classes as the lane's own files say them, with the advance record
+// beside them, and Hold, Release and Revert for each class on a Codex lane. An ANTHROPIC lane (wave 9, Task A4.3; the
+// `anthropic` prop, which the screen sets from the roster's telemetry) draws the same cards with the lines
+// `anthropicFacts` returns (where the id came from, the held id, a class with no id, the supervisor note) and offers no class
+// actions. Drawn in `AccountSheet`'s shell, as the re-auth and switch sheets
 // are: its live region announces each answer (ONE announcement per failure: the card's own note is text, not a second alert),
 // its offline line sits above the body.
 //
@@ -31,7 +34,7 @@ import { laneReadWords, laneTransientBeside, type LaneReadFailure } from '../lib
 import { AccountSheet, type Announcement } from './AccountSheet';
 import {
   MODELS_READ_FAILED, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords, modelsReadStateWords,
-  actUnreadableWords, advanceStateWords, asLaneModelsActAnswer, classActs, classLabel, familyWords, holdAriaLabel, holdWords, lastMoveWords,
+  actUnreadableWords, advanceStateWords, anthropicFacts, anthropicModelLine, asLaneModelsActAnswer, classActs, classLabel, familyWords, holdAriaLabel, holdWords, lastMoveWords,
   modelLine, modelsActFailure, pendingWords, previousWords, revertAriaLabel, revertConsequence, revertStillOffered, revertTitle,
   revertWithdrawnWords, type ModelsAction,
 } from './modelsSheetWords';
@@ -42,8 +45,12 @@ import './models-sheet.css';
 export type ModelsActFn = (lane: string, body: { action: ModelsAction; class: ModelClass }) => Promise<unknown>;
 
 export interface ModelsSheetProps {
-  /** The lane whose classes the sheet shows (a Codex lane's roster id). */
+  /** The lane whose classes the sheet shows (a Codex or an Anthropic lane's roster id). */
   lane: string;
+  /** The lane is an Anthropic one (the roster's `telemetry`), so its cards carry the Anthropic lines and no class actions.
+   *  Told by the screen, never guessed from a read: a Codex read carries none of those fields, and an Anthropic class may
+   *  carry none either. */
+  anthropic?: boolean;
   open: boolean;
   onClose: () => void;
   /** Why the screen cannot act (offline, or the connect gate), or `null`. */
@@ -71,7 +78,7 @@ function ModelsAct({ label, name, disabled, busy, onTap }: {
 
 const defaultAct: ModelsActFn = (lane, body) => api.laneModelsAct(lane, body);
 
-export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, load }: ModelsSheetProps): ReactNode {
+export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, act = defaultAct, load }: ModelsSheetProps): ReactNode {
   const [refreshKey, setRefreshKey] = useState(0);
   const [said, setSaid] = useState<Announcement | null>(null);
   // Why the newest read failed (F12), or null once one landed. A failure is announced once, here, by the shell's live region.
@@ -168,20 +175,20 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
   };
 
   const advance = shown?.kind === 'read' ? shown.advance : undefined;
-  const words = advanceStateWords(advance);
+  const words = advanceStateWords(advance, anthropic);
 
   // The Revert confirm stands only while the CURRENT read still offers the revert: otherwise it closes, and says so (F13).
   useEffect(() => {
-    if (confirming === null || revertStillOffered(shown, confirming)) return;
+    if (confirming === null || revertStillOffered(shown, confirming, anthropic)) return;
     const cls = confirming;
     setConfirming(null);
     setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) });
-  }, [confirming, shown]);
-  const confirmRead = confirming !== null && shown?.kind === 'read' && revertStillOffered(shown, confirming) ? shown : null;
+  }, [confirming, shown, anthropic]);
+  const confirmRead = confirming !== null && shown?.kind === 'read' && revertStillOffered(shown, confirming, anthropic) ? shown : null;
   const confirmPrevious = confirmRead !== null && confirming !== null ? confirmRead.advance?.classes?.[confirming]?.previous ?? null : null;
   /** The confirm's yes: re-checked on the read as it is NOW, and never sent for a class that no longer offers it. */
   const confirmRevert = (cls: ModelClass): void => {
-    if (!revertStillOffered(shownNow.current, cls)) { setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) }); return; }
+    if (!revertStillOffered(shownNow.current, cls, anthropic)) { setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) }); return; }
     void run('revert', cls);
   };
 
@@ -214,7 +221,7 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
           <div className="acct-models-list">
             {CLASSES.map((cls) => {
               const c = shown.classes[cls];
-              const { adv, held, hold, revert } = classActs(advance, cls);
+              const { adv, held, hold, revert } = classActs(advance, cls, anthropic);
               const mine = busy === cls;
               const n = notes[cls];
               return (
@@ -223,13 +230,18 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
                   aria-label={classLabel(cls)} data-testid={`models-class-${cls}`} data-held={adv === null ? undefined : String(held)}
                 >
                   <h3 className="acct-models-name">{classLabel(cls)}</h3>
-                  <p className="acct-models-model">{modelLine(c.model, c.label)}</p>
+                  <p className="acct-models-model">{anthropic ? anthropicModelLine(cls, c.model, c.label) : modelLine(c.model, c.label)}</p>
+                  {anthropic && (
+                    <div className="acct-models-facts" data-testid={`models-anthropic-${cls}`}>
+                      {anthropicFacts(cls, c, adv).map((f) => <p key={f.kind} data-fact={f.kind}>{f.text}</p>)}
+                    </div>
+                  )}
                   {adv !== null && (
                     <div className="acct-models-facts">
                       <p>{familyWords(adv.family)}</p>
                       <p>{holdWords(adv.hold)}</p>
                       <p>{lastMoveWords(adv.lastMove)}</p>
-                      {previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
+                      {!anthropic && previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
                     </div>
                   )}
                   {(hold !== null || revert) && (

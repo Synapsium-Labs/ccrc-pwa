@@ -108,7 +108,7 @@ function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsR
   // the registry's first plan, so one without it is off the grammar and `unreadable` (follow-up
   // transient-beside-kept-answer): an `absent` with no lane kind then has one cause only, `no-such-account` above.
   if (raw.registry === null) {
-    if (raw.anthropic === true) return { kind: 'absent', laneKind: 'anthropic' };
+    if (raw.anthropic === true) return readAnthropicShow(raw);
     if (raw.anthropic === false) return { kind: 'absent', laneKind: 'never-made' };
     return { kind: 'unreadable' };
   }
@@ -128,13 +128,57 @@ function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsR
   return { kind: 'read', classes, advance };
 }
 
+/** An Anthropic lane's `show` (no registry; model-class Anthropic arm A4.1): three answers for its aliases file, never one.
+ *  No `aliases` key (an older op), `{state: 'absent'}`, or a parsed file beside no labels (an op older than A4.1) is
+ *  `absent`, as before; `unreadable` and `invalid` are the lane's
+ *  `unreadable`, the existing arm; and a parsed aliases file (no `state` key) is a lane READ, whose classes are the op's
+ *  `labels` (built from that file) beside the advance report. A parsed file whose labels or advance are off the grammar is
+ *  `unreadable` too: a half view is never returned. */
+function readAnthropicShow(raw: Record<string, unknown>): LaneModelsRead {
+  const aliases = raw.aliases;
+  if (aliases === undefined) return { kind: 'absent', laneKind: 'anthropic' };
+  if (!isObj(aliases)) return { kind: 'unreadable' };
+  if (aliases.state !== undefined) {
+    return aliases.state === 'absent' ? { kind: 'absent', laneKind: 'anthropic' } : { kind: 'unreadable' };
+  }
+  // An op from before Task A4.1 prints the parsed aliases file the hourly refresh wrote, but `labels: null` for a lane with no
+  // registry: that lane reads as it always did, so a server rolled out before the fleet box never turns it unreadable.
+  if (raw.labels === null || raw.labels === undefined) return { kind: 'absent', laneKind: 'anthropic' };
+  if (!isObj(raw.labels)) return { kind: 'unreadable' };
+  const classes = {} as Record<ModelClass, LaneClassModel>;
+  for (const c of CLASSES) {
+    const row = classRow(raw.labels[c]);
+    if (row === null) return { kind: 'unreadable' };
+    classes[c] = row;
+  }
+  const advance = readAdvanceReport(raw.advance);
+  if (advance === null) return { kind: 'unreadable' };
+  return { kind: 'read', classes, advance };
+}
+
 /** One class's row, built from the fields `LaneClassModel` declares, in this one place (R1's `efforts`: a string
- *  array copied, or null, an absent key read as null). `null` is a row off the grammar. */
+ *  array copied, or null, an absent key read as null). `null` is a row off the grammar. The optional fields an Anthropic
+ *  lane's row carries (A4.1) are each copied when well formed and left out when absent; a MALFORMED one is dropped to
+ *  absent and the row is kept, since an optional field a newer op adds must never cost the lane its whole read. */
 function classRow(raw: unknown): LaneClassModel | null {
   if (!isObj(raw) || !isStrOrNull(raw.model) || !isStrOrNull(raw.label)) return null;
   const e = raw.efforts;
   if (e !== undefined && e !== null && !(Array.isArray(e) && e.every((x) => typeof x === 'string'))) return null;
-  return { model: raw.model, label: raw.label, efforts: Array.isArray(e) ? [...e] : null };
+  const row: { -readonly [K in keyof LaneClassModel]: LaneClassModel[K] } = {
+    model: raw.model, label: raw.label, efforts: Array.isArray(e) ? [...e] : null,
+  };
+  if (raw.takesNoEffort === true) row.takesNoEffort = true;
+  if (raw.source === 'cache' || raw.source === 'use' || raw.source === null) row.source = raw.source;
+  if (isStrOrNull(raw.cacheTarget)) row.cacheTarget = raw.cacheTarget;
+  if (isStrOrNull(raw.seenId)) row.seenId = raw.seenId;
+  if (raw.unobserved === true) row.unobserved = true;
+  const u = raw.unlaunchable;
+  if (isObj(u) && typeof u.needs === 'string' && isStrOrNull(u.laneVersion)) row.unlaunchable = { needs: u.needs, laneVersion: u.laneVersion };
+  if (typeof raw.aliasId === 'string') row.aliasId = raw.aliasId;
+  const o = raw.orphanedEffort;
+  if (o === null) row.orphanedEffort = null;
+  else if (isObj(o) && typeof o.id === 'string' && typeof o.level === 'string') row.orphanedEffort = { id: o.id, level: o.level };
+  return row;
 }
 
 /** `show`'s `advance` key (D-5228): five states never folded; `null` is "off the grammar", and the caller then
