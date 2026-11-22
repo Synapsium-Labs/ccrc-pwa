@@ -35,7 +35,7 @@
 // `POST /api/continuity/quiz-baseline/live` is the coordinator's Live on a W1a row once the baseline exists: attributed,
 // then owned (an open run of the quiz's programme), then `coord/laneArm.ts#decideLaneArmCoordLive`, then the one writer,
 // `CoordStore.setLaneArm`, and a record-only feed row naming the coordinator.
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AccountGate } from '../accounts/gate.js';
 import { decideLaneArmCoordLive, laneArmChangeLine, laneArmRowViewOf } from '../coord/laneArm.js';
@@ -43,6 +43,7 @@ import type { AttributionRead } from '../coord/openRun.js';
 import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import type { NoticeSink } from '../notice.js';
+import type { Entropy } from '../time/ports.js';
 import { refuseRoute } from '../refuse.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_TEXT, isLaneArmLane } from '../../../shared/lane-arm.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
@@ -80,6 +81,8 @@ export interface QuizRouteDeps {
   mail: (m: { toId: string; subject: string; body: string }) => boolean;
   /** The Live door's feed row. */
   notice: NoticeSink;
+  /** The record door's chance: the unattended record's confirm key (`entropy.hex(32)`), never ambient chance. */
+  entropy: Pick<Entropy, 'hex'>;
 }
 
 const TOKEN_DETAIL = {
@@ -139,7 +142,7 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     }
     const v = quizRecordVerdict({ text: report, claimedSha: sha256, measuredSha, now, pending, recorded });
     if (!v.ok) return refuseRoute(reply, v.word ?? 'bad-request', { field: v.field, detail: v.detail });
-    const key = unattended === true ? randomBytes(32).toString('hex') : null;
+    const key = unattended === true ? deps.entropy.hex(32) : null;
     const r = insertQuizRun(deps.coord.db, { report: v.report, extra: v.extra, recordedBy, recordedAt: now,
       ...(key === null ? {} : { confirmKeyHash: quizConfirmKeyHash(key) }) });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be written' });
