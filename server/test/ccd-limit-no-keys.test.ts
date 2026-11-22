@@ -25,8 +25,9 @@ function body(src: string, name: string): string | null {
 }
 /** ccd's own typing helpers: each sends keys to a pane (review 3006 F2), so calling one is sending a key. */
 const TYPERS = ['_route_type_model', '_route_type_effort', '_route_escape', '_answer_two_option_dialog'];
-/** A raw tmux key sender (the pattern `ccd-typing-check.test.ts` refuses too, so the censuses agree on what a key is). */
-const RAW_SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix/;
+/** A raw tmux key sender: the pattern `ccd-typing-check.test.ts` refuses, plus `send`, tmux's alias for send-keys, where it is the
+ *  subcommand of tmux or of ccd's tmux wrapper (options may sit between), so `mail send` never matches. */
+const RAW_SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix|(?<![\w$-])(?:tmux|_tmx|"\$\{_TMX_ARGV\[@\]\}")(?:\s+-[A-Za-z]+(?:\s+[^\s-]\S*)?)*\s+send\b/;
 const SENDS = new RegExp(`${RAW_SENDS.source}|\\b(?:${TYPERS.join('|')})\\b`);
 
 describe('the limit-rescue code sends no key', () => {
@@ -74,20 +75,18 @@ describe('the model-aliases library sends no key', () => {
   });
 });
 
-// REVIEW 3040 F1 (no-keys-transitive): the scans above see a key sender only when a guarded body names one itself, so a function
-// that types by calling a CALLER of a typing helper (`_route_apply_now`, which calls `_route_type_model`) stays green. This one is
-// transitive. It reads ccd's own shell sources once (the body and every `ccd/lib/*.sh`, listed from the directory, so a new
-// library is covered at once), cuts every function out of them, and builds the call graph from their code: an edge is a whole-word
-// mention of a defined function's name in a body's code lines, strings included (so `bash -c "source … && fn"` is a call). A key
-// sender is any function whose code holds a raw tmux key sender, closed over its callers; nothing here is a hand list of callers.
-// The protected code (the limit rescue above, the watchdog's dispatch, and every function of the model-aliases library, the
-// passive observe path among them) must reach none.
+// REVIEW 3040 F1 (no-keys-transitive): the scans above see a sender only when a guarded body names one. This one follows calls through
+// ccd's own shell sources (the body and every `ccd/lib/*.sh`), read once: an edge is a whole-word mention of a defined function in a
+// body's code lines (strings kept, so `bash -c "source … && fn"` counts), or ccd run by its installed path with a verb, which calls
+// `cmd_<verb>`. A key sender is any function holding a raw sender, closed over its callers; no list of callers is kept by hand.
 type Fn = { file: string; line: number; code: string };
 const HEADER = /^([A-Za-z_][A-Za-z0-9_-]*)\(\)\s*\{(.*)$/;
 const CODE = (l: string): string => l.replace(/\s#\s.*$/, '');
+const NAMES = (code: string): string[] => [...code.matchAll(/(?<![A-Za-z0-9_$-])[A-Za-z_][A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g)].map((m) => m[0]);
+const SELF_VERB = /(?<![A-Za-z0-9_$./-])(?:\$HOME|~)\/\.local\/bin\/ccd['"]?\s+([a-z][a-z0-9-]*)/g;
 
-/** Every function of one file: a header at column 0; a one-line body ends on its own line, any other at the first line that opens
- *  with `}` or just before the next header, whichever comes first (a few bodies close with `…; }` at the end of a code line). */
+/** Every function of one file: a header at column 0; a one-line body ends on its line, any other at the first line opening with `}`
+ *  or just before the next header (a few bodies close with `…; }` at the end of a code line). */
 function cutFunctions(text: string, file: string, into: Map<string, Fn[]>): void {
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -95,8 +94,7 @@ function cutFunctions(text: string, file: string, into: Map<string, Fn[]>): void
     if (!m) continue;
     let end = i;
     if (!/\}\s*$/.test(CODE(m[2]!).trim())) {
-      end = i + 1;
-      while (end < lines.length && !lines[end]!.startsWith('}') && !HEADER.test(lines[end]!)) end++;
+      for (end = i + 1; end < lines.length && !lines[end]!.startsWith('}') && !HEADER.test(lines[end]!); end++);
       if (end < lines.length && HEADER.test(lines[end]!)) end--;
     }
     const code = [CODE(m[2]!), ...lines.slice(i + 1, end + 1).filter((l) => !/^\s*#/.test(l)).map(CODE)].join('\n');
@@ -104,94 +102,125 @@ function cutFunctions(text: string, file: string, into: Map<string, Fn[]>): void
   }
 }
 
-/** The graph and its key senders, from ONE read of each source. `next` names the hop toward a raw sender, for the failure text. */
-function keySenderGraph(sources: ReadonlyArray<[string, string]>) {
-  const fns = new Map<string, Fn[]>();
-  for (const [file, text] of sources) cutFunctions(text, file, fns);
-  const calls = new Map<string, Set<string>>();
-  for (const [name, defs] of fns) {
-    const out = new Set<string>();
-    for (const d of defs) {
-      for (const t of d.code.matchAll(/(?<![A-Za-z0-9_$-])[A-Za-z_][A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g)) {
-        if (t[0] !== name && fns.has(t[0])) out.add(t[0]);
-      }
-    }
-    calls.set(name, out);
-  }
-  const callers = new Map<string, string[]>([...fns.keys()].map((n) => [n, []]));
-  for (const [from, tos] of calls) for (const to of tos) if (!CUT.some((c) => c.from === from && c.to === to)) callers.get(to)!.push(from);
-  const raw = [...fns].filter(([, defs]) => defs.some((d) => RAW_SENDS.test(d.code))).map(([n]) => n);
-  const next = new Map<string, string | null>(raw.map((n) => [n, null]));
-  for (const queue = [...raw]; queue.length; ) {
-    const at = queue.shift()!;
-    for (const by of callers.get(at)!) if (!next.has(by)) { next.set(by, at); queue.push(by); }
-  }
-  const pathTo = (name: string): string[] => {
-    const hops = [name];
-    for (let at = next.get(name); at; at = next.get(at)) hops.push(at);
-    return hops;
-  };
-  return { fns, calls, raw, senders: next, pathTo };
-}
-
-/** The two edges the graph cannot read, cut by the coordinator's ruling on no-keys-transitive. Each must still be an edge and its
- *  reason must still read in the source, so a cut cannot go stale and hide a new path; every other path to a key sender reds,
- *  a new one through `cmd_ensure` or `cmd_route` included. */
-const CUT: ReadonlyArray<{ from: string; to: string; why: string; holds: (code: string) => boolean }> = [
-  {
-    from: '_watchdog_resume_run', to: 'cmd_ensure',
-    why: 'it types only into the fresh session\'s startup dialogs, after the old session is killed, and stands down on a limit banner',
-    holds: (code) => /kill-session/.test(code) && code.search(/kill-session/) < code.search(/\bcmd_ensure\b/),
-  },
-  {
-    from: '_operator_choice_promote', to: 'cmd_route',
-    why: 'it calls `cmd_route` without `--apply`, so nothing is typed',
-    holds: (code) => !/--apply\b/.test(code),
-  },
+/** The two arms that type into a FRESH session after a spawn: its startup dialogs, then the resume prompt. Each stands down on a
+ *  limit banner (pinned below). An edge into a spawn is allowed only while the raw senders it reaches are exactly these. */
+const ARMS = ['_accept_first_run_prompts', '_redrive_after_spawn'];
+const FRESH = 'it types only the two arms into a fresh session, each standing down on a limit banner';
+type Src = (name: string) => string;
+/** Edges the graph cannot read, by the coordinator's rulings (calls 299 and the fix round). Each must still be an edge and meet its
+ *  condition in the source; `arms` edges must also reach exactly the two arms. Every other path to a sender reds. */
+const ALLOW: ReadonlyArray<{ from: string; to: string; why: string; arms: boolean; holds: (src: Src) => boolean }> = [
+  { from: '_watchdog_resume_run', to: 'cmd_ensure', arms: true, why: `it kills the old session (the menu's) first; ${FRESH}`,
+    holds: (src) => /kill-session/.test(src('_watchdog_resume_run')) && src('_watchdog_resume_run').search(/kill-session/) < src('_watchdog_resume_run').search(/\bcmd_ensure\b/) },
+  { from: '_dispatch_swap', to: 'cmd_swap', arms: true, why: `the swap ends the session and resumes it on another account; ${FRESH}`, holds: () => true },
+  { from: '_wake_ceiling_move', to: 'cmd_swap', arms: true, why: `the swap ends the session and resumes it on another account; ${FRESH}`, holds: () => true },
+  { from: '_wake_ceiling_move', to: 'cmd_ensure', arms: true, why: `its fallback ensures a session that is not alive; ${FRESH}`,
+    holds: (src) => src('cmd_ensure').search(/_alive "\$id"/) >= 0 && src('cmd_ensure').search(/_alive "\$id"/) < src('cmd_ensure').search(/_spawn_start/) },
+  { from: '_operator_choice_promote', to: 'cmd_route', arms: false, why: 'it calls `cmd_route` without `--apply`, so nothing is typed',
+    holds: (src) => !/--apply\b/.test(src('_operator_choice_promote')) },
+];
+/** The reviewed startup gates `_accept_first_run_prompts` answers above its limit stand-down: a branch condition and its title words.
+ *  The two "Enter to confirm" gates need their title beside that footer, which the rate-limit menu carries too. */
+const GATES = [
+  { cond: /^if _pane_external_import_gate "\$pane"; then$/, title: 'Allow external CLAUDE.md file imports' },
+  { cond: /^if echo "\$pane" \| grep -q "Enter to confirm" && echo "\$pane" \| grep -q "Resume from summary"; then$/, title: 'Resume from summary' },
+  { cond: /^if echo "\$pane" \| grep -q "Enter to confirm" && echo "\$pane" \| grep -q "Try the new fullscreen renderer"; then$/, title: 'Try the new fullscreen renderer' },
+  { cond: /^if echo "\$pane" \| grep -q "Bypass Permissions mode"; then$/, title: 'Bypass Permissions mode' },
+  { cond: /^if echo "\$pane" \| grep -q "trust this folder"; then$/, title: 'trust this folder' },
 ];
 
 describe('no key sender is reachable from the protected code (transitive, review 3040 F1)', () => {
   const libDir = path.dirname(CCD_ALIASES_LIB);
   const libs = fs.readdirSync(libDir).filter((f) => f.endsWith('.sh')).sort();
-  const sources: Array<[string, string]> = [['ccd/ccd', ccdSource()], ...libs.map((f): [string, string] => [`ccd/lib/${f}`, fs.readFileSync(path.join(libDir, f), 'utf8')])];
-  const g = keySenderGraph(sources);
-  const library = [...g.fns].filter(([, defs]) => defs.some((d) => d.file === 'ccd/lib/model-aliases.sh')).map(([n]) => n);
-  const PROTECTED = [...GUARDED, '_dispatch_swap', ...library];
+  const fns = new Map<string, Fn[]>();
+  cutFunctions(ccdSource(), 'ccd/ccd', fns);
+  for (const f of libs) cutFunctions(fs.readFileSync(path.join(libDir, f), 'utf8'), `ccd/lib/${f}`, fns);
+  const src: Src = (n) => (fns.get(n) ?? []).map((d) => d.code).join('\n');
+  const calls = new Map([...fns.keys()].map((n) => {
+    const code = src(n);
+    const verbs = [...code.matchAll(SELF_VERB)].map((m) => `cmd_${m[1]!.replace(/-/g, '_')}`);
+    return [n, new Set([...NAMES(code), ...verbs].filter((t) => t !== n && fns.has(t)))];
+  }));
+  const raw = [...fns.keys()].filter((n) => RAW_SENDS.test(src(n)));
+  const plainCut = (a: string, b: string) => ALLOW.some((x) => !x.arms && x.from === a && x.to === b && x.holds(src));
+  /** The raw senders reachable from `name`, past no arm and not through a plain cut (the promote's record-only `cmd_route`). */
+  const reachRaw = (name: string): string[] => {
+    const seen = new Set([name]);
+    for (const q = [name]; q.length; ) {
+      const at = q.shift()!;
+      if (ARMS.includes(at)) continue;
+      for (const to of calls.get(at)!) if (!seen.has(to) && !plainCut(at, to)) { seen.add(to); q.push(to); }
+    }
+    return raw.filter((n) => seen.has(n)).sort();
+  };
+  const allowed = new Set(ALLOW.filter((a) => calls.get(a.from)?.has(a.to) && a.holds(src) && (!a.arms || reachRaw(a.to).join() === ARMS.join()))
+    .map((a) => `${a.from}>${a.to}`));
+  const next = new Map<string, string | null>(raw.map((n) => [n, null]));
+  for (const q = [...raw]; q.length; ) {
+    const at = q.shift()!;
+    for (const [by, tos] of calls) if (tos.has(at) && !next.has(by) && !allowed.has(`${by}>${at}`)) { next.set(by, at); q.push(by); }
+  }
+  const pathTo = (n: string): string => { const hops = [n]; for (let at = next.get(n); at; at = next.get(at)) hops.push(at); return hops.join(' -> '); };
+  const isSender = (line: string): boolean => RAW_SENDS.test(line) || NAMES(line).some((t) => next.has(t));
+  const library = [...fns].filter(([, defs]) => defs.some((d) => d.file === 'ccd/lib/model-aliases.sh')).map(([n]) => n);
 
-  it('reads every source and derives the senders from their text (so the scan below cannot be vacuous)', () => {
+  it('reads every source and derives the senders and the self-calls from their text (so the scan below cannot be vacuous)', () => {
     expect(libs).toContain('model-aliases.sh');
-    expect(g.fns.size).toBeGreaterThan(500);
+    expect(fns.size).toBeGreaterThan(500);
     expect(library.length).toBeGreaterThan(15);
-    for (const t of TYPERS) expect(g.raw, `${t} holds no raw key sender`).toContain(t);
-    // The indirect sender review 3040 measured: it types only through the helpers it calls.
-    expect(g.raw).not.toContain('_route_apply_now');
-    expect(g.pathTo('_route_apply_now').length, '_route_apply_now is not derived as a key sender').toBeGreaterThan(1);
+    for (const t of [...TYPERS, ...ARMS]) expect(raw, `${t} holds no raw key sender`).toContain(t);
+    expect(raw).not.toContain('_route_apply_now');
+    expect(pathTo('_route_apply_now'), '_route_apply_now is not derived as a key sender').toContain(' -> ');
+    expect(calls.get('_dispatch_swap')?.has('cmd_swap'), 'the self-call `ccd swap` is not an edge').toBe(true);
   });
 
-  it.each(CUT)('the cut edge $from -> $to is still an edge and its reason still reads in the source', ({ from, to, holds }) => {
-    expect(g.calls.get(from)?.has(to), `${from} no longer calls ${to}: drop the cut`).toBe(true);
-    for (const d of g.fns.get(from)!) expect(holds(d.code), `${from} (${d.file}:${d.line}) no longer meets the cut's condition`).toBe(true);
+  it.each(ALLOW)('$from -> $to is an edge, meets its condition, and (a spawn) reaches only the two arms', (a) => {
+    expect(calls.get(a.from)?.has(a.to), `${a.from} no longer calls ${a.to}: drop it`).toBe(true);
+    expect(a.holds(src), `${a.from} -> ${a.to} no longer meets its condition`).toBe(true);
+    if (a.arms) expect(reachRaw(a.to)).toEqual(ARMS);
   });
 
-  // The first cut's last clause: the fresh session's startup dialogs are answered by `_accept_first_run_prompts`, which stands down
-  // on a limit banner (`_pane_hard_blocked`, rc 5). The check must stand, return at once, and be followed by no key of any kind.
-  it('the first cut stands only while the startup dialogs stand down on a limit banner, before any key', () => {
-    const [prompts] = g.fns.get('_accept_first_run_prompts') ?? [];
-    expect(prompts, '_accept_first_run_prompts was not found').toBeDefined();
-    const lines = prompts!.code.split('\n').map((l) => l.trim()).filter(Boolean);
-    const at = lines.findIndex((l) => /^if _pane_hard_blocked "\$pane"; then$/.test(l));
-    expect(at, 'the limit-banner stand-down is gone from _accept_first_run_prompts').toBeGreaterThan(0);
+  it('_accept_first_run_prompts stands down on a limit banner with return 5, and sends no key after it', () => {
+    const lines = src('_accept_first_run_prompts').split('\n').map((l) => l.trim()).filter(Boolean);
+    const at = lines.indexOf('if _pane_hard_blocked "$pane"; then');
+    expect(at, 'the limit-banner stand-down is gone').toBeGreaterThan(0);
     expect(lines[at + 1], 'the stand-down no longer returns at once').toBe('return 5');
-    const rest = lines.slice(at).join('\n');
-    const names = [...rest.matchAll(/(?<![A-Za-z0-9_$-])[A-Za-z_][A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g)].map((t) => t[0]);
-    expect(RAW_SENDS.test(rest) ? 'a raw key sender' : names.find((n) => g.senders.has(n)) ?? null, 'a key follows the stand-down').toBeNull();
-    const [blocked] = g.fns.get('_pane_hard_blocked') ?? [];
-    expect(blocked?.code, '_pane_hard_blocked no longer reads a limit banner').toMatch(/limit reached/);
-    expect(blocked!.code).toMatch(/rate limit/);
+    expect(lines.slice(at).filter(isSender)).toEqual([]);
+    expect(src('_pane_hard_blocked')).toMatch(/limit reached[\s\S]*rate limit/);
   });
 
-  it.each(PROTECTED)('%s reaches no key sender', (name) => {
-    expect(g.fns.has(name), `${name} was not found in ccd's sources`).toBe(true);
-    expect(g.senders.has(name) ? g.pathTo(name).join(' -> ') : null).toBeNull();
+  it('every key _accept_first_run_prompts sends above its stand-down is inside a reviewed startup gate', () => {
+    const lines = src('_accept_first_run_prompts').split('\n').map((l) => l.trim()).filter(Boolean);
+    const stack: string[] = [];
+    const outside: string[] = [];
+    let inside = 0;
+    for (const l of lines.slice(1, lines.indexOf('if _pane_hard_blocked "$pane"; then'))) {
+      const oneLine = /^if .*; then .*; fi$/.test(l);
+      if (/^if .*; then$/.test(l)) stack.push(l);
+      else if (/^(fi|fi;.*)$/.test(l)) stack.pop();
+      const inGate = [...stack, ...(oneLine ? [l.slice(0, l.indexOf('; then') + 6)] : [])].some((c) => GATES.some((g) => g.cond.test(c)));
+      if (isSender(l)) inGate ? inside++ : outside.push(l);
+    }
+    expect(outside).toEqual([]);
+    expect(inside, 'no gated key was found, so the scan read nothing').toBeGreaterThanOrEqual(GATES.length);
+    expect(src('_pane_external_import_gate')).toContain(`grep -q "${GATES[0]!.title}"`);
+  });
+
+  it.each(['rate-limit-dialog.ansi', 'rate-limit-dialog-mail-row.ansi'])('the rate-limit menu (%s) carries no startup gate\'s title', (f) => {
+    const menu = fs.readFileSync(path.join(__dirname, 'fixtures/panes/box', f), 'utf8').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+    expect(menu).toContain('What do you want to do?');
+    expect(GATES.map((g) => g.title).filter((t) => menu.includes(t))).toEqual([]);
+  });
+
+  it('_redrive_after_spawn stands down on a limit banner before the first key it sends', () => {
+    const lines = src('_redrive_after_spawn').split('\n').map((l) => l.trim());
+    const at = lines.findIndex((l) => /^_pane_hard_blocked "\$pane" && \{.*return 0; \}$/.test(l));
+    expect(at, 'the limit-banner stand-down is gone').toBeGreaterThan(0);
+    expect(at).toBeLessThan(lines.findIndex(isSender));
+  });
+
+  it.each([...GUARDED, '_dispatch_swap', ...library])('%s reaches no key sender', (name) => {
+    expect(fns.has(name), `${name} was not found in ccd's sources`).toBe(true);
+    expect(next.has(name) ? pathTo(name) : null).toBeNull();
   });
 });
