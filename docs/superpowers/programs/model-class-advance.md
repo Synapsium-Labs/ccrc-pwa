@@ -144,7 +144,7 @@ ends by itself would leave every Codex revert held for good. Wave 10 is last.
 
 Nothing. On 2026-11-22 the owner ruled that no pull request waits for a human review: a PR lands on its required
 checks and the programme's own independent review, and the review judge's codes that ask for a person outside the
-author set (`devops-approval-needed`, `code-owner`, `rules-mixed`, `proof-not-built`) hold nothing. The items that asked
+author set (`devops-approval-needed`, `code-owner`, `rules-mixed`) hold nothing, and neither does `proof-not-built`. The items that asked
 the owner for such reviews were withdrawn: 542 (#3118) and 523 (#3122). Item 522, on #3122's coupled installer and
 libraries, closed that day. Item 505, which asked the owner to type one `/model` line so the re-pick could be
 measured, was withdrawn under the owner's other ruling of that day, never to hand the operator a chore: `typed-repick`
@@ -180,7 +180,7 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   hold the console could not end: no Release on that lane by the always-advance ruling, and the refresh passes over a
   held class. Wave 9 therefore offers no Hold, Release or Revert on an Anthropic lane (D-8922, D-8930). A class held
   from the shell still reads as held there, and its words name no control the sheet does not draw. Revert returns on
-  both kinds of lane with `revert-holds-until-newer`.
+  Anthropic lanes with `revert-holds-until-newer`, offered on both kinds of lane only where the box ends holds.
 - **A Revert's hold ends by itself (calls 411 and 412).** A Revert records the model it moved away from. One decider in
   the advance rule ends the hold: on a Codex lane when a newer version of the same family appears, on an Anthropic lane
   when the alias, seen after the hold began, names a third id. A hold that records nothing derives it, from the
@@ -205,7 +205,9 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   `no-keys-transitive` (call 299): `_watchdog_resume_run`'s header comment says it types nothing, which needs a
   correction at `ccd/ccd`'s next change, and the stand-downs of the supervisor's typing paths (auto-compact, the route
   typers) want pins of their own. Wave 10 takes the `ccrc-models` test's stale title, D-8751's prose after wave 9's one
-  push per class move, and the over-cap log wording.
+  push per class move, and the over-cap log wording. Done-when 3 still says doctor warns on a held class behind a newer
+  model, which a Revert's hold now is by design until its end comes; its wording goes to the owner with wave 10's
+  docs as a proposed modification of the definition of done.
 - **A pin gone from the catalogue (wave 3, #3118).** Done-when 2's "never to an older version" governs a
   release advance, and wave 3 keeps it: a `newer` move goes only to a version strictly above the pin, and it never
   waits for the grace below. The one step that can still choose an older model is the retirement of a pin the catalogue no longer lists.
@@ -231,8 +233,8 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
 - **The Anthropic arm's re-pick (wave 6).** The plan's step that moves a running Anthropic session to its class's new
   id took six review rounds. Rounds 3 to 6 each found a defect in a guard the previous round had added. Round 5 replaced
   those guards with one bound: a `picked=` key, so a given id is acted on at most once per session, and only a positive
-  hand pick stands it down (D-8744). The last round's minor points are a follow-up ticket (`repick-landing-notes`), read
-  with A3.6's re-check against the A3.0 measurements before wave 8 dispatches.
+  hand pick stands it down (D-8744). The last round's minor points became a follow-up ticket
+  (`repick-landing-notes`), dropped on 2026-11-22 with the typed re-pick itself (below).
 - **Two changes were to wait for the Codex bridge's check week to close (2026-11-21); one landed early.** The week reads
   the doctor and the GPT lanes' usage units every day, and a merge reaches the fleet within hours. On 2026-11-19 the
   operator amended D-8689 for #2943: its four checks were measured PASS on both Codex lanes, read-only; the week's
@@ -266,7 +268,7 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   text-closable findings. The coordinator checked each with two independent Opus readers (one for conformance to the
   rulings, one for correctness) and landed it, rather than spend another review round.
 - **Workers and reviews:** each wave is a dispatched worker on its own branch, read by a review run with the held-out
-  panel, and merged through the queue by the coordinator. Rollout stays the owner's.
+  panel, and merged through the queue by the coordinator. Rollout rides the release lane; nothing here moves a box by hand.
 
 ## Carried constraints
 

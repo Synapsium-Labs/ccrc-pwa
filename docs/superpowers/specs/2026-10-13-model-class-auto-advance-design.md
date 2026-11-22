@@ -22,14 +22,15 @@ the written spec with them on 2026-10-15.
 
 > [!IMPORTANT]
 > **Amended 2026-11-22: classes always advance.** The owner's settings audit
-> (`docs/superpowers/specs/2026-11-22-settings-audit.md`) fixed the Models sheet's Hold and Release: "Always advance. A
-> Revert holds until something newer appears. Hold is the standing form of Revert." So the standing per-class hold is
+> (`docs/superpowers/specs/2026-11-22-settings-audit.md`) fixed the Models sheet's Hold and Release at "Always advance.
+> A Revert holds until something newer appears.", because "Hold is the standing form of Revert." So the standing per-class hold is
 > no longer a control. A Revert records the model it moved away from, and the hourly refresh ends its hold by itself,
 > in the same write as the move, once a model newer than that one appears: on a Codex lane a newer version of the
 > same family, on an Anthropic lane the alias resolving to a third id after the hold. Doctor stops telling anyone to
 > release a hold. The phone's sheet offers Revert alone, on both kinds of lane, wherever the box reports that it ends
 > holds itself. A hold written before this, with no record of what it reverted from, ends at the next newer model.
-> Where the sections below still describe a Hold switch, a Release, or a hold as a standing brake, this note governs.
+> Where the sections below still describe a Hold switch, a Release, a hold as a standing brake, or when doctor warns
+> about a held class, this note governs.
 > The programme records it as modification 94 of its definition of done (done-when 5 and 6).
 
 ## 1. Context
@@ -538,7 +539,9 @@ accept them before they ship. The approved design named the first three; D15 (Ag
 hears about it. Failures fail shut: a pin never moves on data that cannot be read.
 
 On an Anthropic lane the four read the aliases file beside the advance file. `model-held-behind` fires when a held
-class's alias now resolves to a newer id than the one held. `model-sessions-behind` fires for a running session
+class's alias now resolves to a newer id than the one held. (Amended 2026-11-22: it fires only when the alias, seen
+after the hold began, names an id other than both the held one and the one the Revert left, and the hold still stands
+past the next refresh.) `model-sessions-behind` fires for a running session
 on an id other than the one it should run: the held id while the class is held, whether or not the class is
 observed, else the class's current id. A session's class is its routing record's served class; a session with no
 class, or `default`, is never named. As on a Codex lane, a session on another class's model is not behind, and only a
