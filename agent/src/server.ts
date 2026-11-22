@@ -39,6 +39,7 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   ACCOUNT_OP, TESTBOX_ADMIN_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP, READDIR_MTIMES_OP,
+  WITNESS_OP, type WitnessReq,
   TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_CAPTURE_OP, type TestboxReq, type TestboxToolsSyncReq, type TestboxCaptureReq,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
@@ -51,6 +52,8 @@ import { measureHeadroom, measurePressure, type PressureSeams } from './pressure
 import { measureBackup, type BackupSeams } from './backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools, type TestboxCaptureSeams, type TestboxOpSeams } from './testboxOp.js';
 import { isClaudeVersion } from '../../shared/claudeVersion.js';
+import { answerWitness, readHeldWitness } from './witness.js';
+import { parseWitnessTuple } from '../../shared/authorityWitness.js';
 import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
 import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
 import { OVERLORD_HISTORY_OP, type OverlordHistoryReq } from '../../shared/agent-protocol.js';
@@ -886,6 +889,11 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { ...outcome, fleetIdentity: readFleetIdentity(ctx.cfg.home) } satisfies ModelsOpAnswer));
       return;
     }
+    case 'witness': {
+      // Overlord W1 Task 6: keep the higher epoch in the node's own file and answer what it holds (agent/src/witness.ts).
+      send(ws, ok(req.id, answerWitness(ctx.cfg.home, req.offer)));
+      return;
+    }
     case 'overlord-history': {
       // Overlord W1 (w1-board-history.md Task 3): history's read verbs over every project, in a worker thread with one
       // slot (historyOp.ts). It reads ~/.ccrc/history/ only, read-only, outside the read whitelist; it spawns no process.
@@ -1128,6 +1136,14 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       return {
         t: 'req', id, op: 'models', lane, action: msg.action as Exclude<ModelsReq['action'], 'show'>, class: msg.class as ModelClass,
       } satisfies ModelsReq;
+    }
+    case 'witness': {
+      // The offer must be a tuple `parseWitnessTuple` accepts, and the frame carries no other key; anything else is
+      // `bad-request` (the word that means "this agent predates the op" is never produced by a good frame).
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op' && k !== 'offer')) return null;
+      const p = parseWitnessTuple(msg.offer);
+      if (!p.ok) return null;
+      return { t: 'req', id, op: 'witness', offer: p.tuple } satisfies WitnessReq;
     }
     case 'overlord-history': {
       // The ONE reader (shared/overlordHistory.ts), handed the request's body: the frame less its envelope keys, so its
@@ -1498,11 +1514,15 @@ function handleConnection(
       // only when it is listed here), and `testbox-capture` (build capture runner spec 2026-11-22 §2.5: one field, the
       // build). It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP, TESTBOX_CAPTURE_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP, TESTBOX_CAPTURE_OP, WITNESS_OP],
       };
       // `overlord-history` (Overlord W1, Task 4) goes last, and only where this agent can serve the history store
       // (historyOp.ts#servable: the worker's entry found, not macOS), so a server never counts an agent that cannot.
       if (historyOp.servable) frame.ops!.push(OVERLORD_HISTORY_OP);
+      // Overlord W1 Task 6: what this node holds of the authority witness, read fresh at each ready (a tuple, `null` for none,
+      // or `'unmeasured'` for an unreadable or malformed file).
+      const heldWitness = readHeldWitness(opts.home);
+      frame.authorityWitness = heldWitness.kind === 'held' ? heldWitness.tuple : 'unmeasured';
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
       const build = readBuildStamp(opts.home);
