@@ -33,6 +33,7 @@ import type { ForecastLanePort } from './coord/forecastLane.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
+import type { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
@@ -237,6 +238,9 @@ export interface Deps {
    *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
   overlordAuthority?: OverlordAuthorityJournal;
   overlordAuthorityGuard?: OverlordAuthorityGuard;
+  /** Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`), built
+   *  once in `index.ts` over the same journal and guard. Absent (a test, a script): the Confirm door answers `unavailable`. */
+  overlordRestore?: OverlordRestoreState;
   /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
   ladderWitness?: NarrowingWitness;
   ladderInputs?: LadderConditionInputs;

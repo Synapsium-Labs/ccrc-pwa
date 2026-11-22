@@ -86,7 +86,7 @@ import {
   reconcilePending, recordFailure, refreshRecord, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice,
   unmeasuredMoves, withEffort,
 } from '../shared/model-advance.mjs';
-import { ANTHROPIC_OPS, anthropicArm } from './models-anthropic.mjs';
+import { ANTHROPIC_OPS, anthropicArm, anthropicLabels } from './models-anthropic.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
@@ -1212,12 +1212,14 @@ function renderRefusal(registry, catalogue, windows) {
  *  on. An unseeded registry (deviation B-1, every class null) still gets the
  *  decision, `{ tokens: null, rule: 'none', unmeasured: [] }`: no key, as
  *  `materialise` writes no env block for it. `advance` is the lane's advance file (`advanceReport`). `labels` is each
- *  class's model and catalogue label (`laneClassModels`), null with no registry: the server's `models` op path reads
- *  the class labels from it, because that path receives no catalogue to derive them from (D-8693). */
+ *  class's model and catalogue label (`laneClassModels`); an Anthropic lane's come from its aliases file (`anthropicLabels`,
+ *  A4.1), and are null with no registry otherwise: the server's `models` op path reads the class labels from it, because
+ *  that path receives no catalogue to derive them from (D-8693). */
 function describe(account, registry, catalogue, reading) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);
   const windows = windowsOf(reading);
+  const advance = advanceReport(account.id), aliases = anthropic ? aliasesReport(account.id) : null;
   return {
     id: account.id,
     anthropic,
@@ -1230,9 +1232,9 @@ function describe(account, registry, catalogue, reading) {
     renderRefusal: renderRefusal(registry, catalogue, windows),
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
-    advance: advanceReport(account.id),
-    ...(anthropic ? { aliases: aliasesReport(account.id) } : {}),
-    labels: registry === null ? null : laneClassModels(registry, catalogue),
+    advance,
+    ...(anthropic ? { aliases } : {}),
+    labels: registry === null ? (anthropic ? anthropicLabels(aliases, advance) : null) : laneClassModels(registry, catalogue),
     windowNotices: windowNotices(account.id, registry, catalogue, windows),
   };
 }

@@ -11,7 +11,7 @@ import {
 import type { RouteRefusal } from '../../shared/refusal.js';
 import {
   TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_SUBS, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_LINE_CODES, buildTestboxAdminArgv, isHostKeyFingerprint,
-  isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxLedgerChanges, testboxAdminIsLong, testboxAdminNeedsStepUp,
+  isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxBusyHolder, readTestboxLedgerChanges, testboxAdminIsLong, testboxAdminNeedsStepUp,
   testboxLedgerShowsValue, testboxLedgerValueOf, testboxLedgerValueOfRow,
   type TestboxAct, type TestboxActOutcome, type TestboxAdminCode, type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub,
   type TestboxLedgerValue, type TestboxSettingChange,
@@ -168,9 +168,11 @@ export function decisionOf(ran: TestboxAdminOutcome): Decision {
         const keys = keysOf(j['keys']);
         // D-8337: a refusal that leaves a line on the box for the operator to remove names that key's PUBLIC words, one line.
         const line = LINE_CODE_SET.has(j['code']) ? lineOf(j['line']) : undefined;
+        // D-8899: `busy` names the act that holds the lock, read by the one reader (a sub and two times, nothing else).
+        const holder = j['code'] === 'busy' ? readTestboxBusyHolder(j['holder']) : null;
         return {
           kind: 'refuse', word: 'testbox-admin-refused', audit: 'refused', code: j['code'] as TestboxAdminCode,
-          extra: { code: j['code'], ...(keys.length > 0 ? { keys } : {}), ...(line === undefined ? {} : { line }) },
+          extra: { code: j['code'], ...(keys.length > 0 ? { keys } : {}), ...(line === undefined ? {} : { line }), ...(holder === null ? {} : { holder }) },
         };
       }
       if (j !== null && j['ok'] === true && ran.code === 0) return { kind: 'ok', json: j };
