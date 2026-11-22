@@ -2468,13 +2468,14 @@ describe('ccrc doctor: docs', () => {
     expect(v.next).toBe('  remedy: ccrc update');
   });
 
-  it('a ccd whose caps read fails WARNs naming both', () => {
+  it('a ccd whose caps read fails WARNs that neither word was measured, never "does not list" (doctor-caps-one-reader)', () => {
     const home = healthy('ccrc-doctor-docs-caps-fail-');
     plantDocsCcd(home, `#!/bin/sh\ncase "$1" in\n  caps) exit 1 ;;\n  *) printf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}' ;;\nesac\n`);
     const r = runDoctor(home);
     const v = docsVerdict(r.stdout);
-    expect(v.line, r.stdout).toMatch(/^WARN docs: .*; this ccd does not list docs-log-v1 docs-sections-v2, so /);
-    expect(v.next).toBe('  remedy: ccrc update');
+    expect(v.line, r.stdout).toMatch(/^WARN docs: .*; ccd caps did not answer, so whether this ccd lists docs-log-v1 docs-sections-v2 was not measured$/);
+    expect(v.line).not.toContain('does not list');
+    expect(v.next).toMatch(/^ {2}remedy: run \$HOME\/\.local\/bin\/ccd caps by hand to see why; /);
   });
 
   it('an unreadable row still WARNs first, with its own remedy', () => {

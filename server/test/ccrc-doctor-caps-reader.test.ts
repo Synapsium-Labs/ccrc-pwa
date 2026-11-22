@@ -5,7 +5,7 @@
 // each reads, and on an unmeasured one (a failed read, a read past its bound, no ccd), each check run alone, sourced as
 // `cmd_doctor` sources it, against a fixture HOME (`healthy()`) and a stub ccd.
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -69,6 +69,72 @@ describe('docs: what the caps read measured', () => {
     expect(r.line).toBe(`WARN docs: ${DOCS_LINE}; this ccd does not list docs-log-v1 docs-sections-v2, ${DOCS_TAIL}`);
     expect(r.next).toBe('  remedy: ccrc update');
     expect(r.code).toBe(2);
+  });
+
+  // An unmeasured read is a WARN that says nothing was measured, never "does not list" (doctor-caps-one-reader).
+  const DOCS_UNMEASURED = `WARN docs: ${DOCS_LINE}; ccd caps did not answer, so whether this ccd lists docs-log-v1 docs-sections-v2 `
+    + 'was not measured';
+  const CAPS_FIX = '  remedy: run $HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers';
+
+  it('a read that exits non-zero: WARN unmeasured, never "does not list"', () => {
+    const home = healthy('ccrc-caps-docs-exit-');
+    plantCcd(home, docsCcd('exit 1'));
+    const r = check(home, 'docs');
+    expect(r.line).toBe(DOCS_UNMEASURED);
+    expect(r.line).not.toContain('does not list');
+    expect(r.next).toBe(CAPS_FIX);
+    expect(r.code).toBe(2);
+  });
+
+  it('a read past its bound: WARN unmeasured within the bound', () => {
+    const home = healthy('ccrc-caps-docs-hang-');
+    plantCcd(home, docsCcd('while :; do :; done'));
+    const r = check(home, 'docs', { CCRC_DOCTOR_DOCS_TIMEOUT: '1' });
+    expect(r.line).toBe(DOCS_UNMEASURED);
+    expect(r.next).toBe(CAPS_FIX);
+    expect(r.ms).toBeLessThan(20_000);
+  });
+});
+
+// THE GUARD (doctor-caps-one-reader, step 4): the checks file asks `ccd caps` in exactly one place, `_dr_ccd_caps`. It
+// lives here, in the doctor test that owns these checks, because the single-definition area file that reads the ccd side
+// was claimed by another run when this landed. A comment line never counts; a prose string naming `ccd caps` (a remedy,
+// a detail) is not a call, so a call is ccd as a quoted word (`"$ccd" caps`, `"$HOME/.local/bin/ccd" caps`), as an
+// unquoted `$`-word (`$ccd caps`), or bare at a command's start (a line's start or right after `$(`), followed by `caps`.
+const CALL = /"[^"\s]*\bccd"\s+caps\b|(?:^|[\s;|&(])\$[^\s"'`]*\bccd\}?\s+caps\b|(?:^\s*|\$\(\s*)ccd\s+caps\b/;
+/** Each non-comment line of `src` that calls `ccd caps`, as [1-based line number, text]. */
+function capsCalls(src: string): [number, string][] {
+  return src.split('\n').map((l, i) => [i + 1, l] as [number, string])
+    .filter(([, l]) => !l.trim().startsWith('#') && CALL.test(l));
+}
+
+describe('one reader of ccd caps in the doctor checks', () => {
+  const src = readFileSync(CHECKS_SRC, 'utf8');
+
+  it('the checks file calls ccd caps on exactly one line, and that line is inside _dr_ccd_caps', () => {
+    const calls = capsCalls(src);
+    expect(calls.map(([, l]) => l.trim()), 'the ccd caps calls').toHaveLength(1);
+    const lines = src.split('\n');
+    const start = lines.findIndex((l) => l.startsWith('_dr_ccd_caps() {'));
+    expect(start, 'the reader _dr_ccd_caps').toBeGreaterThanOrEqual(0);
+    const end = lines.findIndex((l, i) => i > start && l === '}');
+    expect(calls[0]![0] - 1).toBeGreaterThan(start);
+    expect(calls[0]![0] - 1).toBeLessThan(end);
+  });
+
+  it('the pattern catches each call shape the checks used, and no prose or comment that names ccd caps', () => {
+    for (const l of [
+      '      caps="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$ccd" caps </dev/null 2>/dev/null)" || caps=""',
+      '  caps="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null)" || caps=""',
+      '  caps="$($ccd caps)"', '  w="$(ccd caps)"', '  ccd caps >/dev/null', '  x=$($HOME/.local/bin/ccd caps)',
+    ]) expect(capsCalls(l), l).toHaveLength(1);
+    for (const l of [
+      '  # Bounded, and reading no stdin, as "$ccd" caps is',
+      '  _dr_fail cap-floor "unmeasured: a fact stands, and this box\'s ccd caps did not answer" "$DR_CCD_CAPS_FIX"',
+      'DR_CCD_CAPS_FIX="run \\$HOME/.local/bin/ccd caps by hand to see why"',
+      '      ma_note="; ccd caps did not answer, so whether this box\'s ccd marks alias launches was not measured" ;;',
+      '  # `alias-source-absent` WARNs only once this box\'s ccd marks alias launches (`ccd caps` lists `alias-launch-v1`',
+    ]) expect(capsCalls(l), l).toEqual([]);
   });
 });
 

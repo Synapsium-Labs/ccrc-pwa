@@ -7140,7 +7140,12 @@ _check_docs() {
       # Rich-docs spec A12 (W5b): the tokens are read from `ccd caps`, as the server reads them; words only, never a
       # project name. A caps read that fails names both, since neither was measured.
       local tok missing=""
-      _dr_ccd_caps || :
+      if ! _dr_ccd_caps; then
+        # Unmeasured: never "does not list", which is a measured answer (doctor-caps-one-reader).
+        _dr_warn docs "$line; ccd caps did not answer, so whether this ccd lists $CCRC_DOCTOR_DOCS_CAPS was not measured" \
+          "$DR_CCD_CAPS_FIX"
+        return 2
+      fi
       for tok in $CCRC_DOCTOR_DOCS_CAPS; do
         _dr_ccd_lists "$tok" || missing="$missing $tok"
       done
@@ -12680,9 +12685,14 @@ _check_model-advance-blocked() {
     return 3
   fi
   # `alias-source-absent` WARNs only once this box's ccd marks alias launches (`ccd caps` lists `alias-launch-v1`, the
-  # Anthropic arm's A3.2); before that a lane with no catalogue cache has no source by design, so it is a note.
-  _dr_ccd_caps || :
-  if ! _dr_ccd_lists alias-launch-v1; then
+  # Anthropic arm's A3.2); before that a lane with no catalogue cache has no source by design, so it is a note. A read
+  # that did not answer measured neither, so every row stays as it reads once ccd marks alias launches, and the detail
+  # says why (doctor-caps-one-reader): a box whose ccd did not answer never reads as healthy.
+  if ! _dr_ccd_caps; then
+    case "$rows" in *$'\x1f'alias-source-absent$'\x1f'*)
+      ma_note="; ccd caps did not answer, so whether this box's ccd marks alias launches was not measured" ;;
+    esac
+  elif ! _dr_ccd_lists alias-launch-v1; then
     while IFS=$'\x1f' read -r id key text; do
       [ -n "$id" ] || continue
       if [ "$key" = alias-source-absent ]; then ma_note+="${ma_note:+, }$id"; else ma_kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi

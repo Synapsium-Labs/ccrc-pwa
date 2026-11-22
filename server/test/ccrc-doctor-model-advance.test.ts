@@ -653,6 +653,9 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
   const SOURCE_ABSENT_WARN = 'WARN model-advance-blocked: lane-c: alias-source-absent (no class has a model id: the lane\'s home has no '
     + 'catalogue cache, and no alias launch has reported one)\n'
     + '  remedy: per cause: alias source — start one session on this lane through ccd, or sign it in so Claude Code writes a catalogue\n';
+  /** The same row when `ccd caps` did not answer: kept as a WARN, its detail saying so (doctor-caps-one-reader). */
+  const SOURCE_ABSENT_UNMEASURED = SOURCE_ABSENT_WARN.replace(')\n  remedy:',
+    '); ccd caps did not answer, so whether this box\'s ccd marks alias launches was not measured\n  remedy:');
   /** A stub ccd whose `caps` lists these words, one per line. */
   const stubCcd = (h: string, words: string[]): void => {
     fs.mkdirSync(join(h, '.local', 'bin'), { recursive: true });
@@ -803,7 +806,7 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
       + 'no source until ccd marks alias launches (lane-c)\n');
     expect(note.code).toBe(0);
     fs.rmSync(join(h, '.local'), { recursive: true });
-    expect(check(h, 'model-advance-blocked').out).toContain('PASS model-advance-blocked');
+    expect(check(h, 'model-advance-blocked').out).toBe(SOURCE_ABSENT_UNMEASURED);
     capable(h);
     const warn = check(h, 'model-advance-blocked');
     expect(warn.out).toContain('WARN model-advance-blocked: lane-c: alias-source-absent (');
@@ -822,6 +825,35 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     expect(note.out).toBe('PASS model-advance-blocked: 1 lane(s) with a model registry or an aliases file: nothing blocks an advance; '
       + 'no source until ccd marks alias launches (lane-c)\n');
     expect(note.code).toBe(0);
+  });
+
+  it.each([
+    ['exits non-zero', '#!/bin/sh\nexit 1\n', {}],
+    ['runs past its bound', '#!/bin/sh\nwhile :; do :; done\n', { CCRC_DOCTOR_DOCS_TIMEOUT: '1' }],
+    ['is absent', null, {}],
+  ] as const)('an unmeasured caps read (ccd %s) keeps the source row as a WARN, its detail saying ccd caps did not answer', (_w, script, extra) => {
+    const h = box();
+    aop(h, T0, 'aliases-refresh');
+    fs.rmSync(join(h, '.local'), { recursive: true, force: true });
+    if (script !== null) {
+      fs.mkdirSync(join(h, '.local', 'bin'), { recursive: true });
+      fs.writeFileSync(join(h, '.local', 'bin', 'ccd'), script, { mode: 0o755 });
+    }
+    const r = check(h, 'model-advance-blocked', extra);
+    expect(r.out).toBe(SOURCE_ABSENT_UNMEASURED);
+    expect(r.out).not.toContain('no source until ccd marks alias launches');
+    expect(r.code).toBe(2);
+    expect(r.ms).toBeLessThan(20_000);
+  });
+
+  it('an unmeasured caps read adds no detail when no lane has the source cause: a file cause WARNs as it always did', () => {
+    const h = box();
+    fs.mkdirSync(join(h, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(aliasesPath(h), `${JSON.stringify({ v: 2 })}\n`);
+    fs.rmSync(join(h, '.local'), { recursive: true, force: true });
+    const r = check(h, 'model-advance-blocked');
+    expect(r.out).toContain('WARN model-advance-blocked: lane-c: aliases-file-invalid (');
+    expect(r.out).not.toContain('ccd caps did not answer');
   });
 
   it('the note names only the source cause: a stale cache or a file cause still WARNs before alias-launch-v1', () => {
