@@ -1,7 +1,7 @@
 // L1 policy, pure (D-8186): the migration map's deciders. They check a map against the open issues and the plans, order
 // the writes, say how to resume a half-done move, and say how to put a migration back. No I/O: the caller reads Linear
 // and the store, and runs the steps this returns.
-import { isPlanKey, MAP_CLASSES, TICKET_KINDS, type HierarchyState, type IssueSnapshot, type MapBody, type MapCounts, type MapEntry, type MigrationState, type PlanEpicBody, type TicketKind } from '../../../shared/plan.js';
+import { isPlanKey, MAP_CLASSES, TICKET_KINDS, type HierarchyState, type IssueSnapshot, type MapBody, type MapClass, type MapCounts, type MapEntry, type MigrationState, type PlanEpicBody, type TicketKind } from '../../../shared/plan.js';
 import type { LinkingMode } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
@@ -447,34 +447,69 @@ export function reportCounts(moves: readonly Pick<MoveRow, 'kind' | 'before' | '
   };
 }
 
+/** One entry as the Linear owner sends it: the visible identifier, and the Linear UUID only when the owner has it (D-8186). */
+export interface ProposedEntry { identifier: string; issue?: string; class: MapClass; target?: MapEntry['target'] }
+/** A map as the Linear owner sends it, shaped: resolved against the measured rows into a `MapBody` (`resolveMapProposal`). */
+export interface MapProposal { team: string; entries: ProposedEntry[]; backlog?: MapBody['backlog']; epics?: MapBody['epics'] }
+
 /** The map body a `plan map-propose` sends (`entries`, optional `backlog` and `epics`), shaped; the server fills `team` and
- *  `snapshot`. The deep checks are `checkMap`'s; this refuses only a body of the wrong shape. */
-export function parseMapProposal(body: unknown, team: string): { ok: true; map: Omit<MapBody, 'snapshot'> } | { ok: false; word: 'plan-bad-body'; detail: string } {
+ *  `snapshot`. An entry names its issue by the visible identifier; the UUID is optional (D-8186). The deep checks are
+ *  `resolveMapProposal`'s and `checkMap`'s; this refuses only a body of the wrong shape. */
+export function parseMapProposal(body: unknown, team: string): { ok: true; proposal: MapProposal } | { ok: false; word: 'plan-bad-body'; detail: string } {
   const bad = (detail: string) => ({ ok: false as const, word: 'plan-bad-body' as const, detail });
   if (!isObj(body)) return bad('the body is not an object');
   const { entries, backlog, epics } = body;
   if (!Array.isArray(entries)) return bad('entries is not a list');
-  const out: MapEntry[] = [];
+  const out: ProposedEntry[] = [];
   for (const e of entries) {
-    if (!isObj(e) || typeof e['issue'] !== 'string' || typeof e['identifier'] !== 'string' || !(MAP_CLASSES as readonly unknown[]).includes(e['class'])) return bad('an entry needs issue, identifier and a class');
+    if (!isObj(e) || typeof e['identifier'] !== 'string' || e['identifier'] === '' || !(MAP_CLASSES as readonly unknown[]).includes(e['class'])) return bad('an entry needs an identifier and a class');
+    if ('issue' in e && typeof e['issue'] !== 'string') return bad("an entry's issue is not a string");
     const t = e['target'];
     if (t !== undefined && !isObj(t)) return bad(`${e['identifier']}: target is not an object`);
     for (const [k, v] of Object.entries(t ?? {})) {
       if (!['programme', 'epic', 'checkpoint', 'successor', 'ticketKey', 'kind', 'pr', 'reason'].includes(k) || typeof v !== 'string') return bad(`${e['identifier']}: target.${k}`);
     }
-    out.push({ issue: e['issue'], identifier: e['identifier'], class: e['class'] as MapEntry['class'], ...(t === undefined ? {} : { target: t as MapEntry['target'] }) });
+    out.push({
+      identifier: e['identifier'], ...(typeof e['issue'] === 'string' ? { issue: e['issue'] } : {}), class: e['class'] as MapClass,
+      ...(t === undefined ? {} : { target: t as MapEntry['target'] }),
+    });
   }
   const groups = (v: unknown, key: 'slug' | 'programme'): boolean => v === undefined || (Array.isArray(v) && v.every((g) => isObj(g) && typeof g[key] === 'string' && Array.isArray(g['epics'])));
   if (!groups(backlog, 'slug')) return bad('backlog');
   if (!groups(epics, 'programme')) return bad('epics');
   return {
     ok: true,
-    map: {
+    proposal: {
       team, entries: out,
       ...(backlog === undefined ? {} : { backlog: backlog as NonNullable<MapBody['backlog']> }),
       ...(epics === undefined ? {} : { epics: epics as NonNullable<MapBody['epics']> }),
     },
   };
+}
+
+/** A proposal's entries resolved against the measured eligible rows (D-8186): each entry's issue is the row its identifier names
+ *  (ASCII case-insensitive), with the row's own UUID and identifier, never the caller's spelling. A UUID the caller sent must
+ *  be that row's. Coverage of a missing row stays `checkMap`'s. The first refusal, in the order sent, wins. */
+export function resolveMapProposal(p: MapProposal, eligible: readonly IssueSnapshotRow[]):
+  { ok: true; map: Omit<MapBody, 'snapshot'> } | { ok: false; word: 'map-incomplete' | 'plan-bad-body'; detail: string } {
+  const entries: MapEntry[] = [];
+  const seen = new Set<string>();
+  for (const e of p.entries) {
+    const want = e.identifier.toUpperCase();
+    const candidates = eligible.filter((r) => r.identifier.toUpperCase() === want);
+    const mismatch = { ok: false as const, word: 'plan-bad-body' as const, detail: `issue-mismatch:${e.identifier}` };
+    if (candidates.length === 0) {
+      if (e.issue !== undefined && eligible.some((r) => r.linearId === e.issue)) return mismatch;
+      return { ok: false, word: 'map-incomplete', detail: `not-open:${e.identifier}` };
+    }
+    if (candidates.length > 1) return { ok: false, word: 'map-incomplete', detail: `ambiguous:${e.identifier}` };
+    const row = candidates[0]!;
+    if (e.issue !== undefined && e.issue !== row.linearId) return mismatch;
+    if (seen.has(row.linearId)) return { ok: false, word: 'map-incomplete', detail: `twice:${row.identifier}` };
+    seen.add(row.linearId);
+    entries.push({ issue: row.linearId, identifier: row.identifier, class: e.class, ...(e.target === undefined ? {} : { target: e.target }) });
+  }
+  return { ok: true, map: { team: p.team, entries, ...(p.backlog === undefined ? {} : { backlog: p.backlog }), ...(p.epics === undefined ? {} : { epics: p.epics }) } };
 }
 
 // ── Items and mails (§11.3; every one raised under `linear-sync`, acted on in the console only) ──

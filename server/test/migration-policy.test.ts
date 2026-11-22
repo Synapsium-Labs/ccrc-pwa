@@ -1,7 +1,7 @@
 // D-8186: the migration map's deciders (`linear/migrationPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  applySteps, checkMap, mapProposerVerdict, migrationOfProject, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, shedTaken, ticketKeyOf, ticketKindOf, programmeOfEntry,
+  applySteps, checkMap, mapProposerVerdict, migrationOfProject, parseMapProposal, resolveMapProposal, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, shedTaken, ticketKeyOf, ticketKindOf, programmeOfEntry,
   type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from '../src/linear/migrationPolicy.js';
 import { projectOnTeam } from '../src/linear/route.js';
@@ -348,5 +348,63 @@ describe('projectOnTeam and migrationOfProject (D-8808)', () => {
     expect(migrationOfProject({ teamKey: 'AAA', workspaceId: null }, rows, both)).toBeNull();
     expect(migrationOfProject({ teamKey: 'AAA', workspaceId: null }, rows, null)).toBeNull();
     expect(migrationOfProject({ teamKey: 'AAA', workspaceId: null }, [m(1, 'ws-a'), m(5, 'ws-a')], null)?.id).toBe(5);
+  });
+});
+
+describe('parseMapProposal and resolveMapProposal (D-8186: the visible identifier without the UUID)', () => {
+  const tgt = { programme: 'prog-a', epic: 'e-1' };
+  const eligible = [row(1), row(2), row(3)];
+  const proposal = (entries: unknown[]) => {
+    const p = parseMapProposal({ entries }, 'AAA');
+    if (!p.ok) throw new Error(p.detail);
+    return p.proposal;
+  };
+  const refusal = (r: { ok: boolean }) => r as { ok: false; word: string; detail: string };
+
+  it('parses an identifier-only entry, and keeps a given UUID', () => {
+    expect(parseMapProposal({ entries: [{ identifier: 'AAA-1', class: 'leaf', target: tgt }, { issue: U(2), identifier: 'AAA-2', class: 'stale' }] }, 'AAA'))
+      .toEqual({ ok: true, proposal: { team: 'AAA', entries: [{ identifier: 'AAA-1', class: 'leaf', target: tgt }, { identifier: 'AAA-2', issue: U(2), class: 'stale' }] } });
+  });
+  it('refuses a non-string issue, a missing identifier and a bad class', () => {
+    expect(parseMapProposal({ entries: [{ issue: 5, identifier: 'AAA-1', class: 'leaf' }] }, 'AAA')).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    expect(parseMapProposal({ entries: [{ issue: null, identifier: 'AAA-1', class: 'leaf' }] }, 'AAA')).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    expect(parseMapProposal({ entries: [{ issue: U(1), class: 'leaf' }] }, 'AAA')).toEqual({ ok: false, word: 'plan-bad-body', detail: 'an entry needs an identifier and a class' });
+    expect(parseMapProposal({ entries: [{ identifier: '', class: 'leaf' }] }, 'AAA')).toMatchObject({ ok: false, detail: 'an entry needs an identifier and a class' });
+    expect(parseMapProposal({ entries: [{ identifier: 'AAA-1', class: 'nope' }] }, 'AAA')).toMatchObject({ ok: false, detail: 'an entry needs an identifier and a class' });
+  });
+
+  it('resolves to the canonical UUID and identifier, keeps the order and the target untouched', () => {
+    const r = resolveMapProposal(proposal([{ identifier: 'aaa-2', class: 'leaf', target: tgt }, { issue: U(1), identifier: 'AAA-1', class: 'stale' }]), eligible);
+    expect(r).toEqual({ ok: true, map: { team: 'AAA', entries: [{ issue: U(2), identifier: 'AAA-2', class: 'leaf', target: tgt }, { issue: U(1), identifier: 'AAA-1', class: 'stale' }] } });
+  });
+  it('carries backlog and epics through', () => {
+    const p = parseMapProposal({ entries: [], backlog: [{ slug: 'b', title: 't', epics: [] }], epics: [{ programme: 'prog-a', epics: [] }] }, 'AAA');
+    if (!p.ok) throw new Error('parse');
+    expect(resolveMapProposal(p.proposal, eligible)).toEqual({ ok: true, map: { team: 'AAA', entries: [], backlog: [{ slug: 'b', title: 't', epics: [] }], epics: [{ programme: 'prog-a', epics: [] }] } });
+  });
+  it('an identifier no eligible row has is not-open, as sent', () => {
+    expect(refusal(resolveMapProposal(proposal([{ identifier: 'aaa-9', class: 'leaf' }]), eligible))).toMatchObject({ word: 'map-incomplete', detail: 'not-open:aaa-9' });
+    expect(refusal(resolveMapProposal(proposal([{ issue: U(9), identifier: 'AAA-9', class: 'leaf' }]), eligible))).toMatchObject({ word: 'map-incomplete', detail: 'not-open:AAA-9' });
+  });
+  it('no row by identifier but the issue is eligible: issue-mismatch', () => {
+    expect(refusal(resolveMapProposal(proposal([{ issue: U(1), identifier: 'AAA-99', class: 'leaf' }]), eligible))).toEqual({ ok: false, word: 'plan-bad-body', detail: 'issue-mismatch:AAA-99' });
+  });
+  it('a row by identifier whose UUID is not the one sent: issue-mismatch, never another row', () => {
+    expect(refusal(resolveMapProposal(proposal([{ issue: U(2), identifier: 'AAA-1', class: 'leaf' }]), eligible))).toEqual({ ok: false, word: 'plan-bad-body', detail: 'issue-mismatch:AAA-1' });
+    expect(refusal(resolveMapProposal(proposal([{ issue: U(77), identifier: 'AAA-1', class: 'leaf' }]), eligible))).toEqual({ ok: false, word: 'plan-bad-body', detail: 'issue-mismatch:AAA-1' });
+  });
+  it('two rows with one identifier: ambiguous', () => {
+    const dup = [...eligible, { ...row(1), linearId: U(190) }];
+    expect(refusal(resolveMapProposal(proposal([{ identifier: 'AAA-1', class: 'leaf' }]), dup))).toEqual({ ok: false, word: 'map-incomplete', detail: 'ambiguous:AAA-1' });
+  });
+  it('one row named twice in any mix of forms: twice, canonical identifier', () => {
+    expect(refusal(resolveMapProposal(proposal([{ identifier: 'AAA-1', class: 'leaf' }, { issue: U(1), identifier: 'aaa-1', class: 'stale' }]), eligible)))
+      .toEqual({ ok: false, word: 'map-incomplete', detail: 'twice:AAA-1' });
+  });
+  it('the first refusal in the order sent wins', () => {
+    expect(refusal(resolveMapProposal(proposal([{ identifier: 'AAA-8', class: 'leaf' }, { issue: U(2), identifier: 'AAA-1', class: 'leaf' }]), eligible)).detail).toBe('not-open:AAA-8');
+  });
+  it('leaves a missing eligible row to checkMap', () => {
+    expect(resolveMapProposal(proposal([{ identifier: 'AAA-1', class: 'stale' }]), eligible)).toMatchObject({ ok: true });
   });
 });
