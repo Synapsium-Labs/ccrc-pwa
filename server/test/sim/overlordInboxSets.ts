@@ -10,7 +10,8 @@ import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { MESSAGE_STATES, READ_DOORS } from '../../../shared/operatorMessages.js';
 import { INBOX_PAGE_ROWS, READ_CEILINGS, READ_CEILING_WINDOW_MS, type InboxBehind, type InboxRow, type InboxWakeBody } from '../../../shared/overlordInbox.js';
 import type { GateVerdict, GateWord } from '../../src/coord/overlordGate.js';
-import type { InboxComposed, InboxSources, MessageFacts, OpenRound, Source } from '../../src/coord/overlordInbox.js';
+import type { InboxComposed, InboxSources, MessageFacts, OpenRound, ProbeRowsFact, Source } from '../../src/coord/overlordInbox.js';
+import { GENERATION_STATES } from '../../../shared/continuity.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -253,6 +254,53 @@ export function composeInboxCases(m: InboxDecidersModule): Record<string, SuiteC
       const list = Object.freeze([msg(2, 20), msg(1, 10)]);
       expect(() => m.composeInbox(sources(M('none'), M(list)))).not.toThrow();
       expect(list.map((x) => x.id)).toEqual([2, 1]);
+    },
+  };
+}
+
+// ------------------------------------------------------------------------------------------------------ inboxProbeSource
+
+const ROUND_ROWS = (kind: 'start' | 'compaction' | 'spot' = 'compaction'): Extract<ProbeRowsFact, { ok: true }> => ({
+  ok: true,
+  rows: [
+    { roundId: 'r-7', kind, askedAt: 4_000 },
+    { roundId: 'r-7', kind, askedAt: 4_000 },
+    { roundId: 'r-7', kind, askedAt: 4_001 },
+  ],
+});
+
+export function inboxProbeSourceCases(m: InboxDecidersModule): Record<string, SuiteCase> {
+  const active = { kind: 'state', state: 'active' } as const;
+  return {
+    'an active generation asks for its open round before it answers': () => {
+      expect(m.inboxProbeSource(active, 'not-read')).toEqual({ kind: 'read-rows' });
+    },
+    'an active generation with an open round answers its id, kind, count and first time, and nothing else': () => {
+      const r = m.inboxProbeSource(active, ROUND_ROWS('spot'));
+      expect(r).toEqual({ kind: 'measured', value: { roundId: 'r-7', kind: 'spot', questions: 3, askedAt: 4_000 } });
+      if (r.kind === 'measured' && r.value !== 'none') expect(Object.keys(r.value).sort()).toEqual(['askedAt', 'kind', 'questions', 'roundId']);
+    },
+    'an active generation with no open round answers none': () => {
+      expect(m.inboxProbeSource(active, { ok: true, rows: [] })).toEqual({ kind: 'measured', value: 'none' });
+    },
+    'a round whose rows could not be read is unmeasured, naming the reader\'s detail, never none': () => {
+      expect(m.inboxProbeSource(active, { ok: false, detail: 'continuity_probes read failed' })).toEqual({ kind: 'unmeasured', why: 'continuity_probes read failed' });
+    },
+    'a generation in any other state answers none and never asks for the round, whatever rows are given': () => {
+      for (const state of GENERATION_STATES.filter((s) => s !== 'active')) {
+        expect(m.inboxProbeSource({ kind: 'state', state }, 'not-read'), state).toEqual({ kind: 'measured', value: 'none' });
+        expect(m.inboxProbeSource({ kind: 'state', state }, ROUND_ROWS()), state).toEqual({ kind: 'measured', value: 'none' });
+        expect(m.inboxProbeSource({ kind: 'state', state }, { ok: false, detail: 'x' }), state).toEqual({ kind: 'measured', value: 'none' });
+      }
+    },
+    'no live generation answers none': () => {
+      expect(m.inboxProbeSource({ kind: 'none' }, 'not-read')).toEqual({ kind: 'measured', value: 'none' });
+      expect(m.inboxProbeSource({ kind: 'none' }, ROUND_ROWS())).toEqual({ kind: 'measured', value: 'none' });
+    },
+    'a generation whose state could not be read is unmeasured with its reason, whatever rows are given': () => {
+      const gen = { kind: 'unmeasured', why: 'the generations could not be read' } as const;
+      expect(m.inboxProbeSource(gen, 'not-read')).toEqual({ kind: 'unmeasured', why: 'the generations could not be read' });
+      expect(m.inboxProbeSource(gen, ROUND_ROWS())).toEqual({ kind: 'unmeasured', why: 'the generations could not be read' });
     },
   };
 }
@@ -659,6 +707,27 @@ const INBOX_ORDER_SET: MutantSet<InboxDecidersModule> = {
   suite: inboxOrderCases,
 };
 
+const INBOX_PROBE_SOURCE_SET: MutantSet<InboxDecidersModule> = {
+  modulePath: L1,
+  mutants: [
+    { id: 'P1 an unmeasured generation read as none', old: "  if (gen.kind === 'unmeasured') return { kind: 'unmeasured', why: gen.why };\n", new: '' },
+    { id: 'P2 an unmeasured generation read as active', old: "if (gen.kind !== 'state' || gen.state !== 'active') return { kind: 'measured', value: 'none' };", new: "if (gen.kind === 'none') return { kind: 'measured', value: 'none' };" },
+    { id: 'P3 any state reads the round', old: "gen.kind !== 'state' || gen.state !== 'active'", new: "gen.kind !== 'state'" },
+    { id: 'P4 only a card or active state reads', old: "gen.state !== 'active'", new: "gen.state === 'degraded'" },
+    { id: 'P5 the round asked for when rows are given', old: "  if (rows === 'not-read') return { kind: 'read-rows' };\n", new: '' },
+    { id: 'P6 the round never asked for', old: "if (rows === 'not-read') return { kind: 'read-rows' };", new: "if (rows === 'not-read') return { kind: 'measured', value: 'none' };" },
+    { id: 'P7 a failed read taken as no round', old: "  if (!rows.ok) return { kind: 'unmeasured', why: rows.detail };\n", new: '' },
+    { id: 'P8 the failed read\'s reason dropped', old: 'why: rows.detail', new: "why: ''" },
+    { id: 'P9 an empty round taken as unmeasured', old: "if (first === undefined) return { kind: 'measured', value: 'none' };", new: "if (first === undefined) return { kind: 'unmeasured', why: 'no rows' };" },
+    { id: 'P10 the last row\'s id', old: 'const first = rows.rows[0];', new: 'const first = rows.rows[rows.rows.length - 1];' },
+    { id: 'P11 the question count lost', old: 'questions: rows.rows.length', new: 'questions: 1' },
+    { id: 'P12 the round\'s kind lost', old: 'kind: first.kind,', new: "kind: 'start'," },
+    { id: 'P13 the time lost', old: 'askedAt: first.askedAt', new: 'askedAt: 0' },
+    { id: 'P14 the id lost', old: 'roundId: first.roundId', new: "roundId: ''" },
+  ],
+  suite: inboxProbeSourceCases,
+};
+
 const ROW_NUDGE_SET: MutantSet<InboxDecidersModule> = {
   modulePath: L1,
   mutants: [
@@ -750,6 +819,7 @@ export const OVERLORD_INBOX_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'shared/overlordInbox.ts#readInboxWakeBody': READ_WAKE_BODY_SET as MutantSet<never>,
   'shared/overlordInbox.ts#renderInboxWakeLine': RENDER_WAKE_LINE_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#composeInbox': COMPOSE_INBOX_SET as MutantSet<never>,
+  'server/src/coord/overlordInbox.ts#inboxProbeSource': INBOX_PROBE_SOURCE_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#inboxOrder': INBOX_ORDER_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#rowNudgeOf': ROW_NUDGE_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#readCeilingVerdict': READ_CEILING_SET as MutantSet<never>,

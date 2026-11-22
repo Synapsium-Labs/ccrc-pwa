@@ -135,6 +135,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('coord/hierarchyRoutes.ts'),
   ...scanRoutes('continuity/routes.ts'),
   ...scanRoutes('coord/overlordRoutes.ts'),
+  ...scanRoutes('coord/overlordInboxRoutes.ts'),
   ...scanRoutes('continuity/quizRoutes.ts'),
   ...scanRoutes('operatorModel/nameListRoutes.ts'),
   ...scanRoutes('coord/decisionModelRoutes.ts'),
@@ -763,7 +764,10 @@ describe('the scanner is looking at something', () => {
     // the HTTP half 288 -> 291, the gated count stays 183 (291 - 108), the exempt-HTTP count 105 -> 108.
     // 295 since review 3232's withdraw door, `POST /api/continuity/quiz-runs/:id/withdraw`, session-gated (the account gate,
     // no step-up) and NOT EXEMPT: the HTTP half 291 -> 292, the gated count 183 -> 184, the exempt-HTTP count stays 108.
-    expect(ROUTES.length).toBe(295);
+    // 298 since the Overlord's inbox doors (Overlord W1, inbox piece), in `coord/overlordInboxRoutes.ts`, a routes file of its own:
+    // `GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and `POST /api/overlord/messages/:id/acknowledge`, three box-token
+    // machine lanes IN EXEMPT: the HTTP half 292 -> 295, the gated count stays 184 (295 - 111), the exempt-HTTP count 108 -> 111.
+    expect(ROUTES.length).toBe(298);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
@@ -953,7 +957,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 295 scanned + the static wildcard when the bundle is built.
+    // 298 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1065,6 +1069,8 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /api/mail/inbox',
+      'GET /api/overlord/inbox',
+      'GET /api/overlord/messages/:id',
       'GET /api/peers',
       'GET /api/pools/epoch',
       'GET /api/programmes/:slug/goals',
@@ -1114,6 +1120,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/mail',
       'POST /api/mail/:id/ack',
       'POST /api/notify',
+      'POST /api/overlord/messages/:id/acknowledge',
       'POST /api/programmes/:slug/items',
       'POST /api/programmes/:slug/modifications',
       'POST /api/programmes/:slug/modifications/merged',
@@ -1178,7 +1185,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-nine with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report and the coordinator\'s Live', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and two with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live and the Overlord\'s inbox doors', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1729,7 +1736,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 292 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 295 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1793,7 +1800,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 292 HTTP routes, not the 108 exempt.
+          //    is not itself flag-aware — the assertion that covers all 295 HTTP routes, not the 111 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

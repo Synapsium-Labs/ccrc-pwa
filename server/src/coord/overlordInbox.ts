@@ -7,6 +7,8 @@
 // THE DECIDERS:
 //   - `composeInbox`: the open round and the unsettled messages, ordered by `inboxOrder`; a probe round is served alone
 //     (question 6); a source unmeasured fails the whole.
+//   - `inboxProbeSource`: the probe source from the live generation's effective state and the open round's rows, text-free
+//     (the handler's two facts; only an `active` generation reads the round, question 6).
 //   - `inboxOrder`, `rowNudgeOf`: the one order, and the nudge a row has besides the wake (question 7).
 //   - `readCeilingVerdict`: a door's ceiling over a rolling hour (question 1), and whether the refusal's line is written.
 //   - `acknowledgeVerdict`: settle, already, or absent (questions 11 and 12).
@@ -19,7 +21,7 @@ import type {
   InboxBehind, InboxRow, InboxWakeBody, MessageInboxRow, ProbeRoundRow, RowNudge,
 } from '../../../shared/overlordInbox.js';
 import type { MessageState, ReadDoor } from '../../../shared/operatorMessages.js';
-import type { ProbeRoundKind } from '../../../shared/continuity.js';
+import type { GenerationState, ProbeRoundKind } from '../../../shared/continuity.js';
 import type { GateVerdict, GateWord } from './overlordGate.js';
 
 export type Source<T> = { readonly kind: 'measured'; readonly value: T } | { readonly kind: 'unmeasured'; readonly why: string };
@@ -82,6 +84,31 @@ export function composeInbox(s: InboxSources): InboxComposed {
   }
   const past = messages.length - INBOX_PAGE_ROWS;
   return { kind: 'served', rows: messages.slice(0, INBOX_PAGE_ROWS), behind: past > 0 ? { kind: 'page', count: past } : NONE };
+}
+
+/** The live generation's effective state as the handler read it (the gate runner's own reading): a state, no live generation, or
+ *  unmeasured with its reason. */
+export type GenerationFact = { readonly kind: 'state'; readonly state: GenerationState } | { readonly kind: 'none' } | { readonly kind: 'unmeasured'; readonly why: string };
+/** The open round's rows as `CoordStore.openProbeRound` answers them, cut to the fields the inbox may carry: never a question, its
+ *  choices or what it expects. An empty list is no open round; a failed read carries its detail. */
+export type ProbeRowsFact =
+  | { readonly ok: true; readonly rows: readonly { readonly roundId: string; readonly kind: ProbeRoundKind; readonly askedAt: number }[] }
+  | { readonly ok: false; readonly detail: string };
+
+/** The inbox's probe source (question 6). Only an `active` generation has an open round to serve: the handler asks first with
+ *  `'not-read'`, and the answer `read-rows` is the decider asking for the round's rows; it asks again with them. Any other state
+ *  reads `none`, never the round; an unreadable state or round is unmeasured, never `none`. The answer maps ids, kind, count and
+ *  the first row's time only. */
+export function inboxProbeSource(gen: GenerationFact, rows: 'not-read'): Source<OpenRound | 'none'> | { readonly kind: 'read-rows' };
+export function inboxProbeSource(gen: GenerationFact, rows: ProbeRowsFact): Source<OpenRound | 'none'>;
+export function inboxProbeSource(gen: GenerationFact, rows: ProbeRowsFact | 'not-read'): Source<OpenRound | 'none'> | { readonly kind: 'read-rows' } {
+  if (gen.kind === 'unmeasured') return { kind: 'unmeasured', why: gen.why };
+  if (gen.kind !== 'state' || gen.state !== 'active') return { kind: 'measured', value: 'none' };
+  if (rows === 'not-read') return { kind: 'read-rows' };
+  if (!rows.ok) return { kind: 'unmeasured', why: rows.detail };
+  const first = rows.rows[0];
+  if (first === undefined) return { kind: 'measured', value: 'none' };
+  return { kind: 'measured', value: { roundId: first.roundId, kind: first.kind, questions: rows.rows.length, askedAt: first.askedAt } };
 }
 
 /** The nudge a row has besides the wake. A row of a kind this build does not know declares none: the wake covers it. */
@@ -175,4 +202,5 @@ export const isOverlordInboxKebab = (word: string): boolean =>
   || (INBOX_KINDS as readonly string[]).includes(word)
   || (ROW_NUDGES as readonly string[]).includes(word)
   || (INBOX_BEHIND_KINDS as readonly string[]).includes(word)
-  || word === INBOX_WAKE_SUBJECT;
+  || word === INBOX_WAKE_SUBJECT
+  || word === 'read-rows';
