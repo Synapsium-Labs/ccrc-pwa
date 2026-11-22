@@ -6,7 +6,7 @@ import {
   parseCatalogueCache, resolveAliases, serializeAliases,
 } from '../../../../shared/model-aliases.mjs';
 import type {
-  AliasClass, AliasRow, AliasSourceCause, Aliases, CacheReading, Launch, ResolveInput,
+  AliasClass, AliasRow, AliasSourceCause, Aliases, CacheReading, CacheSkip, Launch, ResolveInput,
 } from '../../../../shared/model-aliases.mjs';
 import type { ModelClass } from '../../../../shared/models.js';
 
@@ -30,3 +30,4 @@ export const window: 604_800_000 = CACHE_STALE_AFTER_MS;
 export const field: string = new AliasesInvalid('v', 'v is wrong').field;
 export const born: string = launch.bornAt;
 export const tag: 'current' | 'older' | 'invalid' = reading.format;
+export const skips: readonly CacheSkip[] = reading.format === 'current' ? reading.skipped : [];

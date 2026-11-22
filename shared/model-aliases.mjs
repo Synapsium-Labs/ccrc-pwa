@@ -48,12 +48,14 @@ function fetchedIso(v) {
 
 /** The row of one model: `efforts` is `[]` only when the row SAYS the model takes none (`thinking.type` "none"), the
  *  row's own list when it has one, and `null` when it carries no effort field at all. The two are never folded
- *  (D-8750). Throws a string naming the field when a field is present and unusable. */
+ *  (D-8750). `{row}`, or `{skip: {at, why}}` naming the field that breaks it when a field is present and unusable: one
+ *  row Claude Code added that this build cannot read is that row's loss, never the file's (cache-row-skip). */
 function readRow(m, f) {
-  if (!isObj(m)) throw new Error(`${f} is not an object`);
-  if (typeof m.id !== 'string') throw new Error(`${f}.id is not a string`);
+  const skip = (at, why) => ({ skip: { at, why } });
+  if (!isObj(m)) return skip(f, 'is not an object');
+  if (typeof m.id !== 'string') return skip(`${f}.id`, 'is not a string');
   const id = bareModelId(m.id);
-  if (!MODEL_ID_RE.test(id)) throw new Error(`${f}.id is not a model id`);
+  if (!MODEL_ID_RE.test(id)) return skip(`${f}.id`, 'is not a model id');
   const runtime = isObj(m.runtime) ? m.runtime : {};
   const thinking = isObj(m.thinking) ? m.thinking : {};
   let efforts = null;
@@ -62,23 +64,29 @@ function readRow(m, f) {
   let minVersion = null;
   if (m.min_claude_code_version !== undefined && m.min_claude_code_version !== null) {
     if (typeof m.min_claude_code_version !== 'string' || !VERSION_RE.test(m.min_claude_code_version)) {
-      throw new Error(`${f}.min_claude_code_version is not a version`);
+      return skip(`${f}.min_claude_code_version`, 'is not a version');
     }
     minVersion = m.min_claude_code_version;
   }
   return {
-    id,
-    label: isStr(m.name) ? m.name : null,
-    efforts,
-    defaultEffort: isStr(runtime.default_effort) ? runtime.default_effort : null,
-    minVersion,
+    row: {
+      id,
+      label: isStr(m.name) ? m.name : null,
+      efforts,
+      defaultEffort: isStr(runtime.default_effort) ? runtime.default_effort : null,
+      minVersion,
+    },
   };
 }
 
-/** `(json) => CacheReading`: one cache file's parsed JSON. `{format:'current', fetchedAt, aliasTargets, rows}` when it
- *  carries alias targets (a class its map does not name has a null target; a target with no row keeps the target and
- *  has no entry in `rows`), `{format:'older', fetchedAt}` when it does not (`fetchedAt` null when unreadable: the file
- *  is never a source), and `{format:'invalid', why}` for anything that is not a cache file or breaks a field. */
+/** `(json) => CacheReading`: one cache file's parsed JSON. `{format:'current', fetchedAt, aliasTargets, rows, skipped}`
+ *  when it carries alias targets (a class its map does not name has a null target; a target with no row keeps the
+ *  target and has no entry in `rows`), `{format:'older', fetchedAt}` when it does not (`fetchedAt` null when unreadable:
+ *  the file is never a source), and `{format:'invalid', why}` for anything that is not a cache file or breaks a field
+ *  of the FILE: not an object, no `catalog.config` object, a `fetchedAt` that is not a time, `models` not a list.
+ *  A field of ONE row or ONE class's target is read row by row (cache-row-skip): a row that breaks a field is left out
+ *  of `rows`, a class whose target is not a model id has a null target, and each is one `{at, why}` in `skipped`, in
+ *  file order (targets first), so every other row and class reads exactly as it would without it. */
 export function parseCatalogueCache(json) {
   if (!isObj(json)) return { format: 'invalid', why: 'a catalogue cache is a JSON object' };
   if (!isObj(json.catalog) || !isObj(json.catalog.config)) {
@@ -88,28 +96,27 @@ export function parseCatalogueCache(json) {
   const fetchedAt = fetchedIso(json.fetchedAt);
   if (!isObj(config.provider_alias_targets)) return { format: 'older', fetchedAt };
   if (fetchedAt === null) return { format: 'invalid', why: 'fetchedAt is not a time' };
+  const models = config.models === undefined ? [] : config.models;
+  if (!Array.isArray(models)) return { format: 'invalid', why: 'models is not a list' };
   const targets = config.provider_alias_targets;
+  const skipped = [];
   const aliasTargets = {};
-  try {
-    for (const c of CLASSES) {
-      const entry = targets[c];
-      const raw = isObj(entry) ? entry.default : undefined;
-      if (raw === undefined || raw === null) { aliasTargets[c] = null; continue; }
-      const id = typeof raw === 'string' ? bareModelId(raw) : '';
-      if (!MODEL_ID_RE.test(id)) throw new Error(`provider_alias_targets.${c}.default is not a model id`);
-      aliasTargets[c] = id;
+  for (const c of CLASSES) {
+    const entry = targets[c];
+    const raw = isObj(entry) ? entry.default : undefined;
+    const id = typeof raw === 'string' ? bareModelId(raw) : '';
+    if (raw !== undefined && raw !== null && !MODEL_ID_RE.test(id)) {
+      skipped.push({ at: `provider_alias_targets.${c}.default`, why: 'is not a model id' });
     }
-    const rows = new Map();
-    const models = config.models === undefined ? [] : config.models;
-    if (!Array.isArray(models)) throw new Error('models is not a list');
-    models.forEach((m, i) => {
-      const row = readRow(m, `models[${i}]`);
-      if (!rows.has(row.id)) rows.set(row.id, row);
-    });
-    return { format: 'current', fetchedAt, aliasTargets, rows };
-  } catch (e) {
-    return { format: 'invalid', why: e instanceof Error ? e.message : String(e) };
+    aliasTargets[c] = MODEL_ID_RE.test(id) ? id : null;
   }
+  const rows = new Map();
+  models.forEach((m, i) => {
+    const read = readRow(m, `models[${i}]`);
+    if (read.skip !== undefined) skipped.push(read.skip);
+    else if (!rows.has(read.row.id)) rows.set(read.row.id, read.row);
+  });
+  return { format: 'current', fetchedAt, aliasTargets, rows, skipped };
 }
 
 /** `(readings) => CacheReading | null`: the newest `current` reading by `fetchedAt` (the first of equals), `null` when

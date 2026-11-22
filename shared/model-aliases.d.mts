@@ -13,8 +13,17 @@ export interface AliasRow {
   minVersion: string | null;
 }
 
+/** One row or one class's target the cache reader left out (cache-row-skip): `at` the field that breaks it
+ *  (`models[3].id`, `models[3].min_claude_code_version`, `provider_alias_targets.<class>.default`), `why` what is wrong
+ *  with that field. */
+export interface CacheSkip { at: string; why: string }
+
 export type CacheReading =
-  | { format: 'current'; fetchedAt: string; aliasTargets: Record<ModelClass, string | null>; rows: Map<string, AliasRow> }
+  | {
+    format: 'current'; fetchedAt: string; aliasTargets: Record<ModelClass, string | null>; rows: Map<string, AliasRow>;
+    /** What the reader left out, in file order (targets first); `[]` when it read every row and every target. */
+    skipped: readonly CacheSkip[];
+  }
   | { format: 'older'; fetchedAt: string | null }
   | { format: 'invalid'; why: string };
 

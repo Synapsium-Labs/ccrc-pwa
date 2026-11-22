@@ -4,7 +4,10 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { aliasesSourceCause, bareModelId, resolveAliases, CACHE_STALE_AFTER_MS } from '../../shared/model-aliases.mjs';
+import {
+  aliasesSourceCause, bareModelId, parseCatalogueCache, resolveAliases, CACHE_STALE_AFTER_MS,
+} from '../../shared/model-aliases.mjs';
+import { CLASSES } from '../../shared/models.mjs';
 import type { AliasRow, Aliases, CacheReading, Launch, ResolveInput } from '../../shared/model-aliases.mjs';
 import type { ModelClass } from '../../shared/models.js';
 
@@ -30,6 +33,7 @@ const cache = (fetchedAt: string, targets: Partial<Record<ModelClass, string>>, 
   format: 'current', fetchedAt,
   aliasTargets: { haiku: null, sonnet: null, opus: null, fable: null, ...targets },
   rows: new Map(rows.map((r) => [r.id, r])),
+  skipped: [],
 });
 const launch = (cls: ModelClass, id: string, bornAt: string): Launch => ({ class: cls, id, bornAt });
 const resolve = (over: Partial<ResolveInput> = {}): Aliases => resolveAliases({
@@ -178,6 +182,50 @@ describe('resolveAliases: the lane build', () => {
       prior, own: [cache(T2, { opus: X2 }, rows)], laneVersion: '9.1.0', launches: [launch('opus', X1, T4)],
     });
     expect(a.classes.opus).toMatchObject({ id: X1, source: 'use', unlaunchable: null, unobserved: false, idSince: NOW_ISO });
+  });
+});
+
+describe('resolveAliases: one bad row or target in the cache (cache-row-skip)', () => {
+  /** The full fixture, read by the one reader, with `edit` applied to a copy of its config first. */
+  const catalogue = (edit: (config: any) => void = () => {}): CacheReading => {
+    const j = JSON.parse(readFileSync(path.join(here, 'fixtures', 'model-catalog', 'tok-fixture-cc.json'), 'utf8'));
+    edit(j.catalog.config);
+    return parseCatalogueCache(j);
+  };
+  const clean = resolve({ own: [catalogue()] });
+  const others = (skip: ModelClass) => CLASSES.filter((c) => c !== skip);
+
+  it('the clean file resolves every class from the cache', () => {
+    for (const c of CLASSES) expect(clean.classes[c].source).toBe('cache');
+    expect(aliasesSourceCause(clean)).toBeNull();
+  });
+
+  it('one bad id row among good ones: every class resolves from the cache exactly as before', () => {
+    const r = catalogue((c) => { c.models.splice(2, 0, { id: 'not a model id', name: 'Odd' }); });
+    expect(r.format === 'current' && r.skipped).toEqual([{ at: 'models[2].id', why: 'is not a model id' }]);
+    expect(resolve({ own: [r] })).toEqual(clean);
+  });
+
+  it('one beta minimum on a target row: that class reads as a target with no row, the others exactly as before', () => {
+    const r = catalogue((c) => { c.models[4].min_claude_code_version = '2.1.300-beta'; });
+    expect(r.format === 'current' && r.skipped)
+      .toEqual([{ at: 'models[4].min_claude_code_version', why: 'is not a version' }]);
+    const a = resolve({ own: [r] });
+    const noRow = resolve({ own: [catalogue((c) => { c.models.splice(4, 1); })] });
+    expect(a.classes.fable).toEqual(noRow.classes.fable);
+    expect(a.classes.fable).toMatchObject({ id: F1, source: 'cache', row: null, rowFrom: null, unlaunchable: null });
+    for (const c of others('fable')) expect(a.classes[c]).toEqual(clean.classes[c]);
+  });
+
+  it('a malformed target for one class: that class loses the cache source, the others resolve from it exactly as before', () => {
+    const r = catalogue((c) => { c.provider_alias_targets.opus.default = 'no good'; });
+    expect(r.format === 'current' && r.skipped)
+      .toEqual([{ at: 'provider_alias_targets.opus.default', why: 'is not a model id' }]);
+    const a = resolve({ own: [r] });
+    expect(a.classes.opus).toMatchObject({ id: null, source: null, cacheTarget: null, unobserved: true });
+    for (const c of others('opus')) expect(a.classes[c]).toEqual(clean.classes[c]);
+    expect(a.cache).toEqual(clean.cache);
+    expect(aliasesSourceCause(a)).toBeNull();
   });
 });
 
