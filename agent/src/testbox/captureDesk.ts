@@ -7,7 +7,8 @@
 // `queued` with its position, then `running`, then `ended` with the runner's verdict, or with none and why when the
 // runner could not judge (it answered no verdict, or threw). Every answer echoes the submission's build. The standing
 // refusals are judged again when a waiting capture starts (a symlink may have moved while it waited), and a capture that
-// waited too long to answer before the fleet agent stops waiting is ended with no verdict and a word, never run (F8).
+// waited too long to answer before the fleet agent stops waiting, by the target timings (`capture.ts#captureStartsLate`,
+// not yet the runner's own), is ended with no verdict and a word, never run (F8).
 import { CAPTURE_REFUSAL_SENTENCE, type CaptureAnswer, type CaptureRefusal, type CaptureStateWord, type CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
 import { CAPTURE_LATE_DETAIL, captureStartsLate, captureWrites, capturePaths } from './capture.js';
 import type { CaptureRun } from './captureRunner.js';
