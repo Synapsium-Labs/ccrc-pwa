@@ -2683,7 +2683,7 @@ export const MIGRATIONS: readonly string[] = [
   // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
   // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
   // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
-  // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
+  // `coord/claudeBuildsStore.ts`; its trust reader is `shared/claudeBuildTrust.ts#buildTrustOf` (and later the capture standing beside it). The seed is the four builds
   // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
   //
   // A NEW TABLE AND ITS SEED, NOTHING ELSE: an older build opening a file at `user_version 60` takes rule 3 (it warns, reads
@@ -4239,16 +4239,34 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 119: user_version 118 -> 119 ──────────────────────────────────────────
+  // A new Claude Code build needs no operator (Overlord, `docs/superpowers/programs/overlord/claude-release-unattended.md`,
+  // slug capture-retry-ceiling): `claude_builds.fails` counts a build's failed capture verdicts. Its one writer is
+  // `recordClaudeBuildVerdict`; its reader is `shared/claudeBuildTrust.ts#captureStandingOf`, which captures a failed build
+  // again by itself until the count reaches the ceiling, and only then asks the operator. The UPDATE counts the one
+  // failure every failed row already carries, so a build that failed before this entry is retried like any other.
+  // ONE COLUMN WITH A DEFAULT, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its reads and writes name their columns and never this one, and the default 0 covers
+  // every row it inserts (a new build's row then reads as never failed, which is what it is). The slot is the next free
+  // one by position on `main` (77a1fefe46 holds 118); whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 118, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claude_builds ADD COLUMN fails INTEGER NOT NULL DEFAULT 0;
+  UPDATE claude_builds SET fails = 1 WHERE capture = 'fail';
+  `,
+
+  // ── 120: user_version 119 -> 120 ──────────────────────────────────────────
   // The weekly unattended replay quiz's last word (run 3212; the operator's ruling of 2026-11-22: the quiz runs, records and
   // confirms itself): `continuity_quiz_status`, ONE row (`id` 1), what `deploy/history-quiz-unattended.mjs`'s last tick on
   // the fleet box reported through `POST /api/continuity/quiz-status`. ONE writer, `continuity/quizStore.ts#writeQuizStatus`;
   // `mailedKey` is the week and word the coordinator was last mailed for, so a stop word is mailed once a week. The Shadow
-  // lanes card reads it. The coordinator allotted slot 120 to this entry beside run 3213's 119; by position it is the next
-  // free one on this branch, and whoever lands second renumbers on absorbing main.
+  // lanes card reads it. The coordinator allotted slot 120 to this entry beside run 3213's 119, which landed first (#3170);
+  // it is the next free one by position on `main`.
   //
   // Review 3232 (fix round 1) adds the confirmation's binding to the record and the operator's withdraw to the runs table:
   // `confirmKeyHash` is the sha256 of the single-use key the record door answered an unattended record (NULL for a hand
-  // record and once used), so only the caller that recorded a run can have the server confirm it; `withdrawnAt` and
+  // record; a ruled run's hash is never read, because the ruler reads the key only while the run is pending), so only the caller that recorded a run can have the server confirm it; `withdrawnAt` and
   // `withdrawnBy` are the operator's withdraw of a wrong baseline (state `withdrawn`); `wokeAt` is when the coordinator was
   // mailed that this run became the baseline, keyed on the run so a lost wake is sent again on a later tick. The status row
   // gains the runner's trace and the waiting streak that mails `setup-account-gone` once.
@@ -4256,7 +4274,7 @@ export const MIGRATIONS: readonly string[] = [
   // A NEW TABLE and nullable columns on one existing table: an older build opening a file at this entry's version takes
   // rule 3 (it warns, reads as-is and migrates nothing), never names the new table, inserts runs by named columns (each new
   // one NULL) and reads an unknown state as no state. Every earlier entry is frozen. RE-MEASURE the slot
-  // before merge (it must print 118 before this entry is counted):
+  // before merge (it must print 119 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

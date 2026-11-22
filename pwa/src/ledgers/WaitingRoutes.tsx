@@ -38,7 +38,7 @@ import { programmeTitle } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { LEDGER_REFUSAL_TEXT } from '../lib/refusalWords';
 import { navigate, useLocation } from '../lib/router';
-import { PROGRAMME_FILTER_QUERY, ROUTES, programmeIsOpenable, programmePath, sessionPath, waitingPath } from '../lib/routes';
+import { PROGRAMME_FILTER_QUERY, ROUTES, callParamOf, programmeIsOpenable, programmePath, sessionPath, waitingPath } from '../lib/routes';
 import { FleetBanners } from '../screens/FleetScreen';
 import { useFrameSet } from '../skins/frame';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -117,6 +117,7 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
   const unavailable = useUnavailable(store, view !== null);
   const { search } = useLocation();
   const programme = new URLSearchParams(search).get(PROGRAMME_FILTER_QUERY);
+  const call = callParamOf(search);
   const now = Date.now();
   // Figure 8: live as today; else a box with no coordination database says so; else the copy, marked; else the waiting line.
   const source = unavailable === null ? listSource({ view, sessions }, saved, deviceRows) : null;
@@ -126,7 +127,7 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
   const itemHref = useItemHref(listed === null ? [] : listed.items.flatMap(itemTexts), listed, null);
   return (
     <WaitingScreen view={listed} sessions={drawn?.sessions ?? sessions} runs={runs} now={now} unavailable={unavailable}
-                   programme={programme} {...notCurrent} itemHref={itemHref}
+                   programme={programme} call={call} {...notCurrent} {...(drawn?.kind === 'saved-list' ? { listSaved: true } : {})} itemHref={itemHref}
                    onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
                    onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))}
                    onSeen={(id) => api.markCallSeen(id)} onOverturn={(body) => api.correctDigest(body)} />

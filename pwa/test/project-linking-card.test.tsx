@@ -880,7 +880,7 @@ describe('the hierarchy settings', () => {
 
 // D-8808 (wave 8, Task 8.6): the workspace picker, the candidates' workspaces and suggestions, an Overlord link as its call.
 import type { TeamCandidateWire } from '../../shared/linking';
-import { waitingPath } from '../src/lib/routes';
+import { callPath, waitingPath } from '../src/lib/routes';
 import { KEY_WRITE_WORDS, OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel } from '../src/fleet/linkingWords';
 
 const wsView = (id: string, name: string, keys: string[]): LinearWorkspaceView =>
@@ -1078,7 +1078,15 @@ describe('an Overlord link (D-8809, D-8808)', () => {
     const r = within(rowOf('project-a'));
     expect(r.getByText(teamLinkLine(l)!)).toBeInTheDocument();
     expect(teamLinkLine(l)).toContain(OVERLORD_LINK_WORDS.overturn);
-    const link = r.getByRole('link', { name: OVERLORD_LINK_WORDS.call });
+    const link = r.getByRole('link', { name: OVERLORD_LINK_WORDS.openCall });
+    expect(link.getAttribute('href')).toBe(callPath(7));
+  });
+
+  it('with no readable call id the link is the list, in the old words', async () => {
+    serveWorkspaces('unreadable');
+    const l = wire({ teamKey: 'AAA', teamLink: { source: 'overlord', teamName: 'Alpha', evidence: { kind: 'ticket-ids', ids: 9, of: 10 }, at: NOW } as never });
+    await mount([row('project-a', l)]);
+    const link = within(rowOf('project-a')).getByRole('link', { name: OVERLORD_LINK_WORDS.call });
     expect(link.getAttribute('href')).toBe(waitingPath());
   });
 });
