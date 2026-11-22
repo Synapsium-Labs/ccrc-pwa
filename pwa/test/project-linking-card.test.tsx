@@ -1,5 +1,8 @@
-// Settings › Security › Project linking (D-8147, linking-standard plan Task 8): one row per project from
-// `GET /api/projects`' `linking` cell. Neutral fixtures: `project-a`, `KEY`, `owner/repo`.
+// Settings › Integrations › Project linking (D-8147, linking-standard plan Task 8; the compact list,
+// D-8932): one row per project from `GET /api/projects`' `linking` cell. Neutral fixtures:
+// `project-a`, `KEY`, `owner/repo`. The card takes the section's one read of the project list (`useProjectList`), so the
+// mount below gives it one through a host, as `IntegrationsSection` does.
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ToastHost } from '@ccrc/ui';
@@ -15,6 +18,7 @@ import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT, MIGRATE_REFUSAL_TEXT, linking
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import type { LinearLegacyRow, LinearWorkspaceView } from '../../shared/linear';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
+import { useProjectList } from '../src/screens/settings/useProjectList';
 import { candidateLabel, candidateWhy, evidenceWords, linkingRowsOf, teamLinkLine } from '../src/fleet/linkingWords';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); supplied = null; suppliedLegacy = null; });
@@ -31,6 +35,11 @@ let answer: HierarchyAnswer | null = null;
 // The frame's one workspace list, handed to the card as a prop (`serveWorkspaces` sets it).
 let supplied: LinearWorkspaceView[] | null = null;
 let suppliedLegacy: LinearLegacyRow | null = null;
+/** The card over one read of the project list, as the Integrations section mounts it. */
+function Card(): React.ReactNode {
+  const list = useProjectList();
+  return <ProjectLinkingCard workspaces={supplied} legacy={suppliedLegacy} list={list} />;
+}
 // `null`: an older server (the route is absent, 404); an Error: a read that failed; an answer: the route's answer.
 const mount = async (projects: ProjectRow[], hier: HierarchyAnswer | Error | null = null): Promise<HTMLElement> => {
   serve(projects);
@@ -40,11 +49,12 @@ const mount = async (projects: ProjectRow[], hier: HierarchyAnswer | Error | nul
   else if (hier instanceof Error) read.mockRejectedValue(hier);
   else read.mockImplementation(async () => answer!);
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
-  await act(async () => { render(<><ToastHost /><ProjectLinkingCard workspaces={supplied} legacy={suppliedLegacy} /></>); });
-  return screen.findByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+  await act(async () => { render(<><ToastHost /><Card /></>); });
+  return screen.findByRole('region', { name: SETTINGS_CARDS.integrations.linking.title });
 };
 const rowOf = (name: string): HTMLElement => document.querySelector<HTMLElement>(`[data-linking-row="${name}"]`)!;
-const keyField = (name: string): HTMLInputElement => within(rowOf(name)).getByLabelText(LINKING_TEXT.teamKey) as HTMLInputElement;
+// A listed row's field is labelled "Team key"; an unlinked row's has no visible label and is named for its project.
+const keyField = (name: string): HTMLInputElement => within(rowOf(name)).getByLabelText(/^Team key( for .+)?$/) as HTMLInputElement;
 const overrideSelect = (name: string): HTMLSelectElement => within(rowOf(name)).getByLabelText(LINKING_TEXT.override) as HTMLSelectElement;
 
 describe('the card', () => {
@@ -230,7 +240,24 @@ const hrow = (project: string, over: Partial<HierarchyProjectRow> = {}): Hierarc
 });
 const hier = (projects: HierarchyProjectRow[]): HierarchyAnswer =>
   ({ ok: true, projects, coordinators: [{ id: 'coord-a', live: true }, { id: 'coord-b', live: false }] });
-const ownerSelect = (n: string): HTMLSelectElement => within(rowOf(n)).getByLabelText(HIERARCHY_TEXT.owner) as HTMLSelectElement;
+/** A coordinator select offers the live coordinators; the rest sit behind its "show" control (D-8932).
+ *  These helpers open it first, so a case can pick `coord-b`, which is not live; the cases of the select's own shape, at the
+ *  foot of this file, read it as it is drawn. */
+const showNotLive = (scope: HTMLElement): void => {
+  const more = scope.querySelector<HTMLElement>('[data-linking-more][aria-expanded="false"]');
+  if (more !== null) fireEvent.click(more);
+};
+const ownerSelect = (n: string): HTMLSelectElement => {
+  showNotLive(rowOf(n).querySelector<HTMLElement>('.linking-owner') ?? rowOf(n));
+  return within(rowOf(n)).getByLabelText(HIERARCHY_TEXT.owner) as HTMLSelectElement;
+};
+const allPick = async (region: HTMLElement): Promise<HTMLSelectElement> => {
+  const select = await within(region).findByLabelText(HIERARCHY_TEXT.allPick) as HTMLSelectElement;
+  showNotLive(region.querySelector<HTMLElement>('[data-linking-all]')!);
+  return select;
+};
+/** The row's state cell: the state is also said on the row's one line, so a case about the cell asks the cell. */
+const stateCell = (n: string): HTMLElement => rowOf(n).querySelector<HTMLElement>('[data-linking-state]')!;
 
 describe('the hierarchy settings', () => {
   it('the empty owner option names the default and whether it is live', async () => {
@@ -281,7 +308,7 @@ describe('the hierarchy settings', () => {
     const link = await within(rowOf('project-a')).findByRole('link', { name: HIERARCHY_TEXT.mapWaiting });
     expect(link.getAttribute('href')).toBe(itemPath(42));
     expect(within(rowOf('project-a')).getByText('3 inbound issues wait for an owner')).toBeInTheDocument();
-    expect(await within(rowOf('project-b')).findByText('Migrated on 2026-11-12')).toBeInTheDocument();
+    await waitFor(() => expect(stateCell('project-b')).toHaveTextContent('Migrated on 2026-11-12'));
   });
 
   it('D-8797: the Upkeep link shows with a team key, nothing waiting or not; the inbound count only when issues wait; no key shows neither', async () => {
@@ -356,7 +383,7 @@ describe('the hierarchy settings', () => {
     expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
     expect(within(rowOf('project-a')).queryByText(LINKING_ROUTE_TEXT['write-failed'])).toBeNull();
     vi.spyOn(api, 'ownerForAll').mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
-    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.change(await allPick(region), { target: { value: 'coord-b' } });
     fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
     fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
     await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(1));
@@ -366,9 +393,9 @@ describe('the hierarchy settings', () => {
 
   it('I2: a 502 answer to owner-for-all locks every row behind a read newer than the write; a 409 unlocks at once', async () => {
     await twoRows();
-    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.integrations.linking.title });
     const apply = async (n: number): Promise<void> => {
-      fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+      fireEvent.change(await allPick(region), { target: { value: 'coord-b' } });
       fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
       fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
       await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(n));
@@ -393,7 +420,7 @@ describe('the hierarchy settings', () => {
   it('making one coordinator the owner of every project asks first', async () => {
     const region = await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
     const all = vi.spyOn(api, 'ownerForAll').mockResolvedValue({ ok: true, projects: 1 });
-    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.change(await allPick(region), { target: { value: 'coord-b' } });
     fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
     expect(all).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
@@ -585,8 +612,8 @@ describe('the hierarchy settings', () => {
     const held1 = held<HierarchyAnswer>();
     const stored = hier([hrow('project-a', { linearOwner: 'coord-b' }), hrow('project-b', { teamKey: 'BBB', linearOwner: 'coord-b' })]);
     vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
-    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
-    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.integrations.linking.title });
+    fireEvent.change(await allPick(region), { target: { value: 'coord-b' } });
     fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
     fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
     await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
@@ -605,8 +632,8 @@ describe('the hierarchy settings', () => {
     await twoRows();
     vi.spyOn(api, 'ownerForAll').mockResolvedValue({ ok: true, projects: 2 });
     vi.mocked(api.hierarchy).mockRejectedValue(new TypeError('offline'));
-    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
-    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.integrations.linking.title });
+    fireEvent.change(await allPick(region), { target: { value: 'coord-b' } });
     fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
     fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
     expect(await screen.findByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
@@ -675,8 +702,8 @@ describe('the hierarchy settings', () => {
     await twoRows();
     const inFlight = held<{ ok: true; projects: number }>();
     vi.spyOn(api, 'ownerForAll').mockImplementation(() => inFlight.promise);
-    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
-    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.integrations.linking.title });
+    fireEvent.change(await allPick(region), { target: { value: 'coord-b' } });
     fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
     fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
     await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(1));
@@ -754,6 +781,8 @@ describe('the hierarchy settings', () => {
   it('a project missing from the hierarchy answer is drawn at the server defaults, and a write sends them with the change', async () => {
     await mount([row('project-a', wire())], hier([]));
     expect(await within(rowOf('project-a')).findByText('Default: none live')).toBeInTheDocument();
+    // An unlinked row keeps everything but its key behind "More settings".
+    fireEvent.click(rowOf('project-a').querySelector<HTMLElement>('[data-linking-rest]')!);
     expect(ownerSelect('project-a').value).toBe('');
     expect(initiativesBox('project-a')).toBeChecked();
     expect(within(rowOf('project-a')).getByText('Not migrated')).toBeInTheDocument();
@@ -771,7 +800,7 @@ describe('the hierarchy settings', () => {
 
   it('a stamp the clock cannot place says no date rather than throwing', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state: 'migrated', stateAt: 1e20 })]));
-    expect(await within(rowOf('project-a')).findByText('Migrated')).toBeInTheDocument();
+    await waitFor(() => expect(within(stateCell('project-a')).getByText('Migrated')).toBeInTheDocument());
   });
 
   it('the all-projects act is not drawn while the project list is empty', async () => {
@@ -1161,5 +1190,603 @@ describe('Reshape in Linear', () => {
     expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
     await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
     expect(document.body.textContent).not.toContain('box text');
+  });
+});
+
+// The compact list (D-8932): one line per linked project, a row that waits for the operator open and
+// flagged with its reason, every project with no team in one group, and coordinator selects that offer the live ones first.
+// The kinds, the reasons and the words are `linkingWords.ts`'s and `hierarchyWords.ts`'s (linking-list-words.test.ts);
+// these cases hold what the card DRAWS for each.
+import { LINKING_ROW_WORDS, linkingCountsWords, unlinkedGroupWords } from '../src/fleet/linkingWords';
+import { COORDINATOR_SHORT_LIST, NOT_LIVE_WORDS, inboundUnownedWords, mapWaitingWords, owningUnchosenWords } from '../src/fleet/hierarchyWords';
+import type { ProjectList, ProjectListRead } from '../src/screens/settings/useProjectList';
+
+describe('the compact list', () => {
+  const fold = (n: string): HTMLDetailsElement => rowOf(n).querySelector<HTMLDetailsElement>(':scope > details')!;
+  const line = (n: string): HTMLElement => fold(n).querySelector<HTMLElement>(':scope > summary')!;
+  const kindOf = (n: string): string | null => rowOf(n).getAttribute('data-linking-kind');
+  const flag = (n: string): HTMLElement | null => rowOf(n).querySelector<HTMLElement>('[data-linking-flag]');
+  const reasons = (n: string): string[] => [...rowOf(n).querySelectorAll('[data-linking-decision]')].map((e) => e.textContent ?? '');
+  const group = (): HTMLButtonElement | null => document.querySelector<HTMLButtonElement>('[data-linking-group] button');
+  const order = (): string[] => [...document.querySelectorAll('.linking-list > li')]
+    .map((e) => e.getAttribute('data-linking-row') ?? (e.hasAttribute('data-linking-group') ? '(group)' : '?'));
+  const AUTO = { source: 'auto', teamName: 'Alpha', evidence: { kind: 'ticket-ids', ids: 12, of: 12 }, at: NOW } as const;
+  const QUIET = measured({ template: 'present' });
+  /** "More settings": the control, and the rest of the form it shows. */
+  const rest = (n: string): HTMLButtonElement => rowOf(n).querySelector<HTMLButtonElement>('[data-linking-rest]')!;
+  const restBody = (n: string): HTMLElement => document.getElementById(rest(n).getAttribute('aria-controls')!)!;
+  /** What Tab reaches in a row as it is drawn: every control that is not inside something hidden, in the page's order. */
+  const stops = (n: string): string[] => [...rowOf(n).querySelectorAll<HTMLElement>('summary, input, select, button, a[href], [role="checkbox"]')]
+    .filter((e) => e.closest('[hidden]') === null && !(e as HTMLButtonElement).disabled)
+    .map((e) => (e.tagName === 'SUMMARY' ? 'line' : e.tagName === 'INPUT' ? 'key' : e.tagName === 'SELECT' ? `select:${(e as HTMLSelectElement).labels[0]?.textContent ?? ''}` : (e.textContent ?? '')));
+  const counts = (): string | null => document.querySelector('[data-linking-counts]')?.textContent ?? null;
+
+  it('a linked project is one line, shut: its name, its team by key and name, how it was linked, its owner and its state', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA', teamLink: AUTO, measured: QUIET }))], hier([hrow('project-a')]));
+    await waitFor(() => expect(line('project-a')).toHaveTextContent('owner: coord-a'));
+    expect(kindOf('project-a')).toBe('linked');
+    expect(fold('project-a').open, 'one line until the operator opens it').toBe(false);
+    expect([...line('project-a').querySelectorAll('.linking-line > *')].map((e) => e.textContent))
+      .toEqual(['project-a', 'AAA · Alpha, linked automatically', 'owner: coord-a', 'Not migrated']);
+    expect(counts()).toBe(linkingCountsWords({ decisions: 0, linked: 1, unlinked: 0 }));
+    expect(flag('project-a')).toBeNull();
+    expect(reasons('project-a')).toEqual([]);
+    expect(group(), 'no project is unlinked, so there is no group').toBeNull();
+  });
+
+  it('the line opens to every control the row had: nothing is removed', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    fireEvent.click(line('project-a'));
+    expect(fold('project-a').open).toBe(true);
+    const body = within(fold('project-a'));
+    expect(body.getByLabelText(LINKING_TEXT.teamKey)).toBeInTheDocument();
+    expect(body.getByRole('button', { name: LINKING_TEXT.save })).toBeInTheDocument();
+    expect(body.getByLabelText(LINKING_TEXT.override)).toBeInTheDocument();
+    expect(body.getByRole('button', { name: LINKING_TEXT.openTemplate })).toBeInTheDocument();
+    expect(body.getByLabelText(HIERARCHY_TEXT.owner)).toBeInTheDocument();
+    expect(body.getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeInTheDocument();
+    expect(body.getByRole('button', { name: HIERARCHY_TEXT.reshape })).toBeInTheDocument();
+    expect(body.getByRole('link', { name: HIERARCHY_TEXT.upkeep })).toBeInTheDocument();
+  });
+
+  it('a suggested team waiting: the row is listed, open and flagged, with the reason in words and its one-tap Link', async () => {
+    const candidates: TeamCandidateWire[] = [{ key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' } }];
+    await mount([row('project-a', wire({ teamKey: 'BBB' })), row('project-b', wire({ teamCandidates: candidates })), row('project-c', wire())]);
+    expect(kindOf('project-b')).toBe('decision');
+    expect(fold('project-b').open).toBe(true);
+    expect(flag('project-b')).toHaveTextContent(LINKING_ROW_WORDS.flag);
+    expect(reasons('project-b')).toEqual(['Team AAA (Alpha) is suggested for this project. Link it, or type another key.']);
+    expect(line('project-b')).toHaveTextContent(LINKING_ROW_WORDS.notLinked);
+    expect(within(rowOf('project-b')).getByRole('button', { name: 'Link AAA' })).toBeInTheDocument();
+    // It comes first, before the linked rows, never in the group; the head of the card counts each kind once.
+    expect(order()).toEqual(['project-b', 'project-a', '(group)', 'project-c']);
+    expect(counts()).toBe('1 needs a decision · 1 linked · 1 not linked');
+    expect(fold('project-a').open, 'a row with nothing to decide stays one line').toBe(false);
+    expect(flag('project-a')).toBeNull();
+  });
+
+  it('linking the suggested team settles the row: the flag and the reason go, and it stays open on its answer', async () => {
+    const candidates: TeamCandidateWire[] = [{ key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' } }];
+    await mount([row('project-a', wire({ teamCandidates: candidates }))]);
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', teamLink: { source: 'manual', at: NOW } }) });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: 'Link AAA' }));
+    await waitFor(() => expect(kindOf('project-a')).toBe('linked'));
+    expect(flag('project-a')).toBeNull();
+    expect(reasons('project-a')).toEqual([]);
+    expect(fold('project-a').open).toBe(true);
+    expect(within(rowOf('project-a')).getByText(LINKING_TEXT.saved)).toBeInTheDocument();
+    expect(line('project-a')).toHaveTextContent('AAA, set by hand');
+  });
+
+  it('a key that exists in two workspaces: open and flagged, the reason says to choose, and the picker is there', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
+    await mount([row('project-a', wire({ teamKey: 'AAA', teamWorkspace: null })), row('project-b', wire({ teamKey: 'AAA', teamWorkspace: 'id-b' }))]);
+    expect(kindOf('project-a')).toBe('decision');
+    expect(fold('project-a').open).toBe(true);
+    expect(flag('project-a')).not.toBeNull();
+    expect(reasons('project-a')).toEqual(['Team key AAA exists in more than one Linear workspace. Choose its workspace, then Save.']);
+    expect(picker('project-a')).not.toBeNull();
+    // The row that has stored its workspace waits for nothing.
+    expect(kindOf('project-b')).toBe('linked');
+    expect(flag('project-b')).toBeNull();
+    expect(fold('project-b').open).toBe(false);
+  });
+
+  it('two projects share a key and neither owns it: both are open and flagged; ticking Owning project on one settles both', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' })), row('project-c', wire({ teamKey: 'BBB' }))],
+      hier([hrow('project-a'), hrow('project-b'), hrow('project-c', { teamKey: 'BBB' })]));
+    await waitFor(() => expect(kindOf('project-a')).toBe('decision'));
+    expect(kindOf('project-b')).toBe('decision');
+    expect(kindOf('project-c')).toBe('linked');
+    expect(fold('project-a').open, 'it opened when the hierarchy answer said so').toBe(true);
+    expect(fold('project-b').open).toBe(true);
+    expect(reasons('project-a')).toEqual([owningUnchosenWords({ key: 'AAA', others: ['project-b'] })]);
+    expect(reasons('project-b')).toEqual([owningUnchosenWords({ key: 'AAA', others: ['project-a'] })]);
+    vi.spyOn(api, 'saveHierarchy').mockImplementation(async () => {
+      answer = hier([hrow('project-a', { ownsTeam: true }), hrow('project-b'), hrow('project-c', { teamKey: 'BBB' })]);
+      return { ok: true, settings: { initiatives: 'on', linearOwner: null, ownsTeam: true } };
+    });
+    fireEvent.click(within(rowOf('project-a')).getByRole('checkbox', { name: HIERARCHY_TEXT.owning }));
+    await waitFor(() => expect(kindOf('project-a')).toBe('linked'));
+    expect(kindOf('project-b')).toBe('linked');
+    expect(flag('project-a')).toBeNull();
+    expect(flag('project-b')).toBeNull();
+    expect(fold('project-a').open, 'the row that was acted on keeps its answer in view').toBe(true);
+    expect(within(rowOf('project-a')).getByText(LINKING_TEXT.saved)).toBeInTheDocument();
+  });
+
+  it('a row that starts to wait after it was drawn opens then: the hierarchy answer lands late', async () => {
+    serve([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))]);
+    let land!: (a: HierarchyAnswer) => void;
+    vi.spyOn(api, 'hierarchy').mockReturnValue(new Promise<HierarchyAnswer>((resolve) => { land = resolve; }));
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    await act(async () => { render(<><ToastHost /><Card /></>); });
+    await waitFor(() => expect(rowOf('project-a')).not.toBeNull());
+    // Drawn from the project list alone: nothing says the key is shared yet, so each is one line.
+    expect(kindOf('project-a')).toBe('linked');
+    expect(fold('project-a').open).toBe(false);
+    await act(async () => { land(hier([hrow('project-a'), hrow('project-b')])); });
+    await waitFor(() => expect(kindOf('project-a')).toBe('decision'));
+    expect(fold('project-a').open, 'it opens when it starts to wait').toBe(true);
+    expect(fold('project-b').open).toBe(true);
+    expect(flag('project-a')).not.toBeNull();
+  });
+
+  it('a map waiting: open and flagged, the reason in words, and the link to the item in the row', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state: 'map-waiting', itemId: 42 })]));
+    await waitFor(() => expect(kindOf('project-a')).toBe('decision'));
+    expect(fold('project-a').open).toBe(true);
+    expect(flag('project-a')).not.toBeNull();
+    expect(reasons('project-a')).toEqual([mapWaitingWords('AAA')]);
+    expect(within(rowOf('project-a')).getByRole('link', { name: HIERARCHY_TEXT.mapWaiting }).getAttribute('href')).toBe(itemPath(42));
+  });
+
+  it('projects with no team and nothing to decide fold into one counted group, shut, after the listed rows', async () => {
+    await mount([row('project-a', wire()), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]);
+    expect(order()).toEqual(['project-b', '(group)', 'project-a', 'project-c']);
+    expect(group()).toHaveTextContent(unlinkedGroupWords(2));
+    expect(unlinkedGroupWords(2)).toBe('2 projects not linked to Linear');
+    expect(group()!.getAttribute('aria-expanded')).toBe('false');
+    for (const n of ['project-a', 'project-c']) {
+      expect(kindOf(n)).toBe('unlinked');
+      expect(rowOf(n).hidden, n).toBe(true);
+      expect(within(rowOf(n)).queryByRole('button', { name: LINKING_TEXT.save }), `${n}: nothing in a shut group is reachable`).toBeNull();
+    }
+    expect(rowOf('project-b').hidden).toBe(false);
+    fireEvent.click(group()!);
+    expect(group()!.getAttribute('aria-expanded')).toBe('true');
+    for (const n of ['project-a', 'project-c']) {
+      expect(rowOf(n).hidden, n).toBe(false);
+      expect(within(rowOf(n)).getByRole('button', { name: LINKING_TEXT.save })).toBeInTheDocument();
+    }
+    fireEvent.click(group()!);
+    expect(rowOf('project-a').hidden).toBe(true);
+  });
+
+  it('an unlinked row is a plain line: its name, the key field and Save; the rest sits behind More settings', async () => {
+    await mount([row('project-a', wire())], hier([hrow('project-a', { teamKey: null })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const plain = rowOf('project-a').querySelector<HTMLElement>('.linking-plain')!;
+    expect(within(plain).getByText('project-a')).toBeInTheDocument();
+    expect(within(plain).getByRole('textbox', { name: LINKING_ROW_WORDS.keyFor('project-a') })).toBeInTheDocument();
+    expect(within(plain).getByRole('button', { name: LINKING_TEXT.save })).toBeInTheDocument();
+    expect(within(plain).queryByLabelText(LINKING_TEXT.override), 'only the key is on the plain line').toBeNull();
+    // The line: the key field, Save and "More settings", and nothing else until that is opened.
+    expect(stops('project-a')).toEqual(['key', LINKING_TEXT.save, LINKING_ROW_WORDS.moreShort]);
+    expect(within(plain).getByRole('button', { name: LINKING_ROW_WORDS.moreFor('project-a') })).toBe(rest('project-a'));
+    expect(LINKING_ROW_WORDS.moreFor('project-a'), 'the name holds the word that is drawn').toContain(LINKING_ROW_WORDS.moreShort);
+    expect(rest('project-a').getAttribute('aria-expanded')).toBe('false');
+    expect(restBody('project-a').hidden).toBe(true);
+    expect(within(rowOf('project-a')).queryByRole('combobox', { name: LINKING_TEXT.override }), 'hidden, so not reachable').toBeNull();
+    fireEvent.click(rest('project-a'));
+    expect(rest('project-a').getAttribute('aria-expanded')).toBe('true');
+    expect(restBody('project-a').hidden).toBe(false);
+    expect(within(restBody('project-a')).getByRole('combobox', { name: LINKING_TEXT.override })).toBeInTheDocument();
+    expect(within(restBody('project-a')).getByRole('combobox', { name: HIERARCHY_TEXT.owner })).toBeInTheDocument();
+    expect(flag('project-a')).toBeNull();
+    fireEvent.click(rest('project-a'));
+    expect(restBody('project-a').hidden).toBe(true);
+  });
+
+  it('the unlinked list says "Team key" once: no row repeats the label, and each field is named for its project', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire()), row('project-c', wire())]);
+    expect(document.querySelector('[data-linking-hint]'), 'nothing is said while the group is shut').toBeNull();
+    fireEvent.click(group()!);
+    expect(document.querySelectorAll('[data-linking-hint]')).toHaveLength(1);
+    expect(document.querySelector('[data-linking-hint]')).toHaveTextContent(LINKING_ROW_WORDS.unlinkedHint);
+    expect(LINKING_ROW_WORDS.unlinkedHint).toContain(LINKING_TEXT.teamKey);
+    for (const n of ['project-b', 'project-c']) {
+      expect(rowOf(n).querySelector('.linking-plain label'), `${n}: no label of its own on the line`).toBeNull();
+      expect(within(rowOf(n)).getByRole('textbox', { name: `Team key for ${n}` })).toBe(keyField(n));
+    }
+    // A listed row keeps its visible label.
+    fireEvent.click(line('project-a'));
+    expect(within(rowOf('project-a')).getByLabelText(LINKING_TEXT.teamKey)).toBe(keyField('project-a'));
+  });
+
+  it('the group starts open only when it is the whole card, and does not shut under a row once the first key is saved', async () => {
+    await mount([row('project-a', wire()), row('project-b', wire())]);
+    expect(group()!.getAttribute('aria-expanded'), 'nothing is linked: the list of keys to type is shown').toBe('true');
+    expect(rowOf('project-b').hidden).toBe(false);
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', teamLink: { source: 'manual', at: NOW } }) });
+    fireEvent.change(keyField('project-a'), { target: { value: 'AAA' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(kindOf('project-a')).toBe('linked'));
+    expect(order()).toEqual(['project-a', '(group)', 'project-b']);
+    expect(group()).toHaveTextContent(unlinkedGroupWords(1));
+    expect(group()!.getAttribute('aria-expanded'), 'a listed row now exists, and the group stays as it was').toBe('true');
+    expect(rowOf('project-b').hidden).toBe(false);
+  });
+
+  it('a key saved in the group moves the row up among the linked ones, open on its answer, with focus on its line', async () => {
+    await mount([row('project-a', wire({ teamKey: 'BBB' })), row('project-b', wire())], hier([hrow('project-a', { teamKey: 'BBB' }), hrow('project-b', { teamKey: null })]));
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    fireEvent.click(group()!);
+    const before = rowOf('project-b');
+    vi.spyOn(api, 'saveLinking').mockImplementation(async () => {
+      answer = hier([hrow('project-a', { teamKey: 'BBB' }), hrow('project-b', { teamKey: 'CCC' })]);
+      return { ok: true, linking: wire({ teamKey: 'CCC', teamLink: { source: 'manual', at: NOW } }) };
+    });
+    fireEvent.change(keyField('project-b'), { target: { value: 'ccc' } });
+    fireEvent.click(within(rowOf('project-b')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(kindOf('project-b')).toBe('linked'));
+    expect(order()).toEqual(['project-a', 'project-b']);
+    expect(rowOf('project-b'), 'the same row, moved: its state came with it').toBe(before);
+    await waitFor(() => expect(fold('project-b').open).toBe(true));
+    expect(within(rowOf('project-b')).getByText(LINKING_TEXT.saved)).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(line('project-b')));
+  });
+
+  it('a key cleared on a linked row moves it into the group, which opens on it, with its answer and focus on its key field', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]);
+    expect(group()!.getAttribute('aria-expanded')).toBe('false');
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamLink: { source: 'manual', at: NOW } }) });
+    fireEvent.change(keyField('project-a'), { target: { value: '' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(kindOf('project-a')).toBe('unlinked'));
+    expect(order()).toEqual(['project-b', '(group)', 'project-a', 'project-c']);
+    expect(group()!.getAttribute('aria-expanded')).toBe('true');
+    expect(rowOf('project-a').hidden).toBe(false);
+    expect(within(rowOf('project-a')).getByText(LINKING_TEXT.saved)).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(keyField('project-a')));
+  });
+
+  it('a row that a read moves, not its own write, is left as it was: not opened, and focus is not taken', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire())]);
+    expect(rowOf('project-b').hidden).toBe(true);
+    // project-a's write is answered 502, so the list is read again; that read finds project-b linked by someone else.
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(502, { ok: false }));
+    serve([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB', teamLink: AUTO }))]);
+    const save = within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save });
+    save.focus();
+    fireEvent.click(save);
+    await waitFor(() => expect(kindOf('project-b')).toBe('linked'));
+    expect(fold('project-b').open).toBe(false);
+    expect(document.activeElement).not.toBe(line('project-b'));
+    expect(group()).toBeNull();
+  });
+
+  // The three rules of a row moved by a write, each held apart (a mutation of any one alone turns its case red).
+  /** The card over a list the case drives by hand: its rows, and a `refresh` that settles when the case says. */
+  const driven = async (first: ProjectRow[]): Promise<{ set: (rows: ProjectRow[]) => void; settle: () => void; refreshes: () => number }> => {
+    let setRead!: (r: ProjectListRead) => void;
+    let settle: () => void = () => undefined;
+    let refreshes = 0;
+    function Host(): React.ReactNode {
+      const [read, set] = useState<ProjectListRead>({ kind: 'read', rows: first });
+      setRead = set;
+      const list: ProjectList = {
+        read,
+        stored: (project, linking) => set((r) => (r.kind !== 'read' ? r : { kind: 'read', rows: r.rows.map((p) => (p.name === project ? { ...p, linking } : p)) })),
+        refresh: () => { refreshes++; return new Promise<void>((resolve) => { settle = resolve; }); },
+      };
+      return <ProjectLinkingCard workspaces={null} list={list} />;
+    }
+    vi.spyOn(api, 'hierarchy').mockRejectedValue(new ApiError(404, { ok: false }));
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    await act(async () => { render(<><ToastHost /><Host /></>); });
+    return { set: (rows) => setRead({ kind: 'read', rows }), settle: () => settle(), refreshes: () => refreshes };
+  };
+
+  it('a refused key write is not a move of this row: a later read that moves it neither opens the group nor takes focus', async () => {
+    const list = await driven([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]);
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(400, { ok: false, error: 'bad-request' }));
+    const save = within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save });
+    save.focus();
+    fireEvent.click(save);
+    await within(rowOf('project-a')).findByRole('status');
+    // Someone else clears project-a's key; the list is read again and the row moves into the group.
+    await act(async () => { list.set([row('project-a', wire()), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]); });
+    expect(kindOf('project-a')).toBe('unlinked');
+    expect(group()!.getAttribute('aria-expanded'), 'the group is not opened for a move the operator did not make').toBe('false');
+    expect(rowOf('project-a').hidden).toBe(true);
+    expect(document.activeElement).not.toBe(keyField('project-a'));
+  });
+
+  it('a write that saved without moving the row is spent: a later read that moves it neither opens the group nor takes focus', async () => {
+    const list = await driven([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]);
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', override: 'public', mode: 'public' }) });
+    fireEvent.change(overrideSelect('project-a'), { target: { value: 'public' } });
+    await within(rowOf('project-a')).findByText(LINKING_TEXT.saved);
+    expect(kindOf('project-a'), 'the override changed nothing about where the row is').toBe('linked');
+    await act(async () => { list.set([row('project-a', wire({ override: 'public', mode: 'public' })), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]); });
+    expect(kindOf('project-a')).toBe('unlinked');
+    expect(group()!.getAttribute('aria-expanded')).toBe('false');
+    expect(rowOf('project-a').hidden).toBe(true);
+    expect(document.activeElement).not.toBe(keyField('project-a'));
+  });
+
+  it('a row its own write moved takes focus only once its lock lifts: the list re-read is still in flight when the row moves', async () => {
+    const list = await driven([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]);
+    // Clearing the key is answered 502: the write may have landed, so the list is read again and the row stays locked.
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(502, { ok: false }));
+    fireEvent.change(keyField('project-a'), { target: { value: '' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(list.refreshes()).toBe(1));
+    // The rows land (the key was cleared) before the re-read settles: the row moves while its field is still locked.
+    await act(async () => { list.set([row('project-a', wire()), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire())]); });
+    expect(kindOf('project-a')).toBe('unlinked');
+    expect(group()!.getAttribute('aria-expanded'), 'the group opened on the row').toBe('true');
+    expect(keyField('project-a'), 'still locked behind the re-read').toBeDisabled();
+    expect(document.activeElement).not.toBe(keyField('project-a'));
+    await act(async () => { list.settle(); });
+    await waitFor(() => expect(keyField('project-a')).not.toBeDisabled());
+    await waitFor(() => expect(document.activeElement, 'focus waited for the lock').toBe(keyField('project-a')));
+  });
+});
+
+describe('a row that needs a decision: the control that settles it sits under its reason', () => {
+  const fold = (n: string): HTMLDetailsElement => rowOf(n).querySelector<HTMLDetailsElement>(':scope > details')!;
+  const line = (n: string): HTMLElement => fold(n).querySelector<HTMLElement>(':scope > summary')!;
+  const kindOf = (n: string): string | null => rowOf(n).getAttribute('data-linking-kind');
+  const flag = (n: string): HTMLElement | null => rowOf(n).querySelector<HTMLElement>('[data-linking-flag]');
+  const rest = (n: string): HTMLButtonElement => rowOf(n).querySelector<HTMLButtonElement>('[data-linking-rest]')!;
+  const restBody = (n: string): HTMLElement => document.getElementById(rest(n).getAttribute('aria-controls')!)!;
+  const slot = (n: string, control: string): HTMLElement | null => rowOf(n).querySelector<HTMLElement>(`[data-linking-control="${control}"]`);
+  const slots = (n: string): Array<string | null> => [...rowOf(n).querySelectorAll('[data-linking-control]')].map((e) => e.getAttribute('data-linking-control'));
+  const order = (): string[] => [...document.querySelectorAll('.linking-list > li')]
+    .map((e) => e.getAttribute('data-linking-row') ?? (e.hasAttribute('data-linking-group') ? '(group)' : '?'));
+  /** What Tab reaches in a row as it is drawn: every enabled control that is not inside something hidden, in the page's order. */
+  const stops = (n: string): string[] => [...rowOf(n).querySelectorAll<HTMLElement>('summary, input, select, button, a[href], [role="checkbox"]')]
+    .filter((e) => e.closest('[hidden]') === null && !(e as HTMLButtonElement).disabled)
+    .map((e) => (e.tagName === 'SUMMARY' ? 'line' : e.tagName === 'INPUT' ? 'key' : e.tagName === 'SELECT' ? `select:${(e as HTMLSelectElement).labels[0]?.textContent ?? ''}` : (e.textContent ?? '')));
+  const NONE = { id: null, source: 'none', live: false } as const;
+
+  it('a shared key with no owning project: the Owning project box is the first control in the row, the rest waits behind More settings', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))], hier([hrow('project-a'), hrow('project-b')]));
+    await waitFor(() => expect(kindOf('project-a')).toBe('decision'));
+    expect(slots('project-a')).toEqual(['owning']);
+    const s = slot('project-a', 'owning')!;
+    expect(s.querySelector('[data-linking-decision="owning"]')).toHaveTextContent(owningUnchosenWords({ key: 'AAA', others: ['project-b'] }));
+    expect(within(s).getByRole('checkbox', { name: HIERARCHY_TEXT.owning })).toBeInTheDocument();
+    // Three stops, where the whole form was eleven: the line, the box the reason names, and "More settings".
+    expect(stops('project-a')).toEqual(['line', HIERARCHY_TEXT.owning, LINKING_ROW_WORDS.more]);
+    expect(rest('project-a').getAttribute('aria-expanded')).toBe('false');
+    expect(restBody('project-a').hidden).toBe(true);
+    // The box is drawn once: it is not also in the form behind "More settings", and everything else is.
+    expect(within(rowOf('project-a')).getAllByRole('checkbox', { name: HIERARCHY_TEXT.owning, hidden: true })).toHaveLength(1);
+    fireEvent.click(rest('project-a'));
+    const body = within(restBody('project-a'));
+    expect(body.getByLabelText(LINKING_TEXT.teamKey)).toBeInTheDocument();
+    expect(body.getByLabelText(LINKING_TEXT.override)).toBeInTheDocument();
+    expect(body.getByLabelText(HIERARCHY_TEXT.owner)).toBeInTheDocument();
+    expect(body.getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeInTheDocument();
+    expect(body.queryByRole('checkbox', { name: HIERARCHY_TEXT.owning })).toBeNull();
+    expect(body.getByRole('button', { name: HIERARCHY_TEXT.reshape })).toBeInTheDocument();
+  });
+
+  it('a suggested team for a project with no team: the key cell is under the reason; owner, initiatives and state are not drawn until asked for', async () => {
+    const candidates: TeamCandidateWire[] = [{ key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' } }];
+    await mount([row('project-a', wire({ teamCandidates: candidates }))], hier([hrow('project-a', { teamKey: null })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(slots('project-a')).toEqual(['key']);
+    expect(slot('project-a', 'key')!.querySelector('[data-linking-decision="suggested"]')).not.toBeNull();
+    expect(stops('project-a')).toEqual(['line', 'key', LINKING_TEXT.save, 'Link AAA', LINKING_ROW_WORDS.more]);
+    expect(restBody('project-a').hidden).toBe(true);
+    expect(restBody('project-a').querySelector('[data-linking-hier]'), 'the hierarchy cell is behind More settings').not.toBeNull();
+    expect(within(rowOf('project-a')).queryByRole('combobox', { name: HIERARCHY_TEXT.owner })).toBeNull();
+    expect(within(rowOf('project-a')).queryByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeNull();
+  });
+
+  it('a key in two workspaces: the key cell, with its picker, is under the reason', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
+    await mount([row('project-a', wire({ teamKey: 'AAA', teamWorkspace: null }))]);
+    expect(slots('project-a')).toEqual(['key']);
+    expect(slot('project-a', 'key')!.querySelector('[data-linking-decision="workspace"]')).not.toBeNull();
+    expect(slot('project-a', 'key')!.querySelector('[data-linking-workspace]')).not.toBeNull();
+    expect(stops('project-a')).toEqual(['line', 'key', `select:${PICKER_WORDS.label}`, LINKING_ROW_WORDS.more]);
+  });
+
+  it('a map waiting: the link to the item is under the reason, and is not drawn twice', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state: 'map-waiting', itemId: 42 })]));
+    await waitFor(() => expect(kindOf('project-a')).toBe('decision'));
+    expect(slots('project-a')).toEqual(['map']);
+    expect(slot('project-a', 'map')!.querySelector('[data-linking-decision="map"]')).toHaveTextContent(mapWaitingWords('AAA'));
+    expect(within(slot('project-a', 'map')!).getByRole('link', { name: HIERARCHY_TEXT.mapWaiting }).getAttribute('href')).toBe(itemPath(42));
+    expect(stops('project-a')).toEqual(['line', HIERARCHY_TEXT.mapWaiting, LINKING_ROW_WORDS.more]);
+    expect(within(rowOf('project-a')).getAllByRole('link', { name: HIERARCHY_TEXT.mapWaiting, hidden: true })).toHaveLength(1);
+  });
+
+  it('inbound issues with no live owner: flagged, with the Linear owner select under the reason; with a live owner the line says the count and nothing waits', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))],
+      hier([hrow('project-a', { inboundWaiting: 2, ownerNow: NONE }), hrow('project-b', { teamKey: 'BBB', inboundWaiting: 3 })]));
+    await waitFor(() => expect(kindOf('project-a')).toBe('decision'));
+    expect(flag('project-a')).not.toBeNull();
+    expect(slots('project-a')).toEqual(['owner']);
+    expect(slot('project-a', 'owner')!.querySelector('[data-linking-decision="inbound"]')).toHaveTextContent(inboundUnownedWords(2));
+    expect(within(slot('project-a', 'owner')!).getByRole('combobox', { name: HIERARCHY_TEXT.owner })).toBeInTheDocument();
+    expect(within(rowOf('project-a')).getAllByRole('combobox', { name: HIERARCHY_TEXT.owner, hidden: true })).toHaveLength(1);
+    expect(line('project-a')).toHaveTextContent('no live owner');
+    expect(line('project-a')).toHaveTextContent('2 inbound issues waiting');
+    // A live owner takes them: the row stays one line, shut, and its line still says they wait.
+    expect(kindOf('project-b')).toBe('linked');
+    expect(fold('project-b').open).toBe(false);
+    expect(flag('project-b')).toBeNull();
+    expect(line('project-b')).toHaveTextContent('3 inbound issues waiting');
+  });
+
+  it('the line says what differs from a quiet row: a public repository, a missing template, a visibility that was not read', async () => {
+    await mount([
+      row('project-a', wire({ teamKey: 'AAA', measured: measured({ template: 'present' }) })),
+      row('project-b', wire({ teamKey: 'BBB', mode: 'public', measured: measured({ visibility: 'public', template: 'present' }) })),
+      row('project-c', wire({ teamKey: 'CCC' })),
+      row('project-d', wire({ teamKey: 'DDD', mode: 'unknown', measured: { state: 'failed', reason: 'offline', at: NOW } })),
+    ]);
+    const notes = (n: string): Array<string | null> => [...line(n).querySelectorAll('[data-linking-sum="note"]')].map((e) => e.textContent);
+    expect(notes('project-a'), 'private, with its template: nothing to add').toEqual([]);
+    expect(notes('project-b')).toEqual([LINKING_ROW_WORDS.public]);
+    expect(notes('project-c')).toEqual([LINKING_ROW_WORDS.noTemplate]);
+    expect(notes('project-d')).toEqual([LINKING_ROW_WORDS.notRead]);
+  });
+
+  it('the rows that wait come first, and a row the operator settles keeps its place, its control and its answer', async () => {
+    await mount([row('project-a', wire({ teamKey: 'BBB' })), row('project-b', wire({ teamKey: 'AAA' })), row('project-c', wire({ teamKey: 'AAA' }))],
+      hier([hrow('project-a', { teamKey: 'BBB' }), hrow('project-b'), hrow('project-c')]));
+    await waitFor(() => expect(kindOf('project-b')).toBe('decision'));
+    expect(order()).toEqual(['project-b', 'project-c', 'project-a']);
+    expect(document.querySelector('[data-linking-counts]')).toHaveTextContent('2 need a decision · 1 linked');
+    vi.spyOn(api, 'saveHierarchy').mockImplementation(async () => {
+      answer = hier([hrow('project-a', { teamKey: 'BBB' }), hrow('project-b'), hrow('project-c', { ownsTeam: true })]);
+      return { ok: true, settings: { initiatives: 'on', linearOwner: null, ownsTeam: true } };
+    });
+    const box = within(rowOf('project-c')).getByRole('checkbox', { name: HIERARCHY_TEXT.owning });
+    fireEvent.click(box);
+    await waitFor(() => expect(kindOf('project-c')).toBe('linked'));
+    expect(kindOf('project-b')).toBe('linked');
+    // Nothing jumped: both rows are where they were, above the row that never waited.
+    expect(order()).toEqual(['project-b', 'project-c', 'project-a']);
+    expect(document.querySelector('[data-linking-counts]')).toHaveTextContent('3 linked');
+    // The box that was ticked is the same element, still under where its reason was, now checked; the reason is gone.
+    expect(within(rowOf('project-c')).getByRole('checkbox', { name: HIERARCHY_TEXT.owning })).toBe(box);
+    await waitFor(() => expect(box).toBeChecked());
+    expect(slot('project-c', 'owning')!.querySelector('[data-linking-decision]')).toBeNull();
+    expect(within(rowOf('project-c')).getByText(LINKING_TEXT.saved)).toBeInTheDocument();
+    // Shut and opened again, a settled row is the whole form, with no control lifted out of it.
+    fireEvent.click(line('project-c'));
+    fold('project-c').open = false;
+    fireEvent(fold('project-c'), new Event('toggle'));
+    fold('project-c').open = true;
+    fireEvent(fold('project-c'), new Event('toggle'));
+    await waitFor(() => expect(slots('project-c')).toEqual([]));
+    expect(rowOf('project-c').querySelector('[data-linking-rest]')).toBeNull();
+    expect(within(rowOf('project-c')).getByLabelText(LINKING_TEXT.teamKey)).toBeInTheDocument();
+    expect(within(rowOf('project-c')).getByRole('checkbox', { name: HIERARCHY_TEXT.owning })).toBeChecked();
+  });
+
+  it('one key stored in two different Linear workspaces is two teams: neither row is flagged, and each still has its Owning project box', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
+    await mount([row('project-a', wire({ teamKey: 'AAA', teamWorkspace: 'id-a' })), row('project-b', wire({ teamKey: 'AAA', teamWorkspace: 'id-b' }))],
+      hier([hrow('project-a'), hrow('project-b')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    for (const n of ['project-a', 'project-b']) {
+      expect(kindOf(n), n).toBe('linked');
+      expect(flag(n), n).toBeNull();
+      expect(fold(n).open, n).toBe(false);
+      expect(rowOf(n).querySelector('[data-linking-decision]'), n).toBeNull();
+      expect(within(rowOf(n)).getByRole('checkbox', { name: HIERARCHY_TEXT.owning })).toBeInTheDocument();
+    }
+  });
+});
+
+describe('a coordinator select offers the live coordinators first', () => {
+  const many = (projects: HierarchyProjectRow[]): HierarchyAnswer => ({
+    ok: true, projects,
+    coordinators: [{ id: 'coord-a', live: true }, { id: 'coord-b', live: false }, { id: 'coord-c', live: true }, { id: 'coord-d', live: false }],
+  });
+  const owner = (n: string): HTMLSelectElement => within(rowOf(n)).getByLabelText(HIERARCHY_TEXT.owner) as HTMLSelectElement;
+  const options = (s: HTMLSelectElement): Array<string | null> => [...s.querySelectorAll('option')].map((o) => o.textContent);
+  const more = (scope: HTMLElement): HTMLElement => scope.querySelector<HTMLElement>('[data-linking-more]')!;
+
+  it('the Linear owner: the default stated first, then the live ones; the rest are counted behind a control, not listed', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], many([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(options(owner('project-a'))).toEqual(['Default: coord-a (live)', 'coord-a', 'coord-c']);
+    expect(owner('project-a').querySelector('optgroup')).toBeNull();
+    const show = more(rowOf('project-a'));
+    expect(show).toHaveTextContent(NOT_LIVE_WORDS.show(2));
+    expect(show.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(show);
+    expect(show.getAttribute('aria-expanded')).toBe('true');
+    expect(show).toHaveTextContent(NOT_LIVE_WORDS.hide);
+    expect(options(owner('project-a'))).toEqual(['Default: coord-a (live)', 'coord-a', 'coord-c', 'coord-b (not live)', 'coord-d (not live)']);
+    const grouped = owner('project-a').querySelector('optgroup')!;
+    expect(grouped.getAttribute('label')).toBe(NOT_LIVE_WORDS.group);
+    expect([...grouped.querySelectorAll('option')].map((o) => o.textContent)).toEqual(['coord-b (not live)', 'coord-d (not live)']);
+    fireEvent.click(show);
+    expect(options(owner('project-a'))).toEqual(['Default: coord-a (live)', 'coord-a', 'coord-c']);
+  });
+
+  it('a stored owner that is not live stays the shown choice while the rest are hidden', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))],
+      many([hrow('project-a', { linearOwner: 'coord-d', ownerNow: { id: 'coord-d', source: 'named', live: false, ifUnnamed: { id: 'coord-a', live: true } } })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(owner('project-a').value).toBe('coord-d');
+    expect(options(owner('project-a'))).toEqual(['Default: coord-a (live)', 'coord-d (not live)', 'coord-a', 'coord-c']);
+  });
+
+  it('a fleet with more live coordinators than the short list: the select holds the default and the stored owner, and one control shows them all', async () => {
+    const live = Array.from({ length: COORDINATOR_SHORT_LIST + 4 }, (_, i) => ({ id: `coord-${String(i + 1).padStart(2, '0')}`, live: true }));
+    const coordinators = [...live, { id: 'coord-x', live: false }];
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], {
+      ok: true, coordinators,
+      projects: [hrow('project-a', { linearOwner: 'coord-05', ownerNow: { id: 'coord-05', source: 'named', live: true, ifUnnamed: { id: 'coord-01', live: true } } })],
+    });
+    await within(rowOf('project-a')).findByText('Default: coord-01 (live)');
+    expect(options(owner('project-a')), 'no wall of ids').toEqual(['Default: coord-01 (live)', 'coord-05']);
+    expect(owner('project-a').value).toBe('coord-05');
+    const show = more(rowOf('project-a'));
+    expect(show).toHaveTextContent(NOT_LIVE_WORDS.showAll(coordinators.length));
+    fireEvent.click(show);
+    expect(options(owner('project-a'))).toEqual(['Default: coord-01 (live)', ...live.map((c) => c.id), 'coord-x (not live)']);
+    expect(owner('project-a').value).toBe('coord-05');
+    expect(show).toHaveTextContent(NOT_LIVE_WORDS.fewer);
+  });
+
+  it('the coordinator for every project: the act follows its select in the page, and the "show" control comes after both', async () => {
+    const region = await mount([row('project-a', wire({ teamKey: 'AAA' }))], many([hrow('project-a')]));
+    const all = region.querySelector<HTMLElement>('[data-linking-all]')!;
+    await within(all).findByLabelText(HIERARCHY_TEXT.allPick);
+    // Tab's order is the page's order: what is drawn beside the select has to be next in it.
+    expect([...all.querySelectorAll('select, button')].map((e) => (e.tagName === 'SELECT' ? 'select' : e.textContent)))
+      .toEqual(['select', HIERARCHY_TEXT.allAct, NOT_LIVE_WORDS.show(2)]);
+  });
+
+  it('with every coordinator live there is nothing to show, and no control', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))],
+      { ok: true, projects: [hrow('project-a')], coordinators: [{ id: 'coord-a', live: true }] });
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(rowOf('project-a').querySelector('[data-linking-more]')).toBeNull();
+  });
+
+  it('the coordinator for every project is offered the same way, and a not-live pick stays picked when they are hidden again', async () => {
+    const region = await mount([row('project-a', wire({ teamKey: 'AAA' }))], many([hrow('project-a')]));
+    const all = region.querySelector<HTMLElement>('[data-linking-all]')!;
+    const pick = await within(all).findByLabelText(HIERARCHY_TEXT.allPick) as HTMLSelectElement;
+    expect(options(pick)).toEqual([HIERARCHY_TEXT.allNone, 'coord-a', 'coord-c']);
+    fireEvent.click(more(all));
+    expect(options(pick)).toEqual([HIERARCHY_TEXT.allNone, 'coord-a', 'coord-c', 'coord-b (not live)', 'coord-d (not live)']);
+    fireEvent.change(pick, { target: { value: 'coord-d' } });
+    fireEvent.click(more(all));
+    expect(pick.value).toBe('coord-d');
+    expect(options(pick)).toEqual([HIERARCHY_TEXT.allNone, 'coord-d (not live)', 'coord-a', 'coord-c']);
+  });
+});
+
+describe('Reshape in Linear stays one confirm per team', () => {
+  it('two projects of two teams: each row has its own control, and its confirm names its own team and consequence', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))],
+      hier([hrow('project-a'), hrow('project-b', { teamKey: 'BBB' })]));
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    const call = vi.spyOn(api, 'migrate').mockResolvedValue({ ok: true, migrationId: 5 });
+    fireEvent.click(within(rowOf('project-b')).getByRole('button', { name: HIERARCHY_TEXT.reshape }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(reshapeTitle('BBB'))).toBeInTheDocument();
+    expect(dialog.textContent).toContain(reshapeConsequence('BBB'));
+    expect(dialog.textContent).not.toContain('AAA');
+    expect(call, 'nothing is asked before the confirm').not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: HIERARCHY_TEXT.reshapeConfirm }));
+    await waitFor(() => expect(call).toHaveBeenCalledTimes(1));
+    expect(call).toHaveBeenCalledWith('project-b');
   });
 });

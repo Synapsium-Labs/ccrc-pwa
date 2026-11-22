@@ -1,7 +1,8 @@
 // The Settings screen's Linear card (#1444, spec §10.2, §10.3; it began as named workspaces S4b's one-key section):
 // every Linear workspace key the box holds, one row each, with its state, its teams and its controls, and the key saved
-// before workspaces as the legacy row. Mounted on the Security page after the Box token card, as a `Section` card like
-// the others (its scope, title and purpose line are `SETTINGS_CARDS.security.linear`); its read of GET
+// before workspaces as the legacy row. Mounted first on the Integrations page (it sat on Security after the Box token
+// card until D-8932), as a `Section` card like
+// the others (its scope, title and purpose line are `SETTINGS_CARDS.integrations.linear`); its read of GET
 // /api/linear/workspaces is the Settings frame's (`useLinearWorkspaces`, handed down as `poll`), like Stall watch's,
 // so this file reads nothing itself.
 //
@@ -246,7 +247,7 @@ function addedText(list: LinearWorkspacesRead): string {
 }
 
 export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll; stepUpDeps?: StepUpDeps }): ReactNode {
-  const card = SETTINGS_CARDS.security.linear;
+  const card = SETTINGS_CARDS.integrations.linear;
   const band = useBand();
   const fieldId = useId();
   const noteId = useId();
