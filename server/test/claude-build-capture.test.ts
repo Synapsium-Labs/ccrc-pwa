@@ -37,9 +37,14 @@ const WRITE = { tool_name: 'Bash', tool_input: { command: CAPTURE_WRITE_COMMAND 
 /** The write's permission prompt, as the recorder records it: raised in the `cd` directory, answered `allow`. */
 const writeAsked = (over: Record<string, unknown> = {}, answer: string | null = 'allow'): CaptureRecord =>
   ({ ...hook('PermissionRequest', { ...WRITE, cwd: CD, ...over }), ...(answer === null ? {} : { answer }) });
-/** Every event once, in the drive's order (the write's prompt before its PostToolUse), and one statusline. */
+/** The write's tool call id, which its PreToolUse and PostToolUse carry (its permission prompt carries none). */
+const WRITE_ID = 'toolu_capture_write';
+const writeCalled = (over: Record<string, unknown> = {}): CaptureRecord => hook('PreToolUse', { ...WRITE, tool_use_id: WRITE_ID, ...over });
+const writeRan = (over: Record<string, unknown> = {}): CaptureRecord => hook('PostToolUse', { ...WRITE, tool_use_id: WRITE_ID, ...over });
+/** Every event once, in the drive's order (the write's PreToolUse, its prompt, then its PostToolUse), and one statusline. */
 const goodRecords = (): CaptureRecord[] => [
-  ...CAPTURE_EVENTS.filter((e) => e !== 'PostToolUse').flatMap((e) => (e === 'PermissionRequest' ? [writeAsked(), hook('PostToolUse', WRITE)] : [hook(e)])),
+  ...CAPTURE_EVENTS.filter((e) => e !== 'PostToolUse').flatMap((e) => (
+    e === 'PreToolUse' ? [writeCalled()] : e === 'PermissionRequest' ? [writeAsked(), writeRan()] : [hook(e)])),
   statusline(),
 ];
 const rec = (records: readonly CaptureRecord[], over: Partial<CaptureRecording> = {}): CaptureRecording => ({ records, unreadable: 0, cdDir: CD, finished: true, ...over });
@@ -118,6 +123,63 @@ describe('replayCapture: the build ran the write after the hook answered allow (
     const r = replayCapture(rec(records), BUILD);
     expect(r.pass).toBe(false);
     expect(r.output).toContain('approval: the write never ran after the hook answered allow');
+  });
+});
+
+describe('replayCapture: ONE write carries its cwd, its allow and its completion (review 3316 A1, A2)', () => {
+  /** The good recording with the write's prompt replaced by `prompts`, and `extra` records after it. */
+  const withPrompts = (prompts: readonly CaptureRecord[], extra: readonly CaptureRecord[] = []): CaptureRecord[] =>
+    goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === 'PermissionRequest' ? [...prompts, ...extra] : [r]));
+  const replace = (event: string, to: readonly CaptureRecord[]): CaptureRecord[] =>
+    goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === event ? to : [r]));
+  const CD_ALLOWED: CaptureRecord = { ...hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'cd sub' }, cwd: CD }), answer: 'allow' };
+  const TIED = 'approval: the write that ran cannot be tied to its prompt\'s tool call (tool_use_id)';
+
+  it('an allow on an unrelated prompt does not stand for the write\'s missing answer', () => {
+    const r = replayCapture(rec(withPrompts([CD_ALLOWED, writeAsked({}, null)])), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain('approval: the hook\'s allow answer to the write\'s prompt was not recorded');
+  });
+  it('two prompts for the write (one naming the cd directory with no answer, one allowed elsewhere): no one write, fail', () => {
+    const r = replayCapture(rec(withPrompts([writeAsked({}, null), writeAsked({ cwd: '/elsewhere' })])), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain('approval: 2 permission prompts for the write, so no one write carries the evidence');
+  });
+  it('two prompts for the write, both allowed in the cd directory: still no one write, fail', () => {
+    const r = replayCapture(rec(withPrompts([writeAsked(), writeAsked()])), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain('approval: 2 permission prompts for the write, so no one write carries the evidence');
+  });
+  it('a completion whose tool_use_id is another call\'s: fail', () => {
+    const r = replayCapture(rec(replace('PostToolUse', [writeRan({ tool_use_id: 'toolu_other' })])), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain(TIED);
+  });
+  it('no tool_use_id on the write\'s PreToolUse nor its PostToolUse: missing evidence fails closed', () => {
+    const noId = (h: CaptureRecord): CaptureRecord => {
+      const payload = { ...(h.payload as Record<string, unknown>) };
+      delete payload['tool_use_id'];
+      return { ...h, payload };
+    };
+    const r = replayCapture(rec(replace('PostToolUse', [noId(writeRan())]).map((x) => (x.kind === 'hook' && x.event === 'PreToolUse' ? noId(x) : x))), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
+  });
+  it('two completions of the write after its prompt, both naming its call: fail', () => {
+    const r = replayCapture(rec(replace('PostToolUse', [writeRan(), writeRan()])), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
+  });
+  it('the write\'s PreToolUse only AFTER its prompt (none before it names the call): fail', () => {
+    const records = replace('PreToolUse', []).flatMap((x) => (x.kind === 'hook' && x.event === 'PermissionRequest' ? [x, writeCalled()] : [x]));
+    const r = replayCapture(rec(records), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
+  });
+  it('a second write call (another PreToolUse of the write) makes the call ambiguous: fail', () => {
+    const r = replayCapture(rec(replace('PreToolUse', [writeCalled(), writeCalled({ tool_use_id: 'toolu_second' })])), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
   });
 });
 

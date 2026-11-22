@@ -208,14 +208,45 @@ const isWrite = (payload: unknown): boolean => at(payload, 'tool_name') === 'Bas
 /** The recorder's answer to a permission prompt that lets the tool run. */
 const ALLOW = 'allow';
 
+/** What the drive's ONE write proves, or the first reason it proves nothing (review 3316 A1, A2). */
+interface WriteEvidence { readonly broken: string | null; readonly cwd: boolean }
+
+/** THE WRITE'S EVIDENCE, tied to one tool call: the same intended write must supply its `cwd`, the recorder's `allow` and
+ *  its later completion, so an approval or a completion of another call never stands in for it. A PermissionRequest
+ *  carries no `tool_use_id`, so the call is named by the write's PreToolUse, which the build raises before the prompt.
+ *  In order: exactly one PermissionRequest for the write (none: no prompt; more: no one write); that prompt's own line
+ *  answered `allow`; a PostToolUse of the write after it; and exactly one PreToolUse of the write, before the prompt,
+ *  and exactly one PostToolUse of the write, after it, both naming the same `tool_use_id`. Evidence that is missing or
+ *  cannot be tied fails closed. `cwd` is that one prompt's own `cwd`. */
+function writeEvidence(records: readonly CaptureRecord[], cdDir: string): WriteEvidence {
+  const of = (event: HookEvent): number[] =>
+    records.flatMap((r, i) => (r.kind === 'hook' && hookEventIs(r.event, event) && isWrite(r.payload) ? [i] : []));
+  const prompts = of('PermissionRequest');
+  if (prompts.length === 0) return { broken: 'approval: the write raised no permission prompt', cwd: false };
+  if (prompts.length > 1) return { broken: `approval: ${prompts.length} permission prompts for the write, so no one write carries the evidence`, cwd: false };
+  const asked = prompts[0]!;
+  const prompt = records[asked]!;
+  const answer = prompt.kind === 'hook' ? prompt.answer : undefined;
+  if (answer !== ALLOW) return { broken: "approval: the hook's allow answer to the write's prompt was not recorded", cwd: false };
+  const calls = of('PreToolUse');
+  const runs = of('PostToolUse');
+  if (!runs.some((i) => i > asked)) return { broken: 'approval: the write never ran after the hook answered allow', cwd: false };
+  const call = calls.length === 1 && calls[0]! < asked ? at(records[calls[0]!]!.payload, 'tool_use_id') : undefined;
+  const ran = runs.length === 1 ? at(records[runs[0]!]!.payload, 'tool_use_id') : undefined;
+  if (typeof call !== 'string' || ran !== call) {
+    return { broken: "approval: the write that ran cannot be tied to its prompt's tool call (tool_use_id)", cwd: false };
+  }
+  return { broken: null, cwd: at(prompt.payload, 'cwd') === cdDir };
+}
+
 /** THE replay suite: the recording checked against the grammar, as the verdict the record stores. It passes when the
  *  drive finished, no line was unreadable, every event in {@link CAPTURE_EVENTS} was recorded, every hook payload,
  *  statusline JSON and status file copy fits its rules, at least one statusline JSON and one status file copy were
- *  recorded, a status file names `build` as its `version`, and the approval wait's output side held: the write's
- *  PermissionRequest was answered `allow` by the recorder and the write's PostToolUse was recorded after it (spec §2.6,
- *  review 3226 F7), so the build obeyed the hook's answer. It proves the `cwd` fact only when THE WRITE's
- *  PermissionRequest names the drive's `cd` directory as its `cwd` (review 3226 F5): any other prompt naming it proves
- *  nothing. The output names every break, one per line, and ends with the verdict. */
+ *  recorded, a status file names `build` as its `version`, and the approval wait's output side held: the drive's one
+ *  write was asked, answered `allow` by the recorder and then run, all as one tool call ({@link writeEvidence}; spec
+ *  §2.6, review 3226 F7, review 3316 A1), so the build obeyed the hook's answer. It proves the `cwd` fact only when that
+ *  same write's PermissionRequest names the drive's `cd` directory as its `cwd` (review 3226 F5): any other prompt
+ *  naming it proves nothing. The output names every break, one per line, and ends with the verdict. */
 export function replayCapture(rec: CaptureRecording, build: string): BuildCaptureResult {
   const lines: string[] = [];
   if (!rec.finished) lines.push('drive: did not finish every step');
@@ -224,11 +255,6 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
   let statuslines = 0;
   let statuses = 0;
   let versionSeen = false;
-  let cwd = false;
-  let writeAsked = false;
-  // The recording is read in order, so a write's PostToolUse counts only when it comes after the allowed prompt.
-  let allowed = false;
-  let writeRan = false;
   rec.records.forEach((r, i) => {
     const where = r.kind === 'hook' ? `#${i + 1} ${r.event}` : `#${i + 1} statusline`;
     if (r.kind === 'hook') {
@@ -239,12 +265,6 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
       if (at(r.payload, 'hook_event_name') !== undefined && at(r.payload, 'hook_event_name') !== r.event) {
         lines.push(`${where}: hook_event_name does not name ${r.event}`);
       }
-      if (hookEventIs(r.event, 'PermissionRequest') && isWrite(r.payload)) {
-        writeAsked = true;
-        if (at(r.payload, 'cwd') === rec.cdDir) cwd = true;
-        if (r.answer === ALLOW) allowed = true;
-      }
-      if (hookEventIs(r.event, 'PostToolUse') && isWrite(r.payload) && allowed) writeRan = true;
     } else {
       statuslines++;
       for (const b of ruleBreaks(r.payload, STATUSLINE_RULES)) lines.push(`${where}: ${b}`);
@@ -256,15 +276,14 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
     }
   });
   for (const e of CAPTURE_EVENTS) if (!seen.has(e)) lines.push(`event ${e}: never recorded`);
-  if (!writeAsked) lines.push('approval: the write raised no permission prompt');
-  else if (!allowed) lines.push("approval: the hook's allow answer to the write's prompt was not recorded");
-  else if (!writeRan) lines.push('approval: the write never ran after the hook answered allow');
+  const write = writeEvidence(rec.records, rec.cdDir);
+  if (write.broken !== null) lines.push(write.broken);
   if (statuslines === 0) lines.push('statusline: never recorded');
   if (statuses === 0) lines.push('status file: never recorded');
   else if (!versionSeen) lines.push(`status file: no copy names version ${build}`);
   const pass = lines.length === 0;
-  lines.push(`cwd: ${cwd ? 'the permission prompt names the directory the shell moved into' : 'not proved'}`);
+  lines.push(`cwd: ${write.cwd ? "the write's permission prompt names the directory the shell moved into" : 'not proved'}`);
   lines.push(pass ? `verdict: pass (${rec.records.length} records)` : 'verdict: fail');
   // Through the verdict's one reader, so what the box sends is what the lane will accept (the output keeps its tail).
-  return readBuildCaptureResult({ build, pass, cwd: pass && cwd, output: lines.join('\n') }, build)!;
+  return readBuildCaptureResult({ build, pass, cwd: pass && write.cwd, output: lines.join('\n') }, build)!;
 }
