@@ -35,7 +35,7 @@ _tba_build_copy_src() { printf '%s/.local/share/claude/versions/%s' "$HOME" "$1"
 # shellcheck disable=SC2016  # expanded by the box's sh, not here
 TBA_BUILD_STAGE_SH='set -e; r=$1; d=$r/captures/builds; o=$(ls -ldn -- "$r" | awk '"'"'{print $3":"$4}'"'"'); mkdir -p -- "$d"; chown -- "$o" "$r/captures" "$d"; t=$(mktemp "$d/.copy.XXXXXXXX"); cat >"$t" || { rm -f -- "$t"; exit 1; }; echo "$t"'
 # shellcheck disable=SC2016  # expanded by the box's sh, not here
-TBA_BUILD_INSTALL_SH='set -e; r=$1; t=$2; d=$r/captures/builds; case $t in "$d"/.copy.*) ;; *) exit 2;; esac; o=$(ls -ldn -- "$r" | awk '"'"'{print $3":"$4}'"'"'); chmod 0555 -- "$t"; chown -- "$o" "$t"; mv -f -- "$t" "$d/$3"; echo installed'
+TBA_BUILD_INSTALL_SH='set -e; r=$1; t=$2; d=$r/captures/builds; case $t in "$d"/.copy.*) ;; *) exit 2;; esac; o=$(ls -ldn -- "$r" | awk '"'"'{print $3":"$4}'"'"'); chmod -- 0555 "$t"; chown -- "$o" "$t"; mv -f -- "$t" "$d/$3"; echo installed'
 
 _tba_build_copy_refuse() {   # <code> <log words> — the log line, then the answer
   _tba_log "build-copy: refused $1 ($2)"

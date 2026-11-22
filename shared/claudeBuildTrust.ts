@@ -33,13 +33,17 @@ export const CLAUDE_BUILD_SOURCE_MAP: Record<ClaudeBuildSource, true> = { rig: t
 export type BuildCaptureNotSent =
   | 'no-test-box' | 'no-runner' | 'build-absent' | 'path-refused' | 'not-started' | 'busy'
   | BuildCopyFailure;
-export const BUILD_CAPTURE_NOT_SENT_MAP: Record<BuildCaptureNotSent, true> = {
-  'no-test-box': true, 'no-runner': true, 'build-absent': true, 'path-refused': true, 'not-started': true, busy: true,
-  'copy-refused': true, 'copy-failed': true, 'no-admin-lane': true,
-};
 
 /** Why the copy of a build to the test box did not place it (spec §2.2): the not-sent words a failed copy leaves. */
 export type BuildCopyFailure = 'copy-refused' | 'copy-failed' | 'no-admin-lane';
+const BUILD_COPY_FAILURE_MAP: Record<BuildCopyFailure, true> = {
+  'copy-refused': true, 'copy-failed': true, 'no-admin-lane': true,
+};
+
+export const BUILD_CAPTURE_NOT_SENT_MAP: Record<BuildCaptureNotSent, true> = {
+  'no-test-box': true, 'no-runner': true, 'build-absent': true, 'path-refused': true, 'not-started': true, busy: true,
+  ...BUILD_COPY_FAILURE_MAP,
+};
 
 /** What the queue's try at a build did: a job went out (`sent`, answered or not), or none could (why). */
 export type BuildCaptureTry = 'sent' | BuildCaptureNotSent;
@@ -182,8 +186,8 @@ export type CapturePassStep = 'sent' | BuildCaptureNotSent | 'copied';
 
 /** The lane's next act in a pass: send the capture, copy the build over the admin lane, or stop and record the pass. */
 export type CaptureNextAct = 'send' | 'copy' | 'stop';
-
-const COPY_FAILURES: ReadonlySet<CapturePassStep> = new Set<BuildCopyFailure>(['copy-refused', 'copy-failed', 'no-admin-lane']);
+const CAPTURE_NEXT_ACT_MAP: Record<CaptureNextAct, true> = { send: true, copy: true, stop: true };
+export const CAPTURE_NEXT_ACTS = Object.keys(CAPTURE_NEXT_ACT_MAP) as CaptureNextAct[];
 
 /** THE COPY RULE, decided here and carried out by the lane (`server/src/buildCaptureLane.ts`): send the capture first; copy
  *  only after the box refused it `build-absent`, once a pass, then send it again. Any other answer stops the pass. So a build
@@ -191,7 +195,7 @@ const COPY_FAILURES: ReadonlySet<CapturePassStep> = new Set<BuildCopyFailure>(['
 export function captureNextAct(steps: readonly CapturePassStep[]): CaptureNextAct {
   const last = steps[steps.length - 1];
   if (last === undefined || last === 'copied') return 'send';
-  const copied = steps.some((s) => s === 'copied' || COPY_FAILURES.has(s));
+  const copied = steps.some((s) => s === 'copied' || has(BUILD_COPY_FAILURE_MAP, s));
   return last === 'build-absent' && !copied ? 'copy' : 'stop';
 }
 
