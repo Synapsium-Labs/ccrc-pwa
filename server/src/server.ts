@@ -2284,7 +2284,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // row) and the operator's withdraw (session-gated). Their mail rides `queueSystemMail` as the operator's sender, as the
   // watcher's notices do: the baseline's wake (keyed on its run, retried each tick) and the stop and waiting-streak mails.
   registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'), notice, entropy: deps.time.entropy,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'), notice, entropy: { hex: (n) => deps.time.entropy.hex(n) },
     mail: (m) => (deps.coord === undefined ? false : queueSystemMail(deps.coord, null, { fromId: ASK_OPERATOR_PRINCIPAL, runId: null, kind: 'status', ...m }).queued) });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
