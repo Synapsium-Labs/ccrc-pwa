@@ -1199,7 +1199,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin tool
     expect(json(verb(h, 'tools-home', '--from', 'pwa'))).toEqual({ ok: true, home: 'written' });
     const calls = cmds(h).slice(before);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatch(/^sh -c set -e; .*systemctl daemon-reload; echo written sh /);
+    expect(calls[0]).toMatch(/^sh -c set -e; .*; fi; systemctl daemon-reload; echo "\$said" sh /);
     expect(calls[0]).toContain(` ${DROPIN} `);
     expect(calls[0]!.endsWith(' [Service] Environment=HOME=%h')).toBe(true);
     expect(calls[0]).not.toContain('\n');
@@ -1242,7 +1242,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin tool
     expect(sshCalls(h).length).toBe(before);
   });
 
-  it('the box program writes the file once, reloads once, and keeps it on a second run', () => {
+  it('the box program writes the file once, keeps it on a second run, and reloads the system manager on both', () => {
     const h = fixture();
     const bin = join(h.home, 'box-bin');
     mkdirSync(bin, { recursive: true });
@@ -1258,6 +1258,34 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin tool
     expect(existsSync(`${file}.tmp`)).toBe(false);
     const second = run();
     expect(second.out).toBe('kept\n');
-    expect(readFileSync(join(h.home, 'systemctl-calls'), 'utf8')).toBe('daemon-reload\n');
+    expect(readFileSync(join(h.home, 'systemctl-calls'), 'utf8')).toBe('daemon-reload\ndaemon-reload\n');
+  });
+
+  // Review 3223 F1: the drop-in is written before the reload, so a reload that failed left the file in place but unloaded. The
+  // next call found it identical; if it said `kept` without reloading, the box stayed stuck for good.
+  it('a reload that failed once is tried again by the next call, which finds the file in place and says kept', () => {
+    const h = fixture();
+    const bin = join(h.home, 'box-bin');
+    mkdirSync(bin, { recursive: true });
+    const calls = join(h.home, 'systemctl-calls');
+    const failed = join(h.home, 'reload-failed-once');
+    writeFileSync(join(bin, 'systemctl'),
+      `#!/bin/sh
+printf '%s\n' "$*" >> '${calls}'
+[ -e '${failed}' ] && exit 0
+: > '${failed}'
+exit 1
+`, { mode: 0o755 });
+    const file = join(h.home, 'run', 'ccrc-testbox-tools.service.d', '60-ccrc-testbox-home.conf');
+    const run = (): { out: string; err: string; rc: number } => sh(h, `. "$1"; shift; PATH="${bin}:$PATH" sh -c "$TBA_TOOLS_HOME_SH" sh "$@"`,
+      [VERB, file, '[Service]', 'Environment=HOME=%h']);
+    const first = run();
+    expect(first.rc).not.toBe(0);
+    expect(first.out).toBe('');
+    expect(existsSync(file), 'the file was written before the reload failed').toBe(true);
+    const second = run();
+    expect(second.rc, second.err).toBe(0);
+    expect(second.out).toBe('kept\n');
+    expect(readFileSync(calls, 'utf8')).toBe('daemon-reload\ndaemon-reload\n');
   });
 });

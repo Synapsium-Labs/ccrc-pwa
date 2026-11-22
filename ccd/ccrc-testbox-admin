@@ -1994,15 +1994,17 @@ _tba_run_apply-release() {
 # HOME. A tree whose tool sync predates `_tbt_home` (deploy/testbox/bin/tools-sync#@tbt-home) then dies at every release step
 # (`ccd/ccrc: line 103: HOME: unbound variable`), and the release it cannot fetch is the one that fixes it, so the box cannot
 # heal itself; only the fleet host reaches in. This sub writes ONE runtime drop-in for the tools unit, `Environment=HOME=%h`
-# (the system manager's `%h` is root's home from the password database, the home `_tbt_home` takes too), and reloads the
-# system manager. It is under /run, so a reboot removes it, and it touches nothing the installer wrote under /etc. The next
+# (systemd documents the system manager's `%h` as `/root`, which is root's row in the password database, the home `_tbt_home`
+# takes, wherever that row says `/root`), and reloads the system manager. It is under /run, so a reboot removes it, and it touches nothing the installer wrote under /etc. The next
 # tool sync runs the installed script with that HOME, fetches and switches the release, and from then on the new tree's own
 # `_tbt_home` gives the script a HOME without it. Short (two box calls) and under the lock, so it never runs beside a long act.
-# A drop-in that already holds these lines is kept and nothing is reloaded (`"home":"kept"`, else `"home":"written"`).
+# A drop-in that already holds these lines is kept (`"home":"kept"`, else `"home":"written"`), and the system manager is
+# reloaded either way (review 3223 F1): the file is placed before the reload, so a reload that failed once left it in place
+# and unloaded, and the next call must load it rather than call it done.
 TBA_TOOLS_HOME_DROPIN=/run/systemd/system/ccrc-testbox-tools.service.d/60-ccrc-testbox-home.conf
 # One line: `_tba_ssh` quotes each word with `%q`, and a newline would reach the box's login shell as bash's `$'...'`.
 # shellcheck disable=SC2016  # expanded by the box's sh, not here
-TBA_TOOLS_HOME_SH='set -e; f=$1; d=${f%/*}; shift; want=$(printf "%s\n" "$@"); if [ -f "$f" ] && [ "$(cat -- "$f")" = "$want" ]; then echo kept; exit 0; fi; mkdir -p -- "$d"; printf "%s\n" "$want" >"$f.tmp"; chmod 0644 "$f.tmp"; mv -f -- "$f.tmp" "$f"; systemctl daemon-reload; echo written'
+TBA_TOOLS_HOME_SH='set -e; f=$1; d=${f%/*}; shift; want=$(printf "%s\n" "$@"); said=kept; if [ ! -f "$f" ] || [ "$(cat -- "$f")" != "$want" ]; then mkdir -p -- "$d"; printf "%s\n" "$want" >"$f.tmp"; chmod 0644 "$f.tmp"; mv -f -- "$f.tmp" "$f"; said=written; fi; systemctl daemon-reload; echo "$said"'
 _tba_run_tools-home() {
   local said
   _tba_short_lock || return 0

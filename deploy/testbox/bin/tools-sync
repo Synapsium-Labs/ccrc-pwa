@@ -67,10 +67,15 @@ _tbt_paths() {   # -> TBT_TOOLS, TBT_TREE; else 1 and TBT_WHY
 # level under `set -u`, and the npmrc's `cache=${HOME}/.npm` names npm's cache by it, so every sync that changed the
 # release died at step 1 (`ccd/ccrc: line 103: HOME: unbound variable`). With no HOME in the environment, HOME is the
 # running user's home from the password database, as a login would set it. A home the database does not name, or one
-# that is not an absolute directory, fails the sync before anything is fetched. A HOME the environment gives is kept.
+# that is not an absolute directory, fails the sync before anything is fetched. A HOME the environment gives is kept when
+# it is an absolute directory, and fails the sync the same way when it is not (review 3223 F6).
 _tbt_home() {   # -> HOME exported; else 1 and TBT_WHY
   local row h
-  [ -z "${HOME-}" ] || return 0
+  if [ -n "${HOME-}" ]; then
+    [[ "$HOME" == /* ]] && [ -d "$HOME" ] && return 0
+    TBT_WHY="the environment's HOME is not an absolute directory"
+    return 1
+  fi
   row="$(getent passwd "$EUID" 2>/dev/null)" || row=""
   IFS=: read -r _ _ _ _ _ h _ <<<"$row"
   if [[ "${h-}" != /* ]] || [ ! -d "$h" ]; then

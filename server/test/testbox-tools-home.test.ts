@@ -10,12 +10,14 @@ import path from 'node:path';
 import type { TestboxHostTools } from '../../shared/agent-protocol.js';
 import { TESTBOX_PROTO, type StatusAnswer, type TestboxSync } from '../../shared/testbox.js';
 import { TESTBOX_ADMIN_SUBS, type TestboxAdminStatus, type TestboxAdminSub } from '../../shared/testbox-admin.js';
+import { actorOf } from '../src/accounts/audit.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { loadConfig } from '../src/config.js';
 import type { FleetIdentityCell } from '../src/fleetidentity.js';
 import { localIOFor, type FleetIO, type MeasuredTestbox } from '../src/io.js';
 import { testboxBlock, toolsSyncNeedsHome, type TestboxBlock } from '../src/testbox.js';
-import type { TestboxAdminOps, TestboxAdminOutcome } from '../src/testboxAdmin.js';
+import type { FastifyRequest } from 'fastify';
+import { toolsSyncCallerOf, type TestboxAdminOps, type TestboxAdminOutcome } from '../src/testboxAdmin.js';
 import { TestboxAudit } from '../src/testboxAudit.js';
 import { TestboxLane } from '../src/testboxLane.js';
 import { seedRoster } from './helpers.js';
@@ -71,6 +73,19 @@ describe('toolsSyncNeedsHome: the one decision (L1)', () => {
   });
 });
 
+describe('toolsSyncCallerOf: who the repair row names (box-token-runs-fixed-repair)', () => {
+  const req = (headers: Record<string, string>): FastifyRequest => ({ headers }) as unknown as FastifyRequest;
+  it('a session is its device; the box token is `box token`; neither is the unlabelled actor, and never the server', () => {
+    const session = toolsSyncCallerOf(req({ cookie: 'ccrc_session=abc' }), { reason: 'session', device: 'phone-a' });
+    expect(session.label).toBe('phone-a');
+    const token = toolsSyncCallerOf(req({ 'x-ccrc-mail-token': 'redacted' }), { reason: 'refused', device: null });
+    expect(String(token)).toBe('box token 00000000');
+    const neither = toolsSyncCallerOf(req({}), { reason: 'refused', device: null });
+    expect(neither.label).not.toBe('box token');
+    for (const a of [session, token, neither]) expect(a.label).not.toBe('ccrc server');
+  });
+});
+
 interface Rig { lane: TestboxLane; calls: string[]; rows: () => Record<string, unknown>[] }
 
 /** A lane over fakes: `order` records the admin subs and the sync in the order they ran. */
@@ -111,6 +126,26 @@ describe('the tool sync\'s call gives a stale box\'s tools unit a HOME first (L4
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ act: 'repair', outcome: 'ok' });
     expect(JSON.stringify(rows[0])).toContain('ccrc server');
+  });
+
+  // Review 3223 F2: the row names the caller the route measured (a session, or the box token), not the server.
+  it('the repair row names the caller the route hands the lane', async () => {
+    const r = rig();
+    await r.lane.sweep(true);
+    await r.lane.toolsSync(actorOf('box token', ''));
+    const rows = r.rows().filter((x) => x['act'] === 'repair');
+    expect(rows).toHaveLength(1);
+    expect(JSON.stringify(rows[0])).toContain('box token');
+    expect(JSON.stringify(rows[0])).not.toContain('ccrc server');
+  });
+
+  // Review 3223 F3: a drop-in already in place changed nothing on the box, so it is no repair and writes no row.
+  it('a kept answer runs the sync and writes no repair row', async () => {
+    const r = rig({ homeAnswer: { kind: 'exited', code: 0, stdout: '{"ok":true,"home":"kept"}\n' } });
+    await r.lane.sweep(true);
+    await r.lane.toolsSync();
+    expect(r.calls.filter((c) => c !== 'read')).toEqual(['tools-home', 'sync']);
+    expect(repairRows(r)).toEqual([]);
   });
 
   it('a refused tools-home is recorded with its code, and the sync is still sent', async () => {

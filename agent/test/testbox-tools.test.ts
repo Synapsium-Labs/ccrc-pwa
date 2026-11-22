@@ -921,6 +921,23 @@ describe('the tools unit gives the script no HOME (testbox-sync-home)', () => {
     expectUnchanged(b);
     expect([W.hostA.log, W.hostB.log, W.hostC.log, W.dl.log, W.registry.log]).toEqual([[], [], [], [], []]);
   });
+
+  // Review 3223 F6: a HOME the environment gives is held to the same rule as one the password database gives.
+  it.each([
+    ['relative', 'home'],
+    ['not a directory', '/nonexistent/ccrc-testbox-home'],
+  ])('a HOME from the environment that is %s fails the sync (home: ...) before anything is fetched', async (_n, h) => {
+    const b = makeBox();
+    const env = { ...unitEnv(b, b.home), HOME: h };
+    writeToolsSpec(b, frameOf(NEW_TAG));
+    resetLogs();
+    const r = await exec(b.script, [b.spec], env, path.dirname(b.root));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/tool sync failed \(home: the environment's HOME is not an absolute directory\)/);
+    expect(report(b)).toMatchObject({ result: 'failed', tool: 'home' });
+    expectUnchanged(b);
+    expect([W.hostA.log, W.hostB.log, W.hostC.log, W.dl.log, W.registry.log]).toEqual([[], [], [], [], []]);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------
