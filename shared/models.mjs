@@ -136,7 +136,8 @@ export const aliasesFileName = (id) => `${id}.aliases.json`;
  *  fits: a `moved` line is at most a 32-character lane id, the longest class
  *  word, two 128-character model ids and the fixed text between them, which
  *  makes exactly 300, so it always fits (`server/test/notify-push.test.ts`
- *  holds that sum); the two failure lines carry a reason of up to 120
+ *  holds that sum); a `moved` line of several lanes can pass it too, and the
+ *  two failure lines carry a reason of up to 120
  *  characters on top of the same two ids, so with long ids they pass it. Such
  *  a line still gets its banner and is refused the phone push, with the reason
  *  `over-cap` in `modelsPushDecision`'s answer and one line in the server's
@@ -152,13 +153,18 @@ const overCap = (message) => typeof message === 'string' && message.length > MOD
  *  shapes below are built from `MODELS_LANE_ID_RE`, `CLASSES` and
  *  `MODEL_ID_RE` and never spell any of them a second time; and the reason
  *  slot of the two failure shapes, written once: up to 120 printable-ASCII
- *  characters in brackets. */
+ *  characters in brackets. The `moved` shape's head takes ONE OR MORE lanes
+ *  (`<lane>, <lane>`, one alias change moving every lane on it, F15); the two
+ *  failure shapes take exactly one. */
 const pushInner = (re) => re.source.replace(/^\^/, '').replace(/\$$/, '');
-const PUSH_HEAD = `^(${pushInner(MODELS_LANE_ID_RE)}): (${CLASSES.join('|')}) `;
+const PUSH_LANE = pushInner(MODELS_LANE_ID_RE);
+const PUSH_CLASS = `(${CLASSES.join('|')})`;
+const PUSH_HEAD = `^(${PUSH_LANE}): ${PUSH_CLASS} `;
+const PUSH_HEAD_MANY = `^(${PUSH_LANE}(?:, ${PUSH_LANE})*): ${PUSH_CLASS} `;
 const PUSH_ID = `(?:${pushInner(MODEL_ID_RE)})`;
 const PUSH_REASON = '\\([\\x20-\\x7e]{0,120}\\)';
 const PUSH_SHAPES = Object.freeze([
-  ['moved', new RegExp(`${PUSH_HEAD}${PUSH_ID} → ${PUSH_ID}$`)],
+  ['moved', new RegExp(`${PUSH_HEAD_MANY}${PUSH_ID} → ${PUSH_ID}$`)],
   ['canary-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: ${PUSH_ID} failed its canary ${PUSH_REASON}$`)],
   ['move-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: moving to ${PUSH_ID} failed ${PUSH_REASON}$`)],
 ]);
@@ -166,21 +172,28 @@ const PUSH_SHAPES = Object.freeze([
 /** The ONE reader of the advance step's push lines (the auto-advance plan's
  *  `### 3.8 Push`, docs/superpowers/plans/2026-10-15-model-class-auto-advance-codex-arm.md;
  *  `ccd/ccrc`'s receipt program and its `recovered` definition write them):
- *  `{lane, cls, kind}` for a message of exactly one of the three shapes
- *    `<lane>: <class> <from|none> → <to>`                                        kind `moved`
+ *  `{lane, lanes, cls, kind}` for a message of exactly one of the three shapes
+ *    `<lane>[, <lane>…]: <class> <from|none> → <to>`                             kind `moved`
  *    `<lane>: <class> stays on <from|none>: <to> failed its canary (<reason>)`   kind `canary-failed`
  *    `<lane>: <class> stays on <from|none>: moving to <to> failed (<reason>)`    kind `move-failed`
  *  and null for anything else: a `cc swap:` notice, a second line, a message
- *  that is not a string, and any message over MODELS_PUSH_MAX included. The
- *  lane is MODELS_LANE_ID_RE's, the class one of CLASSES, each model id
- *  MODEL_ID_RE's (`none` is one) and the reason printable ASCII of at most 120
+ *  that is not a string, and any message over MODELS_PUSH_MAX included. A
+ *  `moved` line names one or more lanes (comma and one space between them, no
+ *  lane twice: the hourly refresh sends ONE line per (class, from, to) over
+ *  every lane that moved, F15); `lanes` is every lane in line order and `lane`
+ *  the first, kept for older callers. The two failure lines name ONE lane, so a
+ *  list in front of one is no model line. A lane is MODELS_LANE_ID_RE's, the
+ *  class one of CLASSES, each model id MODEL_ID_RE's (`none` is one) and the reason printable ASCII of at most 120
  *  characters. It is a PARSER only: whether a line may reach a phone is
  *  `modelsPushDecision`'s, which calls it. */
 export function modelsPushOf(message) {
   if (typeof message !== 'string' || overCap(message)) return null;
   for (const [kind, re] of PUSH_SHAPES) {
     const m = re.exec(message);
-    if (m !== null) return { lane: m[1], cls: m[2], kind };
+    if (m === null) continue;
+    const lanes = m[1].split(', ');
+    if (new Set(lanes).size !== lanes.length) return null;
+    return { lane: lanes[0], lanes, cls: m[2], kind };
   }
   return null;
 }
@@ -189,14 +202,14 @@ export function modelsPushOf(message) {
  *  Task 12, D-5211): pure, no I/O, no Fastify, no push call. The box token
  *  proves only "a process on the fleet box" (`deploy/notify.sh`'s own header),
  *  so the route sends a message to the phone only when `modelsPushOf` reads it
- *  AND its lane is a row of `roster` whose `exec.kind` is `codex` or whose `telemetry` is `anthropic` (D-8751: an
+ *  AND every lane it names is a row of `roster` whose `exec.kind` is `codex` or whose `telemetry` is `anthropic` (D-8751: an
  *  Anthropic lane's class moves are pushed in the same line shape). The roster
  *  arrives as a PARAMETER, anything with a `get(laneId)` that answers the
  *  lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`, is
  *  one), so this file reads no file and imports nothing.
  *
  *  Answers one of two shapes, and never a bare null: `{verdict: 'pushable',
- *  lane, cls, kind, tag}` or `{verdict: 'refused', reason}` with the reason one
+ *  lane, lanes, cls, kind, tag}` or `{verdict: 'refused', reason}` with the reason one
  *  of
  *    `not-a-model-line`  no shape of `modelsPushOf` matched (or not a string)
  *    `over-cap`          longer than MODELS_PUSH_MAX, so `modelsPushOf` refused it
@@ -204,10 +217,15 @@ export function modelsPushOf(message) {
  *    `not-a-codex-lane`  a model line of a row that is neither codex-kind nor an Anthropic lane (the word is kept
  *                        so an older reader's vocabulary holds).
  *  The last two also carry the `lane` (grammar-checked, so safe to print), for
- *  the operator's remedy. The roster is asked only about a line that matched,
- *  once. The tag is per lane AND class (D-5212): a phone REPLACES a
+ *  the operator's remedy: the FIRST lane of the line the roster refuses, as the
+ *  roster is asked about each lane in line order and the answer stops at the
+ *  first that is unknown or neither kind. The roster is asked only about a line
+ *  that matched. The tag is per lane AND class (D-5212): a phone REPLACES a
  *  notification that carries the same tag (`pwa/public/push-sw.js`), so a
  *  constant tag would let a second move or failure in one run erase the first.
+ *  A line of several lanes carries them all, comma-joined in line order:
+ *  `models-advance:<lane>:<class>` for one lane (as it always was) and
+ *  `models-advance:<lane-a>,<lane-b>:<class>` for several.
  *
  *  WHAT A PUSHABLE LINE CAN CARRY, stated exactly: the lane, the class and the
  *  model ids are grammar-checked, but a model id may be URL-shaped (`:` and `/`
@@ -220,10 +238,13 @@ export function modelsPushOf(message) {
 export function modelsPushDecision(message, roster) {
   const line = modelsPushOf(message);
   if (line === null) return { verdict: 'refused', reason: overCap(message) ? 'over-cap' : 'not-a-model-line' };
-  const row = roster.get(line.lane);
-  if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane', lane: line.lane };
-  if (row.exec.kind !== 'codex' && row.telemetry !== 'anthropic') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
-  return { verdict: 'pushable', lane: line.lane, cls: line.cls, kind: line.kind, tag: `models-advance:${line.lane}:${line.cls}` };
+  for (const lane of line.lanes) {
+    const row = roster.get(lane);
+    if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane', lane };
+    if (row.exec.kind !== 'codex' && row.telemetry !== 'anthropic') return { verdict: 'refused', reason: 'not-a-codex-lane', lane };
+  }
+  return { verdict: 'pushable', lane: line.lane, lanes: line.lanes, cls: line.cls, kind: line.kind,
+    tag: `models-advance:${line.lanes.join(',')}:${line.cls}` };
 }
 
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];

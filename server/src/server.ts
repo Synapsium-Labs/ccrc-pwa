@@ -2007,13 +2007,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
               : '; if the lane is meant to be a codex lane, its row in this box\'s accounts.json needs a complete codex '
                 + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, '
                 + 'exec.proxyPort and exec.litellmPort), and the server refuses a roster with an incomplete one at '
-                + 'start: fix the row, and restart the server')
+                + 'start: fix the row, and restart the server; if it is meant to be an Anthropic lane, its row in this '
+                + 'box\'s accounts.json needs telemetry "anthropic", and no codex exec block: fix the row, and restart '
+                + 'the server')
           : decision.reason === 'over-cap'
             ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
               + 'ids is refused this way by design, and the banner carries it'
             : '';
         console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
-          + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
+          + `or Anthropic lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
       } else {
         notifyPushOnly(deps, { title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' },
           'ccrc-server: /api/notify: the push did not go out');
