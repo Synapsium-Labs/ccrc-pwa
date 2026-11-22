@@ -6,8 +6,10 @@ import {
   hibernateAfterMs, type HibernateLive, type HibernateMark, type HibernateStoreRead,
 } from './coord/hibernate.js';
 import {
-  NO_ROLL_SUFFIX, ROLL_QUIET_MS, ROLL_SWEEP_ACTOR, autoRollVerdict, longLivedOf, rollTargetVerdict, type AutoRollVerdict,
+  NO_ROLL_SUFFIX, ROLL_QUIET_MS, ROLL_SWEEP_ACTOR, autoRollVerdict, longLivedOf, modelCandidateOf, modelFactOf, rollTargetVerdict,
+  type AutoRollVerdict,
 } from './coord/rollTarget.js';
+import type { LaneModelsRead, ModelClass } from '../../shared/models.js';
 import { laneArmRowViewOf } from './coord/laneArm.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
 import { CONTINUITY_LANE, laneArmGate } from '../../shared/lane-arm.js';
@@ -56,6 +58,13 @@ import { claudeBuildOf, fleetClaudeLatest, laneClaudeLatest, type ClaudeRollTarg
  * (D-7552), so a coordinator that will not roll leaves the pass's population and the next one in frame order gets the
  * act. Every skip is journalled with its reason, at most once per id per `ROLL_LINE_MS` unless the reason changed; a
  * row already on the current release is not a skip and writes nothing.
+ *
+ * BEHIND ITS CLASS'S MODEL (typed-repick): the lane's models (`laneModels`, the `ccrc models <lane> show` op the Models sheet
+ * reads) are read only when `autoRollVerdict` answers `read-models` for a row: an Anthropic lane's session with a routed
+ * class and a main-loop model of its family, behind on nothing else, past every other gate. One read per lane per pass, in
+ * the measured step (never on the serialiser); the act's re-ask reads the pass's answer and never the op again. A roll for
+ * the model names the class, the id it ran and the target in its line, and the target is kept (`modelFor`), so a session
+ * whose relaunch kept the old id is rolled once per target.
  */
 
 /** One roll a pass, fleet-wide. */
@@ -89,6 +98,10 @@ export interface RollSweepDeps {
   /** The hand-off's reads (Overlord W1a, the renewal hand-offs, Task 5): the `continuity` row, the live generations and the
    *  role facts. Absent: the row reads shadow, and every session is judged as before the hand-off. */
   readonly continuity?: Pick<CoordStore, 'laneArmSetting' | 'liveGenerations' | 'openCoordinatorIds' | 'run'>;
+  /** Typed-repick: one lane's models (`readLaneModels`), and whether a lane is an Anthropic one (the roster's
+   *  `telemetry: anthropic`, `isAnthropicLane`'s rule). Absent: no session is behind on its model. */
+  readonly laneModels?: (lane: string) => Promise<LaneModelsRead>;
+  readonly anthropicLane?: (lane: string) => boolean;
 }
 
 /** The node's install record, read for the roll. `none`: no completed install stands (a working-tree deploy, which
@@ -114,12 +127,16 @@ export interface RollSweepMemory {
    *  start, and only for a session whose restart missed a build its own lane already runs (a lane record that moved
    *  back, say): a roll that reaches its lane's build leaves the session with no reach, so nothing asks again. */
   readonly builtFor: Map<string, string>;
+  /** Typed-repick: the model target each id was last rolled for (`AutoRollInput.rolledModelFor`), so a session whose
+   *  relaunch kept the old id is not rolled for that target again. Pruned and held as `builtFor` is: a server restart
+   *  forgets it, which costs at most one more roll per session and target. */
+  readonly modelFor: Map<string, string>;
 }
 
 export type RollOutcome =
   /** `after` (D-7541): the target asked again on the serialiser once ccd answered, when it was no longer one (a
    *  coordination write landed while the call ran, which no longer waits on it): the word that says why. */
-  | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number; readonly after?: string }
+  | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number; readonly after?: string; readonly model?: RolledModel }
   /** The pane was still live after ccd's kill (`roll-kill-failed`, exit 6): nothing was rolled and no wake was tried,
    *  but the hibernated marker and the stopped unit the act wrote stand, so the line names the session to check. */
   | { readonly id: string; readonly kind: 'kill-failed'; readonly detail: string }
@@ -136,17 +153,19 @@ export type RollOutcome =
 
 /** The verdict as the executor reads it: a roll is its `hibernate` answer (the sleep its act starts with), every skip
  *  a hold named by its words, and a row on the current release the hold `current`, which writes nothing. */
+type RolledModel = { readonly class: ModelClass; readonly from: string; readonly to: string };
 type RollAnswer =
-  | { readonly act: 'hibernate'; readonly idleMs: number }
+  | { readonly act: 'hibernate'; readonly idleMs: number; readonly model?: RolledModel }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: string };
 
 const CURRENT = 'current';
 
 function answerOf(v: AutoRollVerdict): RollAnswer {
-  if (v.act === 'roll') return { act: 'hibernate', idleMs: v.idleMs };
+  if (v.act === 'roll') return v.model === undefined ? { act: 'hibernate', idleMs: v.idleMs } : { act: 'hibernate', idleMs: v.idleMs, model: v.model };
   if (v.act === 'measure') return v;
-  if (v.act === 'current') return { act: 'hold', reason: CURRENT };
+  // Only the measured step reads a lane's models; anywhere else (the act's re-ask with no answer this pass) it is current.
+  if (v.act === 'current' || v.act === 'read-models') return { act: 'hold', reason: CURRENT };
   return { act: 'hold', reason: v.reason === 'idle-gate' ? `idle-gate:${v.hold}` : v.reason };
 }
 
@@ -165,6 +184,10 @@ interface Pass {
   /** The hand-off (Task 5): the `continuity` row is live, and each recorded id's long-life (`longLivedOf`), read only then. */
   readonly continuityLive: boolean;
   readonly longLived: ReadonlyMap<string, boolean | null>;
+  /** Typed-repick: each Anthropic lane's models as this pass read them (filled by the measured step, at most once per lane),
+   *  and the target each id was last rolled for (`RollSweepMemory.modelFor`). */
+  readonly models: Map<string, LaneModelsRead>;
+  readonly modelFor: ReadonlyMap<string, string>;
 }
 
 /** The hand-off's facts for one pass: the `continuity` row as the generations lane reads it, and, only while it is live, each
@@ -208,18 +231,33 @@ async function liveOf(deps: RollSweepDeps, rec: SessionRecord): Promise<{ live: 
   return { live: { kind: 'read', word: w.ok ? { ok: true, word: w.word } : { ok: false, reason: w.reason }, mark }, startedAt };
 }
 
-function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetSession, store: HibernateStoreRead,
-  live: HibernateLive, startedAt: number | null, now: number): RollAnswer {
+function verdictOf(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetSession, store: HibernateStoreRead,
+  live: HibernateLive, startedAt: number | null, now: number): AutoRollVerdict {
   const overlord = overlordOf(p.designation, row.id);
-  return answerOf(autoRollVerdict({
+  const candidate = deps.laneModels === undefined ? null : modelCandidateOf(row, deps.anthropicLane?.(row.wrapper) ?? false);
+  return autoRollVerdict({
     targets: p.targets, role: row.role, longLived: p.longLived.get(row.id) ?? null, continuityLive: p.continuityLive, release: p.release, startedAt,
     overlord: overlord ?? 'unmeasured',
     build: claudeBuildOf(row, p.latest, p.lanes.get(row.wrapper) ?? null), rolledFor: p.builtFor.get(row.id) ?? null,
+    model: modelFactOf(candidate, p.models.get(row.wrapper)), rolledModelFor: p.modelFor.get(row.id) ?? null,
     optedOut: { roll: names.includes(`${row.id}.${NO_ROLL_SUFFIX}`), hibernate: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`) },
     hibernation: p.hibernation, statusUpdatedAt: row.statusUpdatedAt,
     sleep: { row, overlord: overlord ?? null, optedOut: false, store, viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: now - deps.startedAt, live },
     now,
-  }));
+  });
+}
+
+function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetSession, store: HibernateStoreRead,
+  live: HibernateLive, startedAt: number | null, now: number): RollAnswer {
+  return answerOf(verdictOf(deps, p, names, row, store, live, startedAt, now));
+}
+
+/** One lane's models for this pass, read once: a read that throws is `unreadable` (never behind). */
+async function readModelsOnce(deps: RollSweepDeps, p: Pass, lane: string): Promise<void> {
+  if (p.models.has(lane) || deps.laneModels === undefined) return;
+  let read: LaneModelsRead;
+  try { read = await deps.laneModels(lane); } catch { read = { kind: 'unreadable' }; }
+  p.models.set(lane, read);
 }
 
 /** The roll's row of the sleep executor. Its policy row is hibernation's (`IDLE_HOURS_POLICY`): the roll's idle gate
@@ -249,8 +287,16 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
     first: (deps, f, row, now) => ask(deps, deps.pass, f.names, row, f.storeOf(row.id), { kind: 'unread' }, null, now),
     measured: async (deps, f, row, rec) => {
       const { live, startedAt } = await liveOf(deps, rec);
-      const now = deps.now();
-      return { v: ask(deps, deps.pass, f.names, row, f.storeOf(row.id), live, startedAt, now), now };
+      let now = deps.now();
+      let v = verdictOf(deps, deps.pass, f.names, row, f.storeOf(row.id), live, startedAt, now);
+      if (v.act === 'read-models') {
+        // Typed-repick: past every other gate and behind on nothing else, so its lane's models are read (once a pass), and
+        // the verdict asked again on that answer.
+        await readModelsOnce(deps, deps.pass, row.wrapper);
+        now = deps.now();
+        v = verdictOf(deps, deps.pass, f.names, row, f.storeOf(row.id), live, startedAt, now);
+      }
+      return { v: answerOf(v), now };
     },
     atAct: async (deps, f, row, rec) => {
       const { live, startedAt } = await liveOf(deps, rec);
@@ -282,7 +328,9 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
     acted: (id, v, r) => {
       if (r.kind === 'hibernated') {
         if (r.woke === undefined || r.woke === true) {
-          return r.after === undefined ? { id, kind: 'rolled', idleMs: v.idleMs } : { id, kind: 'rolled', idleMs: v.idleMs, after: r.after };
+          // The act's own verdict names the model target (asked again at the act); the pass's idle time stays the line's.
+          const m = r.verdict.model === undefined ? {} : { model: r.verdict.model };
+          return r.after === undefined ? { id, kind: 'rolled', idleMs: v.idleMs, ...m } : { id, kind: 'rolled', idleMs: v.idleMs, after: r.after, ...m };
         }
         return r.woke.restored ? { id, kind: 'woke-failed', detail: r.woke.failed } : { id, kind: 'woke-unrestored', detail: r.woke.failed };
       }
@@ -343,7 +391,7 @@ export async function rollPass(
   for (const s of sessions) if (!lanes.has(s.wrapper)) lanes.set(s.wrapper, laneClaudeLatest(sessions, s.wrapper));
   const designation = designationOfCoord(deps.coord);
   const pass: Pass = { targets, release, designation, hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor,
-    ...handoffOf(deps.continuity, records, designation) };
+    models: new Map(), modelFor: mem.modelFor, ...handoffOf(deps.continuity, records, designation) };
   mem.lastAt.delete('*');
   const actArmed = deps.act !== null && deps.act.serial !== null && laneVerb(ROLL_LANE.then, deps.act.fleetState);
   const out = (await sleepPass(ROLL_LANE, { ...deps, pass }, mem, sessions, records, names))
@@ -355,6 +403,7 @@ export async function rollPass(
   for (const k of [...mem.lastAt.keys()]) if (k !== '*' && !seen.has(k)) mem.lastAt.delete(k);
   for (const k of [...mem.lastWhat.keys()]) if (k !== '*' && !mem.lastAt.has(k)) mem.lastWhat.delete(k);
   for (const k of [...mem.builtFor.keys()]) if (!seen.has(k)) mem.builtFor.delete(k);
+  for (const k of [...mem.modelFor.keys()]) if (!seen.has(k)) mem.modelFor.delete(k);
   const done = new Set<string>();
   for (const o of out) {
     done.add(o.id);
@@ -363,10 +412,13 @@ export async function rollPass(
       const rolled = sessions.find((s) => s.id === o.id);
       const reach = rolled === undefined ? null : lanes.get(rolled.wrapper) ?? null;
       if (reach !== null) mem.builtFor.set(o.id, reach);
+      if (o.model !== undefined) mem.modelFor.set(o.id, o.model.to);
       const after = o.after === undefined ? ''
         : UNREAD_AFTER.has(o.after) ? `; once ccd answered, whether it was still a roll target could not be read again (${o.after})`
           : `; by the time ccd answered it was no longer a roll target (${o.after})`;
-      deps.log(`ccrc-server: rolled ${o.id} onto the current release${reach === null ? '' : ` (its lane's newest Claude Code build is ${reach})`} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
+      const model = o.model === undefined ? ''
+        : ` (behind its class's model: ${o.model.class} ran ${o.model.from}, its target is ${o.model.to})`;
+      deps.log(`ccrc-server: rolled ${o.id} onto the current release${reach === null ? '' : ` (its lane's newest Claude Code build is ${reach})`}${model} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
     } else if (o.kind === 'skipped') {
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
     } else if (o.kind === 'failed') {

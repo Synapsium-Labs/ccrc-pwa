@@ -2,7 +2,9 @@
 // (`shared/model-aliases.mjs`), pinned input for input BEFORE its age-free half moves into the predicate the automatic roll
 // shares. Every case below was green against `main`'s code first; the move changes nothing this file asserts.
 import { describe, expect, it } from 'vitest';
-import { aliasSessionBehind, type AliasClass, type Aliases, type AliasSession } from '../../shared/model-aliases.mjs';
+import {
+  aliasModelBehind, aliasSessionBehind, type AliasClass, type AliasClassView, type Aliases, type AliasSession,
+} from '../../shared/model-aliases.mjs';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
 import { CLASSES, type ModelClass } from '../../shared/models.mjs';
 
@@ -129,5 +131,39 @@ describe('aliasSessionBehind, as doctor reads it today', () => {
 
   it('an unreadable move time is never behind', () => {
     expect(ask(session(), lane({ opus: { id: X2, idSince: null } }))).toBeNull();
+  });
+});
+
+// The age-free predicate both readers ask (typed-repick): the roll asks it with the seen rule.
+describe('aliasModelBehind', () => {
+  const v = (o: Partial<AliasClassView> = {}): AliasClassView => ({ id: null, launchable: true, seenId: null, hold: null, heldId: null, ...o });
+  const opus = (o: Partial<AliasClassView>) => ({ opus: v(o), sonnet: v({ id: S1, seenId: S1 }) });
+  const s = { cls: 'opus' as const, model: X1 };
+
+  it('with the seen rule, the alias id is a target only once a launch has been seen on it', () => {
+    expect(aliasModelBehind(s, opus({ id: X2, seenId: X2 }), { seen: true })).toEqual({ class: 'opus', from: X1, to: X2 });
+    expect(aliasModelBehind(s, opus({ id: X2, seenId: X1 }), { seen: true })).toBeNull();
+    expect(aliasModelBehind(s, opus({ id: X2, seenId: null }), { seen: true })).toBeNull();
+    expect(aliasModelBehind(s, opus({ id: X2, seenId: null }), { seen: false })).toEqual({ class: 'opus', from: X1, to: X2 });
+  });
+
+  it('a held id needs no launch seen on it; a hold that names none is no target', () => {
+    expect(aliasModelBehind(s, opus({ id: X2, seenId: null, hold: { model: X0 }, heldId: X0 }), { seen: true }))
+      .toEqual({ class: 'opus', from: X1, to: X0 });
+    expect(aliasModelBehind(s, opus({ id: X2, seenId: X2, hold: { model: null } }), { seen: true })).toBeNull();
+  });
+
+  it('an unlaunchable id is never a target, seen or not', () => {
+    expect(aliasModelBehind(s, opus({ id: X2, seenId: X2, launchable: false }), { seen: true })).toBeNull();
+  });
+
+  it('a model another class names, current or held, is a hand pick, and not behind', () => {
+    const classes = { opus: v({ id: X2, seenId: X2 }), sonnet: v({ id: S1, heldId: X1 }) };
+    expect(aliasModelBehind(s, classes, { seen: true })).toBeNull();
+  });
+
+  it('no class on the session, or no view of it, is not behind', () => {
+    expect(aliasModelBehind({ cls: null, model: X1 }, opus({ id: X2, seenId: X2 }), { seen: true })).toBeNull();
+    expect(aliasModelBehind(s, { sonnet: v({ id: S1 }) }, { seen: true })).toBeNull();
   });
 });

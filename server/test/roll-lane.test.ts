@@ -20,6 +20,7 @@ import { withBindingsOf } from './bindingsFake.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
+import { CLASSES, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../shared/models.js';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -92,7 +93,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
   };
   return { deps, coord, lines, calls, wakes, refunds, set };
 }
-const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map() });
+const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map() });
 const pass = (f: Fake, rows: FleetSession[] = [row(COORD)], names: readonly string[] = [], m = mem()) =>
   rollPass(f.deps, m, rows, rows.map((r) => rec(r.id)), names);
 
@@ -938,5 +939,122 @@ describe('rollPass: the Overlord and the designation (Overlord W1 designation A,
     const f = fake();
     f.deps.coord!.designationRead = () => { throw new Error('fixture'); };
     expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'designation-unreadable' }]);
+  });
+});
+
+// ── behind its class's model (model-class follow-up typed-repick) ─────────────────────────────────────────────────────
+describe('rollPass: a session behind its class\'s model (typed-repick)', () => {
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const X3 = 'claude-opus-9-3';
+  /** Its pane started after the node's install: behind on nothing but its model. */
+  const AFTER = INSTALLED + MIN;
+  const mrow = (id: string, model: string, o: Partial<FleetSession> = {}): FleetSession => row(id, {
+    wrapper: 'lane-a',
+    route: { fields: { class: 'opus' }, degraded: null, inert: [], unreadable: [] },
+    usage: { ts: 1, model, class: 'opus', effort: null, ctxPct: null, cost: null, stale: true },
+    ...o,
+  } as Partial<FleetSession>);
+  const lane = (opusId: string, o: { seenId?: string | null } = {}): LaneModelsRead => {
+    const classes = {} as Record<ModelClass, LaneClassModel>;
+    const adv = {} as Record<ModelClass, LaneClassAdvance>;
+    for (const c of CLASSES) {
+      classes[c] = { model: null, label: null, efforts: null } as LaneClassModel;
+      adv[c] = { family: null, hold: null, previous: null, revertable: false, lastMove: null };
+    }
+    classes.opus = { model: opusId, label: null, efforts: null, seenId: o.seenId === undefined ? opusId : o.seenId } as LaneClassModel;
+    return { kind: 'read', classes, advance: { state: 'ok', detail: null, pending: null, classes: adv } };
+  };
+  /** The fake with an Anthropic lane-a whose models answer `answer()`, counting every read; the act's re-read row is `rows`'. */
+  function modelFake(rows: FleetSession[], answer: () => LaneModelsRead | Promise<LaneModelsRead>, o: { anthropic?: boolean } = {}) {
+    const f = fake({ startedAt: AFTER });
+    const reads: string[] = [];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const act = { ...f.deps.act!, rowAtAct: async (r: SessionRecord) => ({ ok: true as const, row: byId.get(r.id) ?? row(r.id) }) } as RollActPort;
+    const deps: RollSweepDeps = {
+      ...f.deps, act,
+      laneModels: async (l) => { reads.push(l); return answer(); },
+      anthropicLane: (l) => (o.anthropic ?? true) && l === 'lane-a',
+    };
+    return { f, deps, reads, byId };
+  }
+  const run = (deps: RollSweepDeps, rows: FleetSession[], m = mem()) => rollPass(deps, m, rows, rows.map((r) => rec(r.id)), []);
+
+  it('an idle session on the id its class left is rolled once, its line naming the reason and the target', async () => {
+    const rows = [mrow(COORD, X1)];
+    const { f, deps, reads } = modelFake(rows, () => lane(X2));
+    const m = mem();
+    expect(await run(deps, rows, m)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, model: { class: 'opus', from: X1, to: X2 } }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+    expect(reads).toEqual(['lane-a']);
+    expect(f.lines.join('\n')).toContain(`rolled ${COORD} onto the current release (behind its class's model: opus ran ${X1}, its target is ${X2})`);
+    expect(m.modelFor.get(COORD)).toBe(X2);
+  });
+
+  it('a relaunch that kept the old id is not rolled again for that target; a newer target rolls it again', async () => {
+    const rows = [mrow(COORD, X1)];
+    let target = X2;
+    const { f, deps } = modelFake(rows, () => lane(target));
+    const m = mem();
+    await run(deps, rows, m);
+    f.calls.length = 0;
+    expect(await run(deps, rows, m), 'same target: current, nothing written').toEqual([]);
+    expect(f.calls).toEqual([]);
+    target = X3;
+    expect((await run(deps, rows, m)).map((o) => o.kind)).toEqual(['rolled']);
+    expect(m.modelFor.get(COORD)).toBe(X3);
+  });
+
+  it('the lane is read once a pass however many of its sessions pass the gates', async () => {
+    const rows = [mrow(COORD, X2), mrow(COORD2, X2)];
+    const { f, deps, reads } = modelFake(rows, () => lane(X2));
+    expect(await run(deps, rows)).toEqual([]);
+    expect(reads).toEqual(['lane-a']);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('on the new id, on an unseen id, or with an unreadable read, nothing is rolled and nothing is written', async () => {
+    const rows = [mrow(COORD, X1)];
+    let answer: () => LaneModelsRead = () => lane(X1);
+    const { f, deps, reads } = modelFake(rows, () => answer());
+    for (const a of [() => lane(X1), () => lane(X2, { seenId: X1 }), (): LaneModelsRead => ({ kind: 'unreadable' }),
+      (): LaneModelsRead => { throw new Error('link down'); }]) {
+      answer = a;
+      reads.length = 0;
+      expect(await run(deps, rows)).toEqual([]);
+      expect(f.calls).toEqual([]);
+      expect(f.lines).toEqual([]);
+      expect(reads).toEqual(['lane-a']);
+    }
+  });
+
+  it('no lane is read for a session held at a gate, on a lane that is not Anthropic, or unrouted', async () => {
+    const quiet = [mrow(COORD, X1)];
+    const { f, deps, reads } = modelFake(quiet, () => lane(X2));
+    f.set.age = ROLL_QUIET_MS - MIN;
+    expect(await run(deps, quiet), 'held as current, not a skip').toEqual([]);
+    expect(reads).toEqual([]);
+    f.set.age = 2 * HOUR;
+    expect(await run({ ...deps, anthropicLane: () => false }, quiet)).toEqual([]);
+    expect(reads).toEqual([]);
+    const unrouted = [mrow(COORD, X1, { route: null } as Partial<FleetSession>)];
+    expect(await run(deps, unrouted)).toEqual([]);
+    expect(reads).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a session behind on its model is still held by name at a gate (.no-roll)', async () => {
+    const rows = [mrow(COORD, X1)];
+    const { f, deps } = modelFake(rows, () => lane(X2));
+    expect(await rollPass(deps, mem(), rows, rows.map((r) => rec(r.id)), [`${COORD}.no-roll`])).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('with no lane-models read wired, no session is behind on its model', async () => {
+    const rows = [mrow(COORD, X1)];
+    const { f, deps } = modelFake(rows, () => lane(X2));
+    const bare: RollSweepDeps = { ...deps, laneModels: undefined };
+    expect(await run(bare, rows)).toEqual([]);
+    expect(f.calls).toEqual([]);
   });
 });
