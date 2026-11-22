@@ -142,6 +142,8 @@ export const HOOK_EVENT_RULES: Readonly<Record<HookEvent, readonly CaptureFieldR
   PostCompact: [req('trigger', 'string')],
   StopFailure: [opt('error', 'present')],
   SessionEnd: [opt('reason', 'string')],
+  PreModelSwitch: [req('from_model', 'present'), req('to_model', 'present')],
+  PostModelSwitch: [req('from_model', 'present'), req('to_model', 'present')],
 });
 
 /** What `server/src/livestate.ts` reads from Claude Code's live status file (`<config>/sessions/<pid>.json`). */

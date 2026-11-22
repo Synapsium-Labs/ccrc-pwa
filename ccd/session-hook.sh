@@ -3316,9 +3316,34 @@ _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends th
   return 0
 }
 
+# ── THE MODEL EVENTS AND THE TYPED /model (Overlord W1 door process B2, Task 8; spec §3.6 H1, §3.4 Table 3.4b, W0-12) ───
+# Both model events are REPORT-ONLY (ruled, F11). `PreModelSwitch` refuses nothing and sends nothing: Claude Code's own switch
+# on a flagged request is pinned on, and a refusal there could stop it. `PostModelSwitch` sends one `model-switch` report,
+# `how: switched`, `from` and `to` read from the payload's `from_model` and `to_model` (W0-12), for every session the start
+# report covers (main thread, a registry row, not a child: plan question 11, so a coordinator's switch is measured too). The
+# one refusal is on the PROMPT path: in a session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a
+# fact, never a role's name), a prompt that begins `/model` is blocked with the prompt event's own block answer and reported
+# `typed-refused`, which changed nothing and is never drift (slug `typed-model-refused-on-the-prompt-path`). Each arm EXITS in
+# the case block below, before every writer (ruled, F14): the state file, the turn marker and the spools never see a model
+# event or a refused prompt. The report rides the door's one sender, `_hook_door_report` (B1), defined here so these arms reach
+# it. Whether the pinned build passes a typed `/model` through UserPromptSubmit at all is the pull request's live step.
+REPORT_TIMEOUT_S=3
+_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+MODEL_REPORT_JQ='def mdl: (if type == "string" then . elif type == "object" and (.id | type) == "string" then .id else "" end) | explode | map(select(. >= 32 and . <= 126)) | implode | .[0:128] | if . == "" then null else . end; def typed: (.prompt | strings | until(. == "" or (.[0:1] | IN(" ", "\t", "\n", "\r") | not); .[1:])) // "";'
+_hook_model_report() {   # <how> -> one model-switch report from a main-thread, non-child session with a registry row; silent on every failure
+  local b; [[ -z "$paid" && -f "$REG/$id.generation" && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] || return 0
+  b=$(jq -c --arg id "$id" --arg how "$1" --argjson at "$(_hook_epoch_ms)" "$MODEL_REPORT_JQ"'{kind: "model-switch", how: $how, from: (if $how == "switched" then .from_model | mdl else null end), to: (if $how == "switched" then .to_model else typed | .[6:] | (split("\n")[0] // "") | split("\t") | join(" ") | split(" ") | map(select(. != "")) | .[0] end | mdl), fromId: $id, fromUuid: (.session_id // "" | tostring), at: $at}' <<<"$payload" 2>/dev/null) && _hook_door_report "$b"
+}
+_hook_typed_model() {   # -> 0 when this prompt is a typed /model in a session with a door: reported, and its block answer printed
+  local j; [[ "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && "$payload" == *'/model'* ]] || return 1
+  jq -e "$MODEL_REPORT_JQ"'typed | startswith("/model") and (.[6:7] | IN("", " ", "\t", "\n", "\r"))' <<<"$payload" >/dev/null 2>&1 || return 1
+  j=$(jq -cn --arg r "ccrc: a typed /model is refused in this session. Its model is the designation's, set at each start; a change inside a generation reads as model drift. Change the designated model in the Overlord's Settings: it takes effect at the next generation." '{decision: "block", reason: $r}' 2>/dev/null) || return 1
+  _hook_model_report typed-refused; printf '%s\n' "$j"
+}
+
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend="" apr=""
 case "$event" in
-  UserPromptSubmit) state="working" ;;
+  UserPromptSubmit) state="working"; _hook_typed_model && exit 0 ;;
   PostToolUse)
     state="working"
     # ONE payload read for the counter, on the one event that can carry a
@@ -3516,6 +3541,8 @@ case "$event" in
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
+  PreModelSwitch) exit 0 ;;   # report-only, and it refuses nothing (the model events' block above)
+  PostModelSwitch) _hook_model_report switched; exit 0 ;;
   *) exit 0 ;;
 esac
 # THE HISTORY SCOPE MARKER, FAIL-CLOSED (ccrc history spec 2026-10-05 §5.1,
@@ -5935,6 +5962,30 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* &
   fi
 fi
 
+# THE READER ARMS (Overlord W1 door process B2, Task 8; spec §3.3.10 C55: "a reader never acts", "a second line", "Bounds"). Each keys on
+# a fact, never on a role's name, and denies through the one PreToolUse print, so a denied door call sends no witness (B1's arm runs after).
+# SCOPE (ruled, F24): a door tool other than `mcp__door__read`, called by a reader: an agent id with a recorded join (`tmsub`) or a payload
+# carrying an `agent_type`. THREE READERS (plan question 10, slug `reader-bound-in-the-scope-arm`): a main-thread Agent or Task call in a
+# session with a door while the roster `subs` holds three. Its residuals: the roster is rewritten whole and loses writes under load
+# (D-5232), so a lost start lets a fourth through; one message with four Agent calls passes, since every PreToolUse runs before any
+# SubagentStart; and "in the background" is not enforced. MODEL (slug `reader-model-arm-kept-as-a-belt`): under the pin
+# (`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`) an Agent or Task call naming another model than `$CLAUDE_CODE_SUBAGENT_MODEL`; under the
+# pin Claude Code drops the field (W0-11), so the arm stands for a launch where the pin did not engage.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rd=""
+  case "${tool:-}" in
+    mcp__door__read) ;;
+    mcp__door__?*) { [[ -n "$tmsub" ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
+      && rd="ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, \`mcp__door__read\`. Hand anything else back to the main thread in your answer." ;;
+    Agent|Task)
+      [[ -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && (( $(jq 'length' <<<"$subs" 2>/dev/null || echo 0) >= 3 )) \
+        && rd="ccrc: three readers already run (C55's bound): wait for one to finish before starting another."
+      [[ -z "$rd" && "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}" == 1 && -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]] && rmod=$(jq -r '.tool_input.model | strings' <<<"$payload" 2>/dev/null) \
+        && [[ -n "$rmod" && "$rmod" != "$CLAUDE_CODE_SUBAGENT_MODEL" ]] && rd="ccrc: a subagent here runs on the pinned model, $CLAUDE_CODE_SUBAGENT_MODEL; this call names $rmod. Leave the model out, or name the pinned one." ;;
+  esac
+  [[ -n "$rd" ]] && rj=$(_hook_deny_json "$rd") && pre_json=$rj
+fi
+
 # A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
 # Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
 # naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names
@@ -6351,8 +6402,7 @@ if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_gate ||
 # (`renderOperatorMessageNudge`, server/src/coord/envelope.ts; session-hook-door-reports.test.ts holds `DOOR_NUDGE_JQ` to it). Each is a SIDE
 # SEND: it writes nothing to the hookstate, spools nothing, retries nothing and fails open. It is the SIXTH declared network exception (see the
 # header): `_hook_net_bound` gives it at most REPORT_TIMEOUT_S (a copy of the L0 constant, held equal by its test) of the invocation's one budget.
-REPORT_TIMEOUT_S=3
-_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+# REPORT_TIMEOUT_S and the sender, `_hook_door_report`, are defined above the main case block (door process B2), which the model events reach.
 DOOR_NUDGE_JQ='def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | all(. >= 48 and . <= 57) and .[0] != 48)) | tonumber else empty end;'
 _hook_door_arms() {   # -> the event's reports, one `_hook_door_report` each
   local k="" q="" l; [[ "${tool:-}" == mcp__door__?* && "$pre_json" != *'"permissionDecision":"deny"'* ]] && k=$(printf '%s\n%s' "$tool" "$(jq -cS '.tool_input // {}' <<<"$payload")" | _apr_sha256); [[ -z "$paid" && "$bg" == 0 ]] && q=1
