@@ -457,7 +457,6 @@ const homeDoor = (): HTMLElement => topBar().querySelector<HTMLElement>('.ins-do
 const placeDoors = (): HTMLElement[] => within(primary()).getAllByRole('button').filter((b) => !b.classList.contains('ins-home'));
 const primary = (): HTMLElement => screen.getByRole('navigation', { name: 'Primary' });
 const doorNamed = (name: string): HTMLElement => within(topBar()).getByRole('button', { name });
-const FLEET = (): string => ROUTES.find((r) => r.id === 'fleet')!.title;
 
 /** One path per `ROUTES` row, and one outside the table. */
 const ROUTE_PATHS: Record<string, string> = {

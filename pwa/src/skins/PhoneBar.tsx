@@ -12,7 +12,7 @@
 // or under carries `aria-current="page"` (`topRouteOf`, the reader of Instrument's top bar doors too). Search is
 // `commandDoor('open-palette')`, the desk bar's search door. This file holds markup and its own class names only
 // (`styles/shell.css`).
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useState, type ReactNode } from 'react';
 import { CountBadge, Door, Icon } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
 import { badgePrint, placeBadge, useNavBadges } from '../fleet/navBadges';
@@ -51,7 +51,6 @@ function PlaceDoor({ place, here, count, word }: { place: Place; here: boolean; 
 function useBarWidth(): [(el: HTMLDivElement | null) => void, number] {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(() => window.innerWidth);
-  const ref = useRef(setEl);
   useLayoutEffect(() => {
     if (el === null) return undefined;
     const measure = (): void => { if (el.clientWidth > 0) setWidth(el.clientWidth); };
@@ -61,7 +60,7 @@ function useBarWidth(): [(el: HTMLDivElement | null) => void, number] {
     ro.observe(el);
     return () => ro.disconnect();
   }, [el]);
-  return [ref.current, width];
+  return [setEl, width];
 }
 
 export function PhoneBar(): ReactNode {
