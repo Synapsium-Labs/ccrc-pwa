@@ -8,7 +8,8 @@ import {
 import { RUNGS } from '../../shared/overlord-ladder.js';
 import type { AuthorityView } from '../src/coord/overlordAuthority.js';
 import {
-  authorityEpoch, currentWitnessTuple, offVolumeHeld, witnessVerdict,
+  authorityEpoch, currentWitnessTuple, narrowestTold, offVolumeHolders, offVolumeHeld, witnessVerdict,
+  type WitnessSourceAnswer,
   type AuthorityEpoch, type HeldByWitness, type HostRelation, type ServerWitnessFacts, type WitnessHeld, type WitnessVerdict,
 } from '../src/coord/overlordAuthorityWitness.js';
 import { PRIVACY_HEAD_UNWIRED, type PrivacyHeadRead } from '../src/coord/privacyJournalHead.js';
@@ -254,27 +255,27 @@ describe('the witness tuple the server offers', () => {
 describe('offVolumeHeld', () => {
   const h = (host: HostRelation, epoch: number, boot = BOOT_OLD): HeldByWitness => ({ host, epoch, boot });
   it('a same-host holder alone does not hold it', () => {
-    expect(offVolumeHeld(5, [h('same-host', 9)], BOOT_NOW)).toBe('not-yet');
+    expect(offVolumeHeld(5, [h('same-host', 9)])).toBe('not-yet');
   });
   it('an unmeasured holder alone does not hold it', () => {
-    expect(offVolumeHeld(5, [h('unmeasured', 9)], BOOT_NOW)).toBe('not-yet');
+    expect(offVolumeHeld(5, [h('unmeasured', 9)])).toBe('not-yet');
   });
   it('a console or an other-host holder at or above the epoch holds it', () => {
-    expect(offVolumeHeld(5, [h('console', 5)], BOOT_NOW)).toBe('held');
-    expect(offVolumeHeld(5, [h('other-host', 6)], BOOT_NOW)).toBe('held');
-    expect(offVolumeHeld(5, [h('same-host', 9), h('console', 7)], BOOT_NOW)).toBe('held');
+    expect(offVolumeHeld(5, [h('console', 5)])).toBe('held');
+    expect(offVolumeHeld(5, [h('other-host', 6)])).toBe('held');
+    expect(offVolumeHeld(5, [h('same-host', 9), h('console', 7)])).toBe('held');
   });
   it('a holder below the epoch does not hold it, and nobody holds nothing', () => {
-    expect(offVolumeHeld(5, [h('console', 4)], BOOT_NOW)).toBe('not-yet');
-    expect(offVolumeHeld(5, [], BOOT_NOW)).toBe('not-yet');
+    expect(offVolumeHeld(5, [h('console', 4)])).toBe('not-yet');
+    expect(offVolumeHeld(5, [])).toBe('not-yet');
   });
   it('a holder under this boot still counts for holding a narrowing', () => {
-    expect(offVolumeHeld(5, [h('console', 5, BOOT_NOW)], BOOT_NOW)).toBe('held');
+    expect(offVolumeHeld(5, [h('console', 5)])).toBe('held');
   });
   it('an epoch that is not a count is unmeasured', () => {
-    expect(offVolumeHeld(-1, [h('console', 5)], BOOT_NOW)).toBe('unmeasured');
-    expect(offVolumeHeld(Number.NaN, [h('console', 5)], BOOT_NOW)).toBe('unmeasured');
-    expect(offVolumeHeld(1.5, [], BOOT_NOW)).toBe('unmeasured');
+    expect(offVolumeHeld(-1, [h('console', 5)])).toBe('unmeasured');
+    expect(offVolumeHeld(Number.NaN, [h('console', 5)])).toBe('unmeasured');
+    expect(offVolumeHeld(1.5, [])).toBe('unmeasured');
   });
 });
 
@@ -373,12 +374,12 @@ describe('offVolumeHeld over a generated domain', () => {
     for (const host of hosts) for (const epoch of [0, 3, 5, 8]) for (const boot of [BOOT_OLD, BOOT_NOW]) all.push({ host, epoch, boot });
     for (const epoch of [0, 4, 5, 9]) {
       for (const a of all) {
-        const one = offVolumeHeld(epoch, [a], BOOT_NOW);
+        const one = offVolumeHeld(epoch, [a]);
         const expected = (a.host === 'other-host' || a.host === 'console') && a.epoch >= epoch ? 'held' : 'not-yet';
         expect(one).toBe(expected);
         for (const b of all) {
-          if (one === 'held') expect(offVolumeHeld(epoch, [a, b], BOOT_NOW)).toBe('held');
-          if (one === 'not-yet' && offVolumeHeld(epoch, [b], BOOT_NOW) === 'not-yet') expect(offVolumeHeld(epoch, [a, b], BOOT_NOW)).toBe('not-yet');
+          if (one === 'held') expect(offVolumeHeld(epoch, [a, b])).toBe('held');
+          if (one === 'not-yet' && offVolumeHeld(epoch, [b]) === 'not-yet') expect(offVolumeHeld(epoch, [a, b])).toBe('not-yet');
         }
       }
     }
@@ -389,3 +390,41 @@ describe('offVolumeHeld over a generated domain', () => {
 const _epochShape: AuthorityEpoch = 'unmeasured';
 void _epochShape;
 void it;
+
+describe('offVolumeHolders: the holders a source map projects (held-for-compares-authority-sequence)', () => {
+  const src = (host: HostRelation, verdict: WitnessSourceAnswer['verdict'], t: WitnessTuple | null): WitnessSourceAnswer => ({ host, verdict, tuple: t });
+  it('keeps a consistent source at the server\'s base, with its authority head sequence in place of its epoch', () => {
+    const t = tuple({ epoch: 9, base: 4, terms: { authority: 2, privacy: 3, act: 'absent' }, authority: { sequence: 7, digest: D('7') } });
+    expect(offVolumeHolders([src('console', 'consistent', t)], 4)).toEqual([{ host: 'console', boot: BOOT_OLD, epoch: 7 }]);
+  });
+  it('reads a tuple with no authority record as sequence 0', () => {
+    const t = tuple({ epoch: 0, terms: { authority: 0, privacy: 'absent', act: 'absent' }, authority: null });
+    expect(offVolumeHolders([src('other-host', 'consistent', t)], 0)[0]!.epoch).toBe(0);
+  });
+  it('drops a source that is not consistent, has no tuple, or holds another base', () => {
+    const t = tuple({ base: 1, epoch: 3 });
+    expect(offVolumeHolders([src('console', 'stale', t), src('console', 'consistent', null), src('console', 'consistent', t)], 0)).toEqual([]);
+  });
+});
+
+describe('narrowestTold: the narrowest narrowing over the sources that count', () => {
+  const told = (operatorRung: WitnessTuple['told']['operatorRung'], latches: WitnessTuple['told']['latches']): WitnessTuple =>
+    tuple({ told: { operatorRung, latches } });
+  const src = (host: HostRelation, verdict: WitnessSourceAnswer['verdict'], t: WitnessTuple): WitnessSourceAnswer => ({ host, verdict, tuple: t });
+  it('is null when no source counts: a same-host, an unmeasured or a non-consistent one never does', () => {
+    expect(narrowestTold([])).toBeNull();
+    expect(narrowestTold([src('same-host', 'consistent', told('off', [])), src('unmeasured', 'consistent', told('off', [])), src('console', 'stale', told('off', []))])).toBeNull();
+  });
+  it('takes the lowest non-null operator rung by rank, ignoring a null one', () => {
+    expect(narrowestTold([src('console', 'consistent', told('full', [])), src('other-host', 'consistent', told('chat', [])), src('console', 'consistent', told(null, []))]))
+      .toEqual({ operatorRung: 'chat', latches: [] });
+    expect(narrowestTold([src('console', 'consistent', told(null, []))])).toEqual({ operatorRung: null, latches: [] });
+  });
+  it('unions the latches, each cause at its lowest cap, sorted by cause', () => {
+    const got = narrowestTold([
+      src('console', 'consistent', told(null, [{ cause: 'b-cause', cap: 'advise' }, { cause: 'd-cause', cap: 'full' }])),
+      src('other-host', 'consistent', told(null, [{ cause: 'a-cause', cap: 'chat' }, { cause: 'b-cause', cap: 'chat' }])),
+    ]);
+    expect(got).toEqual({ operatorRung: null, latches: [{ cause: 'a-cause', cap: 'chat' }, { cause: 'b-cause', cap: 'chat' }, { cause: 'd-cause', cap: 'full' }] });
+  });
+});

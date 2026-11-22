@@ -46,7 +46,9 @@ export type PrivacyIssue =
 /** The privacy journal as the store uses it: an issuer of message ids that appends the issued record and answers the id
  *  from the same verified read, or the refusal its open read. Task 3 binds the real journal; a test hands a double. */
 export type PrivacyIssuer =
-  | { readonly kind: 'ready'; issue(storeHighest: number | null, at: number): PrivacyIssue; head?(): StoreRead<PrivacyJournalHead> }
+  | { readonly kind: 'ready'; issue(storeHighest: number | null, at: number): PrivacyIssue; head?(): StoreRead<PrivacyJournalHead>;
+    /** The digest of the record at a sequence (`null`: none there), for the witness's heads check. */
+    digestAt?(sequence: number): StoreRead<string | null> }
   | { readonly kind: 'refused'; readonly code: string; readonly detail: string };
 /** The privacy journal's head, for authority journal B's witness epoch: the last record's digest and sequence, and the
  *  highest message id the journal names. `empty` when it holds no record. */
@@ -342,6 +344,13 @@ export class OperatorModelStore {
     return this.privacy.head?.() ?? { kind: 'unmeasured', why: 'this issuer reads no head' };
   }
 
+  /** The digest of the privacy journal's record at `sequence`, `null` when none is there; `unmeasured` for a refused issuer, one
+   *  that reads no digest, or a journal that could not be read. */
+  privacyJournalDigestAt(sequence: number): StoreRead<string | null> {
+    if (this.privacy.kind === 'refused') return { kind: 'unmeasured', why: `${this.privacy.code}: ${this.privacy.detail}` };
+    return this.privacy.digestAt?.(sequence) ?? { kind: 'unmeasured', why: 'this issuer reads no digest' };
+  }
+
   private read<T>(fn: () => T): StoreRead<T> {
     if (!this.db.isOpen) return { kind: 'unmeasured', why: 'the private store is not open' };
     try {
@@ -452,6 +461,13 @@ export function privacyIssuerOf(file: ChainedJournalFile<PrivacyJournalEntry>): 
       if (r.kind === 'absent' || r.records.length === 0) return { kind: 'measured', value: 'empty' };
       const last = r.records[r.records.length - 1]!;
       return { kind: 'measured', value: { digest: last.digest, sequence: last.sequence, highestId: privacyHighestId(r.records) } };
+    },
+    digestAt(sequence) {
+      const r = file.read();
+      if (r.kind === 'unmeasured') return { kind: 'unmeasured', why: r.why };
+      if (r.kind === 'malformed') return { kind: 'unmeasured', why: `${r.code}: ${r.detail}` };
+      if (r.kind === 'absent') return { kind: 'measured', value: null };
+      return { kind: 'measured', value: r.records.find((x) => x.sequence === sequence)?.digest ?? null };
     },
   };
 }

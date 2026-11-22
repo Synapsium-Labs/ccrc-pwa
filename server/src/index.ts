@@ -26,6 +26,9 @@ import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
+import { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
+import { witnessLinkOver } from './coord/overlordAuthorityWitnessLink.js';
+import type { PrivacyJournalHead } from './coord/privacyJournalHead.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -522,6 +525,29 @@ setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now(
 
 deps.overlordAuthority = overlordAuthority;
 deps.overlordAuthorityGuard = overlordAuthorityGuard;
+// The authority witness exchange (Overlord W1, Task 6, §7.6): built after the guard and the agent link. Its privacy port reads the
+// private store's head and digests (`measured 'empty'` is a wired journal with no record, its own word); its boot nonce is the
+// collector switch's, the process's ONE; its agent's host relation reads `unmeasured` until the isolation word's per-link port is
+// wired (plan question 10: whoever lands that re-points `relationOf`).
+const privacyHead: PrivacyJournalHead = {
+  read: () => {
+    const h = operatorModel.store.privacyJournalHead();
+    if (h.kind === 'unmeasured') return { kind: 'unmeasured', why: h.why };
+    if (h.value === 'empty') return { kind: 'empty' };
+    return {
+      kind: 'head', sequence: h.value.sequence, digest: h.value.digest, highestMessageId: h.value.highestId,
+      digestAt: (n) => { const d = operatorModel.store.privacyJournalDigestAt(n); return d.kind === 'unmeasured' ? 'unmeasured' : d.value; },
+    };
+  },
+};
+const overlordAuthorityExchange = new OverlordAuthorityExchange({
+  journal: overlordAuthority, guard: overlordAuthorityGuard, privacy: privacyHead, boot: collectLane.bootNonce,
+  agent: fleetClient === null ? null : { held: () => fleetClient!.state.authorityWitness, link: witnessLinkOver(fleetClient) },
+  relationOf: () => 'unmeasured', warn: (line) => console.warn(line),
+});
+fleetClient?.onConnected(() => overlordAuthorityExchange.nudge());
+overlordAuthorityGuard.onAppended(() => overlordAuthorityExchange.nudge());
+deps.overlordAuthorityExchange = overlordAuthorityExchange;
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

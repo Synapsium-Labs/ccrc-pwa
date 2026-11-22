@@ -544,25 +544,25 @@ export function offVolumeHeldCases(m: Pick<Witness, 'offVolumeHeld'>): Record<st
   const h = (host: Host, epoch: number, boot = 'boot-old') => ({ host, epoch, boot });
   return {
     'a same-host or unmeasured holder alone does not hold it': () => {
-      expect(m.offVolumeHeld(5, [h('same-host', 9)], 'boot-now')).toBe('not-yet');
-      expect(m.offVolumeHeld(5, [h('unmeasured', 9)], 'boot-now')).toBe('not-yet');
+      expect(m.offVolumeHeld(5, [h('same-host', 9)])).toBe('not-yet');
+      expect(m.offVolumeHeld(5, [h('unmeasured', 9)])).toBe('not-yet');
     },
     'a console or an other-host holder at or above the epoch holds it': () => {
-      expect(m.offVolumeHeld(5, [h('console', 5)], 'boot-now')).toBe('held');
-      expect(m.offVolumeHeld(5, [h('other-host', 6)], 'boot-now')).toBe('held');
-      expect(m.offVolumeHeld(5, [h('same-host', 9), h('console', 7)], 'boot-now')).toBe('held');
+      expect(m.offVolumeHeld(5, [h('console', 5)])).toBe('held');
+      expect(m.offVolumeHeld(5, [h('other-host', 6)])).toBe('held');
+      expect(m.offVolumeHeld(5, [h('same-host', 9), h('console', 7)])).toBe('held');
     },
     'a holder below the epoch, or nobody, does not hold it': () => {
-      expect(m.offVolumeHeld(5, [h('console', 4)], 'boot-now')).toBe('not-yet');
-      expect(m.offVolumeHeld(5, [h('other-host', 4)], 'boot-now')).toBe('not-yet');
-      expect(m.offVolumeHeld(5, [], 'boot-now')).toBe('not-yet');
+      expect(m.offVolumeHeld(5, [h('console', 4)])).toBe('not-yet');
+      expect(m.offVolumeHeld(5, [h('other-host', 4)])).toBe('not-yet');
+      expect(m.offVolumeHeld(5, [])).toBe('not-yet');
     },
     'a holder under this boot still counts for holding a narrowing': () => {
-      expect(m.offVolumeHeld(5, [h('console', 5, 'boot-now')], 'boot-now')).toBe('held');
+      expect(m.offVolumeHeld(5, [h('console', 5)])).toBe('held');
     },
     'an epoch that is not a count is unmeasured': () => {
-      expect(m.offVolumeHeld(-1, [h('console', 5)], 'boot-now')).toBe('unmeasured');
-      expect(m.offVolumeHeld(1.5, [], 'boot-now')).toBe('unmeasured');
+      expect(m.offVolumeHeld(-1, [h('console', 5)])).toBe('unmeasured');
+      expect(m.offVolumeHeld(1.5, [])).toBe('unmeasured');
     },
   };
 }

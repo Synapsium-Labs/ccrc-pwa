@@ -44,7 +44,7 @@ const DECISION_ROWS_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TA
 type Fault = 'none' | 'open' | 'write' | 'fsync';
 interface Fx {
   dir: string; leaf: string; db: DatabaseSync; guard: OverlordAuthorityGuard; failures: AuthorityWriterFailure[];
-  journal: OverlordAuthorityJournal; fault: { now: Fault };
+  journal: OverlordAuthorityJournal; fault: { now: Fault }; appendedReports: { n: number };
   head(): { sequence: number; journalId: string; digest: string; at: number } | undefined;
   lines(): string[];
   inTx(e: OverlordAuthorityMove, after?: (a: AuthorityAppend) => void): AuthorityAppend;
@@ -76,12 +76,16 @@ function fx(opts: { content?: string; wall?: () => number } = {}): Fx {
   const failures: AuthorityWriterFailure[] = [];
   let journal!: OverlordAuthorityJournal;
   const guard = new OverlordAuthorityGuard({ healTornTail: () => journal.healTornTail(db), measure: () => journal.measure(db) });
-  const spy = { state: () => guard.state(), writerFailed: (c: AuthorityWriterFailure) => { failures.push(c); guard.writerFailed(c); } };
+  const appendedReports = { n: 0 };
+  const spy = {
+    state: () => guard.state(), writerFailed: (c: AuthorityWriterFailure) => { failures.push(c); guard.writerFailed(c); },
+    appended: () => { appendedReports.n++; },
+  };
   const clock = fakeTime({ wallMs: Date.parse('2026-11-16T10:00:00.000Z') }).ports.clock;
   journal = new OverlordAuthorityJournal(file, { clock: opts.wall === undefined ? clock : { ...clock, wall: opts.wall } }, spy);
   guard.bootVerdict(journal.measure(db));
   return {
-    dir, leaf, db, guard, failures, journal, fault,
+    dir, leaf, db, guard, failures, journal, fault, appendedReports,
     head: () => db.prepare('SELECT sequence, journalId, digest, at FROM overlord_authority_head').get() as never,
     lines: () => (existsSync(leaf) ? readFileSync(leaf, 'utf8').split('\n').filter((l) => l !== '') : []),
     inTx: (e, after) => tx(db, () => { const a = journal.appendInTx(db, e); after?.(a); return a; }),
@@ -116,6 +120,16 @@ describe('appendInTx: inside the caller\'s transaction, never outside', () => {
     const rec = (a as Extract<AuthorityAppend, { kind: 'appended' }>).record;
     expect(f.head()).toEqual({ sequence: 1, journalId: rec.journalId, digest: rec.digest, at: Date.parse('2026-11-16T10:00:00.000Z') });
     expect(f.failures).toEqual([]);
+  });
+  it('reports a successful append to the guard port once, and a row-only or a refusal never (Task 6)', () => {
+    const f = fx();
+    f.inTx(WIDEN);
+    expect(f.appendedReports.n).toBe(1);
+    f.guard.witnessRefused('witness-epoch');
+    f.inTx(NARROW);      // row-only
+    f.inTx(WIDEN);       // refused
+    f.journal.appendInTx(f.db, NARROW);      // outside tx(): refused
+    expect(f.appendedReports.n).toBe(1);
   });
   it('two records in a row, each in its own transaction, chain, and the second re-reads the file (X1)', () => {
     const f = fx();

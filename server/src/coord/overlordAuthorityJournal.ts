@@ -61,6 +61,8 @@ export interface AuthorityGuardPort {
   state(): AuthorityState;
   /** The writer's failure at or after the append (`trailing`), or the verdict of a head mismatch it measured. */
   writerFailed(cause: AuthorityWriterFailure): void;
+  /** The writer's report after a successful append and head-row apply (never on `row-only` or a refusal). */
+  appended?(): void;
 }
 
 /** `appendInTx`'s answer. None is an HTTP refusal: a door maps them (X2's door mapping). */
@@ -296,6 +298,7 @@ export class OverlordAuthorityJournal {
           db.prepare(`INSERT INTO overlord_authority_head (id, sequence, journalId, digest, at) VALUES (1, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET sequence = excluded.sequence, journalId = excluded.journalId, digest = excluded.digest,
             at = excluded.at`).run(rec.sequence, rec.journalId, rec.digest, Date.parse(rec.acceptedAt));
+          this.guard.appended?.();
           return { ok: true, kind: 'appended', record: rec };
         },
       }, phase);

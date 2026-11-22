@@ -12,7 +12,7 @@ import type { AuthorityView } from './overlordAuthority.js';
 import type { PrivacyHeadRead } from './privacyJournalHead.js';
 import type { Rung } from '../../../shared/overlord-ladder.js';
 import {
-  parseWitnessTuple, type WitnessHead, type WitnessRung, type WitnessTuple,
+  parseWitnessTuple, WITNESS_RUNGS, type WitnessHead, type WitnessRung, type WitnessTold, type WitnessTuple,
 } from '../../../shared/authorityWitness.js';
 
 /** Compile-time: the L0 tuple's rung list and the ladder's are the same set of words (L0 may not import the ladder). */
@@ -130,10 +130,48 @@ export interface HeldByWitness { host: HostRelation; boot: string; epoch: number
  *  above it. A same-host or unmeasured witness never counts. A holder whose boot is this boot DOES count: the question is whether the
  *  record is held off the volume, not whether a restore is ruled out (that is `witnessVerdict`'s `counts`). Answers `unmeasured` only
  *  when `epoch` itself is not a count. */
-export function offVolumeHeld(epoch: number, holders: readonly HeldByWitness[], _thisBoot: string): 'held' | 'not-yet' | 'unmeasured' {
+export function offVolumeHeld(epoch: number, holders: readonly HeldByWitness[]): 'held' | 'not-yet' | 'unmeasured' {
   if (!isCount(epoch)) return 'unmeasured';
   const held = holders.some((h) => (h.host === 'other-host' || h.host === 'console') && Number.isSafeInteger(h.epoch) && h.epoch >= epoch);
   return held ? 'held' : 'not-yet';
+}
+
+/** A source's last answer since boot, as the exchange keeps it: where it lives, the verdict's word, and the tuple when one parsed. */
+export interface WitnessSourceAnswer { host: HostRelation; verdict: WitnessVerdict['kind']; tuple: WitnessTuple | null }
+
+/** The holders `offVolumeHeld` reads (`held-for-compares-authority-sequence`): a source whose last verdict was `consistent` and whose
+ *  tuple's base is the server's current base, with `epoch` replaced by that tuple's AUTHORITY head sequence (0 with none). A record's
+ *  own epoch also counts privacy records appended before it, which the server cannot recover; the authority sequence is exact, and
+ *  the digest check that made the verdict `consistent` already proved the same chain. */
+export function offVolumeHolders(sources: readonly WitnessSourceAnswer[], serverBase: number): HeldByWitness[] {
+  const out: HeldByWitness[] = [];
+  for (const s of sources) {
+    if (s.verdict !== 'consistent' || s.tuple === null || s.tuple.base !== serverBase) continue;
+    out.push({ host: s.host, boot: s.tuple.boot, epoch: s.tuple.authority?.sequence ?? 0 });
+  }
+  return out;
+}
+
+/** The narrowest `told` over the sources that count (`other-host` or `console`, last verdict `consistent`): the lowest non-null
+ *  operator rung by rank, and the union of the latches, each cause at its lowest cap, sorted by cause. `null` when none counts. */
+export function narrowestTold(sources: readonly WitnessSourceAnswer[]): WitnessTold | null {
+  let any = false;
+  let rung: WitnessRung | null = null;
+  const caps = new Map<string, WitnessRung>();
+  const rank = (r: WitnessRung): number => WITNESS_RUNGS.indexOf(r);
+  for (const s of sources) {
+    if ((s.host !== 'other-host' && s.host !== 'console') || s.verdict !== 'consistent' || s.tuple === null) continue;
+    any = true;
+    const t = s.tuple.told;
+    if (t.operatorRung !== null && (rung === null || rank(t.operatorRung) < rank(rung))) rung = t.operatorRung;
+    for (const l of t.latches) {
+      const had = caps.get(l.cause);
+      if (had === undefined || rank(l.cap) < rank(had)) caps.set(l.cause, l.cap);
+    }
+  }
+  if (!any) return null;
+  const latches = [...caps].map(([cause, cap]) => ({ cause, cap })).sort((a, b) => (a.cause < b.cause ? -1 : a.cause > b.cause ? 1 : 0));
+  return { operatorRung: rung, latches };
 }
 
 // ── The tuple the server offers ──────────────────────────────────────────────────────────────────────────────────────
