@@ -1,12 +1,14 @@
 // The renewal readings' oracles and mutant sets (Overlord W1, plan `w1-renewal-readings.md`, PR A: Tasks 1 and 2). Each
 // decider's cases are written ONCE here, as suite cases over a module: `continuity-renewal-readings.test.ts` runs them
 // against the real module, and `mutation-floors.test.ts` runs them against each textual mutant (D-8217's every-run floors).
-// A later pull request of the plan adds its mappers' cases and sets here.
+// A later pull request of the plan adds its mappers' cases and sets here (PR C: the designation's readings, the class a mint
+// stamps, and the probes-failed-twice decider).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { FIT_WINDOW, SPOT_PROBE_EVERY_TOKENS } from '../../../shared/continuity.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { DesignationRead, DesignationView } from '../../../shared/overlord-designation.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -178,8 +180,182 @@ const BACKSTOP_DUE_SET: MutantSet<RenewalReadingsModule> = {
   suite: backstopDueCases,
 };
 
+// ------------------------------------------------------------------------------------------ the designation's readings (PR C)
+
+/** A designation row bound to `lane-a-project-a` (the session the fixtures name), at term 3, class `fable`. */
+const SID = 'lane-a-project-a';
+const VIEW = (over: Partial<DesignationView> = {}): DesignationView => ({
+  bound: { sessionId: SID, generation: 'g1' }, pending: null, term: 3, designatedTerm: 3, model: 'fable',
+  accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'device:console-a', lastAttempt: null, stopsOwed: [], ...over,
+});
+const BOUND = (over: Partial<DesignationView> = {}): DesignationRead => {
+  const row = VIEW(over);
+  return { kind: 'designated', sessionId: row.bound?.sessionId ?? SID, term: row.term, row };
+};
+const OTHER = 'lane-b-project-a';
+const NONE: DesignationRead = { kind: 'not-designated', row: null };
+const UNREAD: DesignationRead = { kind: 'unmeasured', why: 'a term is not a count' };
+const PENDING_DESIGNATE: DesignationRead = {
+  kind: 'not-designated',
+  row: VIEW({ bound: null, pending: { sessionId: SID, kind: 'designate', deadlineAt: AT + 60_000, since: AT, actor: 'device:console-a', generation: null } }),
+};
+
+export function termRaisedCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
+  return {
+    'an unmeasured designation reads unmeasured `designation unreadable`': () => {
+      expect(m.termRaisedOf(UNREAD, { sessionId: SID, term: 3 })).toEqual(unmeasured('designation unreadable'));
+    },
+    'no designation, or a pending one: measured false (the row does not apply)': () => {
+      expect(m.termRaisedOf(NONE, { sessionId: SID, term: 1 })).toEqual(measured(false));
+      expect(m.termRaisedOf(PENDING_DESIGNATE, { sessionId: SID, term: 1 })).toEqual(measured(false));
+    },
+    'a designation bound to another session (a rebind ended this one) reads false, whatever the terms': () => {
+      expect(m.termRaisedOf(BOUND({ bound: { sessionId: OTHER, generation: 'g2' }, term: 9 }), { sessionId: SID, term: 3 }))
+        .toEqual(measured(false));
+    },
+    'bound to this session at the same term: false': () => {
+      expect(m.termRaisedOf(BOUND(), { sessionId: SID, term: 3 })).toEqual(measured(false));
+    },
+    'a restore that raised the term above the one the generation was minted under: due': () => {
+      expect(m.termRaisedOf(BOUND({ term: 4 }), { sessionId: SID, term: 3 })).toEqual(measured(true));
+    },
+    'a generation stamped with a later term than the row reads: false': () => {
+      expect(m.termRaisedOf(BOUND({ term: 3 }), { sessionId: SID, term: 5 })).toEqual(measured(false));
+    },
+  };
+}
+
+const TERM_RAISED_SET: MutantSet<RenewalReadingsModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'T1', old: 'value: b.term > g.term }', new: 'value: b.term >= g.term }' },
+    { id: 'T2', old: "  if (b === false) return { kind: 'measured', value: false };\n  if (b.kind === 'unmeasured') return b;\n  return { kind: 'measured', value: b.term",
+      new: "  if (b === false) return { kind: 'measured', value: true };\n  if (b.kind === 'unmeasured') return b;\n  return { kind: 'measured', value: b.term" },
+    { id: 'T3', old: "return d.kind === 'designated' && d.sessionId === sessionId ? d : false;", new: "return d.kind === 'designated' ? d : false;" },
+    { id: 'T4', old: "if (d.kind === 'unmeasured') return { kind: 'unmeasured', why: 'designation unreadable' };", new: "if (d.kind === 'unmeasured') return false;" },
+  ],
+  suite: termRaisedCases,
+};
+
+export function classChangedCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
+  return {
+    'an unmeasured designation reads unmeasured `designation unreadable`': () => {
+      expect(m.classChangedOf(UNREAD, { sessionId: SID, designatedClass: 'fable' })).toEqual(unmeasured('designation unreadable'));
+    },
+    'no designation, or one bound to another session: measured false': () => {
+      expect(m.classChangedOf(NONE, { sessionId: SID, designatedClass: null })).toEqual(measured(false));
+      expect(m.classChangedOf(BOUND({ bound: { sessionId: OTHER, generation: 'g2' }, model: 'opus' }), { sessionId: SID, designatedClass: 'fable' }))
+        .toEqual(measured(false));
+    },
+    'a generation minted before the class was recorded reads unmeasured, never a default': () => {
+      expect(m.classChangedOf(BOUND(), { sessionId: SID, designatedClass: null })).toEqual(unmeasured('minted before the class was recorded'));
+    },
+    'the class unchanged since the mint: false': () => {
+      expect(m.classChangedOf(BOUND({ model: 'fable' }), { sessionId: SID, designatedClass: 'fable' })).toEqual(measured(false));
+    },
+    'the operator changed the class after the mint: due': () => {
+      expect(m.classChangedOf(BOUND({ model: 'opus' }), { sessionId: SID, designatedClass: 'fable' })).toEqual(measured(true));
+    },
+    'a fallback generation (running opus, designated fable, unchanged) reads false: the running class is no input': () => {
+      const fallback = { sessionId: SID, designatedClass: 'fable', model: 'claude-opus-5-5' };
+      expect(m.classChangedOf(BOUND({ model: 'fable' }), fallback)).toEqual(measured(false));
+    },
+  };
+}
+
+const CLASS_CHANGED_SET: MutantSet<RenewalReadingsModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'K1', old: "  if (g.designatedClass === null) return unmeasured('minted before the class was recorded');\n", new: '' },
+    { id: 'K2', old: "if (g.designatedClass === null) return unmeasured('minted before the class was recorded');", new: "if (g.designatedClass === null) return { kind: 'measured', value: false };" },
+    { id: 'K3', old: 'value: b.row.model !== g.designatedClass }', new: 'value: b.row.model === g.designatedClass }' },
+    { id: 'K4', old: "  if (b === false) return { kind: 'measured', value: false };\n  if (b.kind === 'unmeasured') return b;\n  if (g.designatedClass",
+      new: "  if (b === false) return { kind: 'measured', value: true };\n  if (b.kind === 'unmeasured') return b;\n  if (g.designatedClass" },
+  ],
+  suite: classChangedCases,
+};
+
+export function designatedClassCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
+  return {
+    'the Overlord minted under a live binding stamps the row class': () => {
+      expect(m.designatedClassAtMint(BOUND({ model: 'opus' }), 'overlord')).toBe('opus');
+    },
+    'the Overlord minted under a pending designate stamps the row class': () => {
+      expect(m.designatedClassAtMint(PENDING_DESIGNATE, 'overlord')).toBe('fable');
+    },
+    'any other identity (a coordinator, a rebind body under its own id) stamps null': () => {
+      expect(m.designatedClassAtMint(BOUND(), SID)).toBeNull();
+      expect(m.designatedClassAtMint(BOUND(), OTHER)).toBeNull();
+    },
+    'an unmeasured designation, or none, stamps null': () => {
+      expect(m.designatedClassAtMint(UNREAD, 'overlord')).toBeNull();
+      expect(m.designatedClassAtMint(NONE, 'overlord')).toBeNull();
+    },
+  };
+}
+
+const DESIGNATED_CLASS_SET: MutantSet<RenewalReadingsModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'M1', old: "if (identity !== 'overlord' || d.kind === 'unmeasured' || d.row === null) return null;", new: "if (d.kind === 'unmeasured' || d.row === null) return null;" },
+    { id: 'M2', old: '  return d.row.model;\n}', new: '  return null;\n}' },
+  ],
+  suite: designatedClassCases,
+};
+
+/** The step `probing` to `degraded` on a second failed round, live, for the Overlord: the one case that latches. */
+const TWICE = {
+  role: 'overlord' as const, from: 'probing' as const, event: { kind: 'probes', passed: false } as const, view: { probeRounds: 1 },
+  next: 'degraded' as const, column: 'state' as const,
+};
+
+export function probesFailedTwiceCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
+  return {
+    'a live Overlord step from probing to degraded on a second failed round latches': () => {
+      expect(m.probesFailedTwiceOf(TWICE)).toBe(true);
+    },
+    'a shadow walk never latches': () => {
+      expect(m.probesFailedTwiceOf({ ...TWICE, column: 'shadowState' })).toBe(false);
+    },
+    'a coordinator never latches': () => {
+      expect(m.probesFailedTwiceOf({ ...TWICE, role: 'coordinator' })).toBe(false);
+    },
+    'a first failed round does not latch, nor the post-step row that degrade left at 0': () => {
+      expect(m.probesFailedTwiceOf({ ...TWICE, view: { probeRounds: 0 }, next: 'probing' })).toBe(false);
+      expect(m.probesFailedTwiceOf({ ...TWICE, view: { probeRounds: 0 } })).toBe(false);
+    },
+    'a deadline in probing is not two failed probes': () => {
+      expect(m.probesFailedTwiceOf({ ...TWICE, event: { kind: 'deadline' } })).toBe(false);
+    },
+    'a passed round does not latch': () => {
+      expect(m.probesFailedTwiceOf({ ...TWICE, event: { kind: 'probes', passed: true }, next: 'active' })).toBe(false);
+    },
+    'a step from another state, or to another state, does not latch': () => {
+      expect(m.probesFailedTwiceOf({ ...TWICE, from: 'carded' })).toBe(false);
+      expect(m.probesFailedTwiceOf({ ...TWICE, next: 'probing' })).toBe(false);
+    },
+  };
+}
+
+const PROBES_FAILED_TWICE_SET: MutantSet<RenewalReadingsModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'P1', old: " && i.column === 'state'", new: '' },
+    { id: 'P2', old: "i.event.kind === 'probes' && !i.event.passed", new: "(i.event.kind === 'probes' ? !i.event.passed : i.event.kind === 'deadline')" },
+    { id: 'P3', old: 'i.view.probeRounds >= 1', new: 'i.view.probeRounds > 1' },
+    { id: 'P4', old: "i.role === 'overlord' && ", new: '' },
+    { id: 'P5', old: 'i.view.probeRounds >= 1', new: 'i.view.probeRounds >= 0' },
+    { id: 'P6', old: " && i.next === 'degraded'", new: '' },
+  ],
+  suite: probesFailedTwiceCases,
+};
+
 export const RENEWAL_READING_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/renewalReadings.ts#fittedCeilingOf': FITTED_CEILING_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopInstantBefore': BACKSTOP_INSTANT_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopDueOf': BACKSTOP_DUE_SET as MutantSet<never>,
+  'server/src/continuity/renewalReadings.ts#termRaisedOf': TERM_RAISED_SET as MutantSet<never>,
+  'server/src/continuity/renewalReadings.ts#classChangedOf': CLASS_CHANGED_SET as MutantSet<never>,
+  'server/src/continuity/renewalReadings.ts#designatedClassAtMint': DESIGNATED_CLASS_SET as MutantSet<never>,
+  'server/src/continuity/renewalReadings.ts#probesFailedTwiceOf': PROBES_FAILED_TWICE_SET as MutantSet<never>,
 };
