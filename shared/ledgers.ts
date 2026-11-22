@@ -17,8 +17,9 @@ import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
 import type { AnswerMarksView, AskMarkRow } from './answerMarks.js';
 
-/** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
- *  `secret`'s value goes to its slot, never through the answer (spec §5). */
+/** What the operator is asked to do. `decide` and `value` carry an answer; `do` needs none, and its tick may carry the
+ *  operator's optional note as its answer (D-8931); a `secret`'s value goes to its slot, never through the
+ *  answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
 const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
 export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
