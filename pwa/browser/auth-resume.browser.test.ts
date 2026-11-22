@@ -170,7 +170,7 @@ describe('resume on any route, and the switch to the token, at every width and s
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await switchRoutes(ctx);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await onScreen(page, 'the fleet screen', false);
         const text = await page.locator('.auth-resume-text').filter({ visible: true }).first().textContent();
         expect(text).toMatch(/^A sign-in for lane-b is waiting for its code · \d+ min left$/);

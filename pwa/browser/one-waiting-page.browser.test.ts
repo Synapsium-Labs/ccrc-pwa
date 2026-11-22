@@ -125,7 +125,7 @@ const listed = (page: Page): Promise<string[]> =>
 describe.each(SKINS)('one Waiting on you page in %s', (skin) => {
   for (const width of WIDTHS) {
     it(`at ${width}: a programme chip opens the filtered list; an item steps along it and goes back to it; clearing shows every programme`, async () => {
-      const { ctx, page, errors } = await open(skin, width, '/', 'section.pg-box .pg-waiting');
+      const { ctx, page, errors } = await open(skin, width, '/fleet', 'section.pg-box .pg-waiting');
       try {
         await page.locator('section.pg-box', { hasText: 'Programme B' }).locator('.pg-waiting').click();
         await page.waitForSelector('.wl-groups .wl-item');

@@ -146,7 +146,7 @@ async function openSheet(browser: Browser, origin: string, view: (typeof VIEWS)[
   const opened = await openApp(browser, { width: view.size.width, skin: view.skin, theme: view.theme }, fixture);
   const { page } = opened;
   await page.setViewportSize(view.size);
-  await page.goto(`${origin}/`);
+  await page.goto(`${origin}/fleet`);
   await page.evaluate(() => {
     history.pushState(null, '', '/accounts');
     dispatchEvent(new PopStateEvent('popstate'));

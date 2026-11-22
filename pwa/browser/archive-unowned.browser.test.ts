@@ -173,7 +173,7 @@ describe('Fleet foot: the Archived row is the door to work no session owns, with
         it(`${skin} ${theme} at ${width}px: one row, at least --tap-min, inside the page, to /archive`, async () => {
           const opened = await openApp(browser!, { skin, theme, width }, DOOR_FIXTURE);
           try {
-            await opened.page.goto(`${server!.origin}/`);
+            await opened.page.goto(`${server!.origin}/fleet`);
             await opened.page.waitForSelector('.fleet-archived-row', { timeout: 20_000 });
             await opened.page.evaluate(async () => { await document.fonts.ready; });
             await opened.page.waitForTimeout(400);
@@ -270,7 +270,7 @@ describe('Fleet foot: the both-state Archived row breaks between its halves (HF2
       it(`${skin} at ${width}px: each half whole on its line(s), the break between them`, async () => {
         const opened = await openApp(browser!, { skin, theme: PHOSPHOR, width }, FIXTURE);
         try {
-          await opened.page.goto(`${server!.origin}/`);
+          await opened.page.goto(`${server!.origin}/fleet`);
           await opened.page.waitForSelector('.fleet-archived-row', { timeout: 20_000 });
           await opened.page.evaluate(async () => { await document.fonts.ready; });
           await opened.page.waitForTimeout(400);

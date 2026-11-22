@@ -54,7 +54,7 @@ afterAll(async () => {
 
 async function openFleet(page: Page): Promise<void> {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto(server!.origin + '/');
+  await page.goto(server!.origin + '/fleet');
   await page.locator('main#content').waitFor({ state: 'attached', timeout: 20_000 });
   // The fleet frame has landed when the worker's row is drawn (Needs you; Instrument folds its Idle group, the lead's).
   await page.getByText('first', { exact: true }).first().waitFor({ state: 'attached', timeout: 20_000 });

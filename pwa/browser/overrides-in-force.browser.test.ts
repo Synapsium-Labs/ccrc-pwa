@@ -187,7 +187,7 @@ describe('the unreachable banner while the reboot is not configured, at every wi
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, fixture(DOWN_UNCONFIGURED));
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         const remedy = page.locator('[data-reboot="remedy"]').filter({ visible: true }).first();
         await expect.poll(() => remedy.isVisible(), { timeout: 20_000 }).toBe(true);
         const banner = remedy.locator('xpath=ancestor::*[@role="status" or @role="alert"][1]');

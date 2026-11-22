@@ -66,7 +66,7 @@ describe('accountPools: unavailable on a single-box install dims the chip and th
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.locator(`${CHIP}[data-dim="true"]`).waitFor({ timeout: 30_000 });
         const m = await page.evaluate((chipSel) => {

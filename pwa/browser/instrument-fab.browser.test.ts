@@ -69,7 +69,7 @@ describe("Instrument's round + is the one New session door below 900, and absent
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         // Wait on the fleet alone, never on a door: a missing door is MEASURED below (doors: 0), not hidden behind a timeout.
         await page.waitForFunction(() => document.body.innerText.includes('9 sessions'), undefined, { timeout: 20_000 });
         const seen = await page.evaluate(() => {
