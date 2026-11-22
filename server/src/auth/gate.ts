@@ -674,7 +674,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern; test box plan TB9, D-7554): the card's Bring tools up to date with a " +
     'session, and the update lane on the fleet host COOKIELESS through `ccrc-api testbox tools-sync` once a roll ' +
     'ends (spec §2.10). It takes no body and sends the box only the fleet host\'s own release and measured versions, ' +
-    'so the box token buys nothing a session could not; the handler requires one of the two before it acts'],
+    'so the box token buys nothing a session could not; the handler requires one of the two before it acts. On a box ' +
+    'whose last sync died for want of a HOME it first runs the fixed admin act `tools-home` (one runtime drop-in, no ' +
+    'caller input; box-token-runs-fixed-repair, the coordinator\'s ruling on review 3223 F2), so a box-token caller can ' +
+    'cause that one repair, and its ledger row names the caller'],
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],

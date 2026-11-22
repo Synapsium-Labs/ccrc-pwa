@@ -4,6 +4,7 @@
 // card's cells over a table of pairs; the repository row's refusals and the ccrc-pwa row; the runs log line's reader.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { CAPTURE_REFUSAL_SENTENCE } from '../../shared/claudeBuildCapture.js';
 import {
   PROBE_REFUSAL_SENTENCE, RUNS_LOG_LINE, RUNS_LOG_LINE_MAX, TESTBOX_FALLBACK, TESTBOX_FALLBACK_ID_MAP, TESTBOX_PROTO, TESTBOX_STATE_MAP,
   TESTBOX_TOOLS, parseRepoRow, parseRunsLine, readTestboxFrame, versionCellsDiffer, versionRowDiffers,
@@ -11,6 +12,7 @@ import {
 } from '../../shared/testbox.js';
 
 const RUN = '0123456789abcdef0123456789abcdef';
+const CAPTURE_RESULT = { build: '2.1.320', pass: true, cwd: true, output: 'verdict: pass (40 records)' };
 const TOOLS: TestboxToolVersions = { node: '22.11.0', npm: '10.9.0', tmux: '3.4', git: '2.43.0', python3: '3.12.3', chrome: '131.0.6778.85' };
 
 /** One valid frame of each type, every optional-looking field filled. */
@@ -59,6 +61,20 @@ const FRAMES: Record<string, TestboxFrame> = {
   'probe.state (queued)': { t: 'probe.state', probeId: RUN, state: 'queued', refusal: null, detail: null, position: 2, exit: null },
   'probe.state (running)': { t: 'probe.state', probeId: RUN, state: 'running', refusal: null, detail: null, position: null, exit: null },
   'probe.state (ended)': { t: 'probe.state', probeId: RUN, state: 'ended', refusal: null, detail: null, position: null, exit: 1 },
+  // The capture runner's two frames (spec 2026-11-22 §2.2).
+  'capture.submit': { t: 'capture.submit', captureId: RUN, build: '2.1.320' },
+  'capture.state (refused)': {
+    t: 'capture.state', captureId: RUN, build: '2.1.320', state: 'refused', refusal: 'no-runner', detail: CAPTURE_REFUSAL_SENTENCE['no-runner'],
+    position: null, result: null,
+  },
+  'capture.state (queued)': { t: 'capture.state', captureId: RUN, build: '2.1.320', state: 'queued', refusal: null, detail: null, position: 1, result: null },
+  'capture.state (running)': { t: 'capture.state', captureId: RUN, build: '2.1.320', state: 'running', refusal: null, detail: null, position: null, result: null },
+  'capture.state (ended)': {
+    t: 'capture.state', captureId: RUN, build: '2.1.320', state: 'ended', refusal: null, detail: null, position: null, result: CAPTURE_RESULT,
+  },
+  'capture.state (ended, no verdict)': {
+    t: 'capture.state', captureId: RUN, build: '2.1.320', state: 'ended', refusal: null, detail: 'the run timed out', position: null, result: null,
+  },
 };
 
 /** The status answer's one optional field (D-8290). */
@@ -94,6 +110,48 @@ describe('the live probe frames and the status answer\'s probe block (D-8290)', 
     expect(ok({ state: 'running', position: null, detail: 'x' })).toBe(false);
     expect(ok({ state: 'ended', position: null, exit: 256 })).toBe(false);
   });
+});
+
+describe('the capture frames (build capture runner spec 2026-11-22 §2.2)', () => {
+  const ok = (o: unknown): boolean => readTestboxFrame(JSON.stringify(o)).ok;
+  const submit = FRAMES['capture.submit'] as unknown as Record<string, unknown>;
+  const ended = FRAMES['capture.state (ended)'] as unknown as Record<string, unknown>;
+  const queued = FRAMES['capture.state (queued)'] as unknown as Record<string, unknown>;
+  const refused = FRAMES['capture.state (refused)'] as unknown as Record<string, unknown>;
+  it('capture.submit: a bad capture id or a build that is not a Claude Code version is refused', () => {
+    expect(ok(submit)).toBe(true);
+    expect(ok({ ...submit, captureId: RUN.toUpperCase() })).toBe(false);
+    expect(ok({ ...submit, captureId: RUN.slice(1) })).toBe(false);
+    for (const b of ['', 'latest', '2.1', 'v2.1.320', '2.1.320 ', '../2.1.320', 7]) expect(ok({ ...submit, build: b }), String(b)).toBe(false);
+  });
+  it('capture.state: refusal only on refused, and every refusal word is read', () => {
+    expect(ok({ ...queued, refusal: 'no-runner' })).toBe(false);
+    expect(ok({ ...ended, refusal: 'no-runner' })).toBe(false);
+    expect(ok({ ...refused, refusal: null })).toBe(false);
+    expect(ok({ ...refused, refusal: 'made-up' })).toBe(false);
+    for (const w of Object.keys(CAPTURE_REFUSAL_SENTENCE)) expect(ok({ ...refused, refusal: w }), w).toBe(true);
+  });
+  it('capture.state: position only on queued', () => {
+    expect(ok({ ...queued, position: null })).toBe(false);
+    expect(ok({ ...queued, position: 0 })).toBe(false);
+    expect(ok({ ...ended, position: 1 })).toBe(false);
+    expect(ok({ ...refused, position: 1 })).toBe(false);
+  });
+  it('capture.state: a result only on ended, and for this frame\'s build', () => {
+    expect(ok({ ...queued, position: null, state: 'running', result: CAPTURE_RESULT })).toBe(false);
+    expect(ok({ ...refused, result: CAPTURE_RESULT })).toBe(false);
+    expect(ok({ ...ended, result: { ...CAPTURE_RESULT, build: '2.1.319' } })).toBe(false);
+    expect(ok({ ...ended, result: { ...CAPTURE_RESULT, pass: 'yes' } })).toBe(false);
+    expect(ok({ ...ended, result: { ...CAPTURE_RESULT, extra: 1 } })).toBe(false);
+  });
+  it('capture.state: a detail only on refused, or on an ended capture with no verdict', () => {
+    expect(ok({ ...queued, detail: 'x' })).toBe(false);
+    expect(ok({ ...queued, position: null, state: 'running', detail: 'x' })).toBe(false);
+    expect(ok({ ...ended, detail: 'beside a verdict' })).toBe(false);
+    expect(ok({ ...ended, result: null, detail: 'no verdict' })).toBe(true);
+    expect(ok({ ...ended, result: null, detail: null })).toBe(true);
+  });
+  it('capture.state: an unknown state word is refused', () => { expect(ok({ ...queued, state: 'paused' })).toBe(false); });
 });
 
 describe('the frames: one reader each, every field checked (D-7404, D-7428)', () => {

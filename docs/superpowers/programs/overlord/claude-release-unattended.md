@@ -57,7 +57,7 @@ Read on `main` at 77a1fefe46.
 | The roll onto the new build | `server/src/coord/rollTarget.ts#rollTargetVerdict` | none: Roll idle sessions is `all` by default (D-8276); `.no-roll` is an opt-out, never a step | none |
 | The install of the new build | not in this tree: each lane's own updater installs (binary lifecycle spec §8.2) | none | none |
 | Which build a restart runs | the launcher, outside this tree; `shared/claudeVersion.ts#claudeBuildOf` measures its reach | none | none |
-| The capture itself | `server/src/buildCaptureLane.ts#testboxCaptureTransport` | none, but no build is ever captured: the adapter answers `no-runner` (the D-8289 plan's open item) | unchanged; not an operator act (below) |
+| The capture itself | `server/src/testboxCapture.ts#testboxCaptureTransport` (moved there by #3168) | none, but no build was ever captured: the adapter answered `no-runner` (the D-8289 plan's open item) | not an operator act; the capture runner's PRs close it (below) |
 
 **What still falls to the operator per release.**
 - Until the capture runner's PR 3 lands, a prompt on a new build is answered by the operator in the pane, one prompt at a
@@ -73,11 +73,13 @@ switches and arming acts over ccrc's automatic rolls and installs, so a session 
 remove the operator's stop. None of them is a step a new release needs. On `main`, neither the canary nor the ccrc
 installer exists yet, and every kill switch is off by default.
 
-**Not an operator act, but the gap that matters most.** The production capture transport sends nothing (`no-runner`),
-so no new build is ever trusted, and every prompt on one is refused and comes to the operator. This PR makes that state
-quiet on Waiting on you. Run 3214 (the capture runner) replaces that adapter with one that sends the job, and deletes the
-old one from `server/src/buildCaptureLane.ts` by the coordinator's ruling. Once it lands, this PR's lane retries a failed
-verdict from the real runner. Run 3211 fixes the test box's tool sync.
+**Not an operator act, but the gap that matters most.** On `main` at 77a1fefe46 the production capture transport sent
+nothing (`no-runner`), so no new build was ever trusted, and every prompt on one is refused and comes to the operator.
+This PR makes that state quiet on Waiting on you. The capture runner's first PR (#3168, run 3214) replaced that adapter
+with `server/src/testboxCapture.ts#testboxCaptureTransport`, which sends the job through the fleet op. Its later PRs let
+the test box hold and capture a new build. Until then a try that sends nothing counts no attempt and no failure, so it
+never walks a build to the give-up item, and a failed verdict from the real runner is retried by this PR's lane. Run
+3211 fixes the test box's tool sync.
 
 ## Measured
 

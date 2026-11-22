@@ -113,8 +113,13 @@ get wrong when editing `src/whitelist.ts`.
   `npm --version`, `"$CCRC_CHROME" --version`, `python3 --version`, `git --version` and `tmux -V` on the user
   manager's PATH. It reads `~/.ccrc/build.json` and the token file `CCRC_TESTBOX_TOKEN_FILE` names, nothing else, and
   calls the box over one WebSocket within `CCRC_TESTBOX_STATUS_DEADLINE`. The sync's `tools.sync` frame carries the
-  release in `build.json` and the versions just measured, never a field of the request. `server/test/whitelist-subset.test.ts`'s
-  layer 4c reds the day either case reaches an exec path.
+  release in `build.json` and the versions just measured, never a field of the request. The class's third op, **`testbox-capture`**
+  (build capture runner, spec 2026-11-22 §2.5), takes one field, `build`, which `validateReq` checks with `isClaudeVersion`
+  before any case body (`bad-build`; any other field is `bad-request`). It spawns only the same fixed settings printer (no
+  user manager environment, no probe), reads only the token file, and sends one `capture.submit` carrying the build
+  under a fresh random id, then waits up to `TESTBOX_CAPTURE_DEADLINE_MS` for that capture's `refused` or `ended` state;
+  one gate per agent process answers a second capture `busy`. `server/test/whitelist-subset.test.ts`'s
+  layer 4c reds the day any of the three cases reaches an exec path.
 - The **`testbox-admin` op** (test box connect spec §2.1, §2.11, plan TC11, D-8166) is the fifth. It spawns the absolute
   launcher (`updateLauncherPath`) with `testbox-admin <sub> [--name=value…] --from agent`, the words built ONLY by
   `buildTestboxAdminArgv` (`shared/testbox-admin.ts`, the one builder the server's local arm calls too) from typed

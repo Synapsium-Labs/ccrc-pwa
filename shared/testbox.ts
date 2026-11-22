@@ -8,6 +8,11 @@
 // checks every field and refuses a frame with any field it does not name, so a frame is never half-read.
 
 import { isReleaseTag } from './api.js';
+import {
+  CAPTURE_REFUSAL_MAP, CAPTURE_STATE_WORD_MAP, type CaptureAnswer, type CaptureSubmit,
+} from './claudeBuildCapture.js';
+import { readBuildCaptureResult } from './claudeBuildTrust.js';
+import { isClaudeVersion } from './claudeVersion.js';
 import { utf8Bytes } from './utf8.js';
 
 /** The test service's protocol version (spec §2.4's protocol row compares it with the wrapper's). */
@@ -52,11 +57,14 @@ export const TESTBOX_REPORT_MAP: Record<TestboxReport, true> = { ok: true, missi
 export type TestboxSyncState = 'idle' | 'syncing' | 'failed';
 export const TESTBOX_SYNC_STATE_MAP: Record<TestboxSyncState, true> = { idle: true, syncing: true, failed: true };
 
-/** The frame family's type words (spec §2.9; D-8290 adds the two probe frames). */
-export type TestboxFrameType = 'run.submit' | 'run.log' | 'run.summary' | 'run.cancel' | 'tools.sync' | 'status' | 'probe.submit' | 'probe.state';
+/** The frame family's type words (spec §2.9; D-8290 adds the two probe frames; the capture runner spec of 2026-11-22 adds
+ *  the two capture frames, `shared/claudeBuildCapture.ts`). */
+export type TestboxFrameType =
+  | 'run.submit' | 'run.log' | 'run.summary' | 'run.cancel' | 'tools.sync' | 'status' | 'probe.submit' | 'probe.state'
+  | 'capture.submit' | 'capture.state';
 export const TESTBOX_FRAME_TYPE_MAP: Record<TestboxFrameType, true> = {
   'run.submit': true, 'run.log': true, 'run.summary': true, 'run.cancel': true, 'tools.sync': true, status: true,
-  'probe.submit': true, 'probe.state': true,
+  'probe.submit': true, 'probe.state': true, 'capture.submit': true, 'capture.state': true,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -360,7 +368,8 @@ export interface ProbeAnswer {
   readonly exit: number | null;
 }
 
-export type TestboxFrame = RunSubmit | RunLog | RunSummary | RunCancel | ToolsSync | StatusAnswer | ProbeSubmit | ProbeAnswer;
+export type TestboxFrame =
+  | RunSubmit | RunLog | RunSummary | RunCancel | ToolsSync | StatusAnswer | ProbeSubmit | ProbeAnswer | CaptureSubmit | CaptureAnswer;
 
 export type Read<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string };
 
@@ -588,9 +597,34 @@ function readProbeAnswer(o: Obj): ProbeAnswer {
   return { t: 'probe.state', probeId: runId(f.probeId, 'probeId'), state, refusal, detail: textOrNull(f.detail, 'detail'), position, exit };
 }
 
+const build = (v: unknown, at: string): string => (isClaudeVersion(v) ? v : refuse(at, 'not a Claude Code version'));
+
+function readCaptureSubmit(o: Obj): CaptureSubmit {
+  const f = exact(o, 'capture.submit', ['t', 'captureId', 'build']);
+  return { t: 'capture.submit', captureId: runId(f.captureId, 'captureId'), build: build(f.build, 'build') };
+}
+
+/** The verdict inside an ended capture is read by the verdict's one reader (`readBuildCaptureResult`), for this frame's
+ *  build: a result for another build, or off its shape, refuses the frame. */
+function readCaptureAnswer(o: Obj): CaptureAnswer {
+  const f = exact(o, 'capture.state', ['t', 'captureId', 'build', 'state', 'refusal', 'detail', 'position', 'result']);
+  const b = build(f.build, 'build');
+  const state = word(CAPTURE_STATE_WORD_MAP, f.state, 'state');
+  const refusal = f.refusal === null ? null : word(CAPTURE_REFUSAL_MAP, f.refusal, 'refusal');
+  const position = f.position === null ? null : int(f.position, 'position', 1);
+  const result = f.result === null ? null : (readBuildCaptureResult(f.result, b) ?? refuse('result', 'not a capture result for this build'));
+  if ((state === 'refused') !== (refusal !== null)) refuse('refusal', state === 'refused' ? 'missing on a refused capture' : `present on a ${state} capture`);
+  if (state !== 'refused' && state !== 'ended' && f.detail !== null) refuse('detail', `present on a ${state} capture`);
+  if (state === 'ended' && result !== null && f.detail !== null) refuse('detail', 'present beside a verdict');
+  if ((state === 'queued') !== (position !== null)) refuse('position', state === 'queued' ? 'missing on a queued capture' : `present on a ${state} capture`);
+  if (state !== 'ended' && result !== null) refuse('result', `present on a ${state} capture`);
+  return { t: 'capture.state', captureId: runId(f.captureId, 'captureId'), build: b, state, refusal, detail: textOrNull(f.detail, 'detail'), position, result };
+}
+
 const FRAME_READERS: { readonly [K in TestboxFrameType]: (o: Obj) => TestboxFrame } = {
   'run.submit': readRunSubmit, 'run.log': readRunLog, 'run.summary': readRunSummary, 'run.cancel': readRunCancel,
   'tools.sync': readToolsSync, status: readStatusAnswer, 'probe.submit': readProbeSubmit, 'probe.state': readProbeAnswer,
+  'capture.submit': readCaptureSubmit, 'capture.state': readCaptureAnswer,
 };
 
 /** The frames' ONE reader: a frame's JSON text to its typed frame, or the reason it is refused. Every field is checked

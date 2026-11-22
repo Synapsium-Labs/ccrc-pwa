@@ -9,9 +9,10 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, testboxCaptureTransport, type BuildCaptureAnswer, type BuildCaptureTransport,
+  BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, type BuildCaptureAnswer, type BuildCaptureTransport,
 } from '../src/buildCaptureLane.js';
-import type { TestboxBlock } from '../src/testbox.js';
+import { testboxCaptureTransport } from '../src/testboxCapture.js';
+import type { CaptureAsked } from '../src/io.js';
 import {
   BUILD_CAPTURE_FAIL_CEILING, BUILD_CAPTURE_RETRY_MS, buildTrustOf, captureBlockedBy, captureRetryAfterMs, type BuildCaptureJob,
 } from '../../shared/claudeBuildTrust.js';
@@ -246,30 +247,14 @@ describe('the capture queue (D-8289)', () => {
   });
 
   it('a day on the production transport with no runner: every build says it was not sent, and none counts a job', async () => {
-    let block: TestboxBlock | null = null;
-    const s = await setup(testboxCaptureTransport(() => block));
-    block = { state: 'ok', reasons: [], summary: 'ok', switch: 'on', at: 1, host: null, box: null, cells: [], counts: null };
+    let asked: CaptureAsked = { ok: false, reason: 'no-op' };
+    const s = await setup(testboxCaptureTransport(() => ({ testboxCapture: async () => asked })));
     for (let m = 0; m < 24 * 60; m++) { await s.lane.sweep(['2.1.318', '2.1.320']); s.tick(BUILD_CAPTURE_SWEEP_MS); }
     for (const b of ['2.1.318', '2.1.320']) expect(row(s.coord, b)).toMatchObject({ capture: 'queued', attempts: 0, notSent: 'no-runner' });
     expect(captureBlockedBy(s.coord.claudeBuilds())).toBe('no-runner');
-    block = null;
+    asked = { ok: true, reply: { outcome: 'unconfigured', refusal: null, result: null, detail: null } };
     s.tick(BUILD_CAPTURE_RETRY_MS);
     await s.lane.sweep(['2.1.318', '2.1.320']);
     expect(captureBlockedBy(s.coord.claudeBuilds())).toBe('no-test-box');
-  });
-});
-
-describe('testboxCaptureTransport: the job over the test box connection (D-8289)', () => {
-  const block = (state: TestboxBlock['state']): TestboxBlock => ({
-    state, reasons: [], summary: state, switch: 'off', at: 1, host: null, box: null, cells: [], counts: null,
-  });
-  it('answers no-test-box while no box answers, and no-runner otherwise: nothing is sent and nothing is judged', async () => {
-    for (const s of ['off', 'down', 'unreachable'] as const) {
-      expect(await testboxCaptureTransport(() => block(s)).capture({ build: '2.1.320' })).toEqual({ kind: 'unavailable', why: 'no-test-box' });
-    }
-    expect(await testboxCaptureTransport(() => null).capture({ build: '2.1.320' })).toEqual({ kind: 'unavailable', why: 'no-test-box' });
-    for (const s of ['ok', 'degraded'] as const) {
-      expect(await testboxCaptureTransport(() => block(s)).capture({ build: '2.1.320' })).toEqual({ kind: 'unavailable', why: 'no-runner' });
-    }
   });
 });

@@ -31,7 +31,6 @@ import {
   openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemsToRaise, untrustedBuildItemsToSettle,
 } from './coord/untrustedBuildItem.js';
 import { notify, type NoticeDeps } from './notice.js';
-import type { TestboxBlock } from './testbox.js';
 
 /** The lane's clock: once a minute. A new build is sent on the first pass after a session runs it. */
 export const BUILD_CAPTURE_SWEEP_MS = 60_000;
@@ -49,20 +48,6 @@ export type BuildCaptureAnswer =
 /** THE PORT: one job to the test box, over the existing test box connection. A rejection reads as `unanswered`. */
 export interface BuildCaptureTransport {
   capture(job: BuildCaptureJob): Promise<BuildCaptureAnswer>;
-}
-
-/** The production adapter. It reads the test box lane's block: `no-test-box` while no box answers (no block yet, `off`,
- *  `down`, `unreachable`), and `no-runner` otherwise, because the box-side capture runner is the plan's open item. It
- *  sends nothing, so nothing is judged and no attempt is counted: every new build stays `queued`, its row saying why, and
- *  the test box card says no build can be captured (`captureBlockedBy`) until the runner lands. */
-export function testboxCaptureTransport(block: () => TestboxBlock | null): BuildCaptureTransport {
-  return {
-    capture: async () => {
-      const b = block();
-      const answers = b !== null && (b.state === 'ok' || b.state === 'degraded');
-      return { kind: 'unavailable', why: answers ? 'no-runner' : 'no-test-box' };
-    },
-  };
 }
 
 export interface BuildCaptureLaneDeps extends NoticeDeps {

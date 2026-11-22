@@ -17,9 +17,10 @@ describe('evidenceWords', () => {
 // D-8808 (wave 8, Task 8.6): the workspace picker's and the candidate rows' words.
 import {
   candidateAriaLabel, candidateKeyOf, candidateTap, candidateWorkspaceLine, keyWriteText, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
-  KEY_WRITE_WORDS, OVERLORD_LINK_WORDS, PICKER_WORDS,
+  KEY_WRITE_WORDS, OVERLORD_LINK_WORDS, PICKER_WORDS, overlordCallLink,
 } from '../src/fleet/linkingWords';
 import { ApiError } from '../src/lib/apiError';
+import { callPath, waitingPath } from '../src/lib/routes';
 import { readLinearWorkspaces } from '../src/lib/api';
 import { pickerWorkspacesOf } from '../src/fleet/linkingWords';
 import type { LinearLegacyRow } from '../../shared/linear';
@@ -96,6 +97,18 @@ describe('an Overlord link', () => {
   it('reads as a call made for the operator, and says how to overturn it', () => {
     expect(teamLinkLine(l)).toBe(`Linked by the Overlord for you to Alpha: 9 of 10 ticket ids in its branches, pull requests and commits use AAA. ${OVERLORD_LINK_WORDS.overturn}`);
     expect(OVERLORD_LINK_WORDS.call).toBe('See it in Calls made for you');
+    expect(OVERLORD_LINK_WORDS.openCall).toBe('Open this call in Calls made for you');
+  });
+  it('overlordCallLink opens the call by its id, or the list when the id is unreadable, and is null for any other link', () => {
+    expect(overlordCallLink(l.teamLink)).toEqual({ href: callPath(7), words: OVERLORD_LINK_WORDS.openCall });
+    const noId = { ...l.teamLink, callId: undefined } as unknown as ProjectLinkingWire['teamLink'];
+    expect(overlordCallLink(noId)).toEqual({ href: waitingPath(), words: OVERLORD_LINK_WORDS.call });
+    for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(overlordCallLink({ ...l.teamLink, callId: bad } as unknown as ProjectLinkingWire['teamLink'])).toEqual({ href: waitingPath(), words: OVERLORD_LINK_WORDS.call });
+    }
+    expect(overlordCallLink(null)).toBeNull();
+    expect(overlordCallLink(undefined)).toBeNull();
+    expect(overlordCallLink({ source: 'key' } as unknown as ProjectLinkingWire['teamLink'])).toBeNull();
   });
 });
 
