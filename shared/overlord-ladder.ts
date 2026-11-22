@@ -70,6 +70,11 @@ export const LADDER_CAUSE_MAP = {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'push',
     spec: 'the third unwitnessed write in a day (Table 7.5a)',
   },
+  // Raised by the renewal readings (plan w1-renewal-readings.md Task 6) on a live Overlord step from `probing` to `degraded`.
+  'probes-failed-twice': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
+    spec: 'probes failed twice after a renewal (Table 7.5a)',
+  },
 } as const satisfies Readonly<Record<string, LadderCauseRow>>;
 export type LadderCause = keyof typeof LADDER_CAUSE_MAP;
 export const LADDER_CAUSES = Object.keys(LADDER_CAUSE_MAP) as LadderCause[];

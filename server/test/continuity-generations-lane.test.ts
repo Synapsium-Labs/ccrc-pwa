@@ -13,6 +13,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import { renewalDue } from '../src/continuity/renewalDue.js';
+import { renewalReadingsOf } from '../src/continuity/renewalReadingsWiring.js';
 import {
   GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, renewalInputsOf, softTimesOf,
   type CompactionsMemo, type EmptyTries, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
@@ -47,6 +48,8 @@ interface Fixture {
    *  `listedAt` says when; each `proc` keeps its own memo of held starts, as a server process does. */
   pass(readings?: ReadonlyMap<number, GenReadings>, proc?: string, listedAt?: number): ReturnType<typeof generationsPass>;
   start(source: string, uuid: string, at?: number, sessionId?: string, rowIncarnation?: string): number;
+  /** The pass's latch raise (renewal readings PR C), when a case sets one: absent, the pass has none. */
+  latch?: GenerationsDeps['latch'];
 }
 
 function fixture(): Fixture {
@@ -65,9 +68,10 @@ function fixture(): Fixture {
     if (!empties.has(proc)) empties.set(proc, new Map());
     // The renewal act lifted the continuity row's gate; these cases still pass an open one, so they never depend on the
     // card's words (review 2006 N1). The case below holds that the real gate is open too.
-    return { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, emptyTries: empties.get(proc)!, gate: () => null };
+    return { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, emptyTries: empties.get(proc)!, gate: () => null,
+      ...(f.latch === undefined ? {} : { latch: f.latch }) };
   };
-  return {
+  const f: Fixture = {
     s, t, logs, registry,
     pass: (readings = new Map(), proc = 'p1', listedAt = t.ports.clock.wall() + 1) => generationsPass(deps(proc), { registry, readings, listedAt }),
     start: (source, uuid, at = t.ports.clock.wall(), sessionId = COORD, rowIncarnation = 'inc-1') => {
@@ -78,6 +82,7 @@ function fixture(): Fixture {
       return r.id;
     },
   };
+  return f;
 }
 const all = (s: CoordStore): Record<string, unknown>[] =>
   s.db.prepare('SELECT identity, n, state, shadowState, outcome, startId FROM continuity_generations ORDER BY id').all() as Record<string, unknown>[];
@@ -1435,7 +1440,9 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       // The renewal hand-offs: Renew now's and the mark's readers and the PreCompact field's decider (L1); none of them sends.
       './renewNow.js', './operatorMark.js', './precompact.js',
       // Account organization PR D: the organization relation (L0, imports nothing) that reads `startOtherOrg`.
-      '../../../shared/accountOrg.js'];
+      '../../../shared/accountOrg.js',
+      // Renewal readings PR C: the mint's stamp and the latch's decider (L1). The latch itself is a port the wiring binds.
+      './renewalReadings.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());
@@ -1523,4 +1530,154 @@ describe('the pass reads the designation (Overlord W1 designation A, Task 3, X5)
       expect(f.pass()).toMatchObject({ read: 1, minted: 1, unread: null });
     }
   });
+});
+
+describe('the renewal readings PR C: the class a mint stamps, and the probes-failed-twice latch', () => {
+  const BODY = 'overlord-quiet-otter';
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 2, designatedTerm: 1, model: 'fable', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const bound = (id: string): DesignationRead => ({ kind: 'designated', sessionId: id, term: 2, row: view({ bound: { sessionId: id, generation: 'g1' } }) });
+  const classes = (f: Fixture) => live(f.s).map((g) => ({ identity: g.identity, role: g.role, designatedClass: g.designatedClass }))
+    .sort((a, b) => a.identity.localeCompare(b.identity));
+
+  it('the mint stamps the designated class for the Overlord (bound or a pending designate), and null for a coordinator', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound(BODY);
+    f.registry.push({ id: BODY, uuid: U3, lane: 'lane-a', child: { kind: 'none' } });
+    f.start('startup', U1);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 2, unread: null });
+    expect(classes(f)).toEqual([
+      { identity: COORD, role: 'coordinator', designatedClass: null },
+      { identity: 'overlord', role: 'overlord', designatedClass: 'fable' },
+    ]);
+    const p = fixture();
+    p.s.designationRead = () => ({ kind: 'not-designated', row: view({ pending: { sessionId: BODY, kind: 'designate', deadlineAt: 9, since: 1, actor: 'op', generation: null } }) });
+    p.registry.push({ id: BODY, uuid: U3, lane: 'lane-a', child: { kind: 'none' } });
+    p.start('startup', U3, undefined, BODY);
+    p.pass();
+    expect(classes(p)).toEqual([{ identity: 'overlord', role: 'overlord', designatedClass: 'fable' }]);
+  }, 60_000);
+
+  it('a rebind\'s pending body mints under its own id, and stamps null', () => {
+    const f = fixture();
+    f.s.designationRead = () => ({ kind: 'designated', sessionId: COORD, term: 2,
+      row: view({ bound: { sessionId: COORD, generation: 'g1' }, pending: { sessionId: BODY, kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null } }) });
+    f.registry.push({ id: BODY, uuid: U3, lane: 'lane-a', child: { kind: 'none' } });
+    f.start('startup', U3, undefined, BODY);
+    f.pass();
+    expect(classes(f)).toEqual([{ identity: BODY, role: 'overlord', designatedClass: null }]);
+  }, 60_000);
+
+  it('renewalDue: a raised term makes term-raised due (hard) and a changed class makes class-changed due (soft); with no w1 both are blind', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound(COORD);
+    f.start('startup', U1);
+    f.pass();
+    const g = live(f.s)[0]!;
+    expect(g.role).toBe('overlord');
+    const unknown = { kind: 'unmeasured', why: 'unread' } as const;
+    const r = readings(usage(1_000, 1_000_000));
+    const blind = renewalDue(renewalInputsOf(g, r, unknown, 0, unknown));
+    expect(blind.blind).toEqual(expect.arrayContaining(['term-raised', 'class-changed']));
+    expect(renewalDue(renewalInputsOf(g, { ...r, w1: { termRaised: { kind: 'measured', value: true } } }, unknown, 0, unknown)))
+      .toMatchObject({ due: true, cls: 'hard', why: 'term-raised' });
+    expect(renewalDue(renewalInputsOf(g, { ...r, w1: { classChanged: { kind: 'measured', value: true } } }, unknown, 0, unknown)))
+      .toMatchObject({ cls: 'soft' });
+  }, 60_000);
+
+  /** The Overlord (`COORD` designated) live in probing with its first round open, its latch recorded. */
+  const overlordProbing = (live = true): { f: Fixture; latched: { cause: string; detail: string }[] } => {
+    const f = fixture();
+    const latched: { cause: string; detail: string }[] = [];
+    f.latch = (cause, detail) => { latched.push({ cause, detail }); return { ok: true }; };
+    f.s.designationRead = () => bound(COORD);
+    if (live) f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    feedCard(f);
+    f.pass();
+    return { f, latched };
+  };
+  const feedCard = (f: Fixture): void => {
+    const id = `snap-rr${f.t.ports.clock.wall()}`;
+    const hash = `${'c'.repeat(56)}${String(f.t.ports.clock.wall()).slice(-8)}`;
+    if (!f.s.insertSnapshot({ id, sessionId: COORD, at: f.t.ports.clock.wall(), facts: SNAPSHOT, hash }).ok) throw new Error('snapshot');
+    if (!f.s.insertCardRead({ sessionId: COORD, uuid: U1, snapshotId: id, hash, pages: 1, at: f.t.ports.clock.wall() }).ok) throw new Error('read');
+  };
+  const failRound = (f: Fixture): void => {
+    const open = f.s.openProbeRound(COORD);
+    if (!open.ok || open.rows.length === 0) throw new Error('no open round');
+    const w = f.s.answerRound(open.rows[0]!.roundId, COORD, open.rows.map((r) => ({ qid: r.qid, answer: 'x', grade: 'fail' as const })), 'unmeasured', f.t.ports.clock.wall());
+    if (!w.ok) throw new Error(w.kind);
+  };
+  const twoFailedRounds = (f: Fixture, state: 'state' | 'shadowState'): void => {
+    failRound(f);
+    f.pass();
+    f.t.advance(5_000);
+    feedCard(f);
+    f.pass();
+    failRound(f);
+    f.pass();
+    expect(live(f.s)[0]![state]).toBe('degraded');
+  };
+
+  it('a live Overlord degraded by two failed rounds raises the latch once, and later passes raise nothing more', () => {
+    const { f, latched } = overlordProbing();
+    expect(live(f.s)[0]).toMatchObject({ role: 'overlord', state: 'probing' });
+    twoFailedRounds(f, 'state');
+    expect(latched).toEqual([{ cause: 'probes-failed-twice', detail: expect.stringContaining('two failed probe rounds') }]);
+    f.pass(); f.pass();
+    expect(latched).toHaveLength(1);
+  }, 60_000);
+
+  it('a first failed round raises nothing', () => {
+    const { f, latched } = overlordProbing();
+    failRound(f);
+    f.pass();
+    expect(live(f.s)[0]).toMatchObject({ state: 'probing', probeRounds: 1 });
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  it('a shadow walk degraded the same way raises nothing', () => {
+    const { f, latched } = overlordProbing(false);
+    expect(live(f.s)[0]).toMatchObject({ role: 'overlord', shadowState: 'probing' });
+    twoFailedRounds(f, 'shadowState');
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  it('a coordinator degraded by two failed rounds raises nothing', () => {
+    const f = fixture();
+    const latched: string[] = [];
+    f.latch = (cause) => { latched.push(cause); return { ok: true }; };
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    feedCard(f);
+    f.pass();
+    twoFailedRounds(f, 'state');
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  const refusedCase = (latch: NonNullable<Fixture['latch']>, word: string) => () => {
+    const { f } = overlordProbing();
+    f.latch = latch;
+    failRound(f); f.pass(); f.t.advance(5_000); feedCard(f); f.pass(); failRound(f);
+    expect(f.pass()).toMatchObject({ unread: null, probesFed: 1 });
+    expect(live(f.s)[0]!.state).toBe('degraded');
+    expect(f.logs.some((l) => l.includes('probes-failed-twice latch') && l.includes(word))).toBe(true);
+  };
+  it('a refused raise is logged with its word, and the pass goes on', refusedCase(() => ({ ok: false, why: 'journal-unreadable' }), 'journal-unreadable'), 60_000);
+  it('a throwing raise is logged, and the pass goes on', refusedCase(() => { throw new Error('locked'); }, 'locked'), 60_000);
+
+  it('bound to the wiring\'s raise, the latch lands as the ladder\'s row: cap chat, raised by the renewal lane', () => {
+    const { f } = overlordProbing();
+    f.latch = renewalReadingsOf({ time: { clock: f.t.ports.clock, entropy: f.t.ports.entropy } }, f.s, []).latch;
+    twoFailedRounds(f, 'state');
+    expect(f.s.db.prepare('SELECT cause, cap, raisedBy, clearedAt FROM overlord_latches').all()).toEqual([
+      { cause: 'probes-failed-twice', cap: 'chat', raisedBy: 'renewal-lane', clearedAt: null },
+    ]);
+  }, 60_000);
 });

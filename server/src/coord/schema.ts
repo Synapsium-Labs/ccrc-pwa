@@ -4298,6 +4298,22 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
   ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
   `,
+
+  // ── 121: user_version 120 -> 121 ──────────────────────────────────────────
+  // The class the Overlord's generation was minted under (Overlord W1 renewal readings PR C, plan `w1-renewal-readings.md`
+  // Task 5, slug designated-class-stamped-at-mint): `designatedClass` on `continuity_generations`, the designation's model
+  // class when the generation was minted as the Overlord, so `classChanged` asks whether the operator changed the class
+  // after the mint and never compares the class the generation runs (a fallback generation runs another). ONE writer,
+  // `continuityStore.ts#mintGeneration`. Nothing is back-filled: NULL is a coordinator's or a plain session's generation, an
+  // Overlord generation minted before this entry or by an older build, and `classChanged` reads it unmeasured.
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 121` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // RE-MEASURE the slot before merge (it must print 120 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN designatedClass TEXT;   -- the designation's class at the mint; NULL is unknown
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
