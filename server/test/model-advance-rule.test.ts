@@ -5,9 +5,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  BLOCKED_CAUSES, REASON_MAX, canaryEffort, chooseCandidate, compareVersions, eligibleIds, familyOf, parseModelId,
-  resolveEffort,
+  BLOCKED_CAUSES, REASON_MAX, RETIRE_GAP_MS, RETIRE_GRACE_MS, canaryEffort, candidateFor, chooseCandidate, classWaits,
+  clearEffortFallback, compareVersions, effortDroppedDetail, effortFallbackOf, effortFallbacks, eligibleIds, familyOf,
+  markMissing, observedAt, parseModelId, pinMissing, recordEffortFallbacks, refreshRecord, resolveEffort,
 } from '../../shared/model-advance.mjs';
+import { backfillAdvance } from '../../shared/model-advance.mjs';
 import { CLASSES } from '../../shared/models.js';
 import { ADV_CATALOGUE, ADV_REGISTRY, EFFORTS4, EFFORTS5, cat, mrow, reg } from './fixtures/advanceCases.js';
 
@@ -17,6 +19,16 @@ const MODULE = path.join(REPO, 'shared', 'model-advance.mjs');
 const DECL = path.join(REPO, 'shared', 'model-advance.d.mts');
 const PROBE = path.join(here, 'types', 'ok', 'model-advance.ts');
 const NONE = { candidate: null, reason: null, blocked: null };
+/** The measured first sighting of the 2026-11-10 flap (programme wave 3, backward-move). */
+const GRACE_SINCE = '2026-11-10T22:16:58Z';
+/** An epoch in ms in the advance file's time form. */
+const isoS = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+/** A run of sightings that has qualified `model` to retire on catalogue `c` (D-8838): six hours of them, ending at
+ *  `c`'s own observation time, and a plan clock at that time. */
+const qualified = (model: string, c: { fetchedAt: number }) => ({
+  missing: { model, since: isoS(c.fetchedAt * 1000 - RETIRE_GRACE_MS), seen: isoS(c.fetchedAt * 1000) },
+  nowMs: c.fetchedAt * 1000,
+});
 
 describe('parseModelId — exactly <vendor>-<version>-<family> (D16)', () => {
   it.each([
@@ -111,8 +123,12 @@ describe('chooseCandidate — one class, one family, forwards (§2.2)', () => {
     const both = cat([mrow('model-6-delta'), mrow('model-6.1-gamma'), mrow('model-7-delta')]);
     expect(chooseCandidate({ registry: r, catalogue: both, cls: 'opus', family: 'gamma' }))
       .toEqual({ candidate: 'model-7-delta', reason: 'newer', blocked: null });
-    // A retired pin falls back within its own family too, never into the stored one.
+    // A pin gone from the catalogue moves within its own family too, never into the stored one: to a newer model at
+    // once (`newer`, programme wave 3), and to an older one only once its grace has run (`retired`).
     expect(chooseCandidate({ registry: reg({ opus: 'model-5-delta' }), catalogue: both, cls: 'opus', family: 'gamma' }))
+      .toEqual({ candidate: 'model-7-delta', reason: 'newer', blocked: null });
+    expect(chooseCandidate({ registry: reg({ opus: 'model-8-delta' }), catalogue: both, cls: 'opus', family: 'gamma',
+      ...qualified('model-8-delta', both) }))
       .toEqual({ candidate: 'model-7-delta', reason: 'retired', blocked: null });
   });
 
@@ -138,11 +154,12 @@ describe('chooseCandidate — one class, one family, forwards (§2.2)', () => {
 
   it('a retired pin falls back to the newest eligible model left in its family, on a fresh catalogue only (D-5199)', () => {
     const r = reg({ opus: 'model-7-gamma' });
-    expect(chooseCandidate({ registry: r, catalogue: gamma, cls: 'opus', family: 'gamma' }))
+    const gone = qualified('model-7-gamma', gamma);
+    expect(chooseCandidate({ registry: r, catalogue: gamma, cls: 'opus', family: 'gamma', ...gone }))
       .toEqual({ candidate: 'model-6.1-gamma', reason: 'retired', blocked: null });
-    expect(chooseCandidate({ registry: r, catalogue: { ...gamma, stale: true }, cls: 'opus', family: 'gamma' }))
+    expect(chooseCandidate({ registry: r, catalogue: { ...gamma, stale: true }, cls: 'opus', family: 'gamma', ...gone }))
       .toEqual(NONE);
-    expect(chooseCandidate({ registry: r, catalogue: null, cls: 'opus', family: 'gamma' })).toEqual(NONE);
+    expect(chooseCandidate({ registry: r, catalogue: null, cls: 'opus', family: 'gamma', ...gone })).toEqual(NONE);
   });
 
   it("a stale catalogue still names a newer or an empty class's candidate: that stale gate is the op's (W2 Tasks 8 and 9), never this function's", () => {
@@ -362,5 +379,309 @@ describe('shared/model-advance.mjs is a pure module that spells no class word', 
     expect(src).toContain('chooseCandidate({ registry: reg, catalogue: cat, cls, family: fam })');
     expect(src).toContain("resolveEffort({ stored: 'max', oldEfforts: null, newEfforts: ['low'] })");
     expect(src).not.toContain(' as ');
+  });
+});
+
+// ── Programme wave 3, backward-move (D-8838): a pin missing from a fresh catalogue waits out a span of continuous
+// sightings before its class moves to an older model. Measured on the fleet box 2026-11-10: one lane's fresh catalogue
+// left out the opus class's pin for about two hours; the class moved to the older model of its family and back, each
+// behind a passing canary. The only move that may go to an older version is `retired` (the version order is not the
+// cause: 6.1 > 6, pinned above), so the grace sits on that move alone. The grace counts the catalogue's own
+// observation times (`fetchedAt`), never the plan's clock, so hours the lane was not observed never count.
+describe('the retired grace (programme wave 3, backward-move, D-8838)', () => {
+  const PIN = 'model-6.1-sol';
+  const r = reg({ opus: PIN });
+  const T0 = Date.parse(GRACE_SINCE);
+  const H = 3_600_000;
+  /** The measured shape, observed `ms` after the first sighting: the pin gone, its older siblings still listed. */
+  const flap = (ms: number) => cat([mrow('model-6-sol'), mrow('model-5.6-sol')], { fetchedAt: (T0 + ms) / 1000 });
+  const listed = (ms: number) => cat([mrow(PIN), mrow('model-6-sol')], { fetchedAt: (T0 + ms) / 1000 });
+  const fresh = () => backfillAdvance({ registry: r, seedFamilies: null });
+  /** One hourly refresh: the materialise records the sighting, then the plan reads it at `late` ms after it. */
+  const hour = (adv: ReturnType<typeof fresh>, c: ReturnType<typeof flap>, late = 30_000) => {
+    const nowMs = c.fetchedAt * 1000 + late;
+    const next = markMissing(adv, r, c, nowMs).advance;
+    return { adv: next, choice: chooseCandidate({ registry: r, catalogue: c, cls: 'opus', family: 'sol',
+      missing: next.classes.opus['missing'], nowMs }) };
+  };
+  const run = (since: number, seen: number) => ({ model: PIN, since: isoS(T0 + since), seen: isoS(T0 + seen) });
+  const RETIRED = { candidate: 'model-6-sol', reason: 'retired', blocked: null };
+
+  it('RETIRE_GRACE_MS is six hours, and RETIRE_GAP_MS one hourly refresh plus half an hour', () => {
+    expect(RETIRE_GRACE_MS).toBe(6 * H);
+    expect(RETIRE_GAP_MS).toBe(90 * 60_000);
+  });
+
+  it('observedAt is a fresh catalogue\'s fetchedAt in the file\'s time form, and null for anything else', () => {
+    expect(observedAt(flap(0))).toBe(GRACE_SINCE);
+    expect(observedAt({ ...flap(0), stale: true })).toBeNull();
+    expect(observedAt(null)).toBeNull();
+    expect(observedAt({ ...flap(0), fetchedAt: 1e15 })).toBeNull();
+  });
+
+  it('the measured flap through the hourly order: two sightings without the pin, listed again on the third, moves nothing', () => {
+    let adv = fresh();
+    for (const [ms, c] of [[0, flap(0)], [H - 3_000, flap(H - 3_000)], [2 * H + 6_000, listed(2 * H + 6_000)]] as const) {
+      const step = hour(adv, c);
+      expect(step.choice, `${ms} ms`).toEqual(NONE);
+      adv = step.adv;
+    }
+    expect(adv.classes.opus['missing'], 'listed again ends the run').toBeUndefined();
+  });
+
+  it('six hours of hourly sightings, with ordinary jitter, retire at the sighting that completes six hours, not before', () => {
+    let adv = fresh();
+    const times = [0, 62, 121, 183, 242, 301, 359].map((m) => m * 60_000);   // minutes, gaps of 58 to 62
+    for (const ms of times) {
+      const step = hour(adv, flap(ms));
+      expect(step.choice, `${ms / 60_000} min`).toEqual(NONE);
+      adv = step.adv;
+    }
+    expect(adv.classes.opus['missing']).toEqual(run(0, 359 * 60_000));
+    const due = hour(adv, flap(6 * H));
+    expect(due.choice, 'the boundary itself qualifies').toEqual(RETIRED);
+    expect(hour(adv, flap(6 * H - 1_000)).choice, 'a second short').toEqual(NONE);
+  });
+
+  it('the plan clock never counts: a run of one sighting, read twelve hours later, does not retire', () => {
+    const adv = hour(fresh(), flap(0)).adv;
+    expect(chooseCandidate({ registry: r, catalogue: flap(0), cls: 'opus', family: 'sol',
+      missing: adv.classes.opus['missing'], nowMs: T0 + 12 * H })).toEqual(NONE);
+  });
+
+  it('a sighting whose record was not written proposes nothing: the run must end at this catalogue\'s own time', () => {
+    const missing = run(0, 6 * H);
+    expect(chooseCandidate({ registry: r, catalogue: flap(7 * H), cls: 'opus', family: 'sol', missing, nowMs: T0 + 7 * H }),
+      'the write of the 7 h sighting failed').toEqual(NONE);
+    expect(chooseCandidate({ registry: r, catalogue: flap(6 * H), cls: 'opus', family: 'sol', missing, nowMs: T0 + 6 * H }))
+      .toEqual(RETIRED);
+  });
+
+  it('a missed interval restarts the run; ordinary jitter, up to RETIRE_GAP_MS, continues it', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = run(0, 3 * H);
+    const at = (ms: number) => markMissing(adv, r, flap(ms), T0 + ms + 1_000).advance.classes.opus['missing'];
+    expect(at(3 * H + 70 * 60_000), 'a 70 min gap').toEqual(run(0, 3 * H + 70 * 60_000));
+    expect(at(3 * H + RETIRE_GAP_MS), 'the gap itself').toEqual(run(0, 3 * H + RETIRE_GAP_MS));
+    expect(at(3 * H + RETIRE_GAP_MS + 1_000), 'a second past it').toEqual(run(3 * H + RETIRE_GAP_MS + 1_000, 3 * H + RETIRE_GAP_MS + 1_000));
+    expect(at(5 * H), 'a missed hour').toEqual(run(5 * H, 5 * H));
+    expect(at(27 * H), 'a day-long outage, then one sighting').toEqual(run(27 * H, 27 * H));
+  });
+
+  it('a stale catalogue, or the same catalogue read again, changes nothing', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = run(0, 3 * H);
+    for (const c of [{ ...flap(4 * H), stale: true }, { ...listed(4 * H), stale: true }, flap(3 * H), null]) {
+      expect(markMissing(adv, r, c, T0 + 4 * H)).toEqual({ advance: adv, changed: false });
+    }
+  });
+
+  it('a clock that went back, or forward past the gap, restarts the run; a sighting later than now is no sighting', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = run(0, 3 * H);
+    const at = (ms: number, nowMs: number) => markMissing(adv, r, flap(ms), nowMs);
+    expect(at(2 * H, T0 + 4 * H).advance.classes.opus['missing'], 'back').toEqual(run(2 * H, 2 * H));
+    expect(at(30 * H, T0 + 30 * H).advance.classes.opus['missing'], 'forward').toEqual(run(30 * H, 30 * H));
+    expect(at(4 * H, T0 + 3.5 * H), 'in the future').toEqual({ advance: adv, changed: false });
+    expect(chooseCandidate({ registry: r, catalogue: flap(6 * H), cls: 'opus', family: 'sol', missing: run(0, 6 * H),
+      nowMs: T0 + 5 * H }), 'a qualifying run whose last sighting is after now').toEqual(NONE);
+  });
+
+  it('a record of the first shape, or of another model, restarts and never qualifies', () => {
+    const first = { model: PIN, since: GRACE_SINCE };
+    expect(chooseCandidate({ registry: r, catalogue: flap(9 * H), cls: 'opus', family: 'sol', missing: first,
+      nowMs: T0 + 9 * H })).toEqual(NONE);
+    for (const m of [first, { model: 'model-6-sol', since: GRACE_SINCE, seen: isoS(T0 + 8.5 * H) }, null, 'x']) {
+      const adv = fresh();
+      if (m !== null) adv.classes.opus['missing'] = m as never;
+      expect(markMissing(adv, r, flap(9 * H), T0 + 9 * H).advance.classes.opus['missing']).toEqual(run(9 * H, 9 * H));
+    }
+  });
+
+  // Review 2999 N3: one case per guard of the run's identity. The three model checks each red when that term alone is
+  // removed (measured). The first-shape case pins the BEHAVIOUR, a record with no `seen` restarts within 90 minutes:
+  // `isAt(m.seen)`, the order and the gap term each enforce it, so removing one of them alone keeps it green (review 3015 F2).
+  const other = (since: number, seen: number) => ({ ...run(since, seen), model: 'model-7-sol' });
+
+  it('retireDue: a record of another model, six hours long and ending at this catalogue\'s sighting, never retires the pin', () => {
+    expect(chooseCandidate({ registry: r, catalogue: flap(6 * H), cls: 'opus', family: 'sol', missing: other(0, 6 * H),
+      nowMs: T0 + 6 * H })).toEqual(NONE);
+  });
+
+  it('pinMissing: a record of another model is no run of this pin, so no start and no earliest move are named', () => {
+    expect(pinMissing({ registry: r, catalogue: flap(2 * H), cls: 'opus', missing: other(0, 2 * H), nowMs: T0 + 2 * H }))
+      .toEqual({ model: PIN, since: null, until: null, older: 'model-6-sol' });
+  });
+
+  it('markMissing: a record of another model at this very sighting is no repeat of it; the pin\'s run starts there', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = other(0, 9 * H);
+    const back = markMissing(adv, r, flap(9 * H), T0 + 9 * H);
+    expect(back.changed).toBe(true);
+    expect(back.advance.classes.opus['missing']).toEqual(run(9 * H, 9 * H));
+  });
+
+  it('markMissing: a first-shape record half an hour before this sighting restarts the run, never continues it', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = { model: PIN, since: isoS(T0 + 8.5 * H) } as never;
+    expect(markMissing(adv, r, flap(9 * H), T0 + 9 * H).advance.classes.opus['missing']).toEqual(run(9 * H, 9 * H));
+  });
+
+  it('a listed pin or an empty class loses its record, and the input is never edited', () => {
+    const adv = fresh();
+    adv.classes.opus['missing'] = run(0, 3 * H);
+    const back = markMissing(adv, r, listed(4 * H), T0 + 4 * H);
+    expect(back.changed).toBe(true);
+    expect(back.advance.classes.opus['missing']).toBeUndefined();
+    expect(adv.classes.opus['missing'], 'the input').toEqual(run(0, 3 * H));
+    expect(markMissing(adv, reg({}), flap(4 * H), T0 + 4 * H).advance.classes.opus['missing']).toBeUndefined();
+    expect(markMissing(adv, reg({ opus: 'model-6-sol' }), flap(4 * H), T0 + 4 * H).advance.classes.opus['missing'],
+      'the class moved to a listed pin').toBeUndefined();
+    for (const c of CLASSES.filter((x) => x !== 'opus')) {
+      expect(markMissing(fresh(), r, flap(0), T0).advance.classes[c]['missing'], c).toBeUndefined();
+    }
+  });
+
+  it('a stale catalogue never retires, the run qualified or not (D-5199)', () => {
+    expect(chooseCandidate({ registry: r, catalogue: { ...flap(6 * H), stale: true }, cls: 'opus', family: 'sol',
+      missing: run(0, 6 * H), nowMs: T0 + 6 * H })).toEqual(NONE);
+  });
+
+  it('a newer model never waits on a fresh catalogue (D-8839); on a stale one an unlisted pin gets nothing, as before', () => {
+    const newer = cat([mrow('model-6-sol'), mrow('model-6.2-sol')]);
+    expect(chooseCandidate({ registry: r, catalogue: newer, cls: 'opus', family: 'sol' }))
+      .toEqual({ candidate: 'model-6.2-sol', reason: 'newer', blocked: null });
+    expect(chooseCandidate({ registry: r, catalogue: { ...newer, stale: true }, cls: 'opus', family: 'sol' }),
+      'an unlisted pin on a stale catalogue').toEqual(NONE);
+    expect(chooseCandidate({ registry: r, catalogue: cat([mrow(PIN), mrow('model-6.2-sol')], { stale: true }), cls: 'opus',
+      family: 'sol' }), 'a listed pin on a stale catalogue still names it; the op refuses the stale catalogue')
+      .toEqual({ candidate: 'model-6.2-sol', reason: 'newer', blocked: null });
+  });
+
+  it('candidateFor carries the grace through to the plan and the commit (one computation)', () => {
+    expect(candidateFor({ registry: r, catalogue: flap(H), cls: 'opus', family: 'sol', missing: run(0, H), nowMs: T0 + H }))
+      .toEqual({ ...NONE, effortTo: null, canaryEffort: null });
+    expect(candidateFor({ registry: r, catalogue: flap(6 * H), cls: 'opus', family: 'sol', missing: run(0, 6 * H),
+      nowMs: T0 + 6 * H })).toMatchObject({ candidate: 'model-6-sol', reason: 'retired', canaryEffort: 'low' });
+  });
+
+  it('pinMissing names a waiting class: its pin, the run\'s start, the earliest move, and to what', () => {
+    const at = (c: ReturnType<typeof flap> | ReturnType<typeof cat>, missing: unknown) =>
+      pinMissing({ registry: r, catalogue: c, cls: 'opus', missing, nowMs: T0 + 2 * H });
+    expect(at(flap(2 * H), run(0, 2 * H))).toEqual({ model: PIN, since: GRACE_SINCE, until: '2026-11-11T04:16:58Z',
+      older: 'model-6-sol' });
+    expect(at(flap(2 * H), undefined), 'no run yet').toEqual({ model: PIN, since: null, until: null, older: 'model-6-sol' });
+    expect(at(flap(2 * H), { model: PIN, since: GRACE_SINCE }), 'the first shape').toMatchObject({ since: null, until: null });
+    expect(pinMissing({ registry: r, catalogue: flap(6 * H), cls: 'opus', missing: run(0, 6 * H), nowMs: T0 + 6 * H }),
+      'qualified').toBeNull();
+    expect(at(listed(2 * H), run(0, H)), 'listed').toBeNull();
+    expect(at({ ...flap(2 * H), stale: true }, run(0, 2 * H)), 'stale').toBeNull();
+    expect(at(cat([mrow('model-6.2-sol')]), run(0, 2 * H)), 'a newer model is free').toBeNull();
+    expect(at(cat([mrow('model-6-luna')]), run(0, 2 * H)), 'nothing left in its family').toBeNull();
+  });
+
+  it('classWaits names a waiting unheld class, and a held one stays quiet (D-8840)', () => {
+    const c = { ...fresh().classes.opus, missing: run(0, 2 * H) };
+    const rows = classWaits({ registry: r, catalogue: flap(2 * H), cls: 'opus', c, nowMs: T0 + 2 * H });
+    expect(rows).toEqual([{ cause: 'pin-missing', detail: `${PIN} is missing from the lane's catalogue since ${GRACE_SINCE}; `
+      + 'the class moves to model-6-sol, an older model, once every hourly sighting has missed it for six hours '
+      + '(2026-11-11T04:16:58Z at the earliest), and any sighting that lists it again ends the wait' }]);
+    expect(classWaits({ registry: r, catalogue: flap(2 * H), cls: 'opus', c: { ...c, hold: { at: GRACE_SINCE, by: 'hand' } },
+      nowMs: T0 + 2 * H }), 'held').toEqual([]);
+    expect(classWaits({ registry: r, catalogue: flap(0), cls: 'opus', c: null, nowMs: T0 })[0]?.detail)
+      .toContain('(counted from the next sighting the refresh records)');
+  });
+});
+
+// ── Programme wave 3, effort-level-dropped (D-8842): a stored level the class's model no longer offers ────────────
+describe('effortFallbacks (programme wave 3, effort-level-dropped, D-8842)', () => {
+  const json = (effort: Record<string, string>, classes: Record<string, string | null> = { opus: 'model-7-sol', sonnet: 'model-6-terra' }) =>
+    ({ probe: 'codex', classes: { haiku: null, sonnet: null, opus: null, fable: null, ...classes }, subagent: 'sonnet',
+      discovery: 'catalogue', effort });
+  const dropped = cat([mrow('model-7-sol', { efforts: [...EFFORTS4] }), mrow('model-6-terra'), mrow('model-6-luna')]);
+  const FB = { class: 'opus', model: 'model-7-sol', from: 'max', to: 'xhigh' } as const;
+
+  it('falls back to the next level down the model offers, ranked by a row that still lists the old one (D-5991)', () => {
+    const got = effortFallbacks(json({ opus: 'max', sonnet: 'high' }), dropped);
+    expect(got?.fallbacks).toEqual([FB]);
+    expect(got?.registry.effort).toEqual({ opus: 'xhigh', sonnet: 'high' });
+  });
+
+  it('with no row listing the level, the model\'s lowest (resolveEffort\'s own fallback)', () => {
+    const none = cat([mrow('model-7-sol', { efforts: ['minimal', 'low'] }), mrow('model-6-terra', { efforts: ['low'] })]);
+    expect(effortFallbacks(json({ opus: 'max' }), none)?.fallbacks)
+      .toEqual([{ class: 'opus', model: 'model-7-sol', from: 'max', to: 'minimal' }]);
+  });
+
+  it('a fallback can rank ABOVE the old level: nothing below it offered gives the model\'s lowest, never a refusal', () => {
+    const up = cat([mrow('model-7-sol', { efforts: ['low', 'medium', 'high'] }), mrow('model-6-terra')]);
+    expect(effortFallbacks(json({ opus: 'minimal' }), up)?.fallbacks)
+      .toEqual([{ class: 'opus', model: 'model-7-sol', from: 'minimal', to: 'low' }]);
+  });
+
+  it('null for a registry that parses, one refused for anything else, or one still refused after the fallback', () => {
+    expect(effortFallbacks(json({ opus: 'xhigh' }), dropped), 'parses as it is').toBeNull();
+    expect(effortFallbacks({ ...json({ opus: 'max' }), stray: 1 }, dropped), 'an unknown key too').toBeNull();
+    expect(effortFallbacks(json({ opus: 'max', bogus: 'high' }), dropped), 'still refused after the fallback').toBeNull();
+    expect(effortFallbacks('not a registry', dropped)).toBeNull();
+  });
+
+  it('a recorded fallback stands only while the pin, the level and the drop do', () => {
+    const r2 = reg({ opus: 'model-7-sol' }, { effort: { opus: 'xhigh' } });
+    const adv = recordEffortFallbacks(backfillAdvance({ registry: r2, seedFamilies: null }), [FB], GRACE_SINCE);
+    const fb = { at: GRACE_SINCE, model: 'model-7-sol', from: 'max', to: 'xhigh' };
+    expect(adv.classes.opus['effortFallback']).toEqual(fb);
+    expect(effortFallbackOf(adv.classes.opus, r2, 'opus', dropped)).toEqual(fb);
+    expect(effortFallbackOf(adv.classes.opus, r2, 'opus', null), 'no catalogue to say otherwise').toEqual(fb);
+    expect(effortFallbackOf(adv.classes.opus, reg({ opus: 'model-7-sol' }, { effort: { opus: 'high' } }), 'opus', dropped),
+      'another level').toBeNull();
+    expect(effortFallbackOf(adv.classes.opus, reg({ opus: 'model-8-sol' }, { effort: { opus: 'xhigh' } }), 'opus', dropped),
+      'a move').toBeNull();
+    expect(effortFallbackOf(adv.classes.opus, r2, 'opus', cat([mrow('model-7-sol')])), 'the old level offered again')
+      .toBeNull();
+    expect(effortFallbackOf(adv.classes.sonnet, r2, 'sonnet', dropped)).toBeNull();
+    expect(effortFallbackOf(null, r2, 'opus', dropped)).toBeNull();
+  });
+
+  it('clearEffortFallback ends the record after a hand level, and changes nothing on a class without one', () => {
+    const r2 = reg({ opus: 'model-7-sol' }, { effort: { opus: 'xhigh' } });
+    const adv = recordEffortFallbacks(backfillAdvance({ registry: r2, seedFamilies: null }), [FB], GRACE_SINCE);
+    const c = clearEffortFallback(adv, 'opus');
+    expect(c.changed).toBe(true);
+    expect(c.advance.classes.opus['effortFallback']).toBeUndefined();
+    expect(adv.classes.opus['effortFallback'], 'the input').toBeDefined();
+    expect(clearEffortFallback(c.advance, 'opus')).toEqual({ advance: c.advance, changed: false });
+  });
+
+  it('refreshRecord writes the sightings and the new fallbacks in one, and ends a fallback that no longer stands', () => {
+    const r2 = reg({ opus: 'model-7-sol', sonnet: 'model-9-terra' }, { effort: { opus: 'xhigh' } });
+    const base = backfillAdvance({ registry: r2, seedFamilies: null });
+    const nowMs = dropped.fetchedAt * 1000;
+    const one = refreshRecord(base, { registry: r2, catalogue: dropped, fallbacks: [FB], nowMs });
+    expect(one.changed).toBe(true);
+    expect(one.advance.classes.opus['effortFallback']).toEqual({ at: isoS(nowMs), model: 'model-7-sol', from: 'max', to: 'xhigh' });
+    expect(one.advance.classes.sonnet['missing'], 'the sonnet pin is not listed')
+      .toEqual({ model: 'model-9-terra', since: isoS(nowMs), seen: isoS(nowMs) });
+    expect(refreshRecord(one.advance, { registry: r2, catalogue: dropped, fallbacks: [], nowMs }),
+      'the same hour again').toEqual({ advance: one.advance, changed: false });
+    const back = cat([mrow('model-7-sol'), mrow('model-9-terra')], { fetchedAt: dropped.fetchedAt + 3600 });
+    const two = refreshRecord(one.advance, { registry: r2, catalogue: back, fallbacks: [], nowMs: nowMs + 3_600_000 });
+    expect(two.advance.classes.opus['effortFallback'], 'max is offered again; xhigh is kept').toBeUndefined();
+    expect(two.advance.classes.sonnet['missing'], 'listed again').toBeUndefined();
+  });
+
+  it('classWaits and effortDroppedDetail say what the class runs at, and what the refused registry waits for', () => {
+    const r2 = reg({ opus: 'model-7-sol' }, { effort: { opus: 'xhigh' } });
+    const adv = recordEffortFallbacks(backfillAdvance({ registry: r2, seedFamilies: null }), [FB], GRACE_SINCE);
+    expect(classWaits({ registry: r2, catalogue: dropped, cls: 'opus', c: adv.classes.opus, nowMs: 0 })).toEqual([{
+      cause: 'effort-fallback',
+      detail: `model-7-sol no longer offers effort max, so since ${GRACE_SINCE} it runs at xhigh, the fallback the hourly refresh chose`,
+    }]);
+    expect(effortDroppedDetail(FB)).toBe('model-7-sol no longer offers effort max, so the lane\'s registry is refused '
+      + 'until the hourly refresh writes the fallback, xhigh');
+  });
+
+  it('the three new blocked words are BLOCKED_CAUSES words', () => {
+    for (const w of ['pin-missing', 'effort-dropped', 'effort-fallback']) expect(BLOCKED_CAUSES).toContain(w);
   });
 });

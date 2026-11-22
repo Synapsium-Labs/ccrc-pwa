@@ -117,6 +117,7 @@ describe('D4: the roster card, armed', () => {
     fakeApi(list(run_('', { id: 11 }), run_('', { id: 12, state: 'awaiting-review', waveOf: null, unreadMail: 1 })));
     expect(rosterOf(hook('compact'))).toBe([
       'ccrc-roster: 2 open run(s) you claim; re-read with `~/.local/bin/ccrc-api runs list`.',
+      AUTONOMY_LINE,   // D-8126 (A9-1): the fixed line, after the header, before the runs
       '#11 prog-a w1/3 working worker=worker-a 3h unread=0',
       '#12 prog-a w1 awaiting-review worker=worker-a 3h unread=1',
       'awaiting you: review #12',
@@ -518,5 +519,108 @@ describe('the builder ships', () => {
     expect(r2.status).toBe(0);
     expect(r2.stdout).not.toContain('ccrc-roster');
     expect(r2.stdout).toContain('You are still this project\'s coordinator');
+  });
+});
+
+// ── D-8126 (autonomy plan A9-1, spec §9.2; review focus F13): the fixed autonomy line ─────────────────────────────────
+// A compacted coordinator loses clause 21 with the rest of its context. The roster card carries one fixed line that
+// re-states it, a literal of the card's one builder (`ccd/lib/roster-card.jq`), so no server byte reaches it. It sits
+// after the header and before the runs, inside the card's cap, so surplus runs collapse before it does; and the card stays
+// inside its cap in the structural worst case, whatever the server sends.
+const AUTONOMY_LINE = 'ccrc-autonomy: before asking the operator, read your goals (`ccrc-api goals show <slug>`), decide, record (`ccrc-api calls record`), continue; stop only for an operator-only act or a physical block (coordinator clause 21).';
+/** The cap the hook hands the builder: `ROSTER_CARD_MAX_CHARS` less 64. */
+const CARD_CAP = ROSTER_MAX - 64;
+
+describe('D-8126: the roster card carries the fixed autonomy line', () => {
+  beforeEach(arm);
+
+  it('puts the line after the header and before the first run', () => {
+    fakeApi(list(run_('', { id: 41 }), run_('', { id: 42 })));
+    const r = rosterOf(hook('compact')).split('\n');
+    expect(r[0]).toMatch(/^ccrc-roster:/);
+    expect(r[1]).toBe(AUTONOMY_LINE);
+    expect(r[2]).toMatch(/^#41 /);
+  });
+
+  it('the wake arm carries it too: the same builder', () => {
+    writeTranscript(IDLE);
+    fakeApi(list(run_('', { id: 45 })));
+    expect(wake(MAIL()).split('\n')[1]).toBe(AUTONOMY_LINE);
+  });
+
+  it('keeps the line and the cap with forty runs: the runs collapse first', () => {
+    fakeApi(list(...Array.from({ length: 40 }, (_v, i) => run_('', { id: 200 + i, program: 'a-long-programme-slug-for-the-cap' }))));
+    const card = rosterOf(hook('compact'));
+    expect(card.length).toBeLessThanOrEqual(CARD_CAP);
+    expect(card.split('\n')[1]).toBe(AUTONOMY_LINE);
+    expect(card).toMatch(/\+\d+ more open runs: ccrc-api runs list/);
+  });
+
+  it('the structural worst case stays inside the cap with the line whole: every field at its longest, every run awaiting you', () => {
+    const big = 1.7976931348623157e308;   // the longest number jq prints: every integer field, the ids included
+    const slug = 'x'.repeat(80);          // longer than the 40 characters `s` keeps
+    fakeApi(list(...Array.from({ length: 300 }, () => run_('', {
+      id: big, program: slug, sessionId: slug, wave: big, waveOf: big, unreadMail: big, state: 'awaiting-review',
+      health: { mailOutstanding: big, mailParked: big },
+    }))));
+    const card = rosterOf(hook('compact'));
+    expect(card.length).toBeLessThanOrEqual(CARD_CAP);
+    expect(card.split('\n')[1]).toBe(AUTONOMY_LINE);
+    expect(card).toMatch(/^ccrc-roster: 300 open run\(s\)/);
+  });
+
+  it('the worst case still ends with a whole awaiting-you line: its list collapses into "+N more", never cut', () => {
+    fakeApi(list(...Array.from({ length: 300 }, (_v, i) => run_('', { id: 1_000_000 + i, state: 'awaiting-review',
+      health: { mailOutstanding: 0, mailParked: 9 } }))));
+    const r = rosterOf(hook('compact')).split('\n');
+    expect(r[r.length - 1]).toMatch(/^awaiting you: review #1000000; .*; \+\d+ more$/);
+  });
+
+  it('a card full of runs keeps its awaiting-you line whole: the collapse line is reserved before a run is admitted', () => {
+    // Thirty runs overflow the cap; the slug's length sweeps 1 to 40, so the room the admitted runs leave sweeps a whole
+    // run line's width, and some lengths leave less than one collapse line: with no reserve, the collapse line would push
+    // the awaiting-you line past the cap and the last clip would cut it.
+    for (let k = 1; k <= 40; k++) {
+      fakeApi(list(...Array.from({ length: 30 }, (_v, i) => run_('', { id: 300 + i, program: 'p'.repeat(k) })),
+        run_('', { id: 999, state: 'awaiting-review' })));
+      const r = rosterOf(hook('compact')).split('\n');
+      expect(r[r.length - 1], `${k} runs`).toBe('awaiting you: review #999');
+      expect(r.join('\n').length, `${k} runs`).toBeLessThanOrEqual(CARD_CAP);
+    }
+  }, 120_000);
+
+  it('the builder itself never passes the cap it is given, even one smaller than its fixed lines (the last clip)', () => {
+    const body = JSON.stringify({ runs: [run_('', { id: 51 }), run_('', { id: 52, state: 'awaiting-review' })] });
+    for (const max of [-5, 0, 80, 250, 400]) {   // a negative cap clips to nothing (review 3077 F6)
+      const r = spawnSync('jq', ['-L', path.resolve(__dirname, '../../ccd/lib'), '-r', '--arg', 'me', ID, '--argjson', 'now', String(NOW),
+        '--argjson', 'max', String(max), 'include "roster-card"; roster_card($me; $now; $max)'], { input: body, encoding: 'utf8' });
+      expect(r.status).toBe(0);
+      expect(r.stdout.replace(/\n$/, '').length, `cap ${max}`).toBeLessThanOrEqual(Math.max(max, 0));
+    }
+  });
+
+  it('a run field carrying the line text neither duplicates nor alters it', () => {
+    fakeApi(list(run_('', { id: 43, program: AUTONOMY_LINE, sessionId: AUTONOMY_LINE, state: AUTONOMY_LINE })));
+    const card = rosterOf(hook('compact'));
+    expect(card.split(AUTONOMY_LINE).length - 1, 'the exact line appears once; `s` strips the spaces from a field').toBe(1);
+    expect(card.split('\n').filter((l) => l.startsWith('ccrc-autonomy:')).length).toBe(1);
+    expect(card.split('\n')[1]).toBe(AUTONOMY_LINE);
+  });
+
+  it('a coordinator with no open runs gets no line, and a child gets nothing', () => {
+    fakeApi(list(run_('', { claimedBy: 'project-z-other' })));
+    expect(hook('compact')).not.toContain('ccrc-autonomy');
+    fs.writeFileSync(path.join(reg(), `${ID}.child`), 'run-a\n');
+    fakeApi(list(run_('')));
+    expect(hook('compact')).not.toContain('ccrc-autonomy');
+  });
+
+  it('the line is a literal of the one builder: no interpolation, and no other file spells it', () => {
+    const jq = fs.readFileSync(path.resolve(__dirname, '../../ccd/lib/roster-card.jq'), 'utf8');
+    const def = jq.split('\n').filter((l) => l.includes('ccrc-autonomy:'));
+    expect(def, 'one line of the builder holds it').toHaveLength(1);
+    expect(def[0]).toBe(`def roster_autonomy_line: ${JSON.stringify(AUTONOMY_LINE)};`);
+    expect(def[0]).not.toContain('\\(');
+    expect(fs.readFileSync(HOOK, 'utf8')).not.toContain('ccrc-autonomy:');
   });
 });

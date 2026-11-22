@@ -38,13 +38,14 @@ import { withCcrcProvenance } from './hierarchyOps.js';
 import { ownerItemInput } from './inboundPolicy.js';
 import { linearEgressText, statusOfType } from './ops.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type SlotInfo } from './planSync.js';
+import { projectOnTeam, measuredTeamRoutes, measuredProjectTeam, type TeamRoutes } from './route.js';
 import { egress, uuidOf } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
 import {
-  applySteps, checkMap, closerRelation, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOf, mapItemInput, migrationSettled, parseMapProposal,
+  applySteps, checkMap, closerRelation, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOfRow, mapItemInput, migrationSettled, parseMapProposal,
   programmeOfEntry, proposeMail, putBackSteps, putBackVerdict, reconcileMove, replacementComment, reportCounts,
-  reportItemInput, returnMail, startVerdict, ticketKeyOf, ticketKindOf,
-  snapshotHolds, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
+  reportItemInput, returnMail, shedTaken, startVerdict, NO_TEAM_KEY, ticketKeyOf, ticketKindOf,
+  snapshotHolds, migrationOfProject, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from './migrationPolicy.js';
 
 /** How long one apply tick lets a key's pass run when it waits for it (the sync's own budget is its own). */
@@ -53,14 +54,16 @@ export const MIGRATION_PASS_BUDGET_MS = 20_000;
  *  holds 100 calls an hour and the lane ticks every 30 s (120 ticks an hour). An adoption costs its read and one update, and a
  *  close up to four calls (read, comment, relation, state), so under `MIGRATION_CALLS_PER_TICK` two closes never share a tick:
  *  closes go one a tick, an adoption beside one (review 2918 A1). An adopted issue's row settles on a later tick's read, so the
- *  pilot's ~220 issues take about two to four hours, and the sync's own lane is never spent. */
+ *  pilot's ~220 issues take about two to four hours. The cap counts the issue writes only: step 1's structure pass and the
+ *  Upkeep epic's pass run before it is spent (review 2955 F3). */
 export const MIGRATION_WRITES_PER_TICK = 2;
 /** Review 2892 A7, narrowed by the coordinator's ruling on review 2918 F3: the migration's own issue reads and writes of a tick
  *  count here (a read, a comment, a relation, a state write, and one for the update an adoption's pass sends). A step starts only
- *  when the calls it may need are left: an adoption two, a close up to four, so an adoption and a close fit one tick. The two
- *  passes of the plan sync's own that run on lane `migration` are not counted here: step 1's structure pass (only until the
- *  plan's objects exist, bounded by its pass deadline) and the Upkeep epic's pass. They, and every call of the tick, stay
- *  bounded by the writes cap, the lane and the one rate service (D-8796). */
+ *  when the calls it may need are left: an adoption two, a close up to four, so an adoption and a close fit one tick. Two passes
+ *  of the plan sync's own are counted neither here nor by `MIGRATION_WRITES_PER_TICK`: step 1's structure pass (only until the
+ *  plan's objects exist), on lane `migration` for the objects the map declares, and the Upkeep epic's pass, whose create has no
+ *  move row and so goes out on lane `sync` as the plan sync's own. Each is bounded by its lane, the pass deadline
+ *  (`MIGRATION_PASS_BUDGET_MS`) and the one rate service (D-8796, as review 2955 F3 corrected it). */
 export const MIGRATION_CALLS_PER_TICK = 6;
 const ADOPT_CALLS = 2;
 const CLOSE_CALLS = 4;
@@ -86,7 +89,10 @@ export interface LinearMigrationDeps {
 }
 
 type Refusal = { ok: false; word: string; detail: string };
-export type OpenRead = { ok: true; workspaceId: string; rows: IssueSnapshotRow[] } | Refusal;
+/** `routes`: the measured routing facts of the read that served it, for ownership and programme matches of `checkMap` (D-8808). */
+export type OpenRead = { ok: true; workspaceId: string; rows: IssueSnapshotRow[]; routes: TeamRoutes | null } | Refusal;
+/** Where a project's team resolves (D-8808): its workspace, or the refusal start answers. */
+export type ProjectWorkspace = { ok: true; workspaceId: string; routes?: TeamRoutes | null } | Refusal;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 /** An issue node of the hierarchy reads (`issueRecord`) as a snapshot row; null for a node that lacks a field. */
@@ -156,20 +162,19 @@ export class LinearMigration {
       return { declared: plan.planBy !== null, live: live.has(slug), plan };
     };
   }
-  private ownerOf(team: string): { id: string | null; live: boolean; project: string } | null {
+  /** The Linear owner of a team in one workspace (D-8808: a key two workspaces hold has one owner project each). */
+  private ownerOf(team: string, workspaceId: string, routes: TeamRoutes | null) {
     const { plan, presenceOf } = this.deps;
-    const o = linearOwnerOfTeam(team, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf });
-    return o === null ? null : { id: o.id, live: o.live, project: o.project };
+    return linearOwnerOfTeam(team, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf }, workspaceId, routes);
   }
-  /** The workspace a team routes to, and its slot. */
-  private async slotOfTeam(team: string): Promise<{ workspaceId: string; slot: SlotInfo } | null> {
+  /** The store read once, with the routing facts kept for owner and programme decisions. */
+  private async routable(): Promise<{ store: LinearStoreRead; routes: TeamRoutes | null }> {
     const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
-    for (const [workspaceId, slot] of slotsOf(store)) if (slot.teams.some((t) => t.key.toUpperCase() === team.toUpperCase())) return { workspaceId, slot };
-    return null;
+    return { store, routes: measuredTeamRoutes(store) };
   }
 
   /** The team's open issues, every page up to `MIGRATION_OPEN_PAGES` (lane `migration`). */
-  private async readOpenIn(workspaceId: string, slot: SlotInfo, team: string): Promise<OpenRead> {
+  private async readOpenIn(workspaceId: string, slot: SlotInfo, team: string, routes: TeamRoutes | null): Promise<OpenRead> {
     const rows: IssueSnapshotRow[] = [];
     let after: string | null = null;
     for (let page = 0; page < MIGRATION_OPEN_PAGES; page += 1) {
@@ -180,46 +185,74 @@ export class LinearMigration {
       const nodes = Array.isArray(out.value['nodes']) ? out.value['nodes'] : [];
       for (const n of nodes) { const r = rowOf(n); if (r !== null) rows.push(r); }
       const next = out.value['next'];
-      if (typeof next !== 'string') return { ok: true, workspaceId, rows };
+      if (typeof next !== 'string') return { ok: true, workspaceId, rows, routes };
       after = next;
     }
     return { ok: false, word: 'unreachable', detail: `team ${team} has more open issues than ${MIGRATION_OPEN_PAGES} pages` };
   }
 
+  /** Local routing facts for a synchronous decision after a door enters its serial section. */
+  async routingFacts(): Promise<TeamRoutes | null> {
+    return (await this.routable()).routes;
+  }
+
   // ── Start (Task 7.2) ──
 
-  /** The operator's "Reshape in Linear" (inside the mutex; `workspaceId` read before it by `workspaceOfTeam`). */
-  start(project: string, workspaceId: string | null): { ok: true; migrationId: number } | Refusal {
+  /** The operator's "Reshape in Linear" (inside the mutex; `where` read before it by `workspaceOfProject`). */
+  start(project: string, where: ProjectWorkspace): { ok: true; migrationId: number } | Refusal {
     const { plan, coord } = this.deps;
     const team = coord.linkingOf(project).teamKey?.toUpperCase() ?? null;
-    const v = startVerdict(plan.migrationsOf(), team, workspaceId);
+    if (!where.ok) return where;
+    const v = startVerdict(plan.migrationsOf(), team, where.workspaceId);
     if (!v.ok) return v;
-    if (workspaceId === null) return { ok: false, word: 'unreachable', detail: `no Linear key serves team ${team}` };
-    const owning = teamOwnerProject(team!, plan.hierarchyProjectsOf()) ?? project;
-    return { ok: true, migrationId: plan.insertMigration({ workspaceId, teamKey: team!, project: owning, now: this.deps.now() }) };
+    const owning = teamOwnerProject(team!, plan.hierarchyProjectsOf(), where.workspaceId, where.routes ?? null);
+    if (owning.kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured' };
+    return { ok: true, migrationId: plan.insertMigration({ workspaceId: where.workspaceId, teamKey: team!, project: owning.kind === 'owner' ? owning.row.project : project, now: this.deps.now() }) };
   }
-  async workspaceOfTeam(project: string): Promise<string | null> {
-    const team = this.deps.coord.linkingOf(project).teamKey;
-    return team === null ? null : (await this.slotOfTeam(team))?.workspaceId ?? null;
+  /** Where a project's team resolves (D-8808): through `routeProjectTeam` with the row's own workspace, never the first workspace
+   *  holding the key. A key two workspaces hold with none on the row is `team-ambiguous`. */
+  async workspaceOfProject(project: string): Promise<ProjectWorkspace> {
+    const linking = this.deps.coord.linkingOf(project);
+    const team = linking.teamKey;
+    const unreachable = (t: string | null): ProjectWorkspace => ({ ok: false, word: 'unreachable', detail: `no Linear key serves team ${t}` });
+    if (team === null) return NO_TEAM_KEY;
+    const { routes } = await this.routable();
+    const route = measuredProjectTeam(routes, { teamKey: team, workspaceId: linking.teamWorkspace ?? null });
+    if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId, routes };
+    if (route.kind === 'unmeasured') return unreachable(team);
+    if (route.word === 'team-ambiguous') {
+      const names = route.candidates.length === 0 ? '' : ` (${route.candidates.join(', ')})`;
+      return { ok: false, word: 'team-ambiguous', detail: `team ${team.toUpperCase()} is in more than one Linear workspace${names}; pick the project's workspace on its row first` };
+    }
+    return unreachable(team);
   }
 
   // ── Propose (Task 7.2) ──
 
-  /** The migration of a team that waits for a map: `proposing`, or `applied` with skipped issues, its report open and no put back
-   *  asked (a follow-up). Null: none. */
-  private waitingRow(team: string, workspaceId: string | null): MigrationRow | null {
-    return this.deps.plan.migrationsOf().find((m) => m.teamKey.toUpperCase() === team.toUpperCase() && (workspaceId === null || m.workspaceId === workspaceId)
-      && (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0))) ?? null;
+  /** Whether a migration waits for a map: `proposing`, or `applied` with skipped issues, its report open and no put back asked (a
+   *  follow-up). The one predicate of `waitingRow` and `waitingWorkspaces`. */
+  private waits(m: MigrationRow, team: string): boolean {
+    return m.teamKey.toUpperCase() === team.toUpperCase()
+      && (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0));
   }
-  /** Whether a team has a migration waiting for a map: `plan map-propose` asks before its Linear read, so a call with nothing to
-   *  propose spends no read (the wave's review). */
-  awaitsMap(team: string): boolean { return this.waitingRow(team, null) !== null; }
+  /** The migration of a team in one workspace that waits for a map. Null: none. */
+  private waitingRow(team: string, workspaceId: string): MigrationRow | null {
+    return this.deps.plan.migrationsOf().find((m) => m.workspaceId === workspaceId && this.waits(m, team)) ?? null;
+  }
+  /** D-8808: the distinct workspaces with a migration of the team waiting for a map, any workspace. `plan map-propose` asks it
+   *  before its Linear read, so a call with nothing to propose spends no read (the wave's review). */
+  waitingWorkspaces(team: string): string[] {
+    return [...new Set(this.deps.plan.migrationsOf().filter((m) => this.waits(m, team)).map((m) => m.workspaceId))];
+  }
 
-  /** Outside the mutex: the team's open issues, for `storeProposal`. */
-  async readOpen(team: string): Promise<OpenRead> {
-    const at = await this.slotOfTeam(team);
-    if (at === null) return { ok: false, word: 'unreachable', detail: `no Linear key serves team ${team}` };
-    return this.readOpenIn(at.workspaceId, at.slot, team);
+  /** Outside the mutex: the team's open issues for `storeProposal`. The route passes the snapshot it authorized,
+   *  so route selection cannot change between that check and dispatching the read. */
+  async readOpen(team: string, workspaceId: string, snapshot?: { store: LinearStoreRead; routes: TeamRoutes | null }): Promise<OpenRead> {
+    const { store, routes } = snapshot ?? await this.routable();
+    const slot = slotsOf(store).get(workspaceId);
+    if (slot === undefined || !slot.teams.some((t) => t.key.toUpperCase() === team.toUpperCase())) return { ok: false, word: 'unreachable', detail: `no Linear key serves team ${team}` };
+    if (this.ownerOf(team, workspaceId, routes).kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured' };
+    return this.readOpenIn(workspaceId, slot, team, routes);
   }
 
   /** Inside the mutex: the Linear owner's map, checked (`checkMap`) and stored with its snapshots, and its `decide` item raised.
@@ -230,17 +263,17 @@ export class LinearMigration {
     const row = this.waitingRow(team, open.workspaceId);
     const followUp = row?.state === 'applied' ? row.report?.skipped ?? [] : null;
     if (row === null) return { ok: false, word: 'plan-bad-body', detail: `no migration of team ${team} is waiting for a map` };
-    const owner = this.ownerOf(team);
-    if (owner === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner', detail: `only the Linear owner of team ${team} proposes its map` };
+    const owner = this.ownerOf(team, open.workspaceId, open.routes);
+    if (owner.kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured' };
+    if (owner.kind !== 'owner' || owner.id !== caller) return { ok: false, word: 'not-linear-owner', detail: `only the Linear owner of team ${team} proposes its map` };
     const parsed = parseMapProposal(body, team);
     if (!parsed.ok) return parsed;
     // An issue ccrc's sync already holds (a programme born in the new shape, §10.5) is no part of a map: one writer per Linear object.
     const held = new Set(plan.boundLinearIdsOf(open.workspaceId));
     const heldIssues = new Set(plan.bindingsInWorkspace(open.workspaceId).flatMap((b) => (b.localKind === 'ticket' ? [b.linearId, b.identifier].filter((x): x is string => x !== null) : [])));
     // A follow-up's issues are the ones the apply skipped. One this migration adopted and then set aside holds no live binding
-    // (its binding is retired, review 2892 F5), so it is mappable again; one a live binding holds is not, on either path, though
-    // the report still lists it as skipped: the owner may have taken it through inbound since (review 2918 F1; the wave's
-    // security review).
+    // (its binding is retired, review 2892 F5), so it is mappable again; one a live binding holds is not, on either path: the
+    // owner took it through inbound, so it leaves the migration (review 2918 F1; review 2955 F2).
     const mappable = open.rows.filter((r) => !held.has(r.linearId));
     const rows = followUp === null ? mappable : mappable.filter((r) => followUp.includes(r.identifier));
     const runs = this.runFacts();
@@ -248,6 +281,7 @@ export class LinearMigration {
     const project = row.project ?? owner.project;
     const ctx: MapContext = {
       home: project, teamOf: (p) => coord.linkingOf(p).teamKey,
+      sameWorkspace: (p) => this.onTeam(p, team, open.workspaceId, open.routes) === true,
       upkeepKeys: new Set(plan.upkeepPlanOf(project).epics.flatMap((e) => e.tickets.map((t) => t.key))), heldIssues,
     };
     const map: MapBody = { ...parsed.map, snapshot: Object.fromEntries(rows.map((r) => [r.linearId, snapshotOf(r)])) };
@@ -258,7 +292,10 @@ export class LinearMigration {
     // issues then replace their earlier entries. Until then it is stored on its own, the map it joins kept as `prior`, so its item
     // counts and lists its own entries (review 2892 A2), and its issues leave the report's skipped list, so the apply writes them.
     const stored: StoredMap = followUp === null || row.map === null ? map : { ...map, prior: row.map };
-    const report = followUp === null ? undefined : { ...(row.report ?? EMPTY_MIGRATION_REPORT()), skipped: followUp.filter((id) => !map.entries.some((e) => e.identifier === id)) };
+    // The stored follow-up report moves the held ones to `taken` (review 2955 F2).
+    const shed = followUp === null ? null : shedTaken(row.report?.skipped ?? [], row.report?.taken ?? [], (i) => this.heldIdentifier(row, i));
+    const report = followUp === null || shed === null ? undefined
+      : { ...(row.report ?? EMPTY_MIGRATION_REPORT()), skipped: shed.skipped.filter((id) => !map.entries.some((e) => e.identifier === id)), ...(shed.taken.length === 0 ? {} : { taken: shed.taken }) };
     coord.raiseItemWithMail(mapItemInput(row.id, team, caller, checked.counts), now, 'ccrc', (itemId) => {
       if (!plan.setMigration(row.id, from, { state: 'proposed', map: stored, itemId, ...(report === undefined ? {} : { report }) }, now)) {
         throw new Error(`migration ${row.id} moved while its map was stored`);
@@ -269,8 +306,8 @@ export class LinearMigration {
 
   // ── The operator's acts (Tasks 7.2 and 7.4; inside the mutex) ──
 
-  act(itemId: number, migrationId: number, act: 'approve' | 'return' | 'put-back' | 'done', note: string | null):
-    { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'item-act-mismatch' | 'migration-in-flight'; detail: string } {
+  act(itemId: number, migrationId: number, act: 'approve' | 'return' | 'put-back' | 'done', note: string | null, routes: TeamRoutes | null = null):
+    { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'item-act-mismatch' | 'migration-in-flight' | 'unreachable' | 'no-linear-owner' | 'team-ambiguous'; detail: string } {
     const { plan, coord } = this.deps;
     const now = this.deps.now();
     const m = plan.migrationById(migrationId);
@@ -292,7 +329,11 @@ export class LinearMigration {
       }
       case 'return': {
         if (m.state !== 'proposed' || m.itemId !== itemId) return { ok: false, word: 'not-open', detail: `the migration is ${m.state}` };
-        const owner = this.ownerOf(m.teamKey);
+        const owner = this.ownerOf(m.teamKey, m.workspaceId, routes);
+        if (owner.kind === 'unmeasured') return { ok: false, word: 'unreachable', detail: 'the Linear owner could not be measured; retry Return with your note' };
+        if (owner.kind === 'none' && owner.reason === 'team-ambiguous') return { ok: false, word: 'team-ambiguous', detail: 'pick the project’s Linear workspace before returning the map' };
+        if (owner.kind !== 'owner' || owner.id === null) return { ok: false, word: 'no-linear-owner', detail: 'name a Linear owner before returning the map' };
+        const recipient = owner.id;
         const back = m.appliedAt === null ? 'proposing' as const : 'applied' as const;
         const mail = returnMail(m.id, m.teamKey, note ?? '', now);
         // A returned follow-up's issues go back to the skipped list, and the map it would have joined comes back: no move row writes
@@ -303,7 +344,7 @@ export class LinearMigration {
         const report = { ...(m.report ?? EMPTY_MIGRATION_REPORT()), skipped: [...new Set([...(m.report?.skipped ?? []), ...unwritten])] };
         const done = settleWith('Returned to the Linear owner with your note.', () => {
           plan.setMigration(m.id, ['proposed'], back === 'proposing' ? { state: back, map: null } : { state: back, map: map?.prior ?? m.map, report }, now);
-          if (owner?.id != null) insertSystemMailTx(coord, null, { fromId: 'operator', toId: owner.id, runId: null, kind: 'question', subject: mail.subject, body: mail.body });
+          insertSystemMailTx(coord, null, { fromId: 'operator', toId: recipient, runId: null, kind: 'question', subject: mail.subject, body: mail.body });
         });
         return done ? { ok: true } : notOpen;
       }
@@ -333,7 +374,7 @@ export class LinearMigration {
     if (m === null || m.map === null) return null;
     const map = m.map;
     const after = m.state === 'applied' || m.state === 'put-back';
-    const counts = after ? reportCounts(plan.movesOf(id), map, m.report?.skipped.length ?? 0) : countsOfMap(map);
+    const counts = after ? reportCounts(plan.movesOf(id), map, m.report?.skipped.length ?? 0, m.report?.taken ?? []) : countsOfMap(map);
     const titleOf = (slug: string): string | null => coord.programs().find((p) => p.slug === slug)?.title ?? null;
     const body = (epics: readonly PlanEpicBody[]): MigrationStructure['epics'] =>
       epics.map((e) => ({ key: e.key, title: e.title, checkpoints: e.checkpoints.map((c) => ({ key: c.key, title: c.title })) }));
@@ -350,14 +391,15 @@ export class LinearMigration {
     }
     return { ok: true, id: m.id, team: m.teamKey, state: m.state, counts, entries: map.entries, structure, report: m.report };
   }
-  /** The project row's hierarchy state (§11.1): its team's newest migration in the workspace its key routes to (review 2892 A4);
-   *  a team no key serves is matched by its key alone. */
-  async stateOfTeam(team: string | null): Promise<ReturnType<typeof hierarchyStateOf>> {
-    if (team === null) return hierarchyStateOf(null);
-    const ws = (await this.slotOfTeam(team))?.workspaceId ?? null;
-    const m = this.deps.plan.migrationsOf().filter((r) => r.teamKey.toUpperCase() === team.toUpperCase() && (ws === null || r.workspaceId === ws))
-      .sort((a, b) => b.id - a.id)[0] ?? null;
-    return hierarchyStateOf(m);
+  /** The project row's hierarchy state (§11.1): the newest migration of its team in ITS workspace (`migrationOfProject`, D-8808). */
+  async stateOfProject(row: { teamKey: string | null; workspaceId: string | null }, routes?: TeamRoutes | null): Promise<ReturnType<typeof hierarchyStateOfRow>> {
+    const routing = routes === undefined && row.teamKey !== null ? await this.routingFacts() : routes ?? null;
+    return hierarchyStateOfRow(row, this.deps.plan.hierarchyProjectsOf(), this.deps.plan.migrationsOf(), routing);
+  }
+  /** Whether a project's team is `team` in `workspaceId` (`projectOnTeam` over the project's row). */
+  private onTeam(project: string, team: string, workspaceId: string, routes: TeamRoutes | null): boolean | 'unmeasured' {
+    const l = this.deps.coord.linkingOf(project);
+    return projectOnTeam({ teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null }, team, workspaceId, routes);
   }
 
   // ── The lane (Tasks 7.2 to 7.4) ──
@@ -366,8 +408,17 @@ export class LinearMigration {
     if (this.running) return;
     this.running = true;
     try {
-      for (const m of this.deps.plan.migrationsOf()) {
-        if (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && (m.report?.skipped.length ?? 0) > 0 && m.putBackAskedAt === null)) this.mailForMap(m);
+      const { routes } = await this.routable();
+      for (let m of this.deps.plan.migrationsOf()) {
+        // An open report's skipped issue the owner has since taken leaves the list before the follow-up is mailed (review 2955 F2).
+        if (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0) {
+          const shed = shedTaken(m.report!.skipped, m.report!.taken ?? [], (i) => this.heldIdentifier(m, i));
+          if (shed.moved) {
+            const report = { ...m.report!, skipped: shed.skipped, taken: shed.taken };
+            if (this.deps.plan.setMigration(m.id, ['applied'], { report }, this.deps.now())) m = { ...m, report };
+          }
+        }
+        if (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && (m.report?.skipped.length ?? 0) > 0 && m.putBackAskedAt === null)) this.mailForMap(m, routes);
         if (m.state === 'approved' || m.state === 'applying') await this.applyTick(m);
         if (m.state === 'applied' && m.putBackAskedAt !== null) await this.putBackTick(m);
       }
@@ -376,18 +427,26 @@ export class LinearMigration {
     }
   }
 
+  /** Whether a live binding holds the issue with this identifier: the plan store's one reader (`issueBound`), never a second
+   *  definition (review 2955 F2). The issue's id comes from the map's entries, else the identifier stands for it. */
+  private heldIdentifier(m: MigrationRow, identifier: string): boolean {
+    const linearId = m.map?.entries.find((x) => x.identifier === identifier)?.issue ?? identifier;
+    return this.deps.plan.issueBound(m.workspaceId, { id: linearId, identifier });
+  }
+
   /** A `proposing` row: the owner is mailed for the map (or *Name a Linear owner* is raised, by the inbound lane's own item, once),
    *  and each live programme of the team with no declared plan has its coordinator mailed to declare it first (§10.1). Each mail
    *  is sent once, by its subject. A follow-up's mail names the skipped issues. */
-  private mailForMap(m: MigrationRow): void {
+  private mailForMap(m: MigrationRow, routes: TeamRoutes | null): void {
     const { coord, plan } = this.deps;
     const now = this.deps.now();
-    const owner = this.ownerOf(m.teamKey);
-    const project = m.project ?? owner?.project ?? null;
+    const owner = this.ownerOf(m.teamKey, m.workspaceId, routes);
+    if (owner.kind === 'unmeasured') return;
+    const project = m.project ?? (owner.kind === 'owner' ? owner.project : null);
     if (project === null) return;
     const mail = proposeMail(m.id, m.teamKey, project, m.state === 'applied' ? m.report?.skipped ?? [] : []);
     tx(coord.db, () => {
-      if (owner !== null && owner.id !== null && owner.live) {
+      if (owner.kind === 'owner' && owner.id !== null && owner.live) {
         if (!coord.hasMailWithSubject('operator', null, owner.id, mail.subject)) {
           insertSystemMailTx(coord, null, { fromId: 'operator', toId: owner.id, runId: null, kind: 'question', subject: mail.subject, body: mail.body });
         }
@@ -397,7 +456,7 @@ export class LinearMigration {
       if (runs === null) return;
       for (const p of coord.programs()) {
         const home = coord.programHome(p.slug);
-        if (home === null || !runs.live.has(p.slug) || coord.linkingOf(home).teamKey?.toUpperCase() !== m.teamKey.toUpperCase()) continue;
+        if (home === null || !runs.live.has(p.slug) || this.onTeam(home, m.teamKey, m.workspaceId, routes) !== true) continue;
         if (plan.planOf(p.slug).planBy !== null) continue;
         const to = plan.planOwnerOf(p.slug);
         const d = declareMail(m.id, m.teamKey, p.slug);
@@ -406,7 +465,7 @@ export class LinearMigration {
         }
       }
     });
-    if (owner === null || owner.id === null || !owner.live) this.raiseOwnerItemOnce(project, now);
+    if (owner.kind !== 'owner' || owner.id === null || !owner.live) this.raiseOwnerItemOnce(project, now);
   }
   private raiseOwnerItemOnce(project: string, now: number): void {
     const { coord, plan, presenceOf } = this.deps;
@@ -432,6 +491,13 @@ export class LinearMigration {
     const report = { ...(m.report ?? EMPTY_MIGRATION_REPORT()) };
     const skipped = new Set(report.skipped);
     const unrelated = new Set(report.unrelated ?? []);
+    const taken = new Set(report.taken ?? []);
+    const lists = { skipped, unrelated, taken };
+    // An issue a live binding holds leaves the migration: the owner took it through inbound (review 2955 F2).
+    const shed = shedTaken([...skipped], [...taken], (i) => this.heldIdentifier(m, i));
+    skipped.clear(); taken.clear();
+    for (const i of shed.skipped) skipped.add(i);
+    for (const i of shed.taken) taken.add(i);
     const initiativesOff = entries.initiatives === 'off' || plan.hierarchySettingsOf(m.project ?? '').initiatives === 'off';
 
     // 1. The structure the map declares: plan rows and their move rows, then the sync's pass creates and binds the objects. The
@@ -446,7 +512,8 @@ export class LinearMigration {
         const ours = stored.planBy === null || stored.planBy === MIGRATION_PLAN_BY;
         const diff = facts.live || !ours ? null : diffPlan(stored, { epics: g.epics }, { home: m.project ?? '', doneWhenCount: 0, workspaceOfProject: () => m.workspaceId });
         if (diff === null || !diff.ok) {
-          for (const e of map.entries) if (programmeOfEntry(e) === g.slug) skipped.add(e.identifier);
+          // An issue a live binding holds is taken, never skipped (review 2998 F3).
+          for (const e of map.entries) if (programmeOfEntry(e) === g.slug) (taken.has(e.identifier) || this.heldIdentifier(m, e.identifier) ? taken : skipped).add(e.identifier);
           continue;
         }
         plan.declareMapStructure(m.id, g.slug, diff.changes, MIGRATION_PLAN_BY, now, g.backlog === null ? null : { home: m.project ?? '', title: g.backlog.title, state: 'paused' });
@@ -468,23 +535,31 @@ export class LinearMigration {
     const held = new Map<string, MigrationWaitingWhy>();
     for (const e of map.entries) {
       const row = moveOf.get(`issue:${e.issue}`);
-      if (row === undefined || row.appliedAt !== null || skipped.has(e.identifier)) continue;
-      const relation = this.relationOf(m, e, row, skipped);
+      if (row === undefined || row.appliedAt !== null || skipped.has(e.identifier) || taken.has(e.identifier)) continue;
+      // A closer naming an issue a live binding holds gets no comment, relation or close (review 2955 A1).
+      if (CLOSERS.has(e.class) && this.heldIdentifier(m, e.identifier)) { taken.add(e.identifier); continue; }
+      const relation = this.relationOf(m, e, row, new Set([...skipped, ...taken]));
       if (relation?.kind === 'wait') { held.set(e.identifier, 'placed-ticket-not-applied'); continue; }
       if (!affords(CLOSERS.has(e.class) ? CLOSE_CALLS : ADOPT_CALLS)) break;
       budget.writes -= 1;
       const seen = await this.readIssue(m, slot, e.issue, budget);
-      if (seen === 'unread') { this.saveReport(m, report, skipped, now); return; }
+      if (seen === 'unread') { this.saveReport(m, report, lists, now); return; }
+      // A take that landed during that read: the issue is the owner's, so it is never marked applied, never listed unrelated and
+      // never counted closed, whatever the read shows (review 3016 F2). An adopted entry holds its own binding: it is not asked.
+      if (CLOSERS.has(e.class) && this.heldIdentifier(m, e.identifier)) { taken.add(e.identifier); continue; }
       const v = reconcileMove(asMoveRow(row), seen === 'gone' ? 'closed' : seen);
-      if (v === 'applied') plan.setMove(row.id, { appliedAt: now });
+      if (v === 'applied') {
+        plan.setMove(row.id, { appliedAt: now });
+        if (relation?.kind === 'none') unrelated.add(e.identifier);   // the state write landed: it joins the list (review 2955 A2)
+      }
       else if (v === 'skip') this.skipAdopted(row, e, skipped, now);
-      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget, relation, unrelated);
+      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget, relation, unrelated, taken, () => this.saveReport(m, report, lists, now));
       else { budget.calls -= 1; await this.deps.planSync.passFor(String(row.after['key'] ?? ''), now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred'); }
     }
 
     // 3. New writes, in Task 7.1's order: each issue is read by id inside its key's flight just before its write (D-8796), and one
     //    that changed since the map was drafted is skipped, listed and never adopted.
-    const fresh: MapBody = { ...map, entries: map.entries.filter((e) => !moveOf.has(`issue:${e.issue}`) && !skipped.has(e.identifier)) };
+    const fresh: MapBody = { ...map, entries: map.entries.filter((e) => !moveOf.has(`issue:${e.issue}`) && !skipped.has(e.identifier) && !taken.has(e.identifier)) };
     const live = structureBound ? runs.active : new Set([...runs.active, ...(map.epics ?? []).map((g) => g.programme), ...(map.backlog ?? []).map((g) => g.slug)]);
     const asDrafted = new Map<string, IssueSnapshot | 'closed'>(fresh.entries.flatMap((e) => (map.snapshot[e.issue] === undefined ? [] : [[e.issue, map.snapshot[e.issue]!] as const])));
     const steps = applySteps(fresh, live, asDrafted, (e) => (CLOSERS.has(e.class) || e.class === 'leaf' || e.class === 'upkeep' ? { expect: {} } : null));
@@ -503,7 +578,9 @@ export class LinearMigration {
         if (why !== null) { waitingWhy.set(e.identifier, why); continue; }
       }
       // A replaced level waits, before any call, while a ticket under it has not settled (review 2918 F2).
-      const relation = this.relationOf(m, e, null, skipped);
+      // A closer naming an issue a live binding holds goes to `taken` before any call (review 2955 A1).
+      if (CLOSERS.has(e.class) && this.heldIdentifier(m, e.identifier)) { taken.add(e.identifier); continue; }
+      const relation = this.relationOf(m, e, null, new Set([...skipped, ...taken]));
       if (relation?.kind === 'wait') { waitingWhy.set(e.identifier, 'placed-ticket-not-applied'); continue; }
       if (!affords(CLOSERS.has(e.class) ? CLOSE_CALLS : ADOPT_CALLS)) break;
       budget.writes -= 1;
@@ -512,14 +589,17 @@ export class LinearMigration {
           const seen = await this.readIssue(m, slot, e.issue, budget);
           if (seen === 'unread') return 'unread' as const;
           if (seen === 'gone' || !snapshotHolds(was, seen)) return 'changed' as const;
+          if (this.heldIdentifier(m, e.identifier)) return 'taken' as const;   // review 2998 F1: no move row for a held issue
           return plan.insertMove({ migrationId: m.id, subject: `issue:${e.issue}`, kind: 'issue', linearId: e.issue, identifier: e.identifier, before: seen, after: this.closeAfter(e) });
         });
-        if (out === 'unread') { this.saveReport(m, report, skipped, now); return; }
+        if (out === 'unread') { this.saveReport(m, report, lists, now); return; }
+        if (out === 'taken') { taken.add(e.identifier); continue; }
         if (out === 'changed') { skipped.add(e.identifier); continue; }
-        await this.closeIssue(m, e, out, slot, entries, budget, relation, unrelated);
+        await this.closeIssue(m, e, out, slot, entries, budget, relation, unrelated, taken, () => this.saveReport(m, report, lists, now));
       } else {
         const out = await this.adopt(m, e, was, store, slot, budget);
-        if (out === 'unread') { this.saveReport(m, report, skipped, now); return; }
+        if (out === 'unread') { this.saveReport(m, report, lists, now); return; }
+        if (out === 'taken') { taken.add(e.identifier); continue; }   // review 2955 F2
         if (out === 'changed') { skipped.add(e.identifier); continue; }
         if (out === null) { waitingWhy.set(e.identifier, e.class === 'upkeep' ? 'upkeep-not-in-linear' : 'epic-not-in-linear'); continue; }
         budget.calls -= 1;
@@ -527,20 +607,28 @@ export class LinearMigration {
       }
     }
     const waiting = [...waitingWhy.keys()];
-    const nextReport = this.saveReport(m, { ...report, waiting, waitingWhy: Object.fromEntries(waitingWhy), ...(unrelated.size === 0 ? {} : { unrelated: [...unrelated] }) }, skipped, now);
+    const nextReport = this.saveReport(m, { ...report, waiting, waitingWhy: Object.fromEntries(waitingWhy) }, lists, now);
 
     // 4. Done (D-8796 condition 4) when nothing waits, every structure object is bound, no listed issue is left unwritten, and
-    //    every move row is applied or its issue is skipped and listed; a row still waiting on its pass holds `applying`.
+    //    every move row is applied or its issue is skipped or taken and listed; a row still waiting on its pass holds `applying`.
     const all = plan.movesOf(m.id).filter((x) => !x.subject.includes(':skipped:'));
-    const unwritten = map.entries.some((e) => e.class !== 'unclear' && !skipped.has(e.identifier) && !all.some((x) => x.subject === `issue:${e.issue}`));
-    const pending = all.some((x) => x.appliedAt === null && !(x.identifier !== null && skipped.has(x.identifier)));
+    const unwritten = map.entries.some((e) => e.class !== 'unclear' && !skipped.has(e.identifier) && !taken.has(e.identifier) && !all.some((x) => x.subject === `issue:${e.issue}`));
+    const pending = all.some((x) => x.appliedAt === null && !(x.identifier !== null && (skipped.has(x.identifier) || taken.has(x.identifier))));
     if (waiting.length > 0 || !structureBound || unwritten || pending) return;
-    this.finishApply(m, map, nextReport, all, now);
+    this.finishApply(m, map, nextReport, all, now, measuredTeamRoutes(store));
   }
 
-  /** The report's skipped list written back (the row stays `applying`); answers the report it wrote. */
-  private saveReport(m: MigrationRow, report: NonNullable<MigrationRow['report']>, skipped: ReadonlySet<string>, now: number): NonNullable<MigrationRow['report']> {
-    const next = { ...report, skipped: [...skipped] };
+  /** The tick's lists written back (the row stays `applying`): `skipped` always, `unrelated` and `taken` only when they hold
+   *  something. Every exit of the tick passes the same sets, so an early return loses nothing (review 2955 F1). Answers the report
+   *  it wrote. */
+  private saveReport(
+    m: MigrationRow, report: NonNullable<MigrationRow['report']>,
+    lists: { skipped: ReadonlySet<string>; unrelated: ReadonlySet<string>; taken: ReadonlySet<string> }, now: number,
+  ): NonNullable<MigrationRow['report']> {
+    const next = {
+      ...report, skipped: [...lists.skipped],
+      ...(lists.unrelated.size === 0 ? {} : { unrelated: [...lists.unrelated] }), ...(lists.taken.size === 0 ? {} : { taken: [...lists.taken] }),
+    };
     this.deps.plan.setMigration(m.id, ['applying'], { report: next }, now);
     return next;
   }
@@ -627,7 +715,7 @@ export class LinearMigration {
    *  of the issue by id: one that changed since the map was drafted is `changed`, never adopted. The move's `after.expect` is the
    *  sync's planned owned fields for the new binding. The key whose pass sends the update, `unread`, `changed`, or null when it
    *  is not placeable now (rolled back). */
-  private async adopt(m: MigrationRow, e: MapEntry, was: IssueSnapshot, store: LinearStoreRead, slot: SlotInfo, budget: TickBudget): Promise<string | 'unread' | 'changed' | null> {
+  private async adopt(m: MigrationRow, e: MapEntry, was: IssueSnapshot, store: LinearStoreRead, slot: SlotInfo, budget: TickBudget): Promise<string | 'unread' | 'changed' | 'taken' | null> {
     const { plan, planSync, coord } = this.deps;
     const programme = e.class === 'leaf' ? programmeOfEntry(e) : null;
     const project = m.project ?? '';
@@ -664,9 +752,10 @@ export class LinearMigration {
         });
       } catch (err) {
         if (err instanceof Error && err.message === 'not-placeable') return null;
-        // A live binding came to hold the issue since the map was stored (the owner's take, say): it is skipped and listed, and
-        // never gets a second ticket or a second binding (review 2918 F1; the store refuses it, `adoptIssueAsTicketInTx`).
-        if (err instanceof IssueHeldError) return 'changed';
+        // A live binding came to hold the issue since the map was stored (the owner's take, say): it leaves the migration as
+        // `taken` and never gets a second ticket or a second binding (review 2918 F1, review 2955 F2; the store refuses it,
+        // `adoptIssueAsTicketInTx`).
+        if (err instanceof IssueHeldError) return 'taken';
         throw err;
       }
     });
@@ -685,14 +774,22 @@ export class LinearMigration {
    *  ticket placed under it closes with none and joins the report's `unrelated` list (review 2918 F2). */
   private async closeIssue(
     m: MigrationRow, e: MapEntry, row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>, budget: TickBudget,
-    relation: CloserRelation | null, unrelated: Set<string>,
+    relation: CloserRelation | null, unrelated: Set<string>, taken: Set<string>, persist: () => void,
   ): Promise<void> {
     const { plan, coord } = this.deps;
     const state = String((row.after['expect'] as Record<string, unknown> | undefined)?.['state'] ?? 'canceled');
     const status = statusOfType(entries, 'issue', state, m.teamKey);
     if (status === null) return;
     const base = { pass: 'migration', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, target: e.identifier } as const;
+    // A live binding that comes to hold the issue ends the close before the next write: it goes to `taken`, its row stays unapplied
+    // (review 2998 F1). The one window left is a binding made while a single write is already in flight.
+    const heldNow = (): boolean => {
+      if (!this.heldIdentifier(m, e.identifier)) return false;
+      taken.add(e.identifier);
+      return true;
+    };
     await this.deps.planSync.withFlight(`migration:${e.issue}`, async () => {
+      if (heldNow()) return;
       const home = this.homeTitle(e);
       const linking = coord.linkingOf(m.project ?? '');
       const repo = linking.measured.state === 'measured' ? linking.measured.slug : null;
@@ -702,17 +799,31 @@ export class LinearMigration {
             : replacementComment(home, linking.mode, null);
       const comment = await this.callIn(budget, { ...base, op: 'issueComment', fields: ['body'], input: { requestId: uuidOf(`migration:${m.id}:${e.issue}:comment`), issueId: e.issue, body: withCcrcProvenance(egress(text)) } });
       if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) return;
+      if (heldNow()) return;
       const related = row.after['related'] === true ? null
         : e.class === 'superseded' ? e.target?.successor ?? null : relation?.kind === 'relate' ? relation.issue : null;
-      if (relation?.kind === 'none') unrelated.add(e.identifier);
       if (related !== null) {
         // A relation is evidence, not the close: a refused one is not retried and does not stop the close.
         const rel = await this.callIn(budget, { ...base, op: 'issueRelationCreate', fields: ['type', 'related'], input: { issueId: e.issue, relatedIssueId: related, type: 'related' } });
         if (budget.stopped) return;
         if (rel.ok) plan.setMove(row.id, { after: { ...row.after, related: true } });
       }
+      if (heldNow()) return;
       const update = await this.callIn(budget, { ...base, op: 'issueUpdate', fields: ['state'], input: { id: e.issue, stateId: status.id } });
-      if (update.ok) plan.setMove(row.id, { appliedAt: this.deps.now() });
+      if (update.ok) {
+        // A take that landed during the write is listed taken and counted nowhere else (review 3004 F2); otherwise the level joins
+        // `unrelated` only once the state write landed (review 2955 A2). The stamp and the tick's report (with the issue taken) are
+        // written in ONE transaction, so a restart between them cannot lose the listing (review 3016 A2); `persist` is the tick's own
+        // report save, called only when the issue is held.
+        const stamp = this.deps.now();
+        let held = false;
+        tx(coord.db, () => {
+          plan.setMove(row.id, { appliedAt: stamp });
+          held = heldNow();
+          if (held) persist();
+        });
+        if (!held && relation?.kind === 'none') unrelated.add(e.identifier);
+      }
     });
   }
   /** The title a replaced level's comment names: its programme's, epic's or checkpoint's. */
@@ -736,22 +847,27 @@ export class LinearMigration {
   /** The apply is done: the report item is raised, and `planRequired` is set for the programmes the map names and the team's
    *  programmes that have declared a plan, never an unnamed one with no plan, whose coordinator's next run open it would refuse
    *  `plan-missing` mid-work with no word to it (D-8798, review 2892 F8). */
-  private finishApply(m: MigrationRow, map: MapBody, report: NonNullable<MigrationRow['report']>, moves: readonly MoveRowStored[], now: number): void {
+  private finishApply(m: MigrationRow, map: MapBody, report: NonNullable<MigrationRow['report']>, moves: readonly MoveRowStored[], now: number, routes: TeamRoutes | null): void {
     const { plan, coord } = this.deps;
-    const counts = reportCounts(moves, map, report.skipped.length);
+    const counts = reportCounts(moves, map, report.skipped.length, report.taken ?? []);
     const named = [...new Set([...map.entries.flatMap((e) => (programmeOfEntry(e) === null || e.class === 'unclear' ? [] : [programmeOfEntry(e)!])),
       ...(map.epics ?? []).map((g) => g.programme), ...(map.backlog ?? []).map((g) => g.slug)])];
-    const team = m.teamKey.toUpperCase();
-    const declared = coord.programs().filter((p) => {
-      const home = coord.programHome(p.slug);
-      return home !== null && coord.linkingOf(home).teamKey?.toUpperCase() === team && plan.planOf(p.slug).planBy !== null;
-    }).map((p) => p.slug);
+    const required = new Set(named);
+    for (const { slug } of coord.programs()) {
+      if (required.has(slug)) continue;
+      const home = coord.programHome(slug);
+      if (home === null) continue;
+      const membership = this.onTeam(home, m.teamKey, m.workspaceId, routes);
+      if (membership === false || plan.planOf(slug).planBy === null) continue;
+      if (membership === 'unmeasured') return; // retry completion without omitting a possibly eligible programme
+      required.add(slug);
+    }
     // A done programme the map placed open tickets into keeps its initiative active while they are open (D-8796, point 6).
     const placedInto = new Set(map.entries.flatMap((e) => (e.class === 'leaf' && programmeOfEntry(e) !== null && moves.some((x) => x.subject === `issue:${e.issue}` && x.appliedAt !== null) ? [programmeOfEntry(e)!] : [])));
     const done = coord.programs().filter((p) => p.state === 'done' && placedInto.has(p.slug)).map((p) => p.slug).sort();
     coord.raiseItemWithMail(reportItemInput(m.id, m.teamKey, counts, done), now, 'ccrc', (reportItemId) => {
       if (!plan.setMigration(m.id, ['applying'], { state: 'applied', appliedAt: m.appliedAt ?? now, reportItemId, report }, now)) throw new Error(`migration ${m.id} moved while it was finished`);
-      plan.setPlanRequired([...new Set([...named, ...declared])]);
+      plan.setPlanRequired([...required]);
     });
     // A follow-up's earlier report closes after the new one is raised: `moveItem` opens its own transaction (`tx` does not nest),
     // so it cannot run inside `raiseItemWithMail`'s.
@@ -782,14 +898,23 @@ export class LinearMigration {
     const movedSince = new Set(report.movedSince);
     const todo = moves.filter((x) => x.kind === 'issue' && x.revertedAt === null && x.linearId !== null).sort((a, b) => b.id - a.id).slice(0, PUT_BACK_ISSUES_PER_TICK);
     for (const row of todo) {
+      // An issue a live binding holds is the owner's: no write, listed taken; its row is handled so put back goes on (review 3004
+      // F2). It is asked before the read, again after it and again inside the write's flight (review 3016 F1): a take can land in
+      // any of those awaits. A row this migration adopted holds its own binding (`after.bindingId`), which is no take: only a
+      // closer's row can be taken.
+      const held = (): boolean => typeof row.after['bindingId'] !== 'number' && this.heldIdentifier(m, row.identifier ?? row.linearId!);
+      if (held()) { this.putBackTaken(m, report, movedSince, row, now); continue; }
       const seen = await this.readIssue(m, slot, row.linearId!);
       // An issue found moved since earlier in this tick is saved before any early return (review 2892 F2): its row is already
       // marked handled, so no later tick would list it.
       if (seen === 'unread') { this.saveMovedSince(m, report, movedSince, now); return; }
+      if (held()) { this.putBackTaken(m, report, movedSince, row, now); continue; }
       const { steps, moved } = putBackSteps([asMoveRow(row)], seen === 'gone' ? new Map() : new Map([[row.linearId!, seen]]));
       // An issue moved since (or gone) is listed and never touched; its row is marked handled so the next tick goes on.
       if (moved.length > 0 || steps.length === 0) { movedSince.add(row.identifier ?? row.linearId!); plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
-      if (!(await this.putBackStep(m, steps[0]!, row, slot, entries))) { this.saveMovedSince(m, report, movedSince, now); return; }
+      const stepped = await this.putBackStep(m, steps[0]!, row, slot, entries, held);
+      if (stepped === 'taken') { this.putBackTaken(m, report, movedSince, row, now); continue; }
+      if (stepped === 'failed') { this.saveMovedSince(m, report, movedSince, now); return; }
       plan.setMove(row.id, { revertedAt: this.deps.now() });
     }
     // The created objects only once every moved issue is handled: a project is canceled after its issues left it.
@@ -806,8 +931,8 @@ export class LinearMigration {
         // is canceled here, in the key's flight. With every epic put back, the sync's snapshot has no fact for the initiative and
         // sends it nothing, so it never writes over this cancel.
         // Only a programme whose plan is still the map's own is ended and its initiative canceled (a security review): one its
-        // coordinator has since taken over (its first plan write after the map's, which makes `planBy` the coordinator's, review
-        // 2892 F1) is theirs, and is left as it is.
+        // coordinator has since taken over (its first plan write after the map's, which makes `planBy` the coordinator's, D-8802,
+        // review 2892 F1) is theirs, and is left as it is.
         if (slug === null || plan.planOf(slug).planBy !== MIGRATION_PLAN_BY) { plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
         if (plan.planEndOf(slug) === null) plan.closePlan(slug, 'abandoned', 'put back', this.deps.now());
         if (row.linearId !== null) {
@@ -831,27 +956,37 @@ export class LinearMigration {
     }
     plan.setMigration(m.id, ['applied'], { state: 'put-back', putBackAt: now, report: { ...report, movedSince: [...movedSince], milestonesLeft: [...report.milestonesLeft, ...milestones] } }, now);
   }
+  /** An issue a live binding holds, found by put back: listed taken (once), its row marked handled and the report saved in ONE
+   *  transaction, so a restart between them loses neither (review 3016 A2). The one place put back says "held, so take it". */
+  private putBackTaken(m: MigrationRow, report: NonNullable<MigrationRow['report']>, movedSince: ReadonlySet<string>, row: MoveRowStored, now: number): void {
+    report.taken = [...new Set([...(report.taken ?? []), row.identifier ?? row.linearId!])];
+    tx(this.deps.coord.db, () => {
+      this.deps.plan.setMove(row.id, { revertedAt: this.deps.now() });
+      this.saveMovedSince(m, report, movedSince, now);
+    });
+  }
   private saveMovedSince(m: MigrationRow, report: NonNullable<MigrationRow['report']>, movedSince: ReadonlySet<string>, now: number): void {
     this.deps.plan.setMigration(m.id, ['applied'], { report: { ...report, movedSince: [...movedSince] } }, now);
   }
 
   /** One moved issue restored from its `before` (state, project, milestone, parent, team, title and description), in its key's
    *  flight, on lane `migration` with pass `put-back`. */
-  private async putBackStep(m: MigrationRow, step: ReturnType<typeof putBackSteps>['steps'][number], row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>): Promise<boolean> {
-    if (step.linearId === null) return true;
+  private async putBackStep(m: MigrationRow, step: ReturnType<typeof putBackSteps>['steps'][number], row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>, held: () => boolean): Promise<'restored' | 'failed' | 'taken'> {
+    if (step.linearId === null) return 'restored';
     const was = row.before!;
     const team = slot.teams.find((t) => t.key.toUpperCase() === was.team.toUpperCase());
     const state = statusOfType(entries, 'issue', was.state, was.team);
-    if (team === undefined || state === null) return false;
+    if (team === undefined || state === null) return 'failed';
     const key = typeof row.after['key'] === 'string' ? row.after['key'] : `migration:${step.linearId}`;
     return this.deps.planSync.withFlight(key, async () => {
+      if (held()) return 'taken' as const;   // review 3016 F1: a take that landed while the write waited for its flight
       const out = await this.deps.call({
         pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey,
         op: 'issueUpdate', target: row.identifier, destinationTeamKey: was.team, fields: ['title', 'description', 'state', 'project', 'milestone', 'team', 'parent'],
         input: { id: step.linearId, teamId: team.id, stateId: state.id, projectId: was.project, projectMilestoneId: was.milestone, parentId: was.parent, title: was.title, description: was.description },
       });
       if (!out.ok && out.word === 'rate-limited' && 'retryAfterS' in out) this.restUntil = this.deps.now() + out.retryAfterS * 1000;
-      return out.ok;
+      return out.ok ? 'restored' as const : 'failed' as const;
     });
   }
 }

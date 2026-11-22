@@ -21,7 +21,7 @@ import { admissionWakeChoice, blocksNoWaiterWakes, capacityBlockWakes, isCapacit
 import { blockWakeMail, type CallRow } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { queueAdmissionWake } from './admissionWakeTx.js';
-import { capCountsWorkingArmed, capsMeasured, workerReadings } from './dispatch.js';
+import { capCountsWorkingArmed, capsMeasured, workerReadings, type HostMachinePort } from './dispatch.js';
 import { capsRoomOf, type WorkerFacts } from './dispatchDecide.js';
 import type { WatcherCoordPort } from './ports.js';
 import { wakeRoom } from './wakeBudget.js';
@@ -45,6 +45,9 @@ export interface AdmissionWakeDeps {
   readonly serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null;
   /** A run worker's measured facts (`turnverdict.ts#workerFactsFor`), the doors' own port. */
   readonly workerFacts: (sessionId: string) => Promise<WorkerFacts>;
+  /** D-8920: the fleet host's size (`FleetWatcher.hostMachine`), the doors' own port, so the room this
+   *  pass wakes into is measured against the cap the dispatch door enforces. REQUIRED: this lane has one caller. */
+  readonly hostMachine: HostMachinePort;
   /** The freed-slot window's list (`FleetWatcher.admitFreedSlot`'s), read and never written: armed, a slot the readings
    *  free is room only while that window would admit it (`capsRoomOf`, T4 F5). */
   readonly freedSlotRecent: () => readonly number[];
@@ -68,7 +71,7 @@ export async function admissionWakePass(d: AdmissionWakeDeps): Promise<void> {
     const readings = armed ? await workerReadings(d.coord, d.workerFacts) : undefined;
     await serial(async () => {
       const now = Date.now();
-      const room = capsRoomOf(capsMeasured(d.coord, readings, armed), wakeRoom(d.freedSlotRecent(), now));
+      const room = capsRoomOf(capsMeasured(d.coord, d.hostMachine, readings, armed), wakeRoom(d.freedSlotRecent(), now));
       const waiters = d.coord.admissionWaiters();
       const pick = admissionWakeChoice(waiters, room, d.memory.recent, now, d.memory.served);
       d.memory.recent = pick.recent;

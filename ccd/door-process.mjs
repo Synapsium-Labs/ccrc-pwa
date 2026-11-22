@@ -51,6 +51,9 @@ const HEX64 = /^[0-9a-f]{64}$/;
 /** Every call's answer once a whoami has named another session. */
 const NOT_THIS_SESSION = Object.freeze({ text: 'door: this process does not serve this session (whoami named another); nothing was sent', isError: true });
 const isPage = (v) => Number.isInteger(v) && v >= 1 && v <= 999_999;
+/** A Linear team key, uppercased first: the SAME grammar as `LINEAR_TEAM_KEY_SHAPE` (shared/linear.ts), which this file cannot
+ *  import (Node built-ins only); door-tools.test.ts holds the two sources equal (D-8809). */
+export const TEAM_KEY_SHAPE = /^[A-Z][A-Z0-9_]{0,15}$/;
 const isId = (v) => Number.isInteger(v) && v >= 1;
 const pageSchema = { type: 'integer', minimum: 1, description: 'The page to read; 1 when absent.' };
 const object = (properties, required = [], extra = false) => ({ type: 'object', properties, required, additionalProperties: extra });
@@ -137,6 +140,20 @@ const BASE_TOOLS = [
     description: 'Cancel one of your timers.',
     input: object({ id: { type: 'integer', minimum: 1 } }, ['id']),
     argv: (i) => { need(isId(i.id), 'id is a timer id'); return ['timer', 'cancel', String(i.id)]; },
+  },
+  {
+    // D-8809: the Overlord's confirm of one current team candidate for a project with no Linear key, a call made in the
+    // operator's name. Fenced like the note door; the gate allows it at the full rung only.
+    name: 'link_team', verb: 'linking.confirm', class: 'operate', fenced: true, reader: false,
+    description: "Link a project to one of its current Linear team candidates, as a call made in the operator's name (full rung only).",
+    input: object({ project: { type: 'string' }, team: { type: 'string' }, workspace: { type: ['string', 'null'] } }, ['project', 'team', 'workspace']),
+    argv: (i) => {
+      need(typeof i.project === 'string' && i.project.length > 0, 'project is a project name');
+      need(typeof i.team === 'string' && TEAM_KEY_SHAPE.test(i.team.toUpperCase()), 'team is a Linear team key');
+      need(i.workspace === null || (typeof i.workspace === 'string' && i.workspace.length > 0), "workspace is the candidate's workspace id, or null");
+      return ['linking', 'confirm', '--json', '-'];
+    },
+    body: (i) => ({ project: i.project, team: i.team, workspace: i.workspace }),
   },
 ];
 

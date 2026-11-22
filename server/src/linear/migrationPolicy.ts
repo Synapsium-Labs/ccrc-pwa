@@ -5,11 +5,12 @@ import { isPlanKey, MAP_CLASSES, TICKET_KINDS, type HierarchyState, type IssueSn
 import type { LinkingMode } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
-import { parsePlanPut } from '../coord/planPolicy.js';
-import type { StoredPlan } from '../coord/planStore.js';
+import { parsePlanPut, teamOwnerUnmeasured } from '../coord/planPolicy.js';
+import type { HierarchyProjectFacts, StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
 import { normalText } from './driftPolicy.js';
 import { publicTextVerdict } from '../linking/policy.js';
+import { measuredProjectTeam, routeProjectTeam, type LinearRouteSlot, type TeamRoutes } from './route.js';
 
 export type IssueSnapshotRow = IssueSnapshot & { linearId: string; identifier: string };
 export interface IssueAfter {
@@ -34,6 +35,8 @@ export interface MapContext {
   /** The Linear ids and identifiers of the issues ccrc's plan already holds in the workspace: a superseded entry's successor
    *  exists in the map or here (review 2892 F6). Absent: none. */
   heldIssues?: ReadonlySet<string>;
+  /** D-8808: whether a project's team is the map's team IN THE MIGRATION'S WORKSPACE (`projectOnTeam`). Absent: every project is. */
+  sameWorkspace?: (project: string) => boolean;
 }
 /** A finished entry's pull request: `<owner>/<repo>#<number>` (review 2892 F7, D-8801): its shape only, as L1 cannot ask GitHub. */
 const PR_REF = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,8})$/u;
@@ -162,7 +165,7 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
   for (const g of [...groups.map((x) => ({ slug: x.programme, epics: x.epics })), ...backlog.map((x) => ({ slug: x.slug, epics: x.epics }))]) {
     for (const ep of g.epics) {
       const key = ctx.teamOf(ep.project ?? ctx.home);
-      if (key === null || key.toLowerCase() !== team) return fail('plan-bad-body', `epic-other-team:${g.slug}/${ep.key}`);
+      if (key === null || key.toLowerCase() !== team || ctx.sameWorkspace?.(ep.project ?? ctx.home) === false) return fail('plan-bad-body', `epic-other-team:${g.slug}/${ep.key}`);
     }
   }
   for (const e of map.entries) {
@@ -170,7 +173,7 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
     const project = epicsFor(e.target!.programme!).get(e.target!.epic!)!.project;
     const key = ctx.teamOf(project);
     if (key === null) return fail('plan-bad-body', `leaf-no-team:${e.identifier}`);
-    if (key.toLowerCase() !== team) return fail('plan-bad-body', `leaf-other-team:${e.identifier}`);
+    if (key.toLowerCase() !== team || ctx.sameWorkspace?.(project) === false) return fail('plan-bad-body', `leaf-other-team:${e.identifier}`);
   }
 
   // 6. Ticket keys.
@@ -300,6 +303,13 @@ export function closerRelation(e: MapEntry, entries: readonly MapEntry[], applie
   return under.some((x) => !skipped.has(x.identifier)) ? { kind: 'wait' } : { kind: 'none' };
 }
 
+/** Every skipped issue a live binding holds moves to the taken list (review 2955 F2): the team's Linear owner took it through
+ *  inbound, so it leaves the migration. `isHeld` is the plan store's one reader (`issueBound`); taken stays deduplicated, in order. */
+export function shedTaken(skipped: readonly string[], taken: readonly string[], isHeld: (identifier: string) => boolean): { skipped: string[]; taken: string[]; moved: boolean } {
+  const held = skipped.filter((i) => isHeld(i));
+  return { skipped: skipped.filter((i) => !held.includes(i)), taken: [...new Set([...taken, ...held])], moved: held.length > 0 };
+}
+
 /** The comment on an issue closed as finished (spec §10.3, review 2892 F7, D-8801): it names its evidence. A private team's names the
  *  pull request; a public (or unmeasured) team's names it only when it is in the project's own repository (`repo`, measured),
  *  and says "a pull request" for any other, which may be private. The text passes the public-text check for the team, or the
@@ -326,16 +336,51 @@ export interface MigrationFacts {
 export const migrationSettled = (m: Pick<MigrationFacts, 'state' | 'reportDoneAt'>): boolean =>
   m.state === 'put-back' || m.state === 'failed' || (m.state === 'applied' && m.reportDoneAt !== null);
 
+export const NO_TEAM_KEY = { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' } as const;
+
 /** `POST /api/projects/:project/hierarchy/migrate` (Task 7.2): one team at a time, in order (§10.2), and never a team already
  *  migrated. `rows` are every migration, any order. */
 export function startVerdict(rows: readonly MigrationFacts[], team: string | null, workspaceId: string | null):
   { ok: true } | { ok: false; word: 'no-team-key' | 'migration-in-flight'; detail: string } {
-  if (team === null) return { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' };
+  if (team === null) return NO_TEAM_KEY;
   const open = rows.find((m) => !migrationSettled(m));
   if (open !== undefined) return { ok: false, word: 'migration-in-flight', detail: `team ${open.teamKey}'s migration is not finished` };
   const same = rows.filter((m) => m.teamKey.toUpperCase() === team.toUpperCase() && (workspaceId === null || m.workspaceId === workspaceId));
   if (same.some((m) => m.state === 'applied')) return { ok: false, word: 'migration-in-flight', detail: `team ${team} is migrated already` };
   return { ok: true };
+}
+
+/** D-8808: the migration a project row shows (`hierarchyStateOf` reads it): the newest of its team in its workspace. A row naming a
+ *  workspace needs no slots; one naming none is routed (a slot gives the workspace, an ambiguous key shows none: the operator is
+ *  refused at Reshape too); a key no slot serves matches by key alone only while all its migrations sit in one workspace. */
+export function migrationOfProject<M extends { id: number; workspaceId: string; teamKey: string }>(
+  row: { teamKey: string | null; workspaceId: string | null }, migrations: readonly M[], slots: readonly LinearRouteSlot[] | null,
+): M | null {
+  if (row.teamKey === null) return null;
+  const key = row.teamKey.toUpperCase();
+  const ofKey = migrations.filter((m) => m.teamKey.toUpperCase() === key);
+  const newest = (ms: readonly M[]): M | null => [...ms].sort((a, b) => b.id - a.id)[0] ?? null;
+  if (row.workspaceId !== null) return newest(ofKey.filter((m) => m.workspaceId === row.workspaceId));
+  const route = slots === null || slots.length === 0 ? null : routeProjectTeam(slots, { teamKey: key, workspaceId: null });
+  if (route !== null && route.kind === 'slot') return newest(ofKey.filter((m) => m.workspaceId === route.slot.workspaceId));
+  if (route !== null && route.word === 'team-ambiguous') return null;
+  return new Set(ofKey.map((m) => m.workspaceId)).size <= 1 ? newest(ofKey) : null;
+}
+
+/** D-8808: a caller must own exactly one waiting workspace. If an unmeasured workspace could be theirs, do not read
+ *  any map. With no waiting migration the key-only holder (a null workspace) can receive a diagnostic, not permission. */
+export function mapProposerVerdict(
+  caller: string, waiting: readonly string[], holderWorkspaces: readonly (string | null)[],
+  ownerIn: (workspaceId: string | null) => { kind: 'owner'; id: string | null } | { kind: 'none' } | { kind: 'unmeasured'; possibleIds: readonly string[] },
+): { ok: true; workspaceId: string } | { ok: false; word: 'not-linear-owner' | 'plan-bad-body' | 'team-ambiguous' | 'unreachable' } {
+  const workspaces = waiting.length === 0 ? holderWorkspaces : [...new Set(waiting)];
+  const measured = workspaces.map((w) => ({ workspace: w, owner: ownerIn(w) }));
+  const owned = measured.filter(({ owner }) => owner.kind === 'owner' && owner.id === caller);
+  if (waiting.length === 0 && owned.length > 0) return { ok: false, word: 'plan-bad-body' };
+  if (owned.length > 1) return { ok: false, word: 'team-ambiguous' };
+  if (measured.some(({ owner }) => owner.kind === 'unmeasured' && owner.possibleIds.includes(caller))) return { ok: false, word: 'unreachable' };
+  const workspaceId = owned[0]?.workspace;
+  return workspaceId == null ? { ok: false, word: 'not-linear-owner' } : { ok: true, workspaceId };
 }
 
 /** The hierarchy state a project row shows (§11.1) from its team's newest migration: none is "Not migrated". */
@@ -348,6 +393,19 @@ export function hierarchyStateOf(m: MigrationFacts | null): { state: HierarchySt
     case 'put-back': return { state: 'put-back', at: m.putBackAt, itemId: m.reportItemId };
     default: return { state: 'not-migrated', at: null, itemId: null };
   }
+}
+
+/** F1 (D-8186, D-8808): the console state of a project row. It says `unmeasured`, never "not-migrated", and Reshape is not offered,
+ *  when either measurement cannot be made: the row's own workspace (`measuredProjectTeam` with the row's pin, the measurement
+ *  Reshape's `workspaceOfProject` makes: an unpinned row's routing, or a pinned row's own slot or a failed listing; review 3087 F1)
+ *  or its team owner (`teamOwnerUnmeasured`, the pick the card's owner line reads: a pinned row outranked by an unpinned holder
+ *  whose routing cannot be read). A row with no team key has none to measure. The caller only supplies the rows and the routing. */
+export function hierarchyStateOfRow<M extends MigrationFacts & { id: number; workspaceId: string; teamKey: string }>(
+  row: { teamKey: string | null; workspaceId: string | null }, rows: readonly HierarchyProjectFacts[], migrations: readonly M[], routing: TeamRoutes | null,
+): { state: HierarchyState; at: number | null; itemId: number | null } {
+  if (row.teamKey !== null && (measuredProjectTeam(routing, { teamKey: row.teamKey, workspaceId: row.workspaceId }).kind === 'unmeasured'
+    || teamOwnerUnmeasured(row, rows, routing))) return { state: 'unmeasured', at: null, itemId: null };
+  return hierarchyStateOf(migrationOfProject(row, migrations, routing?.slots ?? null));
 }
 
 /** Put back is offered until the team's next migration starts (§10.4): a later row for the same team refuses it. */
@@ -373,8 +431,9 @@ export function expectOfOwned(owned: Readonly<Record<string, unknown>>): Partial
 
 /** The report's counts (§10.3): created objects and moved issues from the applied move rows; closed issues likewise; skipped
  *  and left from the report and the map. */
-export function reportCounts(moves: readonly Pick<MoveRow, 'kind' | 'before' | 'appliedAt' | 'after'>[], map: MapBody, skipped: number): MapCounts {
-  const applied = moves.filter((m) => m.appliedAt !== null);
+export function reportCounts(moves: readonly Pick<MoveRow, 'kind' | 'before' | 'appliedAt' | 'after' | 'identifier'>[], map: MapBody, skipped: number, taken: readonly string[] = []): MapCounts {
+  // An issue a live binding came to hold after its close landed is the owner's now: it is listed taken, not counted closed (review 3004 F2).
+  const applied = moves.filter((m) => m.appliedAt !== null && !(m.identifier !== null && taken.includes(m.identifier)));
   const closing = (m: (typeof applied)[number]): boolean => {
     const st = isObj(m.after.expect) ? (m.after.expect as Partial<IssueSnapshot>).state : undefined;
     return st === 'canceled' || st === 'completed';

@@ -52,6 +52,7 @@ const MIN: Record<TestboxAdminSub, Record<string, unknown>> = {
   'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
   'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } }, 'settings-box': { settings: { CCRC_TESTBOX_WORKERS: '3' } },
   'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {}, 'key-rotate': {}, 'key-revoke': {},
+  'tools-home': {},
 };
 const POST_SUBS = (Object.keys(TESTBOX_ADMIN_SUB_MAP) as TestboxAdminSub[]).filter((s) => s !== 'status');
 const STEP_UP_SUBS = POST_SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].stepUp);
@@ -469,6 +470,21 @@ describe('the ledger: one closed row per short act (spec §2.10, T10)', () => {
     await post(r, 'connect', { fields: MIN['connect'] }, cookie);
     await post(r, 'parity', { fields: {} }, cookie);
     expect(r.rows().map((x) => [x['act'], x['outcome'], x['code']])).toEqual([['connect', 'refused', 'busy']]);
+  });
+
+  it('a busy refusal carries the holder the verb named, held to its shape, and drops one that is off it (D-8899)', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    const holder = { sub: 'parity', startedAt: 1_700_000_000_000, deadlineAt: 1_700_003_600_000 };
+    r.stub('repair', { out: { ok: false, code: 'busy', holder: { ...holder, address: 'testbox.invalid' } } });
+    const named = await post(r, 'repair', { fields: {} }, cookie);
+    expect(named.statusCode, named.body).toBe(409);
+    expect(named.json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'busy', holder });
+    r.stub('repair', { out: { ok: false, code: 'busy', holder: { sub: '/home/x', startedAt: 1, deadlineAt: 2 } } });
+    expect((await post(r, 'repair', { fields: {} }, cookie)).json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'busy' });
+    // only `busy` names one
+    r.stub('repair', { out: { ok: false, code: 'unreachable', holder } });
+    expect((await post(r, 'repair', { fields: {} }, cookie)).json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'unreachable' });
   });
 
   it('a failed ledger write still answers the act', async () => {

@@ -43,10 +43,18 @@ describe('the advance file and its clock, each spelled once (auto-advance spec Â
     for (const f of ['deploy/models-op.mjs', 'shared/model-advance.mjs', 'ccd/ccrc']) expect(names).toContain(f);
   });
 
-  it('`.advance.json` is spelled by deploy/models-op.mjs alone, on advancePath\'s one line, and by no bash tool', () => {
-    expect(SHIPPED.filter((f) => textOf(f).includes('.advance.json')).map(rel).sort()).toEqual(['deploy/models-op.mjs']);
+  it('`.advance.json` is spelled by deploy/models-op.mjs on advancePath\'s one line, and by one bash tool, ccd\'s cached reader, on one line that only reads it', () => {
+    expect(SHIPPED.filter((f) => textOf(f).includes('.advance.json')).map(rel).sort())
+      .toEqual(['ccd/lib/model-aliases.sh', 'deploy/models-op.mjs']);
     expect(readFileSync(OP, 'utf8').split('\n').filter((l) => l.includes('.advance.json')))
       .toEqual(['const advancePath = (id) => path.join(modelsDir(), `${id}.advance.json`);']);
+    // The Anthropic arm's Task A3.1: ccd reads a lane's holds from the file itself, in the one jq call that also reads
+    // the aliases file, cached on both files' bytes (`_alias_facts_to`). It hands the path to that reader and nothing
+    // else: the op stays the file's one writer.
+    const lib = SHIPPED.find((f) => rel(f) === 'ccd/lib/model-aliases.sh')!;
+    const spelled = textOf(lib).split('\n').filter((l) => l.includes('.advance.json'));
+    expect(spelled).toHaveLength(1);
+    expect(spelled[0]).toMatch(/^\s*_ma_answer_to "\$1" aliases /);
   });
 
   it('its bytes come from one place: writeAdvance writes through writeJsonFile (D-5783), and nothing else writes the file or spells its bytes', () => {
@@ -73,8 +81,15 @@ describe('the advance file and its clock, each spelled once (auto-advance spec Â
     ]);
   });
 
-  it('CCRC_MODELS_NOW is read in one place, and models-op reads the wall clock on two named lines only', () => {
-    expect(SHIPPED.filter((f) => textOf(f).includes('CCRC_MODELS_NOW')).map(rel)).toEqual(['deploy/models-op.mjs']);
+  it('CCRC_MODELS_NOW is read once by models-op and once by the probe, and models-op reads the wall clock on two named lines only', () => {
+    // The probe stamps a catalogue's observation time (`fetchedAt`) under the same seam, so a fixture HOME drives hours
+    // of sightings through the real refresh (programme wave 3, D-8838). It is another process, in Python, so it reads
+    // the variable itself rather than importing the op's reader.
+    expect(SHIPPED.filter((f) => textOf(f).includes('CCRC_MODELS_NOW')).map(rel).sort())
+      .toEqual(['ccd/ccrc-models-probe', 'deploy/models-op.mjs']);
+    const probe = SHIPPED.find((f) => rel(f) === 'ccd/ccrc-models-probe')!;
+    expect(textOf(probe).split('\n').filter((l) => l.includes('CCRC_MODELS_NOW')).map((l) => l.trim()))
+      .toEqual(['v = os.environ.get("CCRC_MODELS_NOW", "")']);
     const lines = readFileSync(OP, 'utf8').split('\n');
     expect(lines.filter((l) => l.includes("process.env['CCRC_MODELS_NOW']"))).toHaveLength(1);
     expect(lines.filter((l) => /\bnew Date\(|\bDate\.now\(/.test(l)).map((l) => l.trim())).toEqual([

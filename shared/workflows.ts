@@ -2,13 +2,13 @@
 // them. One row per dynamic workflow Claude Code is running in the session —
 // the same facts its own terminal row prints, `○ name ▰▰▰▱ 19/20 · 3h15m ·
 // ↓ 2.5m tokens` — read from the files Claude Code itself keeps
-// (`server/src/workflows/`, D-5561). L0: imports no module but a sibling L0 file's one id rule (`AGENT_ID_RE`).
+// (`server/src/workflows/`, D-5561). L0: imports no module but a sibling L0 file's one id guard (`isAgentId`).
 //
 // EVERY NUMBER HAS ONE NULL, AND IT MEANS "NOT MEASURED". A count that could
 // not be read is never a zero: a journal this box failed to read has no
 // `done` and no `total`, and the row says so instead of drawing `0/0`.
 
-import { AGENT_ID_RE } from './continuity-reports.js';
+import { isAgentId } from './continuity-reports.js';
 
 /** Where a row stands. `running` is decided by the read rule in
  *  `server/src/workflows/model.ts` (`decideRun`), never by a recency timeout;
@@ -70,11 +70,10 @@ export interface WorkflowView {
   agents: WorkflowAgentView[];
   /** Agents left out of `agents` by that cut — said, never silently dropped. */
   agentsOmitted: number;
+  /** H1b (D-8862, spec §8): the newest write the reader measured, the journal's or a running agent's transcript's, epoch ms;
+   *  null when none was. ABSENT from an older server's frame: the row then leaves out `active … ago`. */
+  lastActivityAt?: number | null;
 }
-
-/** A finished row stays this long after its end, then drops off — Claude Code
- *  2.1.302's own `evictAfter = endTime + 30000`. */
-export const WORKFLOW_EVICT_MS = 30_000;
 
 /** The most agents one row carries on the wire; a run measured up to 629. */
 export const WORKFLOW_AGENTS_MAX = 120;
@@ -160,17 +159,30 @@ export type HelpersUnmeasured =
   | { why: 'unregistered' } // the session's identity is not registered yet
   | { why: 'unseen'; helpers: number }; // drops this reader did not see
 
-/** A finished Agent helper or workflow stays this long after its end time, folded (the coordinator's ruling on review 2861, F5). */
+/** The `workflows` frame's helper members (H1b, D-8862; spec §8, Table 11), ADDITIVE: each is present only when it says
+ *  something, and an older server's frame carries none of them, which reads as no Agent rows and nothing said. Kept here,
+ *  not in `shared/api.ts`, which is near its growth cap; the frame there is the intersection with this type. One reader:
+ *  `pwa/src/stores/session.ts#applySessionMsg`. */
+export interface HelperFrameMembers {
+  /** The Agent arm's rows (`server/src/workflows/model.ts#decideAgentHelpers`); absent when there is none. */
+  agents?: AgentHelperView[];
+  /** Why a known helper's state was left out, said once; absent when none was. */
+  agentsUnmeasured?: HelpersUnmeasured;
+  /** The helper tier rotated: `refreshed` of the `of` helpers not final had their transcript looked at this reading. */
+  readEvery?: { refreshed: number; of: number };
+}
+
+/** A finished Agent helper or workflow stays this long after its end time, folded (the coordinator's ruling on review 2861, F5).
+ *  Since H2 (D-8872) it is the workflows' keep too: Claude Code's own 30 s (`WORKFLOW_EVICT_MS`) retired with its pins, and
+ *  `server/src/workflows/model.ts#isFinishedKept` is the one clock both arms ask. */
 export const HELPER_FINISHED_KEEP_MS = 600_000;
 /** The most finished rows kept per arm, the newest. */
 export const HELPER_KEPT_MAX = 20;
 
-// THE BOUNDS OF THE AGENT ARM (review 2900 F9). The frame's Agent arm is at most
-// HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX = 84 rows. Each text field is capped by the unit named
-// below, so the bytes of a row depend on the text (review 2961 F5, measured on a row with every field at its cap and
-// serialised as JSON): ASCII text, 895 bytes a row (73 KiB for 84 rows); 3-byte characters, 1,677 bytes (138 KiB);
-// supplementary-plane characters, 1,287 bytes (106 KiB). No byte cap is added: no frame size limit is read anywhere
-// on the path, and the one that frames bytes is H1b's to pin where the frame is built.
+// THE BOUNDS OF THE AGENT ARM (reviews 2900 F9, 3014 F4): at most 64 non-final rows and 20 final rows. After removing
+// controls and lone surrogates, display text costs at most 3 JSON bytes per UTF-16 unit, and a summary costs at most
+// twice its UTF-8 bytes after JSON escaping. The frame with no workflow rows is below 134,000 bytes, including the
+// Agent qualifiers and envelope; the legacy workflow arm is not part of that bound. Pinned in helpers-frame.test.ts.
 /** The hook roster's own cap: the most `running` rows. */
 export const HELPER_LISTED_MAX = 32;
 /** The most rows that are not final and not listed (launched, no longer listed, session ended, state left out) together. */
@@ -183,6 +195,10 @@ export const HELPER_LABEL_MAX = 64;
 export const HELPER_SUMMARY_MAX_BYTES = 200;
 /** A report is at most this many bytes, and a cut one says so. */
 export const HELPER_REPORT_MAX_BYTES = 16_384;
+/** What a cut report says under its text, with the cap in it, and the finished fold's label, with the keep's minutes in it:
+ *  each written once, from its constant, and handed to the strip by the PWA's words module (H2, review 3072 F12). */
+export const HELPER_CUT_NOTE = `The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`;
+export const HELPER_FOLD_LABEL = `Finished · last ${HELPER_FINISHED_KEEP_MS / 60_000} min`;
 /** The most ids whose launch results and notifications the fold remembers, the oldest evicted first. */
 export const HELPER_FACTS_MAX = 256;
 /** A finished (kept) workflow carries at most this many agents, failed and running first. */
@@ -191,6 +207,18 @@ export const WORKFLOW_KEPT_AGENTS_MAX = 40;
 /** What Claude Code names a workflow's agents, in the hook roster's `name` and in their meta's `agentType`: never an Agent row. */
 export const WORKFLOW_AGENT_TYPE = 'workflow-subagent';
 
-/** Whether `v` is an agent id: the hook's own rule, `AGENT_ID_RE` (`shared/continuity-reports.ts`), the one definition (review
- *  2961 F6). The fact parser and the decision both read it, and an id that fails it is never a row. */
-export const isHelperId = (v: unknown): v is string => typeof v === 'string' && AGENT_ID_RE.test(v);
+/** Whether `v` is an agent id: the hook's own rule, `isAgentId` over `AGENT_ID_RE` (`shared/continuity-reports.ts`), the one
+ *  definition and its one guard (review 2961 F6; H1b, D-8862). The fact parser and the decision both read it, and an id that
+ *  fails it is never a row. */
+export const isHelperId: (v: unknown) => v is string = isAgentId;
+
+/** The PWA asks for one finished helper's report over the session socket (H2, D-8872; spec §4.3, §8 Table 11, J10): reports
+ *  never ride the frame. It carries no `visible`, so an older server's parser (`visible` only) reads it as null and ignores
+ *  it. Parsed by `server/src/server.ts#asSessionClientMsg`; `id` must pass `isHelperId`. */
+export interface HelperReportRequest { type: 'helper-report'; id: string }
+
+/** The server's answer (`server/src/workflows/model.ts#reportAnswer`). `report` is null when no row the last reading drew
+ *  with `hasReport` has this id (an unknown id, or one evicted from the keep): never a stale or another helper's text. A
+ *  report is masked, then cut at `HELPER_REPORT_MAX_BYTES` at parse time, and `cut` says so. One reader:
+ *  `pwa/src/stores/session.ts#applySessionMsg`. */
+export interface HelperReportAnswer { type: 'helper-report'; id: string; report: string | null; cut: boolean }

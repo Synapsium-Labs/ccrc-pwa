@@ -28,7 +28,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/programmeRemainingRoute.ts': { reason: "the coordinator's remaining-work door (Overlord W2 remaining work A)", since: '2026-11-16' },
   'server/src/coord/decisionModelRoutes.ts': { reason: "the operator's decision-model doors: the read, arm, off, ceiling and the key's PUT and DELETE (Overlord W2, decision model B)", since: '2026-11-17' },
   'server/src/operatorModel/nameListRoutes.ts': { reason: "the private-name list's upload door and status read (Overlord W2, private names B)", since: '2026-11-17' },
-  'server/src/continuity/quizRoutes.ts': { reason: "the replay quiz's record door and its rule door (Overlord W1a quiz record)", since: '2026-11-17' },
+  'server/src/continuity/quizRoutes.ts': { reason: "the replay quiz's record door and its rule door (Overlord W1a quiz record), and the weekly unattended run's confirm, status and Live doors (run 3212)", since: '2026-11-17' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
   'server/src/docs/hooks.ts': { reason: "the docs plugin's request and response hooks (L4 by its header)", since: '2026-10-20' },
   'server/src/review/routes.ts': { reason: "the draft review read door's L4 HTTP delivery module", since: '2026-11-20' },

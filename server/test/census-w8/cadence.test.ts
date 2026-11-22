@@ -152,6 +152,7 @@ describe('the cadence census, on the real tree', () => {
       'OnUnitActiveSec=60min',
       'OnUnitActiveSec=60s',
       'OnUnitInactiveSec=15min',   // D-7876: ccd-graph-sweep.timer counts its period from the previous pass's end
+      'OnUnitInactiveSec=6h',   // Overlord W1a: ccd-quiz-weekly.timer counts its period from the previous run's end
     ]);
   });
 });

@@ -971,7 +971,7 @@ describe("layer 4b — the token-sync op is not an exec path, and its spawn port
   });
 });
 
-// Layer 4c (test box plan TB9, D-7411, D-7430): the `testbox` and `testbox-tools-sync` ops are the FOURTH class of
+// Layer 4c (test box plan TB9, D-7411, D-7430): the `testbox`, `testbox-tools-sync` and `testbox-capture` ops are the FOURTH class of
 // wire-triggered spawn outside the exec whitelist. Their spawns are fixed templates in `agent/src/testboxOp.ts`
 // (`systemctl --user show-environment`, the settings printer, the six version probes), run through the bounded spawner
 // with no field of the frame in them. The same two properties as layers 4 and 4b: neither case nor the op's module
@@ -1009,7 +1009,7 @@ describe('layer 4c — the testbox ops are not an exec path, and their bodies ha
     handleReq = rest.slice(0, end!.index);
   });
 
-  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools']])(
+  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools'], ['testbox-capture', 'captureTestbox']])(
     "(a) `case '%s'` and agent/src/testboxOp.ts name no exec-surface symbol", (word, body) => {
       const cut = caseBody(handleReq, word);
       expect(code(cut)).not.toMatch(EXEC_PATH);
@@ -1017,7 +1017,7 @@ describe('layer 4c — the testbox ops are not an exec path, and their bodies ha
       expect(code(readFileSync(path.join(SRC_DIR, 'testboxOp.ts'), 'utf8'))).not.toMatch(EXEC_PATH);
     });
 
-  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools']])(
+  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools'], ['testbox-capture', 'captureTestbox']])(
     "(b) the `%s` op's body is called exactly once in agent/src, inside its case", (word, body) => {
       const cut = caseBody(handleReq, word);
       const call = new RegExp(`\\b${body}\\s*\\(`, 'g');

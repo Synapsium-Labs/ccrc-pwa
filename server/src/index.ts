@@ -36,6 +36,7 @@ import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operat
 import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
+import { MAIL_HOLD_LANE_ROW } from './coord/mailHoldLane.js';
 import { createLandingJournal } from './coord/landingJournal.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
@@ -49,6 +50,7 @@ import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
 import { planStorePort } from './coord/planStore.js';
+import { COORDINATOR_SKILL_REVISION } from './coord/skillRollout.js';
 import { quizLanePortOf } from './continuity/quizStore.js';
 import { QUIZ_RECORD_READY } from './continuity/quiz.js';
 import { canonicalJson } from '../../shared/api.js';
@@ -66,7 +68,7 @@ import { linearMigrationFor } from './linear/migration.js';
 import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
-import { testboxCaptureTransport } from './buildCaptureLane.js';
+import { testboxCaptureTransport } from './testboxCapture.js';
 import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
@@ -330,6 +332,8 @@ await notifyLog.load();
 
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
+// Mid-turn mail (plan Task 4.4): a landed ack kicks the mailhold projection, so a released hold clears at the next tick.
+deps.onMailAcked = () => watcher.kick(MAIL_HOLD_LANE_ROW);
 
 // Design 2026-09-20 §8: a `ready` frame measures the fleet node at once. The
 // handshake is when an agent that just restarted — a self-update among the
@@ -375,8 +379,8 @@ deps.accountAudit = accountAudit;
 const testboxAudit = new TestboxAudit(coord.db);
 deps.testboxAudit = testboxAudit;
 deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
-// D-8289: the capture queue's transport, over the test box lane's connection (`watcher.testboxLane`).
-deps.buildCapture = testboxCaptureTransport(() => watcher.testboxLane.block());
+// D-8289: the capture queue's transport, over the fleet connection's `testbox-capture` op (build capture runner spec §2.5).
+deps.buildCapture = testboxCaptureTransport(() => deps.io);
 // The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);
@@ -436,6 +440,7 @@ try {
   console.warn(`ccrc-server: decision model: the boot release of stale reservations failed: ${err instanceof Error ? err.message : String(err)}`);
 }
 deps.linearPolicy = allowAll;
+deps.skillRolloutRevision = COORDINATOR_SKILL_REVISION;   // D-8126 (A9-3): the watcher's `skillRollout` lane runs only where this is set
 // The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
 deps.planSync = planSyncFor({
   coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,

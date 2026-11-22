@@ -13,7 +13,8 @@ import { capWaiting } from '../fleet/reviewCapWords';
 import { boundOpenRun, claimedRunsOf, sessionProgramme } from '../fleet/runWords';
 
 /** One thing that waits on the operator. `programme` is the slug, `''` for a session in none. `runId` is the run the
- *  entry is about: an item's run, a question's OPEN bound run (else the first open run it claims), a cap's run. */
+ *  entry is about: an item's run, a question's OPEN bound run (else the first open run it claims), a cap's run, a parked
+ *  approval's PARK run as the server's view names it (approvals PR 3c F-D: a resumed child's wave 2, never its mark's). */
 export interface NeedsYouEntry {
   readonly programme: string;
   readonly runId: number | null;

@@ -199,7 +199,7 @@ const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-n
 /** The replay quiz's rule door (Overlord W1a quiz record): the operator confirms or discards a recorded run, behind a session
  *  and the account gate's step-up. Hand-kept for the NAME only, compared with the quiz file's registrations in both directions
  *  below; it consults no box token and does not sit in EXEMPT. */
-const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule'];
+const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule', '/api/continuity/quiz-runs/:id/withdraw'];
 
 /** The Models sheet's write door (programme model-class-advance, wave R4), registered from `server/src/laneModelsRoutes.ts`, which no
  *  harvest above can see: `POST /api/models/:lane`, hold, release and revert of one class. Hand-kept for the NAME only, like
@@ -287,7 +287,15 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1 door process B1: POST /api/sessions/:id/report, the hook's report door, a box-token lane in the continuity file: ninety-three machine lanes in all.
   'ninety-three',
   // D-8186: POST /api/teams/:team/plan/map (`plan map-propose`), the per-team migration's map, a box-token lane in the plan file: ninety-four machine lanes in all.
-  'ninety-four'];
+  'ninety-four',
+  // D-8808: POST /api/linking/suggest, a coordinator's suggestion of a team, a box-token lane in the linking file: ninety-five machine lanes in all.
+  'ninety-five',
+  // D-8809: POST /api/linking/confirm, the Overlord's confirm of a team candidate, a box-token lane in the linking file: ninety-six machine lanes in all.
+  'ninety-six',
+  // Run 3212: POST /api/continuity/quiz-runs/:id/confirm (the weekly timer's unattended confirmation), POST
+  // /api/continuity/quiz-status (its tick report) and POST /api/continuity/quiz-baseline/live (the coordinator's Live on the
+  // baseline), three box-token lanes in the quiz file: ninety-nine machine lanes in all.
+  'ninety-seven', 'ninety-eight', 'ninety-nine'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -435,14 +443,18 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
       'POST /api/programmes/:slug/spec',
     ]);
-    // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
-    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
+    // …and the linking standard's three (D-8147 the session's read, D-8808 the coordinator's suggestion, D-8809 the Overlord's
+    // confirm), by name; the operator's write beside it is no lane.
+    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking', 'POST /api/linking/suggest', 'POST /api/linking/confirm']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
     expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'POST /api/sessions/:id/act-key', 'POST /api/sessions/:id/report', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
-    // …and the quiz file's one (Overlord W1a quiz record): the operator's record door, by name.
-    expect(QUIZ_LANES, 'continuity/quizRoutes.ts lost its box-token lane, or the rule door gained a token check').toEqual(['POST /api/continuity/quiz-runs']);
+    // …and the quiz file's four (Overlord W1a quiz record; run 3212): the operator's record door, the weekly timer's confirmation
+    // and tick report, and the coordinator's Live, by name.
+    expect(QUIZ_LANES, 'continuity/quizRoutes.ts lost a box-token lane, or the rule door gained a token check')
+      .toEqual(['POST /api/continuity/quiz-runs', 'POST /api/continuity/quiz-runs/:id/confirm', 'POST /api/continuity/quiz-status',
+        'POST /api/continuity/quiz-baseline/live']);
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });

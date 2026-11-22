@@ -37,7 +37,8 @@
 # are removed after a sync succeeds. The release the takeover replaced is removed once the takeover has ended (the
 # next sync, or `tools-sync --takeover-ended`, which TB7's service unit runs before the new service starts).
 # It reads no config file but the box's one (for the release base), assigns no BOX_ENV_FILE, and names no test box
-# setting: every other value comes from the spec.
+# setting: every other value comes from the spec. The unit gives it no HOME, so before the spec is read HOME is taken
+# from the password database when the environment names none (`_tbt_home`, testbox-sync-home).
 set -uo pipefail
 
 TBT_PROG=ccrc-testbox-tools
@@ -59,6 +60,30 @@ _tbt_paths() {   # -> TBT_TOOLS, TBT_TREE; else 1 and TBT_WHY
   t="${t%/release/installed}"
   [ "$t" != "$TBT_TREE" ] && [ -n "$t" ] || { TBT_WHY="not run from <tools>/release/installed: $TBT_TREE"; return 1; }
   TBT_TOOLS="$t"
+}
+# @anchor tbt-home
+# THE HOME (testbox-sync-home). The unit is root's and names no User=, and the system manager sets HOME only for a
+# unit with User= (systemd.exec(5)), so this script starts with no HOME. The sourced ccd/ccrc reads $HOME at its top
+# level under `set -u`, and the npmrc's `cache=${HOME}/.npm` names npm's cache by it, so every sync that changed the
+# release died at step 1 (`ccd/ccrc: line 103: HOME: unbound variable`). With no HOME in the environment, HOME is the
+# running user's home from the password database, as a login would set it. A home the database does not name, or one
+# that is not an absolute directory, fails the sync before anything is fetched. A HOME the environment gives is kept when
+# it is an absolute directory, and fails the sync the same way when it is not (review 3223 F6).
+_tbt_home() {   # -> HOME exported; else 1 and TBT_WHY
+  local row h
+  if [ -n "${HOME-}" ]; then
+    [[ "$HOME" == /* ]] && [ -d "$HOME" ] && return 0
+    TBT_WHY="the environment's HOME is not an absolute directory"
+    return 1
+  fi
+  row="$(getent passwd "$EUID" 2>/dev/null)" || row=""
+  IFS=: read -r _ _ _ _ _ h _ <<<"$row"
+  if [[ "${h-}" != /* ]] || [ ! -d "$h" ]; then
+    TBT_WHY="HOME is not set, and the password database names no usable home for uid $EUID"
+    return 1
+  fi
+  HOME="$h"
+  export HOME
 }
 
 # ── small helpers ────────────────────────────────────────────────────────
@@ -425,6 +450,7 @@ _tbt_main() {
   if [ "${1:-}" = --takeover-ended ] && [ "$#" -eq 1 ]; then _tbt_takeover_ended; exit 0; fi
   [ "$#" -eq 1 ] || { printf 'usage: tools-sync <spec file> | tools-sync --takeover-ended\n' >&2; exit 2; }
   spec="$1"
+  _tbt_home || _tbt_fail home "$TBT_WHY"
   _tbt_read_spec "$spec" || _tbt_fail spec "$TBT_WHY"
   # The node that renames: the box's current one until this sync has placed its own.
   TBT_SWAP_NODE="$TBT_TOOLS/current/node"

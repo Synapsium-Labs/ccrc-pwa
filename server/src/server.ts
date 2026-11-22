@@ -27,6 +27,7 @@ import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
+import { isHelperId } from '../../shared/workflows.js';
 import { buildAgreement, defaultCachePath, inventoryBuildAgreement, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -75,6 +76,7 @@ import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorM
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
+import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -163,7 +165,7 @@ import {
   type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, ASK_OPERATOR_PRINCIPAL, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import { noticeBanner, noticeSink, notifyPushOnly, questionOutboxOf } from './notice.js';
@@ -191,9 +193,11 @@ import { ccdSwapRefusal, swapTurnRefusal } from './swapguard.js';
  * so a member added to it lands here as a compile error rather than as a frame
  * silently ignored.
  */
-function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
+export function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
   if (raw === null || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
+  // H2 (D-8872): one finished helper's report, asked by its agent id (`isHelperId`, the one rule); anything else is null.
+  if (o['type'] === 'helper-report') return isHelperId(o['id']) ? { type: 'helper-report', id: o['id'] } : null;
   if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
   return { type: 'visible', visible: o['visible'] };
 }
@@ -2158,8 +2162,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
     itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
-    driftAct: (i, a, b) => deps.driftPass?.act(i, a, b) ?? { ok: false, word: 'unavailable' },
-    migration: deps.linearMigration ?? undefined,
+    driftAct: (i, a, b, slots) => deps.driftPass?.act(i, a, b, slots) ?? { ok: false, word: 'unavailable' },
+    migration: deps.linearMigration ?? undefined, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
@@ -2221,14 +2225,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     managed: (w, t) => deps.plan?.managedTeams().some((m) => m.workspaceId === w && m.teamKey.toUpperCase() === t.toUpperCase()) ?? false,
     boundIssue: (w, i) => deps.plan?.issueBound(w, i) ?? false,
   });
-  // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
-  registerLinkingRoutes(app, {
-    coord: deps.coord, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
-    mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
-    readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
-    runCcd: deps.runCcd, fleetState: () => deps.fleetState,
-  });
   // The caller identity port (Overlord W1 gates A, §3.6 H2): its one adapter, over the readers the continuity routes take.
   const identity = attributionIdentity({
     attribute: (id, uuid, field) => attributionVerdict(deps.io, deps.cfg, id, uuid, field),
@@ -2256,6 +2252,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
   });
+  // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project, and (D-8809)
+  // the Overlord's confirm of a team candidate behind the gate above.
+  registerLinkingRoutes(app, {
+    coord: deps.coord, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
+    mailToken: () => deps.mailToken ?? null,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
+    privateTrackerKeys: deps.cfg.privateTrackerKeys, gate, notice, bus, build: deps.build?.version ?? null,
+  });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
@@ -2281,8 +2287,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     notice,
     masker: deps.masker,
   });
-  // The replay quiz's record door (box token, the operator's shell) and its rule door (session and step-up), from their own file.
-  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate });
+  // The replay quiz's record door (box token, the operator's shell and the weekly timer) and its rule door (session and step-up),
+  // from their own file. Run 3212 adds the unattended confirm door, which confirms only a run whose record's single-use key and sha
+  // it is handed (review 3232 F1), the tick report, the coordinator's Live door (attributed on `fromUuid`, with a record-only feed
+  // row) and the operator's withdraw (session-gated). Their mail rides `queueSystemMail` as the operator's sender, as the
+  // watcher's notices do: the baseline's wake (keyed on its run, retried each tick) and the stop and waiting-streak mails.
+  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'), notice, entropy: { hex: (n) => deps.time.entropy.hex(n) },
+    mail: (m) => (deps.coord === undefined ? false : queueSystemMail(deps.coord, null, { fromId: ASK_OPERATOR_PRINCIPAL, runId: null, kind: 'status', ...m }).queued) });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a
@@ -2408,7 +2420,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m !== null) viewers.setVisible(token, m.visible ? id : null);
+        if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
+        else if (m?.type === 'helper-report') stream.helperReport(m.id);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {

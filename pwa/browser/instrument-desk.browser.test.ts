@@ -421,7 +421,7 @@ async function measureRows(page: import('playwright-core').Page) {
         needsYou: (state?.textContent ?? '').includes('needs you'),
         name: shown(li.querySelector('.sess-open'), box), state: shown(state, box),
         context: shown(li.querySelector('.sess-meta--context'), box),
-        asks: li.querySelector('.sess-ask, .sess-subagent-list') !== null,
+        asks: li.querySelector('.sess-ask') !== null,
         // The lamp's centre and the centre of the name's FIRST line, in px below the row's top.
         lamp: mid(line.firstElementChild!) - box.top, nameFirst: (nameLines[0] ?? NaN) - box.top,
       };

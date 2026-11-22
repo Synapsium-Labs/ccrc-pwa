@@ -560,6 +560,8 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     expect(firewallFindings(nft, FIREWALL.map((l) => l.replace('@@LISTEN_MATCH@@', 'ip daddr 127.0.0.9').replace('@@LISTEN_PORT@@', '7443')))).toEqual([]);
     expect(readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'egress'), 'utf8')).toBe([
       'github\tgithub.com', 'nodejs\tnodejs.org', 'chrome\tstorage.googleapis.com', 'registry\tregistry.npmjs.org', 'release\tgithub.com',
+      // a download from the release host is a redirect to an asset host: the row names it, or the tool sync's fetch is dropped
+      'release\trelease-assets.githubusercontent.com', 'release\tobjects.githubusercontent.com',
       'osmirror\tmirror.testbox.invalid', '',
     ].join('\n'));
   });

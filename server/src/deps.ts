@@ -228,6 +228,8 @@ export interface Deps {
   planSync?: PlanSync | null;
   /** D-8183: the Linear drift pass, built once in `index.ts` after `planSync`; the watcher's `linearDrift` lane ticks it and the item route's `hand`/`keep` reach `act`. Absent (a test, a script): the lane does nothing and the acts are `unavailable`. */
   driftPass?: DriftPass | null;
+  /** D-8126 (A9-3): the coordinator skill revision the rollout lane announces (`coord/skillRolloutLane.ts`), set in `index.ts`. Absent (a test, a script): the lane does not run. */
+  skillRolloutRevision?: string;
   /** D-8186: the per-team migration, built once in `index.ts` after `planSync`; the watcher's `linearMigration` lane ticks it, the
    *  plan routes' `plan map-propose` and the hierarchy routes' doors reach it. Absent (a test, a script): the lane does nothing and
    *  its doors are `unavailable`. */
@@ -257,6 +259,10 @@ export interface Deps {
   /** D-8289: the capture queue's transport to the test box, built in `index.ts`. Absent (a test, a script): builds are
    *  recorded and no job is sent. */
   buildCapture?: BuildCaptureTransport;
+  /** Mid-turn mail (plan Task 4.4): called by `POST /api/mail/:id/ack` after an ack lands, never awaited; `index.ts`
+   *  composes it as the watcher's kick of the mailhold row, so a released hold's marker clears at the next tick. Absent
+   *  (a test, a script): nothing is kicked, and the projection's own beat clears it. */
+  onMailAcked?: () => void;
   /** The Linear lookup's test seams (named workspaces S4/S5): the network call and its deadline, read by the preview
    *  route and the workspace create alike so a test reaches neither the network nor an 8 s wait. Absent in
    *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */

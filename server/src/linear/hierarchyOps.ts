@@ -150,6 +150,11 @@ const issueRecord = record({
   projectId: f('project', relationId), milestoneId: f('projectMilestone', relationId), parentId: f('parent', relationId),
   labelIds: (o) => at(o, 'labels', nodesOf(idOf)),
 });
+/** D-8808: an attachment read as the issue it is attached to: its id, identifier and team key, nothing else. */
+const attachmentRecord = record({
+  issueId: (o) => at(o, 'issue', idOf), identifier: (o) => at(o, 'issue', f('identifier', identifier)),
+  teamKey: (o) => at(o, 'issue', (i) => at(i, 'team', keyOf)),
+});
 const statusRecord = record({ id: f('id', uuid), name: f('name', name), type: f('type', stateType) });
 
 // ── shapers ──
@@ -292,6 +297,7 @@ export const LINEAR_CCRC_OPS: Readonly<Record<CcrcOpName, CcrcOpRow>> = Object.f
   changedIssues: read('changedIssues', D.changedIssues, readVars('since', 'teams', 'after'), listShape('issues', issueRecord, true)),
   teamOpenIssues: read('teamOpenIssues', D.teamOpenIssues, readVars('team', 'after'), listShape('issues', issueRecord, true)),
   issueOwned: read('issueOwned', D.issueOwned, readVars('id'), oneShape('issue', issueRecord, 'issue')),
+  attachmentsForUrl: read('attachmentsForUrl', D.attachmentsForUrl, readVars('url'), listShape('attachmentsForURL', attachmentRecord, false)),
 
   initiativeCreate: write('initiativeCreate', D.initiativeCreate, 'initiative-create',
     createVars('name', 'description', 'status'), writeShape('initiativeCreate', 'initiative', true)),

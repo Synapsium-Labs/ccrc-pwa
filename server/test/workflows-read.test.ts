@@ -10,6 +10,7 @@ import {
 } from '../src/workflows/read.js';
 import type { Proc } from '../src/workflows/model.js';
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
+import { HELPER_FINISHED_KEEP_MS } from '../../shared/workflows.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const RUN = 'wf_00000000-aaa';
@@ -159,17 +160,20 @@ describe('SessionWorkflows — finished, resumed and orphaned runs', () => {
     }, mtime);
   };
 
-  it('finished inside 30 s: the summary\'s row; at 30 s it drops off and is never re-read', async () => {
+  // H2 (D-8872): the keep is the helpers' ten minutes (was Claude Code's 30 s, whose pins retired).
+  it('finished inside ten minutes: the summary\'s row; at ten minutes it drops off and is never re-read', async () => {
     const end = T0 + 100_000;
     finished('completed', end);
     const io = counted(localIO);
     const wf = new SessionWorkflows(io, S);
     const r1 = await wf.read(LIVE, end + 10_000);
     expect((r1 as { workflows: unknown[] }).workflows).toMatchObject([{ state: 'completed', done: 1, failed: 1, total: 3, tokens: 4242, endedAt: end }]);
-    const r2 = await wf.read(LIVE, end + 30_000);
+    const r2 = await wf.read(LIVE, end + HELPER_FINISHED_KEEP_MS);
     expect((r2 as { workflows: unknown[] }).workflows).toEqual([]);
     io.calls.length = 0;
-    for (let i = 0; i < RESTAT_EVERY - 1; i++) await wf.read(LIVE, end + 40_000);
+    // H2: a kept finished run is quiet from its first read (no re-stat when it leaves the keep), so its re-stat tick
+    // counts from reading 1: readings 3 to RESTAT_EVERY are quiet.
+    for (let i = 0; i < RESTAT_EVERY - 2; i++) await wf.read(LIVE, end + HELPER_FINISHED_KEEP_MS + 10_000);
     // a dropped finished run costs the listing only, until its re-stat tick
     expect(io.calls.filter((c) => c.op !== 'readdir')).toEqual([]);
   });

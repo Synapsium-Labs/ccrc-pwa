@@ -54,7 +54,7 @@ import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import { BLANK_CONN, ConnFields, Field, LedgerChanges, PARTIAL_DISCONNECT, Phases, StateLine, connReady, keyFieldsOf, type Conn } from './TestBoxConnect';
 import {
   BOX_SETTING_FAMILIES, BOX_SETTING_FORM_START, FLEET_EDIT_KEYS, PAIRED_BOX_KEYS, TESTBOX_FAMILY_FOLD, actWord, TESTBOX_CONNECT_TEXT, TESTBOX_MANAGE_TEXT, blockedOf, checkWord, codeSentence, ledgerLine, manageRowLine,
-  phaseWord, settingLabel, shapeSentence,
+  phaseWord, settingLabel, shapeSentence, utcMinuteUpAt,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
 
@@ -519,6 +519,7 @@ export function TestBoxManage(p: TestBoxManageProps): ReactNode {
           {running && phased !== null && act !== null && (
             <>
               <Phases sub={phased} act={act} />
+              {act.deadlineAt !== undefined && <p className="settings-note" data-testbox="ends-by">{T.endsBy(utcMinuteUpAt(act.deadlineAt))}</p>}
               {settingsRunning && act?.phase === 'wait' && (
                 <>
                   <p className="settings-note" data-testbox="waiting">{T.waiting}</p>

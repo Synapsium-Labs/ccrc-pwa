@@ -1501,7 +1501,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the ninety-four machine lanes the
+liveness gate reads the shipped sha out of it), the ninety-nine machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1515,7 +1515,12 @@ the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`
 (`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
 (`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`), the replay quiz's record door
 (`POST /api/continuity/quiz-runs`, which the operator's `ccrc quiz-record` reaches through `ccrc-api` and which records a run
-as pending only; its rule door, `POST /api/continuity/quiz-runs/:id/rule`, is gated, behind a session and a step-up),
+as pending only; its rule door, `POST /api/continuity/quiz-runs/:id/rule`, is gated, behind a session and a step-up), the weekly
+unattended run's confirmation (`POST /api/continuity/quiz-runs/:id/confirm`, which `ccrc quiz-record --confirm` reaches through
+`ccrc-api` and which confirms a recorded run when its record's single-use key and the sha its report printed match, and
+refuses otherwise) and its tick report
+(`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
+(`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -4422,10 +4427,15 @@ what it cannot.
    `409 heir-is-a-worker` (below).
 5. **The caps dial.** Beside the pause banner, `CapsControl` reads
    `GET /api/coord/caps` and shows the concurrency cap beside its current use,
-   the running workers. A save (`POST /api/coord/caps`) sends the dial only when
-   you moved it, and afterwards the dial shows what the server stored, not what
-   you typed. There is no daily dial: the daily dispatch brake is retired
-   (operator ruling 2026-10-26).
+   the running workers. The cap is automatic: the server derives it from the
+   fleet host's memory and cores, and the control says so (`Automatic: 16 (from
+   64 GB and 16 cores)`), so nobody has to set a number. When the host has not
+   been measured it says why, and which number is used meanwhile. The number
+   box is your override: a save (`POST /api/coord/caps`) sends the number you
+   typed (while the cap is automatic, the number on screen included), afterwards
+   the dial shows what the server answered, not what you typed, and
+   `use automatic` clears the override. There is no daily dial: the daily
+   dispatch brake is retired (operator ruling 2026-10-26).
 6. **What a run warns about.** Under an open run's row, one line names trouble
    the server measured: mail to the run that gave up retrying (`N parked`), a
    delivery replayed many times (`replayed N×`), a dispatch that queued no brief
@@ -5552,8 +5562,28 @@ never neither, and naming both is refused `400 bad-request`. `GET /api/feed?prog
 the full event archive, with no outstanding/history split. Both join through the
 run row; an event with no run behind it is programless and shows only unfiltered.
 
-**Caps and pause.** The single-row `coordinator_state` table holds
-`maxConcurrentWorkers` (default 3 — runs currently dispatched and in an
+**Caps and pause.** The run cap is DERIVED from the machine the fleet runs on
+(the operator's ruling of 2026-11-22; `server/src/coord/caps.ts#deriveCap`): the
+smallest of what the fleet host's memory allows (its memory less 8 GiB kept for
+everything that is not a run, at 3 GiB a run), what the sessions' own memory
+limit allows when they have one (the limit at 3 GiB a run), and its core count,
+never below 1 or above 64. A host with 64 GiB and 16 cores derives 16; the same
+host with its sessions limited to 24 GiB (the session slice's shipped default)
+derives 8, and the control shows both figures. The agent measures these facts
+on its `pressure` op (in local mode the server measures its own box) and
+decides nothing about them, and the pressure beat holds the last reading. The
+operator may set a number in its place, an override that stands until they
+choose automatic again (`POST /api/coord/caps` with
+`{"maxConcurrentWorkers": n}`, or `{"mode": "automatic"}`). The single-row
+`coordinator_state` table holds that number, `maxConcurrentWorkers`, and what it
+is, `capMode`: under `automatic` the stored number is used only while the host
+is unmeasured, and the caps view says which reason applies (nothing has
+answered yet, the fleet agent is too old to say, or its read failed). An
+upgrade moves no cap somebody set: a number an operator had set stays the cap,
+as an override, and only a box still on the untouched default (3) becomes
+automatic. An automatic cap that differs from the stored number is recorded in
+the feed once (`caps changed`, `workers 3 → automatic (16)`). What the
+cap counts is unchanged (runs currently dispatched and in an
 ACTIVE state, `dispatched`, `working` or `unknown` (and any state token this build
 cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
 `merging` or `closing` is idle by contract and holds no slot — design
@@ -5564,11 +5594,12 @@ anything else is touched. It is the only cap. The daily dispatch brake,
 dispatch alike, reviews and warm resumes included, refused a coordinator with
 nothing to wake it, and never measured memory. Its column stays in the row,
 unread, and a caps write that still carries the field is accepted and the field
-ignored. The cap is an operator control: `GET`/`POST /api/coord/caps` reads it
-beside its current usage and writes it, bounds-checked, and the `/runs` board
-renders the dial. (For a stretch of this build's history there was no route at all and
-an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
-caller in the server for as long as it did.) Like every other same-origin PWA
+ignored. `GET`/`POST /api/coord/caps` reads the cap in force (`capNow`: its mode,
+the derived cap and what it was derived from) beside its current usage and
+writes the override, bounds-checked, and Runs > Advanced renders the dial. (For
+a stretch of this build's history there was no route at all and an operator
+edited the row with `sqlite3` — hence `CoordStore.setCaps` having no caller in
+the server for as long as it did.) Like every other same-origin PWA
 write the caps route carries **no box token**; unlike the operator doors named
 above (`/api/coord/pause`, `/api/runs/:id/abandon`, `/api/claims/:id/break`,
 `/api/runs/:id/reclaim`) it is not a release valve, so nothing may rely on it to
@@ -7522,6 +7553,20 @@ units instead. An act whose unit is gone (a reboot, an OOM kill, a stopped unit)
 seconds: after that, with its lock free, the status ends it as failed with the code `interrupted` and the card offers its
 controls again.
 
+No act holds the lock without a ceiling. One table (`TBA_DEADLINE_S` in `ccd/ccrc-testbox-admin`, mirrored as
+`TESTBOX_ADMIN_DEADLINE_S` in `shared/testbox-admin.ts`) gives every detached act its limit, and the system manager
+enforces it on the unit (`RuntimeMaxSec`): Connect 58 minutes; Repair, Apply release and a box settings edit 30 minutes;
+parity 60 minutes. An Apply when idle has one limit for its 6-hour wait and its edit together, so an edit that hangs
+after a short wait is stopped only when that whole limit ends. An act stopped at its limit reads `interrupted` at the
+next status read, or when the next act begins. A parity act that is only slow ends before its limit by itself: its
+tool starts nothing in the last five minutes and each of its steps (an install, or one run on one side) is stopped
+after 15 minutes, so the act ends `parity-differs` with a record, and the log says which steps did not run. While an act
+holds the lock, another act's `busy` answer names it: which act, when it began and the latest time it can end, and the
+status says the same latest end on its running act (`deadlineAt`), which the card shows. A server older than this
+build cannot read a status that carries it, so roll this build out with `ccrc rollout --server-first`. `ccrc
+testbox-admin cancel` ends a parity act that is still running its legs, as it ends an Apply when idle that is still
+waiting.
+
 - **Repair** re-pushes the release recorded on the box, verified again on the fleet host, and re-runs the installer from
   it with the box's current settings file. It never changes the tag.
 - **Replace** is Disconnect of the old box followed by Connect of a new address, in one flow, with the new fingerprint
@@ -7827,7 +7872,8 @@ you need to reason about one.*
   `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
   route fields `poolset` and `acctorder`) and `lib/long-lived.sh` (the Overlord's ccd arms: the
   `keep-awake` verb's region) and `lib/door.sh` (the Overlord's door process: its registry directory's purge and its
-  program's pin check); `ccrc`, the box
+  program's pin check) and `lib/model-aliases.sh` (the model-class Anthropic arm: a lane's aliases and holds, the launch
+  marker and the model id the routing record carries); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -8061,7 +8107,8 @@ The managed entry is one command, `bash "$HOME/.cc-sessions/session-hook.sh"`,
 registered under every event the hook's `case` block handles — `PreToolUse`
 (matcher `*`), `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`,
 `StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
-`SessionStart` and `SessionEnd`; `Notification` is not among them. Every managed entry but
+`SessionStart`, `SessionEnd`, `PreModelSwitch` and `PostModelSwitch` (the model events: report-only, never refused);
+`Notification` is not among them. Every managed entry but
 `SessionEnd`'s carries `"timeout": 600` (the installer's `HOOK_TIMEOUT_S`, Claude Code's own default
 for a command hook, so it moves no path's fail-open point and bounds the open above); `SessionEnd`'s
 carries none, because Claude Code runs `SessionEnd` hooks under its own 1.5 s budget, which a
@@ -8596,6 +8643,7 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ~/.local/libexec/ccrc/lib/long-lived.sh   # its fifth library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-door.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-door.sh ~/.local/libexec/ccrc/lib/door.sh   # its sixth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ~/.local/libexec/ccrc/lib/model-aliases.sh   # its seventh library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-door-process.mjs ] || restore ~/ccrc-backups/<ts>/ccd-door-process.mjs ~/.local/libexec/ccrc/door-process.mjs   # the door program, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
@@ -8973,10 +9021,10 @@ These conventions carry more weight here than style:
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
   `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
-  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth, and `ccd/lib/door.sh` (the Overlord's door process) the sixth;
+  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth, and `ccd/lib/door.sh` (the Overlord's door process) the sixth, and `ccd/lib/model-aliases.sh` (the model-class Anthropic arm) the seventh;
   each is treated the same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install`,
   `__CCD_LIB_LEASE_SHA256=stamp-at-install`, `__CCD_LIB_POOLSET_SHA256=stamp-at-install` and
-  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` and `__CCD_LIB_DOOR_SHA256=stamp-at-install`; the body reads and checks all six before it evaluates any.
+  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` and `__CCD_LIB_DOOR_SHA256=stamp-at-install` and `__CCD_LIB_ALIASES_SHA256=stamp-at-install`; the body reads and checks all seven before it evaluates any.
   `ccd/door-process.mjs` (the Overlord's door program, a Node program: not a library, not a launcher) is installed beside the body at
   `~/.local/libexec/ccrc/door-process.mjs` (mode 644, not on `PATH`) and pinned the same way (`__CCD_DOOR_SHA256=stamp-at-install`, rendered from the
   installed bytes in the same run, like the redactor's two files); the updater's backup carries it as `ccd-door-process.mjs`.

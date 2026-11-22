@@ -1,10 +1,12 @@
 import { isRegistryId, routeNamesFable, spawnVerdict, transitionsFor, parseRouteFields, routeFieldsOrNull, routeParseDetail,
   IDLE_RUN_STATES, MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
-  type CoordCaps, type CoordCapsUsage, type RouteFields, type RunState, type SpawnVerdict,
+  type CoordCapsUsage, type RouteFields, type RunState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { routeDefaultFor } from '../../../shared/route-defaults.js';
 import { parseLandingIntents, type LandingIntentHold } from '../../../shared/landingIntents.js';
-import { measuredIdentity, type RegistryRead, type SessionRecord } from '../registry.js';
+import { measuredIdentity, measuredProjectOf, type RegistryRead, type SessionRecord } from '../registry.js';
+import { isDocsBareRef } from '../../../shared/docs.js';
+import type { AttributionRead, AttributionRefusal } from './openRun.js';
 import type { MeasuredRead } from '../io.js';
 import type { HookStateRead } from '../hookstate.js';
 import type { cutShort } from '../lifecycle.js';
@@ -78,9 +80,11 @@ const refused = (outcome: DispatchHalt, event?: string, orphanEvent?: string): D
 const orphaned = (res: SpawnEnding, kind: 'registry-unmeasurable' | 'ambiguous-dispatch'): string | undefined =>
   (res.ok || res.cutShort === false ? `${DISPATCH_ORPHANED_EVENT}${kind}` : undefined);
 
-/** What `capsMeasured` reads: the caps, the usage and, when the concurrency cap is reached, its numbers. */
+/** What `capsMeasured` reads: the limit, the usage and, when the concurrency cap is reached, its numbers. `limit` is THE
+ *  CAP IN FORCE (`dispatch.ts#capNow`, D-8920), a number and never a `CoordCaps`: that type is the STORED
+ *  number, which is the cap only as the operator's override or while the host is unmeasured. */
 export interface CapsReading {
-  caps: CoordCaps; usage: CoordCapsUsage;
+  limit: number; usage: CoordCapsUsage;
   overConcurrency: { limit: number; running: number } | null;
   /** D-8792, armed only: the raw count is at or above the limit but the runs whose worker still works are below it, so the
    *  worker readings freed a slot. It carries the RAW numbers a refusal says. `freedSlotPending` says so as data, the
@@ -150,9 +154,11 @@ export function resumeSkipsCap(f: WorkerFacts, door: 'dispatch' | 'advance'): bo
 
 /** D-8792: the one edge a send-back is charged on, the cap gate's own (`advance.ts`, its `cap` row): an idle run sent back
  *  to `working`. The send-back reader asks it before reading any worker; `caps-counts-working.test.ts` holds it equal to
- *  the gate's own, state by state, so the two cannot drift. */
-export function sendBackCharged(to: RunState, from: RunState): boolean {
-  return to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(from);
+ *  the gate's own, state by state, so the two cannot drift. D-6096 (review 2993 F2): an IN-PLACE run is charged on no
+ *  edge, because it never held a slot (`dispatchedAt` stays null): its coordinator sending it back after a review round
+ *  is never refused at the cap, and never waits for one. */
+export function sendBackCharged(to: RunState, from: RunState, inPlace = false): boolean {
+  return !inPlace && to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(from);
 }
 
 /**
@@ -163,20 +169,19 @@ export function sendBackCharged(to: RunState, from: RunState): boolean {
  * rows that still hold a slot, and a slot the readings free is `freedSlot`, handed out by `capRefusalOf`.
  */
 export function capsReadingOf(
-  caps: CoordCaps, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading> | null, armed: boolean,
+  limit: number, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading> | null, armed: boolean,
 ): CapsReading {
-  const limit = caps.maxConcurrentWorkers;
   const running = rows.length;
   const raw = running >= limit ? { limit, running } : null;
-  if (readings === null) return { caps, usage: { running }, overConcurrency: raw };
+  if (readings === null) return { limit, usage: { running }, overConcurrency: raw };
   const holding = rows.filter((r) => {
     const w = readings.get(r.runId);
     return w === undefined || (w !== 'waiting' && w !== 'gone');
   }).length;
   const usage = { running, waiting: running - holding, workingOnly: armed };
   const freed = holding < limit && running >= limit ? { limit, running } : null;
-  if (!armed) return { caps, usage, overConcurrency: raw, freedSlot: null, shadowFreed: freed };
-  return { caps, usage, overConcurrency: holding >= limit ? { limit, running: holding } : null, freedSlot: freed };
+  if (!armed) return { limit, usage, overConcurrency: raw, freedSlot: null, shadowFreed: freed };
+  return { limit, usage, overConcurrency: holding >= limit ? { limit, running: holding } : null, freedSlot: freed };
 }
 
 /** D-8792, armed only: whether this reading holds a slot the worker readings freed, which only the freed-slot window may
@@ -257,9 +262,9 @@ export function capShadowLine(
  * without recording into it (`wakeBudget.ts#wakeRoom`), and the dispatch the mail prompts still passes `capRefusalOf`.
  */
 export function capsRoomOf(c: CapsReading, freedAdmissible: number): number {
-  const ordinary = Math.max(0, c.caps.maxConcurrentWorkers - c.usage.running);
+  const ordinary = Math.max(0, c.limit - c.usage.running);
   if (c.usage.workingOnly !== true) return ordinary;
-  const armed = Math.max(0, c.caps.maxConcurrentWorkers - (c.usage.running - (c.usage.waiting ?? 0)));
+  const armed = Math.max(0, c.limit - (c.usage.running - (c.usage.waiting ?? 0)));
   return ordinary + Math.min(armed - ordinary, Math.max(0, freedAdmissible));
 }
 
@@ -271,8 +276,26 @@ export function capShadowResumeLine(start: string, over: { limit: number; runnin
     + `armed, a send-back to a worker ${state} is a resume and is not charged`;
 }
 
+/** `self-dispatch`'s words: the other door, with the fields it takes (D-6096). */
+export const SELF_DISPATCH_DETAIL =
+  'a run bound to its own claimant is not dispatched onto its coordinator: send this route with inPlace: true, by, byUuid ' +
+  'and the sibling worktree\'s branch to take the wave in place';
+
 /** The run row a dispatch decides on, once it is known to exist. */
 export type DispatchRun = RunRow;
+
+/** D-8083, D-8085, D-8086: the one spelling of "another programme's run in this project holds a key this act names", for
+ *  the dispatch's request step and the in-place bind. The run's own programme never blocks itself (wave 2 may name what
+ *  wave 1 holds); `held` is read only for a non-empty list. */
+function intentHeldRefusal(
+  run: Pick<RunRow, 'project' | 'program'>, keys: readonly string[],
+  held: (project: string, keys: readonly string[]) => readonly LandingIntentHold[],
+): DispatchHalt | null {
+  if (keys.length === 0) return null;
+  const other = held(run.project, keys).find((h) => h.program !== run.program);
+  return other === undefined ? null
+    : { ok: false, kind: 'refused', code: 'intent-held', key: other.key, holder: { runId: other.runId, program: other.program } };
+}
 
 // -- step: request -----------------------------------------------------------------------------------------------
 
@@ -409,15 +432,16 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   // The stored SESSION ID, re-checked for the hold's reason (spec §2.3): every id-taking call after this takes this
   // column. It runs after the body checks and before the pause listing, so a refused id costs no read.
   if (run.sessionId !== null && !isRegistryId(run.sessionId)) return refused({ ok: false, kind: 'bad-session' });
+  // D-6096: a run bound to the session that CLAIMS it would be dispatched onto its own coordinator: `ensure`, the hold and
+  // the `/clear` would all name the coordinator's workspace. Refused here, before the pause listing and any fleet act, with
+  // the other door in words; the in-place bind (`bindRunInPlace`) is the way to take such a wave.
+  if (run.sessionId !== null && run.sessionId === run.claimedBy) {
+    return refused({ ok: false, kind: 'refused', code: 'self-dispatch', detail: SELF_DISPATCH_DETAIL });
+  }
   // D-8083, D-8085: another programme's run in this project holds a key this dispatch names. The run's own programme
   // never blocks itself (wave 2 may name what wave 1 holds). The thunk is read only for a non-empty list.
-  if (intentKeys.length > 0) {
-    const other = held(run.project, intentKeys).find((h) => h.program !== run.program);
-    if (other !== undefined) {
-      return refused({ ok: false, kind: 'refused', code: 'intent-held', key: other.key,
-        holder: { runId: other.runId, program: other.program } });
-    }
-  }
+  const heldElsewhere = intentHeldRefusal(run, intentKeys, held);
+  if (heldElsewhere !== null) return refused(heldElsewhere);
   return go({ run, body, itemTitles, routeFields, routeDefaulted, childSlug, intentKeys, hold });
 }
 
@@ -654,6 +678,110 @@ async function decideAct(f: ActFacts): Promise<DispatchDecision<ActPlan>> {
     }
   }
   return go({ clear: true });
+}
+
+// -- the in-place bind (D-6096) ---------------------------------------------------------------------------------
+
+/** The in-place body of `POST /api/runs/:id/dispatch`, shaped here (review 2993 F8): null when the body names no
+ *  `inPlace` (an ordinary dispatch), a refusal detail for a malformed one, else the caller and the raw branch, which
+ *  `decideInPlaceTarget` checks. Any `inPlace` value but `true` is malformed. */
+export type InPlaceRequest = { ok: true; by: string; byUuid: string; branch: unknown } | { ok: false; detail: string };
+export function inPlaceRequest(body: unknown): InPlaceRequest | null {
+  const b = (typeof body === 'object' && body !== null ? body : {}) as
+    { inPlace?: unknown; by?: unknown; byUuid?: unknown; branch?: unknown };
+  if (b.inPlace === undefined) return null;
+  if (b.inPlace !== true) return { ok: false, detail: 'inPlace: must be true when given' };
+  if (typeof b.by !== 'string' || b.by === '' || typeof b.byUuid !== 'string' || b.byUuid === '') {
+    return { ok: false, detail: 'inPlace: by and byUuid (the claimant) are required' };
+  }
+  return { ok: true, by: b.by, byUuid: b.byUuid, branch: b.branch };
+}
+
+/** A refusal of the in-place bind: the dispatch union's failures, or the caller's attribution refusal. */
+export type InPlaceHalt = DispatchHalt | { ok: false; kind: 'attribution'; error: AttributionRefusal; detail: string };
+type InPlaceStep<P> = { ok: true; plan: P } | InPlaceHalt;
+
+/** Step 1 (`bindRunInPlace` reads the listing and the run, nothing else yet): the operator's pause and the mail kill
+ *  switch, failing shut on an unlistable registry; then the run: it exists, is a `planned` work run, is claimed by the
+ *  caller, and is not bound to another session (a wave N>=2 reclaim would be re-bound silently, and its worker's mail
+ *  re-issued to the coordinator). The plan carries the claimant as the STORE recorded it, equal to `by` once the
+ *  claimant check passed, so every later read and write names the stored id, never the request's value. */
+export function decideInPlaceRequest(
+  names: readonly string[] | null, read: RunReadResult, by: string,
+): InPlaceStep<{ run: RunRow; claimant: string }> {
+  const markers = admitMarkerRefusal(names);
+  if (markers !== null) return markers;
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
+  if (run === null) return { ok: false, kind: 'unknown-run' };
+  if (run.kind !== 'work') return { ok: false, kind: 'bad-request', detail: 'inPlace: only a work run is bound in place' };
+  if (run.state !== 'planned') return { ok: false, kind: 'bad-transition', from: run.state, to: 'working' };
+  if (run.claimedBy !== by) return { ok: false, kind: 'refused', code: 'claimed-by-another' };
+  if (run.sessionId !== null && run.sessionId !== by) {
+    return { ok: false, kind: 'bad-request', detail: 'inPlace: this run is already bound to another session' };
+  }
+  return { ok: true, plan: { run, claimant: run.claimedBy } };
+}
+
+/** Step 2: the caller's attribution (its uuid is the registry's), then its project MEASURED through `fieldMeasured`
+ *  (never `SessionRecord.project`, whose `project ?? id` default answers as if it were a measurement). Unreadable is
+ *  transient; an unrecorded project proves nothing and fails shut. */
+export function decideInPlaceCaller(run: RunRow, who: AttributionRead, project: MeasuredRead): InPlaceHalt | null {
+  if (!who.ok) return { ok: false, kind: 'attribution', error: who.error, detail: who.detail };
+  if (!project.ok && project.reason === 'unreadable') return { ok: false, kind: 'registry-unmeasurable' };
+  if (!project.ok || project.content === '') return { ok: false, kind: 'refused', code: 'project-mismatch' };
+  if (project.content !== run.project) return { ok: false, kind: 'refused', code: 'project-mismatch', by: project.content };
+  return null;
+}
+
+/** The branch a ws-add base names (`origin/main` -> `main`), or null when it records none. */
+const baseBranchOf = (base: string | null): string | null =>
+  base === null || base === '' ? null : base.startsWith('origin/') ? base.slice('origin/'.length) : base;
+
+/**
+ * Step 3 (review 2993 F3): the branch, which must be the SIBLING worktree's. It is a bare git ref (`isDocsBareRef`, the
+ * one shared reader), and it is none of these, read from one measured registry listing: the claimant's own registry
+ * branch (its workspace is the coordinator's), any registry row's branch in the project (another session's workspace,
+ * whose PR its own pr-state line binds), and the project's base branch, as each of those rows' recorded `base` names it.
+ * An unlistable registry, a missing claimant row, and a row of the project (or of a project that could not be read)
+ * with a plain field that could not be read, or whose branch could not be read or is empty, all refuse: an unreadable
+ * input never frees. So does an unknown base (review 3023 F3-a): when no row of the project, the claimant's included,
+ * records a readable `base` (a coordinator on the project's main checkout, with no ws-add row beside it), the base
+ * branch cannot be told from a sibling's. Then the landing intents, under the holder check the dispatch takes
+ * (`intentHeldRefusal`). The plan is the branch and the parsed keys.
+ */
+export function decideInPlaceTarget(
+  run: RunRow, by: string, branch: unknown, registry: RegistryRead, intents: unknown,
+  held: (project: string, keys: readonly string[]) => readonly LandingIntentHold[],
+): InPlaceStep<{ branch: string; intentKeys: readonly string[] }> {
+  if (typeof branch !== 'string' || !isDocsBareRef(branch)) {
+    return { ok: false, kind: 'bad-request', detail: 'branch: must be the sibling worktree\'s bare git branch name' };
+  }
+  if (!registry.listed || !registry.records.some((r) => r.id === by)) return { ok: false, kind: 'registry-unmeasurable' };
+  let baseKnown = false;
+  for (const r of registry.records) {
+    const project = measuredProjectOf({ kind: 'found', record: r });
+    const inProject = r.id === by || project === null || project === run.project;
+    if (!inProject) continue;
+    if (r.plainFieldUnreadable === true || r.branchEvidence === 'unreadable' || r.branchEvidence === 'empty') {
+      return { ok: false, kind: 'registry-unmeasurable' };
+    }
+    if (r.branch === branch || baseBranchOf(r.base) === branch) {
+      const what = r.branch === branch ? (r.id === by ? 'the claimant\'s own workspace branch' : `the workspace branch of ${r.id}`)
+        : 'the project\'s base branch';
+      return { ok: false, kind: 'bad-request', detail: `branch: ${branch} is ${what}, not a sibling worktree's` };
+    }
+    if (baseBranchOf(r.base) !== null) baseKnown = true;
+  }
+  if (!baseKnown) {
+    return { ok: false, kind: 'bad-request', detail: 'branch: the project\'s base branch is unknown (no registry row of '
+      + 'the project records a base), so no branch can be shown to be a sibling worktree\'s' };
+  }
+  const parsed = parseLandingIntents(intents);
+  if (!parsed.ok) return { ok: false, kind: 'bad-request', detail: parsed.detail };
+  const heldElsewhere = intentHeldRefusal(run, parsed.keys, held);
+  if (heldElsewhere !== null) return heldElsewhere;
+  return { ok: true, plan: { branch, intentKeys: parsed.keys } };
 }
 
 // -- the one function --------------------------------------------------------------------------------------------

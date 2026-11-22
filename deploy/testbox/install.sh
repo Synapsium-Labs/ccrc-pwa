@@ -208,6 +208,8 @@ read -r LISTEN_IP LISTEN_FAM < <(ip_of "$(k CCRC_TESTBOX_LISTEN)") || refuse "CC
 LISTEN_PORT=${TBK[CCRC_TESTBOX_LISTEN]##*:}
 read -r PROXY_IP PROXY_FAM < <(ip_of "$(k CCRC_TESTBOX_REGISTRY_PROXY)") || refuse "CCRC_TESTBOX_REGISTRY_PROXY=$(k CCRC_TESTBOX_REGISTRY_PROXY) does not name an IP address"
 
+# The hosts github.com redirects a release download to (the release row's, beside the release host itself).
+TBI_RELEASE_ASSET_HOSTS=(release-assets.githubusercontent.com objects.githubusercontent.com)
 host_of() { [[ $1 =~ ^[a-z][a-z0-9+.-]*://([^/:@]+@)?([^/:]+) ]] && printf '%s' "${BASH_REMATCH[2]}"; }
 EGRESS=()   # `<row><TAB><host>` lines, the names file's
 for n in $(k CCRC_TESTBOX_EGRESS_ALLOW); do
@@ -224,6 +226,13 @@ _tb_release_base || refuse "the release base: $TB_BOX_WHY"
 # KNOB is the value `_tb_release_base` has just read from the box file in file mode (D-7457).
 h=$(host_of "$KNOB") || refuse "CCRC_RELEASE_BASE_URL names no host"
 EGRESS+=("release"$'\t'"$h")
+# A release download from github.com is a redirect: the release's files are served from an asset host. The row names
+# that host too, or the tool sync's fetch of a later release is dropped by this firewall (measured on a real box: every
+# sync that changed the release failed at its first download, so a box never left the release it was installed with).
+# Two names, because the host changed once already and the older one still serves; both resolve to the same addresses.
+if [ "$h" = github.com ]; then
+  for a in "${TBI_RELEASE_ASSET_HOSTS[@]}"; do EGRESS+=("release"$'\t'"$a"); done
+fi
 if [ -n "$(k CCRC_TESTBOX_OS_MIRROR)" ]; then
   h=$(host_of "$(k CCRC_TESTBOX_OS_MIRROR)") || refuse "CCRC_TESTBOX_OS_MIRROR names no host"
   EGRESS+=("osmirror"$'\t'"$h")

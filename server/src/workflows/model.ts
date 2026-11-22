@@ -29,12 +29,13 @@ import {
   HELPER_SUMMARY_MAX_BYTES,
   WORKFLOW_AGENTS_MAX,
   WORKFLOW_AGENT_TYPE,
-  WORKFLOW_EVICT_MS,
   WORKFLOW_KEPT_AGENTS_MAX,
   isFinalHelperState,
   isHelperId,
   type AgentHelperState,
   type AgentHelperView,
+  type HelperFrameMembers,
+  type HelperReportAnswer,
   type HelpersUnmeasured,
   type WorkflowAgentState,
   type WorkflowAgentView,
@@ -42,6 +43,7 @@ import {
   type WorkflowView,
 } from '../../../shared/workflows.js';
 import type { HelperFact } from '../transcript/parse.js';
+import { stripLine } from '../../../shared/unprintable.js';
 
 /** Claude Code's run id, as measured: `wf_` + 8 hex + `-` + 3 hex. Anything
  *  else in the runs directory is not a run. Defined once in `shared/workflow-ids.mjs`
@@ -127,6 +129,18 @@ export interface JournalFold {
 }
 
 export const emptyFold = (): JournalFold => ({ keys: new Map(), starts: [] });
+
+/** The newest measured write in the journal or a running agent's transcript. */
+export function workflowLastActivity(journalMtime: number, fold: JournalFold, activity: ReadonlyMap<string, number>): number;
+export function workflowLastActivity(journalMtime: number | null, fold: JournalFold, activity: ReadonlyMap<string, number>): number | null;
+export function workflowLastActivity(journalMtime: number | null, fold: JournalFold, activity: ReadonlyMap<string, number>): number | null {
+  let at = journalMtime;
+  for (const k of fold.keys.values()) {
+    const a = k.last === 'started' ? activity.get(k.agentId) : undefined;
+    if (a !== undefined && (at === null || a > at)) at = a;
+  }
+  return at;
+}
 
 type JournalLine = { type: string; key: string; agentId: string; label: string | null; phase: string | null };
 
@@ -434,12 +448,37 @@ export function summaryView(id: string, f: SummaryFacts, summaryMtime: number, n
   };
 }
 
-/** The rows to show at `now`: every running one, and a finished one until
- *  `WORKFLOW_EVICT_MS` after its end — oldest start first, unknown starts last. */
-export function selectRows(views: readonly WorkflowView[], now: number): WorkflowView[] {
-  return views
-    .filter((v) => v.state === 'running' || (v.endedAt !== null && now - v.endedAt < WORKFLOW_EVICT_MS))
-    .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+/**
+ * The workflow rows to send at `now` (H2, D-8872; spec §4.3): every running one, and a finished one while `isFinishedKept`
+ * keeps it by its end time — the keep's one clock, which the Agent arm asks too. Claude Code's own 30 s retired here. A
+ * finished row with no readable end time is drawn in the reading that decided it and never again (`noEndShown`, the Agent
+ * arm's rule; review 2961 F8): the memory keeps every id it drew while the run still reads finished with no end, so it is
+ * drawn once, not every other reading (review 3072 F11). `summaryView` always gives one, so it guards the type's null. At most
+ * `HELPER_KEPT_MAX` finished rows, the newest by end time (a null end ranks newest, as it was decided this reading), each
+ * cut to `WORKFLOW_KEPT_AGENTS_MAX` agents. Oldest start first, unknown starts last.
+ */
+export function keepWorkflows(views: readonly WorkflowView[], now: number, noEndShown: ReadonlySet<string>):
+  { rows: WorkflowView[]; noEndShown: ReadonlySet<string> } {
+  const shown = new Set<string>();
+  const finals: WorkflowView[] = [];
+  const rows: WorkflowView[] = [];
+  for (const v of views) {
+    if (v.state === 'running') { rows.push(v); continue; }
+    if (v.endedAt === null) {
+      if (noEndShown.has(v.id)) continue; // drawn once already: it leaves with this reading
+      shown.add(v.id);
+    } else if (!isFinishedKept(v.endedAt, now)) continue;
+    finals.push(v);
+  }
+  const rank = (v: WorkflowView): number => v.endedAt ?? Infinity;
+  const kept = finals.sort((a, b) => rank(b) - rank(a) || (a.id < b.id ? -1 : 1)).slice(0, HELPER_KEPT_MAX);
+  const keptIds = new Set(kept.map((v) => v.id));
+  const stillNoEnd = new Set(views.filter((v) => v.state !== 'running' && v.endedAt === null).map((v) => v.id));
+  return {
+    rows: [...rows, ...kept.map(capKeptWorkflow)]
+      .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    noEndShown: new Set([...[...noEndShown].filter((id) => stillNoEnd.has(id)), ...[...shown].filter((id) => keptIds.has(id))]),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -500,9 +539,9 @@ export function workflowsFrame(
 }
 
 /**
- * Whether the frame is due (D-5560): the gate H1b MOVES here. H1a states it and nothing calls it yet, so until H1b deletes
- * `checkWorkflows`'s inline copy (`sessionws.ts`) there are two copies of one decision, and H1b pins in a characterization
- * case that the two agree on today's inputs (review 2961 F9). "Never had": the session has
+ * Whether the frame is due (D-5560): the gate's one copy. H1a moved it here and H1b deleted `checkWorkflows`' inline copy
+ * (`sessionws.ts`), pinning first that the two agreed on every input the inline one had (`helpers-frame.test.ts`, review
+ * 2961 F9); `helpersFrame` calls it. "Never had": the session has
  * no workflows directory, no known Agent helper id, and no frame was ever sent — a session that never ran a helper gets
  * no frame. An absent read made `unreadable` by the hook's word, an unreadable read, a read and a known helper are all
  * due, and so is any frame after one was sent (its rows must be cleared). Whether the JSON changed is delivery's.
@@ -532,6 +571,19 @@ export function frameDue(a: {
 /** What a workflow's agents are called on the roster: no Agent row. */
 export const isWorkflowAgentName = (name: string): boolean => name === WORKFLOW_AGENT_TYPE;
 
+/** Whether an id is an Agent helper, the ONE rule (the decision's, and since H1b the reader's, which spends its tier on Agent
+ *  helpers only): a launch result names it (positive evidence); else its meta sits at the Agent path with another type than
+ *  a workflow's, and the roster (`rosterName`, when it lists the id) does not call it a workflow's agent. */
+export function isAgentHelper(
+  facts: { launch: unknown } | undefined,
+  meta: { path: 'agent' | 'workflow'; agentType: string | null } | undefined,
+  rosterName: string | undefined,
+): boolean {
+  if (facts?.launch != null) return true;
+  if (meta === undefined || meta.path !== 'agent' || meta.agentType === WORKFLOW_AGENT_TYPE) return false;
+  return !(rosterName !== undefined && isWorkflowAgentName(rosterName));
+}
+
 /** The facts of one id, folded from the transcript's `HelperFact`s. `launch` is the Agent launch result's; `end` is the
  *  final task notification, or a foreground launch's completed result (`from`). */
 export interface HelperIdFacts {
@@ -545,26 +597,44 @@ type HelperLaunch = NonNullable<HelperIdFacts['launch']>;
 
 /** A tie of two ends at one time is told by outcome, so a backwards scan and a forward tail agree (review 2961 F10). */
 const OUTCOME_RANK = { done: 0, stopped: 1, failed: 2 } as const;
+/** Between two facts that tie on every rule above it, the one whose JSON sorts last: a total order, so the fold is the same
+ *  in any order of arrival (review 2900 F4, session helpers H1c, D-8873). It picks one of the two, never a merge, so a reader
+ *  that keeps the report of the chosen end finds it among the facts. */
+const byContent = <T>(a: T, b: T): T => (JSON.stringify(b) > JSON.stringify(a) ? b : a);
 /** The later of two ends, by their own times; an end with a time beats one with none; a tie goes to the more telling outcome
- *  (failed, then stopped, then done), and between two of one outcome to the newer read. */
+ *  (failed, then stopped, then done), then to the one with a summary, then with a report, then by content (which puts a
+ *  notification's above a launch's: a launch result carries no summary, so the two differ only in `from`). */
 function laterEnd(a: HelperEnd | null, b: HelperEnd): HelperEnd {
   if (a === null) return b;
-  if (a.at === null) return b;
-  if (b.at === null) return a;
-  if (b.at !== a.at) return b.at > a.at ? b : a;
-  return OUTCOME_RANK[b.outcome] >= OUTCOME_RANK[a.outcome] ? b : a;
+  if (a.at !== b.at) {
+    if (a.at === null) return b;
+    if (b.at === null) return a;
+    return b.at > a.at ? b : a;
+  }
+  for (const rank of [(e: HelperEnd) => OUTCOME_RANK[e.outcome], (e: HelperEnd) => Number(e.summary !== null), (e: HelperEnd) => Number(e.hasReport)]) {
+    if (rank(a) !== rank(b)) return rank(b) > rank(a) ? b : a;
+  }
+  return byContent(a, b);
 }
-/** The earlier of two launches, one with a time beating one with none. */
+/** The earlier of two launches, one with a time beating one with none; a tie by content. */
 function earlierLaunch(a: HelperLaunch | null, b: HelperLaunch): HelperLaunch {
   if (a === null) return b;
-  if (a.at === null) return b.at === null ? a : b;
-  return b.at !== null && b.at < a.at ? b : a;
+  if (a.at !== b.at) {
+    if (a.at === null) return b;
+    if (b.at === null) return a;
+    return b.at < a.at ? b : a;
+  }
+  return byContent(a, b);
 }
+/** An id's newest fact time, for the fold's bound: no time is the oldest. */
+const factTime = (f: HelperIdFacts): number => Math.max(f.launch?.at ?? -Infinity, f.end?.at ?? -Infinity);
 
 /**
- * Fold `facts` into a copy of `prev`, per id, in either order of arrival. At most `HELPER_FACTS_MAX` ids are kept, the
- * least recently touched evicted first (a notification for a task that is no Agent helper — a workflow's, a shell's — is a
- * fact too, and nothing here can tell it from one). `prev` is never mutated.
+ * Fold `facts` into a copy of `prev`, per id, in any order of arrival: each rule above is a total order, so the start
+ * scan's, the backlog's and the tail's facts give the same result whichever comes first (review 2900 F4). At most
+ * `HELPER_FACTS_MAX` ids are kept, those with the oldest newest fact evicted first, ties by id (a notification for a task
+ * that is no Agent helper — a workflow's, a shell's — is a fact too, and nothing here can tell it from one). Past that bound
+ * an evicted id's later fact starts it afresh, so the order can matter there (a recorded residual). `prev` is never mutated.
  */
 export function foldHelperFacts(prev: ReadonlyMap<string, HelperIdFacts>, facts: readonly HelperFact[]): Map<string, HelperIdFacts> {
   const out = new Map(prev);
@@ -583,11 +653,11 @@ export function foldHelperFacts(prev: ReadonlyMap<string, HelperIdFacts>, facts:
         from: f.source,
       });
     }
-    out.delete(f.id);
     out.set(f.id, { launch, end });
   }
-  while (out.size > HELPER_FACTS_MAX) out.delete(out.keys().next().value as string);
-  return out;
+  if (out.size <= HELPER_FACTS_MAX) return out;
+  const keep = [...out].sort(([ia, a], [ib, b]) => factTime(b) - factTime(a) || (ia < ib ? -1 : ia > ib ? 1 : 0)).slice(0, HELPER_FACTS_MAX);
+  return new Map(keep);
 }
 
 /** What one Agent helper's meta file and transcript say, as the reader measured them. */
@@ -653,11 +723,10 @@ export interface AgentArm {
   memory: HelperMemory;
 }
 
-/** Whether a finished helper or workflow is still kept, by its END TIME (review 2900 F5): the keep's one owner. An end
- *  time that cannot be read is not kept HERE. The rule that a final row with no readable end time is drawn once and leaves
- *  with the next reading is not this function's: for an Agent row it is `decideAgentHelpers`'s `noEndShown` memory, and H2,
- *  which moves the workflow keep onto this function, applies the same draw-once rule to a finished workflow (spec §4.3;
- *  review 2961 F8). */
+/** Whether a finished helper or workflow is still kept, by its END TIME (review 2900 F5): the keep's one owner, asked by
+ *  `decideAgentHelpers`, by `keepWorkflows` and by `read.ts`'s `finishedView` (H2, D-8872). An end time that cannot be read
+ *  is not kept HERE. The rule that a final row with no readable end time is drawn once and leaves with the next reading is
+ *  not this function's: it is `decideAgentHelpers`'s and `keepWorkflows`' `noEndShown` memory (spec §4.3; review 2961 F8). */
 export const isFinishedKept = (endedAt: number | null, now: number): boolean => endedAt !== null && now - endedAt < HELPER_FINISHED_KEEP_MS;
 
 /** A kept (finished) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` agents, running and failed first, and says what it left out. */
@@ -666,6 +735,13 @@ export function capKeptWorkflow(v: WorkflowView): WorkflowView {
   const cut = cutAgents(v.agents.map((view, seq) => ({ seq, view })), WORKFLOW_KEPT_AGENTS_MAX);
   return { ...v, agents: cut.agents, agentsOmitted: v.agentsOmitted + cut.omitted };
 }
+
+/** Display text on one line: the shared unprintable set's strip (`shared/unprintable.ts#stripLine`: controls, format and
+ *  bidi characters, the line separators, each run a space, the ends trimmed), after the unpaired UTF-16 surrogates, which
+ *  are no character to show and JSON-escape to six bytes, are removed. One rule with every other one-line string (review
+ *  3033 F5); valid supplementary characters survive. */
+const helperDisplayText = (v: unknown): string | null =>
+  typeof v === 'string' ? stripLine(v.replace(/\p{Cs}/gu, '')) || null : null;
 
 const capChars = (s: string | null, max: number): string | null => {
   if (s === null) return null;
@@ -723,8 +799,12 @@ function rosterIds(entries: ReadonlyArray<{ id: string | null }>): Set<string> {
  * usable roster that this roster no longer lists is a seen drop when nothing else could have taken it: both rosters have
  * room (fewer than `HELPER_LISTED_MAX` ENTRIES, counting those with no id, as the hook's cap does), the process did not
  * restart between the readings (`Proc.live.startedAt` changed), and an id that sat BEFORE it in the last roster is still
- * listed. A reset empties the roster whole and the cap evicts the OLDEST entries first, so a surviving older id proves
- * neither happened. The cost is recorded: a real stop of the oldest entry is left out, as is the last listed id's.
+ * listed. A reset empties the roster whole and the cap evicts the OLDEST entries first, so a surviving older id is the
+ * witness that neither happened. The cost is recorded: a real stop of the oldest entry is left out, as is the last listed
+ * id's. NOT A PROOF (review 2978 F3): an older id that was stopped and re-added since (a continued helper, listed again
+ * with a new start) still counts as a survivor, because the memory keeps ids, not their starts; so a reset followed by a
+ * continued older helper's new SubagentStart, both between two readings, reads the newer ids as `unlisted` rather than
+ * left out. That label claims no end, and H1b keeps the memory's shape (a recorded residual).
  */
 export function seenDrops(memory: HelperMemory, roster: RosterInput, proc: Proc): ReadonlySet<string> {
   const none: ReadonlySet<string> = new Set();
@@ -766,15 +846,7 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
   for (const e of entries) if (isHelperId(e.id)) entryById.set(e.id, e);
   const listedFull = entries.length >= HELPER_LISTED_MAX;
 
-  // Which ids are Agent helpers. A launch result names one (positive evidence); else its meta sits at the Agent path with
-  // another type than a workflow's, and the roster does not call it a workflow's agent.
-  const isAgent = (id: string): boolean => {
-    if (i.facts.get(id)?.launch != null) return true;
-    const m = i.metas.get(id);
-    if (m === undefined || m.path !== 'agent' || m.agentType === WORKFLOW_AGENT_TYPE) return false;
-    const e = entryById.get(id);
-    return !(e !== undefined && isWorkflowAgentName(e.name));
-  };
+  const isAgent = (id: string): boolean => isAgentHelper(i.facts.get(id), i.metas.get(id), entryById.get(id)?.name);
   const ids = new Set<string>();
   for (const [id, f] of i.facts) if (isHelperId(id) && f.launch !== null && isAgent(id)) ids.add(id);
   for (const id of i.metas.keys()) if (isHelperId(id) && isAgent(id)) ids.add(id);
@@ -827,14 +899,14 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
       id,
       description: capChars(m?.description ?? null, HELPER_DESCRIPTION_MAX),
       agentType: capChars(m?.agentType ?? null, HELPER_LABEL_MAX),
-      model: capChars(m?.model ?? launch?.model ?? null, HELPER_LABEL_MAX),
+      model: capChars(m?.model ?? helperDisplayText(launch?.model), HELPER_LABEL_MAX),
       effort: capChars(m?.effort ?? null, HELPER_LABEL_MAX),
       state,
       startedAt: fromLaunch ?? entryById.get(id)?.startedAt ?? null,
       endedAt, // only a final branch above sets it
       lastActivityAt: m?.lastWriteAt ?? null,
       tokens: m?.tokens ?? null,
-      summary: capBytes(shownEnd?.summary ?? null, HELPER_SUMMARY_MAX_BYTES),
+      summary: capBytes(helperDisplayText(shownEnd?.summary), HELPER_SUMMARY_MAX_BYTES),
       hasReport: shownEnd?.hasReport ?? false,
     });
   }
@@ -865,4 +937,162 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
       noEndShown: boundedSet([...prev.noEndShown, ...[...shownNoEnd].filter((id) => shown.has(id))]),
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Session helpers H1b (D-8862; spec 2026-11-19-session-helpers-design §3.1, §8): the reads' facts, and the frame.
+
+/** The raw hook read the roster comes from, as the stream holds it: `hookstate.ts#HookStateRawRead`, structurally, so this
+ *  L1 file imports nothing from the adapter that reads it. */
+export type HookRosterRead =
+  | { ok: false; reason: 'absent' | 'unmeasured' | 'malformed' }
+  | {
+    ok: true;
+    identity: 'current' | 'foreign' | 'unregistered';
+    aliveAt?: number;
+    state: { updatedAt: number; subagents: ReadonlyArray<{ id?: string; name: string; startedAt: number }> };
+  };
+
+export interface HelperHookReading { readonly uuid: string; readonly at: number; readonly raw: HookRosterRead }
+
+/** A lagged roster publication must not fabricate a drop. Apply this to the helper arm only, never the hook ask. `lagMs` is
+ *  the most a read of the reading can lag the last one (the feed's freshness window, `sessionFeed.ts#PUBLISHED_FRESH_MS`):
+ *  a read older than the last by more than that is not a lag but a clock that stepped back, and is taken. So after a step
+ *  back the roster holds its last reading for at most `lagMs` (review 3033 F4, session helpers H1c, D-8873). */
+export function orderHelperHook(last: HelperHookReading | null, next: HelperHookReading, lagMs: number): HelperHookReading {
+  return last !== null && last.uuid === next.uuid && next.at < last.at && last.at - next.at <= lagMs ? last : next;
+}
+
+/**
+ * The decision's roster from the stream's RAW hook read and the time it was read (`FeedReading.helperHook`), each reason the
+ * roster cannot be used told apart, never the aged fold's one "no state" (`foldHookStateRead` folds five of them). The order
+ * and the clock are the aged fold's own: identity first, then age from the later of `updatedAt` and `aliveAt`, stale only
+ * PAST `freshMs` (`HOOKSTATE_FRESH_MS`, passed in, so this file imports no adapter). No read this reading (no hook, or no
+ * read time) is `unreadable`: it is never a roster that lists nothing. An entry with no id lists none (its `id` is null).
+ */
+export function rosterInputOf(raw: HookRosterRead | null, at: number | null, now: number, freshMs: number): RosterInput {
+  if (raw === null || at === null) return { kind: 'unusable', why: { why: 'unreadable' } };
+  if (!raw.ok) return { kind: 'unusable', why: raw.reason === 'absent' ? { why: 'absent' } : { why: 'unreadable' } };
+  if (raw.identity !== 'current') return { kind: 'unusable', why: { why: raw.identity } };
+  const age = now - Math.max(raw.state.updatedAt, raw.aliveAt ?? raw.state.updatedAt);
+  if (age > freshMs) return { kind: 'unusable', why: { why: 'stale', hookAgeMs: age } };
+  return { kind: 'usable', at, entries: raw.state.subagents.map((e) => ({ id: e.id ?? null, name: e.name, startedAt: e.startedAt })) };
+}
+
+/** An Agent helper's meta file (`subagents/agent-<id>.meta.json`), narrowed: the facts a row shows and the one on-disk end
+ *  marker, `finished` (true only when the file says `true`). Null for bytes that are not a JSON object. */
+export function parseHelperMeta(raw: string): { agentType: string | null; description: string | null; model: string | null; effort: string | null; finished: boolean } | null {
+  let o: unknown;
+  try { o = JSON.parse(raw); } catch { return null; }
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) return null;
+  const r = o as Record<string, unknown>;
+  return {
+    agentType: helperDisplayText(r.agentType), description: helperDisplayText(r.description),
+    model: helperDisplayText(r.model), effort: helperDisplayText(r.effort), finished: r.finished === true,
+  };
+}
+
+/** The newest `timestamp` among the whole JSON lines of `text`, epoch ms: a helper transcript's last write. A tail read that
+ *  starts mid-line skips its fragment like any line that does not parse (`lastUsageTokens`' reason). Null: none. */
+export function lastLineTime(text: string): number | null {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i]!;
+    if (!t.includes('"timestamp"')) continue;
+    let o: unknown;
+    try { o = JSON.parse(t); } catch { continue; }
+    const ts = (o as { timestamp?: unknown } | null)?.timestamp;
+    const ms = typeof ts === 'string' ? Date.parse(ts) : NaN;
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
+
+/** The `workflows` frame, as the wire carries it (`shared/api.ts`'s member, the intersection with `HelperFrameMembers`). */
+export type WorkflowsFrameMsg = { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true } & HelperFrameMembers;
+
+/**
+ * The session frame for one reading, and whether it is due: the workflow arm is `workflowsFrame`'s, the Agent arm is the
+ * decision's, and the gate is `frameDue` (the copy `checkWorkflows` held inline is deleted, review 2961 F9). Each helper
+ * member is present only when it says something, so a session with no helper sends today's frame byte for byte. Whether
+ * the JSON changed is delivery's.
+ */
+export function helpersFrame(a: {
+  read: WorkflowsRead;
+  hookSaysWorkflow: boolean;
+  lastRead: readonly WorkflowView[];
+  arm: AgentArm;
+  readEvery: { refreshed: number; of: number } | null;
+  sentBefore: boolean;
+}): { due: boolean; frame: WorkflowsFrameMsg } {
+  const w = workflowsFrame(a.read, a.hookSaysWorkflow, a.lastRead);
+  const frame: WorkflowsFrameMsg = {
+    type: 'workflows',
+    workflows: w.workflows,
+    ...(w.unreadable ? { unreadable: true as const } : {}),
+    ...(a.arm.agents.length > 0 ? { agents: a.arm.agents } : {}),
+    ...(a.arm.unmeasured !== null ? { agentsUnmeasured: a.arm.unmeasured } : {}),
+    ...(a.readEvery !== null ? { readEvery: a.readEvery } : {}),
+  };
+  return { due: frameDue({ workflows: a.read.kind, unreadable: w.unreadable, knownHelpers: a.arm.known, sentBefore: a.sentBefore }), frame };
+}
+
+// ---------------------------------------------------------------------------
+// Session helpers H2 (D-8872; spec 2026-11-19-session-helpers-design §4.3, §8, J10): reports travel on request.
+
+/** One report the stream holds, with the end fact it came with (its outcome, time, source and summary), so it is kept only
+ *  while the fold's end for its id is that same fact. */
+export interface HeldReport {
+  text: string;
+  cut: boolean;
+  end: { outcome: HelperEnd['outcome']; at: number | null; from: HelperEnd['from']; summary: string | null };
+}
+
+const sameEnd = (a: HeldReport['end'], b: HelperEnd): boolean =>
+  a.outcome === b.outcome && a.at === b.at && a.from === b.from && a.summary === b.summary && b.hasReport;
+
+/**
+ * The reports to hold after a reading's facts were folded (`folded`): each incoming fact's report (masked, then cut at
+ * `HELPER_REPORT_MAX_BYTES` at parse time, reviews 2900 F7 and F15) is held while the fold's end for its id is that fact,
+ * so a later end replaces it and an earlier one arriving late does not. A held report whose id's end moved on, or whose id
+ * the fold forgot, is dropped. Unbounded here: `boundReports` bounds it once the reading has decided its rows. `prev` is
+ * never mutated.
+ */
+export function holdReports(prev: ReadonlyMap<string, HeldReport>, facts: readonly HelperFact[], folded: ReadonlyMap<string, HelperIdFacts>): Map<string, HeldReport> {
+  const out = new Map<string, HeldReport>();
+  for (const [id, h] of prev) {
+    const end = folded.get(id)?.end ?? null;
+    if (end !== null && sameEnd(h.end, end)) out.set(id, h);
+  }
+  for (const f of facts) {
+    if (f.status === 'async_launched' || f.report === null || f.report === '') continue;
+    const end = folded.get(f.id)?.end ?? null;
+    const mine = { outcome: HELPER_OUTCOME[f.status], at: f.at, from: f.source, summary: f.summary };
+    if (end !== null && sameEnd(mine, end)) out.set(f.id, { text: f.report, cut: f.reportCut, end: mine });
+  }
+  return out;
+}
+
+/**
+ * The bound of the held reports, once a reading has decided its rows (`drawn`): every report of a DRAWN row is kept, with
+ * `hasReport` or not — a helper continued after its end is drawn running with no report, and can return to that end when
+ * its continuation turns unmeasurable, so its report must survive the readings between (review 3072 F5). Of the rest — a
+ * helper whose row is not decided yet, and the notifications of tasks that are no Agent helper (a workflow's, a shell's),
+ * which nothing here can tell apart — the newest `HELPER_KEPT_MAX` by end time (a null time ranks newest). So a
+ * notification that is no row's never evicts a drawn row's report. A held report needs an end fact, so the drawn part is at
+ * most the drawn rows that ended; the rest is at most `HELPER_KEPT_MAX`, each at most 16 KiB.
+ */
+export function boundReports(held: ReadonlyMap<string, HeldReport>, drawn: readonly AgentHelperView[]): Map<string, HeldReport> {
+  const shown = new Set(drawn.map((a) => a.id));
+  const rank = (h: HeldReport): number => h.end.at ?? Infinity;
+  const rest = [...held].filter(([id]) => !shown.has(id))
+    .sort(([a, x], [b, y]) => rank(y) - rank(x) || (a < b ? -1 : 1)).slice(0, HELPER_KEPT_MAX);
+  return new Map([...[...held].filter(([id]) => shown.has(id)), ...rest]);
+}
+
+/** The answer to a `helper-report` request: the held report of a row the last reading DREW with `hasReport`, else
+ *  `report: null` (an unknown id, or one evicted from the keep), never a stale or another helper's text. */
+export function reportAnswer(held: ReadonlyMap<string, HeldReport>, drawn: readonly AgentHelperView[], id: string): HelperReportAnswer {
+  const h = drawn.some((a) => a.id === id && a.hasReport) ? held.get(id) : undefined;
+  return h === undefined ? { type: 'helper-report', id, report: null, cut: false } : { type: 'helper-report', id, report: h.text, cut: h.cut };
 }

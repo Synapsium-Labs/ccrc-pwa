@@ -194,6 +194,22 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       const f = base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 2 * MIN }) }, roster: listedFrom(NOW - MIN) });
       expect(stateOf(run(f), A)).toBe('finished');
     });
+
+    // H1b (review 2978 F1): the narrowness of the rule, pinned. Characterization pins, not reds: H1a's code already answers so.
+    it('an UNMEASURED process is asked the roster like a live one (Figure 2\'s "no, or unmeasured" edge): a later listing reads running', () => {
+      const arm = run(base({ facts: { [A]: facts(endedAt('done', NOW - 15 * MIN)) }, roster: listedFrom(NOW - MIN), proc: { kind: 'unmeasured' } }));
+      expect(stateOf(arm, A)).toBe('running');
+    });
+
+    it('an UNLISTED helper whose meta was written after its end is not a continuation: a transcript write is no listing, so the end stands', () => {
+      const f = base({
+        facts: { [A]: facts(endedAt('done', NOW - 2 * MIN)) },
+        metas: { [A]: meta({ lastWriteAt: NOW - 30_000 }) },
+        roster: usable(['other']),
+      });
+      expect(stateOf(run(f), A)).toBe('done');
+      expect(row(run(f), A)).toMatchObject({ endedAt: NOW - 2 * MIN, summary: 'one line', hasReport: true });
+    });
   });
 
   describe('the meta\'s finished marker comes next', () => {
@@ -857,9 +873,9 @@ describe('every bound of the Agent arm (review 2900 F9)', () => {
     expect(arm.agents).toEqual([]);
   });
 
-  it('the fold of helper facts keeps at most HELPER_FACTS_MAX ids, evicting the oldest first', () => {
+  it('the fold of helper facts keeps at most HELPER_FACTS_MAX ids, evicting the oldest first (by fact time since H1c, review 2900 F4)', () => {
     const many: HelperFact[] = Array.from({ length: HELPER_FACTS_MAX + 10 }, (_, i) => ({
-      source: 'notification', id: `t${i}`, status: 'completed', at: NOW, model: null, durationMs: null, summary: null, report: null, reportCut: false,
+      source: 'notification', id: `t${i}`, status: 'completed', at: NOW - MIN + i, model: null, durationMs: null, summary: null, report: null, reportCut: false,
     }));
     const map = foldHelperFacts(new Map(), many);
     expect(map.size).toBe(HELPER_FACTS_MAX);
@@ -1003,11 +1019,11 @@ describe('foldHelperFacts: the facts of one id, folded', () => {
     expect(foldHelperFacts(new Map(), [by('killed'), by('failed')]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
     expect(foldHelperFacts(new Map(), [by('failed'), by('killed')]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
   });
-  it('two ends of one outcome at one time: the newer read stands', () => {
+  it('two ends of one outcome at one time: one rule decides, whatever the order read (H1c, review 2900 F4; it was the newer read)', () => {
     const at = NOW - MIN;
     const older = fact({ status: 'completed', at, summary: 'older' });
     const newer = fact({ status: 'completed', at, summary: 'newer' });
-    expect(foldHelperFacts(new Map(), [older, newer]).get('a1')!.end).toMatchObject({ summary: 'newer' });
+    expect(foldHelperFacts(new Map(), [older, newer]).get('a1')!.end).toMatchObject({ summary: 'older' });
     expect(foldHelperFacts(new Map(), [newer, older]).get('a1')!.end).toMatchObject({ summary: 'older' });
   });
 
@@ -1023,10 +1039,10 @@ describe('foldHelperFacts: the facts of one id, folded', () => {
     expect(foldHelperFacts(new Map(), [timed, untimed]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
     expect(foldHelperFacts(new Map(), [untimed, timed]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
   });
-  it('the least recently touched id is evicted first: a fact for an old id keeps it', () => {
-    const many: HelperFact[] = Array.from({ length: HELPER_FACTS_MAX }, (_, i) => fact({ id: `t${i}` }));
+  it('the id with the oldest newest fact is evicted first: a newer fact for an old id keeps it (H1c, review 2900 F4; it was the least recently touched)', () => {
+    const many: HelperFact[] = Array.from({ length: HELPER_FACTS_MAX }, (_, i) => fact({ id: `t${i}`, at: NOW - 10 * MIN + i }));
     const full = foldHelperFacts(new Map(), many);
-    const touched = foldHelperFacts(full, [fact({ id: 't0' }), fact({ id: 'extra' })]);
+    const touched = foldHelperFacts(full, [fact({ id: 't0', at: NOW }), fact({ id: 'extra', at: NOW })]);
     expect(touched.size).toBe(HELPER_FACTS_MAX);
     expect(touched.has('t0')).toBe(true);
     expect(touched.has('t1')).toBe(false);
@@ -1037,7 +1053,8 @@ describe('foldHelperFacts: the facts of one id, folded', () => {
     const untimed = fact({ source: 'launch', status: 'async_launched', at: null, model: 'm3' });
     for (const order of [[early, late], [late, early]]) expect(foldHelperFacts(new Map(), order).get('a1')!.launch).toMatchObject({ at: NOW - 5 * MIN });
     for (const order of [[untimed, early], [early, untimed]]) expect(foldHelperFacts(new Map(), order).get('a1')!.launch).toMatchObject({ at: NOW - 5 * MIN });
-    expect(foldHelperFacts(new Map(), [untimed, fact({ source: 'launch', status: 'async_launched', at: null, model: 'm4' })]).get('a1')!.launch).toMatchObject({ model: 'm3' });
+    const untimed4 = fact({ source: 'launch', status: 'async_launched', at: null, model: 'm4' });
+    for (const order of [[untimed, untimed4], [untimed4, untimed]]) expect(foldHelperFacts(new Map(), order).get('a1')!.launch).toMatchObject({ model: 'm4' }); // a tie by content (H1c; it was the first read)
   });
   it('a notification alone is no launch: the id has an end and no launch, so it is never an Agent row', () => {
     expect(foldHelperFacts(new Map(), [fact({})]).get('a1')!.launch).toBeNull();

@@ -9,6 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
+import { RUNG_CELLS } from '../../shared/overlord-ladder.js';
+import { callsIn, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/overlord-skill');
@@ -212,6 +215,8 @@ function waveOf(door: string): string {
   const first = door.split(' ')[0]!;
   let found = rows.filter((r) => hasWord(r[0]!, first));
   if (found.length === 0 && first.includes('-')) found = rows.filter((r) => hasWord(r[0]!, first.split('-')[0]!));
+  // A spaced door under the kebab spelling the table gives multi-word doors (`link team` as `link-team`; review 3260 F1).
+  if (found.length === 0 && door.includes(' ')) found = rows.filter((r) => hasWord(r[0]!, door.replace(/ /g, '-')));
   if (found.length === 0) throw new Error(`Table 11.1e has no row for the door ${door}`);
   // Several rows can mention a word; a row whose first cell begins with it names that door.
   const lead = (c: string): string => c.replace(/^the\s+/i, '').replace(/^`/, '');
@@ -290,6 +295,11 @@ function steps(text: string): Array<{ n: number; text: string }> {
   return out;
 }
 
+// Doors another programme's plan added to the Overlord's table that the spec's Table 11.1e does not name, each keyed by its
+// door name in starting.md to its row in server/src/coord/overlordDoors.ts, whose word it must carry (D-8809: the Linear
+// hierarchy's team confirm).
+const OUTSIDE_SPEC: Readonly<Record<string, string>> = { 'link team': 'link-team' };
+
 describe('the Overlord skill: its references', () => {
   it('carries exactly the four references', () => {
     expect(readdirSync(path.join(skillDir, 'references')).sort()).toEqual([...REFERENCES]);
@@ -307,6 +317,12 @@ describe('the Overlord skill: its references', () => {
     expect(rows.length, 'the references name no doors').toBeGreaterThan(20);
     const wrong: string[] = [];
     for (const { file, door, words } of rows) {
+      if (door in OUTSIDE_SPEC) {
+        const row = OVERLORD_DOORS[OUTSIDE_SPEC[door]!];
+        if (!row || row.group !== 'overlord') { wrong.push(`${file}: ${door} has no Overlord row in overlordDoors.ts`); continue; }
+        if (words.length !== 1 || words[0] !== row.word) wrong.push(`${file}: ${door} carries ${words.join(', ') || 'nothing'}; its row in overlordDoors.ts has the word ${row.word}`);
+        continue;
+      }
       const wave = waveOf(door);
       const accepted = acceptedWords(wave, byWave);
       if (words.length === 0 || words.some((w) => !accepted.includes(w))) {
@@ -314,6 +330,13 @@ describe('the Overlord skill: its references', () => {
       }
     }
     expect(wrong).toEqual([]);
+  });
+
+  it('names outside the spec only doors the spec lacks, each in the door table', () => {
+    for (const door of Object.keys(OUTSIDE_SPEC)) {
+      expect(() => waveOf(door), `Table 11.1e now names ${door}; drop it from OUTSIDE_SPEC`).toThrow(`Table 11.1e has no row for the door ${door}`);
+      expect(doorRows().some((r) => r.file === 'starting.md' && r.door === door), `${door} is not in starting.md's door table`).toBe(true);
+    }
   });
 
   const table116 = new Set(specTable('| Word | Door or lane |', '*Table 11.6.').map((r) => firstWord(cells(r)[0]!)));
@@ -353,5 +376,69 @@ describe('the Overlord skill: its references', () => {
     const row = refusals().find((r) => firstWord(r[0]!) === 'renewing');
     expect(row, 'the refusal table has no renewing row').toBeTruthy();
     expect(row!.join(' | ')).toContain('step 3');
+  });
+});
+
+describe('the Overlord skill: the team candidate (D-8809)', () => {
+  const paragraph = (): string => {
+    const text = readRef('starting.md');
+    const at = text.indexOf('**A team candidate.**');
+    if (at === -1) return '';
+    const end = text.indexOf('\n\n', at);
+    return text.slice(at, end === -1 ? undefined : end).replace(/\s*\n\s*/g, ' ');
+  };
+  const cellsOf = RUNG_CELLS['link-team'] as Readonly<Record<string, string>>;
+
+  it('exists and names link team', () => {
+    expect(paragraph()).toContain('`link team`');
+  });
+
+  it("follows the gate's rung cells", () => {
+    const p = paragraph();
+    const first = p.slice(0, p.indexOf('. ') + 1);
+    // Exact on the gate's side (review 3253 F2): `full` alone allows. On the words' side, no sentence that says the
+    // Overlord may confirm names a refused rung (review 3260 A2).
+    expect(Object.keys(cellsOf).filter((r) => cellsOf[r] === 'allow'), 'the gate allows link-team at a rung other than full alone')
+      .toEqual(['full']);
+    for (const [rung, cell] of Object.entries(cellsOf)) {
+      if (cell === 'allow') expect(first, `the first sentence omits \`${rung}\``).toContain(`\`${rung}\``);
+      if (cell === 'refuse') {
+        expect(p, `the paragraph omits \`${rung}\``).toContain(`\`${rung}\``);
+        expect(first, `the first sentence names the refused rung \`${rung}\``).not.toContain(`\`${rung}\``);
+      }
+    }
+    for (const s of p.split(/(?<=\.) /).filter((x) => /\bmay confirm\b/.test(x))) {
+      for (const [rung, cell] of Object.entries(cellsOf)) {
+        if (cell === 'refuse') expect(s, `a sentence says the refused rung \`${rung}\` may confirm`).not.toContain(`\`${rung}\``);
+      }
+    }
+    for (const w of ['`rung-below`', 'Project linking card', 'decision brief', 'never by another route']) expect(p).toContain(w);
+  });
+
+  // Keyed on the parsed calls and symbols (`scan/symbols.ts`), never on the file's text (ARCH-06's counting rule).
+  it("gives the confirm route's refusals", () => {
+    const calls = callsIn(symbolOf('server/src/linking/routes.ts', 'registerLinkingRoutes'));
+    const confirm = calls.filter((c) => c.callee === 'app.post' && c.args[0]?.kind === 'string' && c.args[0].text === '/api/linking/confirm');
+    expect(confirm, 'registerLinkingRoutes registers the confirm route once').toHaveLength(1);
+    const refusals = calls.filter((c) => c.start > confirm[0]!.start && c.end <= confirm[0]!.end && c.name === 'refuseRoute');
+    const words = new Set(refusals.flatMap((c) => (c.args[1]?.kind === 'string' ? [c.args[1].text] : [])));
+    // A word the pin cannot resolve fails it rather than being skipped (review 3253 A1): only `pair.error` is read.
+    expect(refusals.filter((c) => c.args[1]?.kind !== 'string' && c.args[1]?.text !== 'pair.error').map((c) => c.args[1]?.text),
+      'a refuseRoute in the confirm route whose word the pin cannot read').toEqual([]);
+    // `pair.error` is `teamPairVerdict`'s word: the ones its declared return type names.
+    if (refusals.some((c) => c.args[1]?.text === 'pair.error')) {
+      const pairType = /error: ((?:'[a-z-]+'(?: \| )?)+)/.exec(sourceOfSymbol('server/src/linking/policy.ts', 'teamPairVerdict'));
+      expect(pairType, 'teamPairVerdict declares no error words').toBeTruthy();
+      for (const m of pairType![1]!.matchAll(/'([a-z-]+)'/g)) words.add(m[1]!);
+    }
+    // The token and the body's shape are the door process's to get right: the Overlord never sends either.
+    for (const w of ['unauthenticated', 'bad-request']) words.delete(w);
+    expect([...words].sort(), 'the confirm route answers a refusal the paragraph does not name, or lost one')
+      .toEqual(['no-project', 'not-configured', 'team-ambiguous', 'team-set', 'team-unknown', 'unavailable', 'write-failed']);
+    const p = paragraph();
+    for (const w of words) expect(p, `the paragraph omits \`${w}\``).toContain(`\`${w}\``);
+    // And the other way (review 3253 A2): each refusal the paragraph lists, a word followed by a colon, is one the door answers.
+    const listed = [...p.slice(p.indexOf("the door's own refusals")).matchAll(/`([a-z-]+)`:/g)].map((m) => m[1]!);
+    expect(listed.sort(), "the paragraph lists a refusal the door does not answer, or misses one").toEqual([...words].sort());
   });
 });

@@ -11,7 +11,7 @@ import {
 import type { RouteRefusal } from '../../shared/refusal.js';
 import {
   TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_SUBS, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_LINE_CODES, buildTestboxAdminArgv, isHostKeyFingerprint,
-  isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxLedgerChanges, testboxAdminIsLong, testboxAdminNeedsStepUp,
+  isTestboxAdminSub, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxBusyHolder, readTestboxLedgerChanges, testboxAdminIsLong, testboxAdminNeedsStepUp,
   testboxLedgerShowsValue, testboxLedgerValueOf, testboxLedgerValueOfRow,
   type TestboxAct, type TestboxActOutcome, type TestboxAdminCode, type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub,
   type TestboxLedgerValue, type TestboxSettingChange,
@@ -22,6 +22,7 @@ import { actorOf, type AccountActor } from './accounts/audit.js';
 import { parseCookies, SESSION_COOKIE } from './auth/cookie.js';
 import { sessionIdHash } from './auth/sessions.js';
 import { capSupported } from './ccdargv.js';
+import { MAIL_TOKEN_HEADER } from './coord/token.js';
 import type { FleetState } from './fleetstate.js';
 import { credentialBodyRoute, type AccountGate } from './accounts/gate.js';
 import type { CcrcConfig } from './config.js';
@@ -57,6 +58,13 @@ import type { TestboxAudit, TestboxEventInput } from './testboxAudit.js';
  *    presence word. A refused act records none.
  *  - NOTHING SECRET IS READ OR SAID. The routes never open the token, the push key or the access key; the verb's JSON never
  *    carries them, and a field outside the closed result shapes is dropped.
+ *  - ONE WRITE SUB RUNS OUTSIDE THESE ROUTES (box-token-runs-fixed-repair, the coordinator's ruling on review 3223 F2):
+ *    `tools-home`, which `POST /api/testbox/tools-sync` reaches through `TestboxLane.toolsSync`. That route takes a session OR
+ *    the box token (the update lane's cookieless post-roll signal is its intended unattended trigger), so a box-token caller,
+ *    or any caller while auth is off, can make the server run it. It is fixed-content and takes no input (one runtime drop-in
+ *    giving the tools unit a HOME, then a reload), and it runs only when the box's last sync failed with the exact
+ *    `HOME: unbound variable` line and the admin lane is connected (`server/src/testbox.ts#toolsSyncNeedsHome`). Its ledger
+ *    row names that caller (`toolsSyncCallerOf`), never the bare server. Every other write sub stays behind the account gate.
  */
 
 /** What one run answered: the node's outcome, or one of the link's two (`TestboxAdminAsked`). */
@@ -160,9 +168,11 @@ export function decisionOf(ran: TestboxAdminOutcome): Decision {
         const keys = keysOf(j['keys']);
         // D-8337: a refusal that leaves a line on the box for the operator to remove names that key's PUBLIC words, one line.
         const line = LINE_CODE_SET.has(j['code']) ? lineOf(j['line']) : undefined;
+        // D-8899: `busy` names the act that holds the lock, read by the one reader (a sub and two times, nothing else).
+        const holder = j['code'] === 'busy' ? readTestboxBusyHolder(j['holder']) : null;
         return {
           kind: 'refuse', word: 'testbox-admin-refused', audit: 'refused', code: j['code'] as TestboxAdminCode,
-          extra: { code: j['code'], ...(keys.length > 0 ? { keys } : {}), ...(line === undefined ? {} : { line }) },
+          extra: { code: j['code'], ...(keys.length > 0 ? { keys } : {}), ...(line === undefined ? {} : { line }), ...(holder === null ? {} : { holder }) },
         };
       }
       if (j !== null && j['ok'] === true && ran.code === 0) return { kind: 'ok', json: j };
@@ -317,6 +327,14 @@ export function writeSwitchRow(
 export function switchActorOf(req: FastifyRequest, device: string | null): AccountActor {
   const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
   return actorOf(device, token === undefined || token === '' ? '' : sessionIdHash(token));
+}
+
+/** The caller of `POST /api/testbox/tools-sync`, for the `tools-home` repair row (box-token-runs-fixed-repair): the session
+ *  the gate measured when there is one; else `box token` when the request carried it (the route has checked it when auth is
+ *  armed; while auth is off this is attribution only); else the unlabelled actor. */
+export function toolsSyncCallerOf(req: FastifyRequest, auth: { readonly reason: string; readonly device: string | null }): AccountActor {
+  if (auth.reason === 'session') return switchActorOf(req, auth.device);
+  return req.headers[MAIL_TOKEN_HEADER] !== undefined ? actorOf('box token', '') : switchActorOf(req, null);
 }
 
 // ── the routes ───────────────────────────────────────────────────────────────────────────────────────────────────────

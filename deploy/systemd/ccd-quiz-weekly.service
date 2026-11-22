@@ -1,0 +1,24 @@
+# ccd-quiz-weekly.service - the replay quiz's weekly unattended run (Overlord W1a): the arms, the judge and the report
+# through the history quiz driver, then the record and the confirmation, so no baseline waits on the operator's hand. A
+# ccrc-owned act: the runner is a file of this tree, run through node, so no bin is placed. Fired by ccd-quiz-weekly.timer.
+[Unit]
+Description=Run the weekly replay quiz unattended: arms, judge, report, then record and confirm it
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env node --no-warnings %h/ccrc/deploy/history-quiz-unattended.mjs
+# NO `Environment=PATH=`, deliberately, for ccd-history-sweep.service's reason: a bare
+# `Environment=PATH=` REPLACES the user manager's PATH rather than extending it, and `node`
+# and `claude` are found through exactly that manager PATH, so a spelled-out PATH could only
+# lose one of them.
+# A week's arms are real Claude Code turns and can run for hours, so the deadline is generous
+# rather than tight: past it the run is wedged, not slow. A killed run loses nothing, because
+# the runner resumes the same week's directory at the next tick, and its stop handler ends its
+# children's process groups on the SIGTERM this deadline sends.
+TimeoutStartSec=12h
+# The driver runs at most two Claude Code children at once and each is a few hundred MiB; the
+# cap leaves room for both and the judge's reads, and keeps a runaway from taking the fleet
+# host with it (ccd-cap-scopes' own reason for capping what is not a session).
+MemoryMax=4G
+# Idle priority: the run shares the host with every live session, and a report a few minutes
+# later costs nothing.
+Nice=10

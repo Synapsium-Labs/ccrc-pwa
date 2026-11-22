@@ -423,7 +423,7 @@ export interface DiskReq { t: 'req'; id: number; op: 'disk' }
  *  Every argument failure is answered `ok: true` with `kind: 'refused'` and the node's `fleetIdentity`, never
  *  `bad-request`, which from this op means "the agent predates it". */
 export interface TestboxAdminReq { t: 'req'; id: number; op: 'testbox-admin'; sub: TestboxAdminSub; fields: TestboxAdminFields }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq|ModelsReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq|ModelsReq|TestboxCaptureReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -1017,9 +1017,16 @@ export const PRESSURE_OP = 'pressure';
 /** The `pressure` op's reply: exactly what the decider takes, in this one type. D-8122 adds `headroomBytes`, the session
  *  slice's memory headroom (`memory.max` minus `memory.current`, no more than `MemAvailable`; `MemAvailable` alone when
  *  the slice has no `memory.max`), or `null` when it could not be read. ADDITIVE: an older agent sends no field, which
- *  the server reads as `null` (unmeasured), never as room. */
-export type PressureOpReply = HostPsi & { headroomBytes?: number | null };
-import type { HostPsi } from './pressure.js';
+ *  the server reads as `null` (unmeasured), never as room. D-8920 adds `machine`, the host's size (the
+ *  box's total memory, its cores and the sessions' memory limit, each as measured), or `null` when it could not be
+ *  measured. ADDITIVE in the same way: an older agent sends no field, which the server reads as unmeasured
+ *  (`readHostMachine`, `agent-older`), never as a small machine. A box with no PSI (the two kernel files unreadable)
+ *  answers `PressureOpSizeOnly`: a size does not depend on the PSI, and a reply with no PSI reads as no reading
+ *  (`readHostPsi`), exactly as the error such a box answered before did. */
+export type PressureOpReply = HostPsi & { headroomBytes?: number | null; machine?: HostMachine | null };
+/** The `pressure` op's reply from a box with no PSI: the size alone. */
+export interface PressureOpSizeOnly { machine: HostMachine | null }
+import type { HostMachine, HostPsi } from './pressure.js';
 
 // ── the `testbox` and `testbox-tools-sync` ops (test box plan TB9, D-7411; spec 2026-10-28 §2.7, §2.10) ─────────────
 // The fleet agent reads its host's test box settings through the wrapper's own printer, measures the six tools with
@@ -1298,3 +1305,62 @@ export function readModelsOpAnswer(raw: unknown): ModelsOpAnswer | null {
  *  `unsupported` (an agent that does not list the op, an older agent answering bad-request, or the bare localIO;
  *  nothing ran) and `lost` (the frame left and no answer came back, or one off readModelsOpAnswer's grammar; UNKNOWN). */
 export type ModelsAsked = ModelsOpOutcome | { kind: 'unsupported' } | { kind: 'lost' };
+
+// ── the `testbox-capture` op (spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.5) ─────────────
+// The build capture lane's job to the test box: the fleet agent reads its host's test box settings as the `testbox` op does
+// (the same fixed spawn, the same token file), opens one WebSocket to the box, sends `capture.submit` for the one build
+// the request names (`isClaudeVersion`, checked by `validateReq` before any case body runs) under a fresh capture id, and
+// waits for that capture's `refused` or `ended` state within `TESTBOX_CAPTURE_DEADLINE_MS`. The build is the op's only
+// field; no field reaches a spawn or a path. Declared at the file's foot so no line cited above moves. ADDITIVE: no
+// `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never sent it (the server reads `ready.ops`
+// first).
+
+/** ONE member of the `req` envelope. A frame with any other extra field is a malformed frame (`bad-request`). */
+export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const TESTBOX_CAPTURE_OP = 'testbox-capture';
+
+/** How long the agent waits, after the job was sent, for the capture's `refused` or `ended` state. A capture that is still
+ *  queued or running then is `unanswered`: the job went out and no verdict came back. */
+export const TESTBOX_CAPTURE_DEADLINE_MS = 15 * 60_000;
+/** The server's request deadline for the op: the agent's wait plus the settings read and the box's hello. */
+export const TESTBOX_CAPTURE_REQUEST_MS = TESTBOX_CAPTURE_DEADLINE_MS + 2 * 60_000;
+
+/** What the op came to. Before the job was sent: `unconfigured` (no `CCRC_TESTBOX_URL`), `unreachable` (no connection,
+ *  hello or status answer within the status deadline), `bad-answer` (the box's status answer was off its shape). After:
+ *  `not-taken` (the box closed the connection as a policy refusal of the frame: a box that predates the job kind),
+ *  `refused` (a `capture.state refused`, its word in `refusal`), `answered` (a `capture.state ended`; `result` is null when
+ *  the box had no verdict), `unanswered` (no refused or ended state within the deadline, the connection lost after the
+ *  job was sent, or a frame for this capture off its shape). */
+export type TestboxCaptureOutcome = 'unconfigured' | 'unreachable' | 'bad-answer' | 'not-taken' | 'refused' | 'answered' | 'unanswered';
+export const TESTBOX_CAPTURE_OUTCOME_MAP: Record<TestboxCaptureOutcome, true> = {
+  unconfigured: true, unreachable: true, 'bad-answer': true, 'not-taken': true, refused: true, answered: true, unanswered: true,
+};
+
+/** The op's reply. `refusal` only on `refused`; `result` only on `answered` (and null there when the box had no
+ *  verdict); `detail` is a short sentence for the log, never a decision input. */
+export interface TestboxCaptureReply {
+  readonly outcome: TestboxCaptureOutcome;
+  readonly refusal: CaptureRefusal | null;
+  readonly result: BuildCaptureResult | null;
+  readonly detail: string | null;
+}
+
+/** THE ONE READER of a `testbox-capture` op's reply (the `res` frame itself: its envelope fields `t`, `id` and `ok` are not
+ *  read, as `readTestboxOpReply` reads its own), for the build the request named. `null` is "no answer to trust". Each of
+ *  the four fields must be present; the verdict is read by the verdict's one reader. */
+export function readTestboxCaptureReply(raw: unknown, build: string): TestboxCaptureReply | null {
+  if (!isObj(raw) || !['outcome', 'refusal', 'result', 'detail'].every((k) => Object.prototype.hasOwnProperty.call(raw, k))) return null;
+  const { outcome, refusal, result, detail } = raw;
+  if (typeof outcome !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_CAPTURE_OUTCOME_MAP, outcome)) return null;
+  if (!shortTextOrNull(detail)) return null;
+  if ((outcome === 'refused') !== (refusal !== null)) return null;
+  if (refusal !== null && (typeof refusal !== 'string' || !Object.prototype.hasOwnProperty.call(CAPTURE_REFUSAL_MAP, refusal))) return null;
+  if (outcome !== 'answered' && result !== null) return null;
+  const read = result === null ? null : readBuildCaptureResult(result, build);
+  if (result !== null && read === null) return null;
+  return { outcome: outcome as TestboxCaptureOutcome, refusal: refusal as CaptureRefusal | null, result: read, detail };
+}
+import { CAPTURE_REFUSAL_MAP, type CaptureRefusal } from './claudeBuildCapture.js';
+import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';

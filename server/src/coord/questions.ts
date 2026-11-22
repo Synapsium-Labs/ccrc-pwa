@@ -50,7 +50,7 @@ import type { NoticeSink } from '../notice.js';
 import type { PushPayload } from '../push.js';
 import type { BoundRowRef, BoundWrite } from './pushOutboxStore.js';
 import { changeLatch } from '../changeLatch.js';
-import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
+import { freshAskAt, freshHookState, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
 import { approvalClass, approvalCommandWords, literalInRoot, rootsForChild } from './approvalguard.js';
 import type { DenyStanding } from './approvalDenyFloor.js';
 import {
@@ -60,12 +60,14 @@ import {
 import { laneArmRowViewOf } from './laneArm.js';
 import { censusSightingOf, type CensusEnvelope } from './approvalCensus.js';
 import { paintedApprovalOf } from './approvalEnvelope.js';
-import { openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemOf } from './untrustedBuildItem.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
 import type { LiveAskRead, WatcherCoordPort } from './ports.js';
-import { decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, type AskLapse, type QuestionHoldPhase } from './questionPolicy.js';
+import {
+  clearSettledApprovalIds, decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, pressAnswersHeldPrompt, type AskLapse, type HeldPrompt,
+  type QuestionHoldPhase,
+} from './questionPolicy.js';
 import type { ReclaimDeps } from './reclaim.js';
 import { redactCommand, redactedStored } from './redact.js';
 import { approvalNudgeSubject, approvalParkRuledSubject, askNudgeSubject } from './rundefs.js';
@@ -320,6 +322,8 @@ export interface HeldApproval {
   readonly dialogId: string;
   readonly rowIds: number[];
   readonly ev: QuestionPush;
+  /** The painted prompt it was held for (approvals PR 3c, review 3022 F1): what a press must still answer to reach its rows. */
+  readonly prompt: HeldPrompt;
 }
 
 /** One entry of the carrier, keyed by question: `ask-<rowId>` for an ask (held, lapsed or still to be re-seeded), and
@@ -681,23 +685,6 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);
   };
 
-  /** Approvals PR 2 (Task 2.2): a `version-unverified` refusal raises the build's one Waiting on you item, keyed by the build
-   *  (`untrustedBuildItemOf` decides; an open item for the build raises nothing). The read and the raise run with no await
-   *  between, so two refusals in one process never raise two. A failure is logged once per cause and never changes the
-   *  refusal. */
-  const untrustedWarn = changeLatch<string>();
-  const raiseUntrustedBuildItem = (coord: WatcherCoordPort, version: string | null, reason: BuildUntrustedReason, now: number): void => {
-    try {
-      const open = openUntrustedBuildItems(coord.itemsFor(UNTRUSTED_BUILD_ITEM_PROGRAMME, now).open);
-      const input = untrustedBuildItemOf(new Set(open.map((i) => i.build)), version, reason);
-      if (input !== null) coord.raiseItem(input, now, 'ccrc');
-      untrustedWarn.clear();
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      if (untrustedWarn.changed(why)) console.warn(`ccrc-server: untrusted build item not raised (${why})`);
-    }
-  };
-
   const raiseApproval = async (request: ApprovalRaiseRequest, d: ApprovalRaiseDeps, now: number): Promise<ApprovalRaiseVerdict> => {
     const { sessionId, digest, nonce, canonical, truncated } = request;
     const coord = d.coord;
@@ -717,13 +704,14 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     if (standing === 'none') return { kind: 'deny-not-engaged' };
     const denyCurrent = standing === 'current';
     // D-8289: the build is trusted only when the record says its capture passed (`buildTrustOf`, the one decider); a record
-    // that cannot be read trusts nothing. The verdict carries the typed reason, and the detail says it in words.
+    // that cannot be read trusts nothing. The verdict carries the typed reason, and the detail says it in words. The refusal
+    // raises nothing on Waiting on you: the capture lane raises a build's item only once ccrc has given up capturing it (the
+    // Overlord's `docs/superpowers/programs/overlord/claude-release-unattended.md`, slug routing-reverted-until-capture).
     const version = await d.liveVersionOf(rec);
     let records: readonly ClaudeBuildRecord[] | null;
     try { records = coord.claudeBuilds(); } catch { records = null; }
     const trust = buildTrustOf(records, version);
     if (trust.kind === 'untrusted') {
-      raiseUntrustedBuildItem(coord, version, trust.reason, now);
       return { kind: 'version-unverified', trust: trust.reason, detail: `this child's live Claude Code build is not trusted: ${buildUntrustedSentence(trust.reason, version)}` };
     }
 
@@ -902,15 +890,19 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   /**
    * THE ONE WRITE SITE of `parked` (F8-a): asked of `decideApprovalLapse` by the lapse sweep, it moves the row through the
    * store's one write (`parkApprovalRow`). A row whose ruling the hook never fetched (the last-poll move, F2) has its
-   * ruling moved onto the park, and the child is nudged at once; a parked row's push is sent here, at park time (§3.3.2),
-   * never by the deferred dialog push (which drops an entry covering a parked row).
+   * ruling moved onto the park, and the child is nudged at once, only when the park took it (approvals PR 3c, F-B: an
+   * unspent ruling already on the park wins, and its own nudge went when it was recorded); a parked row's push is sent here,
+   * at park time (§3.3.2), never by the deferred dialog push (which never sends an entry covering a parked row). The write
+   * asks whether the key's park is still open, with the park's run read here, doubt closing it (as the doors read it): a
+   * `closed` answer parks nothing, pushes nothing and mails nothing.
    */
   const parkApproval = (coord: WatcherCoordPort, row: ApprovalRow, now: number, push: (ev: QuestionPush) => void): void => {
-    if (!coord.parkApprovalRow(row.id, now)) return;
-    if ((row.state === 'allowed' || row.state === 'denied') && row.verdict !== null) {
+    const move = coord.parkApprovalRow(row.id, now, (runId) => runClosedOf(coord, runId) !== false);
+    if (move === 'ruled' && row.verdict !== null) {
       nudgeParkRuling(coord, row, 'coordinator', row.verdict, row.reason ?? '');
       return;
     }
+    if (move !== 'parked' || row.state !== 'held') return;
     push({
       kind: 'ask', sessionId: row.childId, project: rules?.doors?.projectOf(row.childId) ?? '', title: '❓ Question',
       body: `${row.childId}'s ${row.tool} call is parked for a ruling (approval ${row.id}): see Waiting on you.`,
@@ -951,12 +943,16 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   /** The ruling read's `fetchedAt` (F8-c): recorded the first time a ruling is served, WHATEVER the time left before its
    *  record's `expiresAt` (review 2889 F1: a served allow is a used allow; the hook may print it, so the last-poll move must
    *  never carry it onto a park and tell the child to run the command again). Expiry is judged separately, by the verifier.
-   *  A failed write is warned, never turned into a refusal. `_graceMs` no longer gates the record: it is kept so the ruling
-   *  read's one added call (the route file's packet line) is unchanged (slug fetched-at-as-an-added-call). */
+   *  A failed write withholds the ruling (approvals PR 3c, F-C: no allow is served without its `fetchedAt`): it is warned
+   *  once and thrown on as a 503, so the route, which calls this before it sends, answers no ruling, and the hook polls
+   *  again. `_graceMs` no longer gates the record: it is kept so the ruling read's one added call (the route file's packet
+   *  line) is unchanged (slug fetched-at-as-an-added-call). */
   const noteRulingServed = (row: ApprovalRow, now: number, _graceMs: number): void => {
     if ((row.state !== 'allowed' && row.state !== 'denied') || row.ruling === null || row.fetchedAt !== null) return;
     try { deps.coord?.markApprovalFetched(row.id, now); } catch (err) {
-      console.warn(`ccrc-server: fetchedAt for approval ${row.id} was not recorded (${err instanceof Error ? err.message : String(err)})`);
+      const why = err instanceof Error ? err.message : String(err);
+      console.warn(`ccrc-server: fetchedAt for approval ${row.id} was not recorded (${why}); the ruling is withheld from this read`);
+      throw Object.assign(new Error(`approval ${row.id}: the ruling is withheld until its read can be recorded`), { statusCode: 503 });
     }
   };
 
@@ -1173,7 +1169,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    * trace) but not sent, and the approval half sends it when the window ends, the claimant hands the prompt over, or
    * the hook has not resolved a ruled prompt. Any failure answers `none`: the prompt raises as today.
    */
-  const holdApproval = (r: SessionRecord, dialog: Dialog, hs: HookState, agentId: string): RaiseVerdict => {
+  const holdApproval = (r: SessionRecord, dialog: Dialog, hs: HookState, agentId: string, at: number): RaiseVerdict => {
     const coord = deps.coord;
     if (!coord) return { kind: 'none' };
     try {
@@ -1188,7 +1184,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const open = read.rows.filter((x) => x.agentId === agentId && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
       const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
-      setHeldApproval(r.id, { until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev });
+      setHeldApproval(r.id, {
+        until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev, prompt: { agentId, at },
+      });
       return { kind: 'held', parent: open[open.length - 1]!.parentId, record: { ...ev, recordAlways: true, recordOnly: true } };
     } catch (err) {
       console.warn(`ccrc-server: approval hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
@@ -1268,7 +1266,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     // D-5298 (plan Task 16): a permission prompt is held when its child's hook already asked and the server minted a
     // row HELD for the claimant (`POST /api/approvals` decided the claimant rule, the kill switches and the gates); the
     // push waits for that row's window. No row, or none still inside its window: the prompt raises as today.
-    if (hs !== null && ask !== null && 'approval' in ask) return holdApproval(r, dialog, hs, painted.entry?.agentId ?? '');
+    if (hs !== null && ask !== null && 'approval' in ask) return holdApproval(r, dialog, hs, painted.entry?.agentId ?? '', painted.entry?.at ?? hs.updatedAt);
     if (actions === null || hs === null || ask === null || !('questions' in ask)) return none;
     const coord = deps.coord;
     if (!coord || asksDisabled) return none;
@@ -1416,9 +1414,11 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         const rows = pendingApprovals.rows;
         dropApproval(r.id, 'reseed-pending');
         if (hs.ask !== null && 'approval' in hs.ask) {
+          // The prompt is taken as the main thread's, with no `waitBy` test (review 3037 F2). It voids no park: the re-seed
+          // covers only main-thread rows still `held` (`heldApprovalRowsByChild`), never a parked one, and a press marks those.
           setHeldApproval(r.id, {
             until: Math.max(...rows.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: rows.map((x) => x.id),
-            ev: askHoldPayload(r, hs, dialog, null),
+            ev: askHoldPayload(r, hs, dialog, null), prompt: { agentId: '', at: hs.updatedAt },
           });
           reseeded = true;
         }
@@ -1447,13 +1447,19 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
 
   /** A painted approval dialog went away: its deferred push is dropped, and its rows that no principal ruled become
    *  `operator` — the prompt was answered in the pane (spec §6.3 server step 5). Only the rows its deferred push
-   *  covered, so a background subagent's hidden wait (D-5440) is not ended by it (D-5491). */
+   *  covered, so a background subagent's hidden wait (D-5440) is not ended by it (D-5491). Which of them is
+   *  `clearSettledApprovalIds`' (L1; approvals PR 3c, F-A): a row the hook has told "parked", and a parked row, are left to
+   *  the sweep, because the clear was the park deny. */
   const settleClearedApproval = (childId: string, dialogId: string): void => {
     const entry = approvalEntry(childId, 'held');
     if (entry === undefined || entry.dialogId !== dialogId) return;
     dropApproval(childId, 'held');
     try {
-      deps.coord?.markApprovalOperatorRows(entry.rowIds, Date.now());
+      const coord = deps.coord;
+      if (!coord) return;
+      const now = Date.now();
+      const ids = clearSettledApprovalIds(entry.rowIds, coord.approvalsForChild(childId, ['held', 'released', 'parked']), now);
+      if (ids.length > 0) coord.markApprovalOperatorRows(ids, now);
     } catch (err) {
       console.warn(`ccrc-server: settling a cleared approval hold failed for ${childId} (${err instanceof Error ? err.message : String(err)})`);
     }
@@ -2306,7 +2312,21 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
           console.warn(`ccrc-server: recording the operator on ${id}'s approval rows failed (${err instanceof Error ? err.message : String(err)}) — answering anyway`);
         }
       }
+      // Approvals PR 3c (F-A): a press on the dialog a held entry covers reaches that entry's rows, a parked one included,
+      // which becomes `operator` with its park voided (the plan's press in the clear interval; review 2889 F3: these rows
+      // only). Taken before the press (a tick during it can drop the entry), only while hook state, read fresh, still names
+      // the entry's own prompt (review 3022 F1: the dialog id does not name the command, and the last tick's copy lags a
+      // second prompt as long as it lags the clear), and marked only once the press LANDED (F2).
+      const covered = approvalEntry(id, 'held');
+      const ours = covered !== undefined && covered.dialogId === q.dialogId
+        && pressAnswersHeldPrompt(covered.prompt, await freshHookState(d.io, d.cfg, id));
+      const pressed = covered !== undefined && ours ? covered.rowIds : [];
       const res = await d.pressDialog(id, q.dialogId, q.optionIndex);
+      if (res.ok && pressed.length > 0) {
+        try { d.coord?.markApprovalOperatorRows(pressed, Date.now()); } catch (err) {
+          console.warn(`ccrc-server: recording the operator on ${id}'s pressed approval rows failed (${err instanceof Error ? err.message : String(err)}) — the press landed`);
+        }
+      }
       d.answered(id, 'dialog', res);
       return res.ok ? sent(200, res) : sent(409, res);
     }

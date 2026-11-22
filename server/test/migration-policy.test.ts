@@ -1,9 +1,10 @@
 // D-8186: the migration map's deciders (`linear/migrationPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  applySteps, checkMap, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, ticketKeyOf, ticketKindOf, programmeOfEntry,
+  applySteps, checkMap, mapProposerVerdict, migrationOfProject, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, shedTaken, ticketKeyOf, ticketKindOf, programmeOfEntry,
   type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from '../src/linear/migrationPolicy.js';
+import { projectOnTeam } from '../src/linear/route.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
 import type { IssueSnapshot, MapBody, MapEntry, PlanEpicBody } from '../../shared/plan.js';
 
@@ -288,5 +289,64 @@ describe('review 2892 fix round 1 (D-8186)', () => {
     const why = reportItemInput(4, 'AAA', c, ['prog-b']).why;
     expect(why).toContain('prog-b');
     expect(why).toContain('initiative stays active in Linear while its placed tickets are open');
+  });
+});
+
+describe('shedTaken (review 2955 F2)', () => {
+  it('moves each held identifier from skipped to taken, deduplicated and in order', () => {
+    const held = new Set(['AAA-2', 'AAA-4']);
+    expect(shedTaken(['AAA-1', 'AAA-2', 'AAA-3', 'AAA-4'], ['AAA-4', 'AAA-9'], (i) => held.has(i)))
+      .toEqual({ skipped: ['AAA-1', 'AAA-3'], taken: ['AAA-4', 'AAA-9', 'AAA-2'], moved: true });
+  });
+  it('moves nothing when no skipped identifier is held', () => {
+    expect(shedTaken(['AAA-1'], ['AAA-9'], () => false)).toEqual({ skipped: ['AAA-1'], taken: ['AAA-9'], moved: false });
+  });
+});
+
+describe('mapProposerVerdict (D-8808: the map route\'s decider, review 2997 F2)', () => {
+  const ownerIn = (mine: readonly (string | null)[]) => (ws: string | null) => ({ kind: 'owner' as const, id: mine.includes(ws) ? 'coord-a' : 'coord-b' });
+  it('one waiting workspace the caller owns is the one', () => {
+    expect(mapProposerVerdict('coord-a', ['ws-a', 'ws-b'], ['ws-a', 'ws-b'], ownerIn(['ws-a']))).toEqual({ ok: true, workspaceId: 'ws-a' });
+  });
+  it('two the caller owns is team-ambiguous', () => {
+    expect(mapProposerVerdict('coord-a', ['ws-a', 'ws-b'], ['ws-a', 'ws-b'], ownerIn(['ws-a', 'ws-b']))).toMatchObject({ ok: false, word: 'team-ambiguous' });
+  });
+  it('something waits but the caller owns none of it: not-linear-owner', () => {
+    expect(mapProposerVerdict('coord-a', ['ws-b'], ['ws-a', 'ws-b'], ownerIn(['ws-a']))).toMatchObject({ ok: false, word: 'not-linear-owner' });
+  });
+  it('nothing waits and the caller owns the team somewhere: plan-bad-body', () => {
+    expect(mapProposerVerdict('coord-a', [], ['ws-a', 'ws-b'], ownerIn(['ws-a']))).toMatchObject({ ok: false, word: 'plan-bad-body' });
+  });
+  it('nothing waits and the caller owns nothing: not-linear-owner, learning nothing', () => {
+    expect(mapProposerVerdict('coord-a', [], ['ws-b'], ownerIn([]))).toMatchObject({ ok: false, word: 'not-linear-owner' });
+  });
+});
+
+describe('projectOnTeam and migrationOfProject (D-8808)', () => {
+  const slot = (workspaceId: string, ...keys: string[]) => ({ ref: { source: 'file' as const, id: workspaceId }, workspaceId, urlKey: workspaceId, teamKeys: keys });
+  const both = [slot('ws-a', 'AAA'), slot('ws-b', 'AAA')];
+  const measured = (slots: typeof both) => ({ slots, unreadableWorkspaces: new Set<string>(), unreadableLegacy: false });
+  it('a row naming a workspace is judged by it', () => {
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-b' }, 'AAA', 'ws-b', measured(both))).toBe(true);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-b' }, 'AAA', 'ws-a', measured(both))).toBe(false);
+    expect(projectOnTeam({ teamKey: 'BBB', workspaceId: 'ws-a' }, 'AAA', 'ws-a', measured(both))).toBe(false);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: 'ws-a' }, 'AAA', 'ws-a', null)).toBe(true);
+  });
+  it('a row naming none is routed: one slot decides, an ambiguous or unroutable key is false', () => {
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', measured([slot('ws-a', 'AAA')]))).toBe(true);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-b', measured([slot('ws-a', 'AAA')]))).toBe(false);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', measured(both))).toBe(false);
+    expect(projectOnTeam({ teamKey: 'AAA', workspaceId: null }, 'AAA', 'ws-a', null)).toBe('unmeasured');
+  });
+  const m = (id: number, workspaceId: string) => ({ id, workspaceId, teamKey: 'AAA' });
+  it('migrationOfProject: a pinned row takes its workspace\'s newest', () => {
+    expect(migrationOfProject({ teamKey: 'AAA', workspaceId: 'ws-b' }, [m(1, 'ws-a'), m(2, 'ws-b'), m(3, 'ws-a')], null)?.id).toBe(2);
+  });
+  it('migrationOfProject: an unpinned row is routed, ambiguous is none, unroutable falls back to one workspace only', () => {
+    const rows = [m(1, 'ws-a'), m(2, 'ws-b')];
+    expect(migrationOfProject({ teamKey: 'AAA', workspaceId: null }, rows, [slot('ws-b', 'AAA')])?.id).toBe(2);
+    expect(migrationOfProject({ teamKey: 'AAA', workspaceId: null }, rows, both)).toBeNull();
+    expect(migrationOfProject({ teamKey: 'AAA', workspaceId: null }, rows, null)).toBeNull();
+    expect(migrationOfProject({ teamKey: 'AAA', workspaceId: null }, [m(1, 'ws-a'), m(5, 'ws-a')], null)?.id).toBe(5);
   });
 });

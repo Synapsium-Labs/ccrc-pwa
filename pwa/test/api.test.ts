@@ -373,6 +373,15 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
   });
 
+  it('POSTs the mode alone to return to the automatic cap (D-8920)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { caps: { maxConcurrentWorkers: 12 }, usage: { running: 1 } }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.setCoordCaps({ mode: 'automatic' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/caps');
+    expect(JSON.parse(init.body as string)).toEqual({ mode: 'automatic' });
+  });
+
   it('answers `unreadable` when a 2xx caps write comes back unparseable (D-1150)', async () => {
     // The distinction the control depends on: the write may have LANDED, so
     // this must not reject the way a failed request does.

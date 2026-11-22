@@ -14,7 +14,7 @@ import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, RosterWire, RouteField, SessionStatus } from '../../../shared/api';
 import {
-  BackButton, Chip, Icon, Keycap, StatusDot, TypedLabel, cn, useNow,
+  BackButton, Chip, Icon, Keycap, RoleBadge, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { commandDoor, doorMark } from '../command/door';
 import { navigate } from '../lib/router';
@@ -27,7 +27,7 @@ import './chat.css';
 import { chipTone, metaChipTone } from './chipTones';
 import { GoalsDoor, SessionCoordination, SessionDetails } from './SessionDetails';
 import type { Coordination } from '../fleet/fleetTree';
-import type { SessionFactSet } from '../fleet/sessionFacts';
+import { COORDINATOR_BADGE, type SessionFactSet } from '../fleet/sessionFacts';
 // W2 Task S7a (D-5471): every word, chip and state below is the view's (`sessionHeaderView`), the one derivation both
 // skins' session chrome render from. This part holds the hooks (the clock, the pointer query, the flows' doors) and
 // the markup, nothing else.
@@ -124,8 +124,37 @@ export function HeaderBack({ onBack }: { onBack: () => void }): ReactNode {
 /** The title's own node, both skins'. Only a present workspace row's title types in (`TypedLabel`), because only a
  *  change to it is a rename (`view.renames`). The fallback and a main checkout's title are plain text: a swap between
  *  the fallback and the row then draws plainly (a TypedLabel mounted afresh never animates), and a main checkout
- *  mounts no TypedLabel, as before the title was the label (desktop polish T3c, D-6333). */
+ *  mounts no TypedLabel, as before the title was the label (desktop polish T3c, D-6333).
+ *
+ *  A COORDINATOR'S BADGE SITS HERE (desktop polish C51, D-8834; the coordinator's ruling of 2026-11-20 on the operator's
+ *  look at C50): on the title line, right after the name, in both skins. It is the same `RoleBadge` C50 drew in the details
+ *  row (the network icon, the accessible name "coordinator", the role title on hover), sized to the name's text (`chat.css`,
+ *  `.chat-title-role`) and on its baseline, in the title's own ink.
+ *
+ *  IT IS GLUED TO THE NAME (review 2963 F1). A browser may break a line before an atomic inline such as the badge, and
+ *  neither a word joiner nor a no-break space stops it (measured in Chrome, a probe page: 34 of 482 widths left the badge
+ *  alone on a line of its own, with either). Only markup does: the name's last character and the badge sit in one
+ *  `white-space: nowrap` box (`.chat-title-glue`), so the line can break anywhere it could before, except between that
+ *  character and the badge. The last CHARACTER, not the last word, so a single token wider than the column keeps
+ *  `overflow-wrap: break-word`'s emergency break inside it and the badge follows its last fragment.
+ *
+ *  THE COST: a coordinator's title is plain text, never a `TypedLabel`. The label's one text node and its `role="img"` root
+ *  cannot hold a box that spans its last character and a sibling, so a rename of a coordinator's name no longer types in; it
+ *  changes at once, as a main checkout's title does. */
 export function HeaderTitleText({ view }: { view: SessionHeaderView }): ReactNode {
+  if (view.coordinatorRole) {
+    const chars = Array.from(view.title);
+    const last = chars.pop() ?? '';
+    return (
+      <span className="chat-title-text">
+        {chars.join('')}
+        <span className="chat-title-glue">
+          {last}
+          <RoleBadge {...COORDINATOR_BADGE} className="chat-title-role" />
+        </span>
+      </span>
+    );
+  }
   return view.renames
     ? <TypedLabel className="chat-title-text" text={view.title} />
     : <span className="chat-title-text">{view.title}</span>;

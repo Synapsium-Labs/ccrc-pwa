@@ -7,14 +7,15 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  NO_PLAN_CHANGES, applyPlanChanges, markSyncDue, planStorePort, type NewTicket, type PlanChanges, type PlanStorePort,
+  NO_PLAN_CHANGES, applyPlanChanges, ensureUpkeepEpicInTx, markSyncDue, planStorePort, type NewTicket, type PlanChanges, type PlanStorePort,
 } from '../src/coord/planStore.js';
 import { planViewOf } from '../src/coord/planRoutes.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { FetchLike } from '../src/linear/client.js';
+import { LinearDirectory } from '../src/linear/directory.js';
 import { LINEAR_HIERARCHY_DOCUMENTS, LINEAR_DOCUMENTS, type LinearDirectoryEntries } from '../src/linear/ops.js';
 import {
-  PLAN_SYNC_BACKOFF_MS, PLAN_SYNC_CALL_TIMEOUT_MS, PLAN_SYNC_DEBOUNCE_MS, PLAN_SYNC_TICK_DEADLINE_MS, PlanSync, type PlanSyncDeps,
+  PLAN_SYNC_BACKOFF_MS, PLAN_SYNC_CALL_TIMEOUT_MS, PLAN_SYNC_DEBOUNCE_MS, PLAN_SYNC_TICK_DEADLINE_MS, PlanSync, planSyncFor, type PlanSyncDeps,
 } from '../src/linear/planSync.js';
 import { PLAN_SYNC_BEAT_MS, laneRow } from '../src/laneSchedule.js';
 import { requestIdOf } from '../src/linear/planSyncPolicy.js';
@@ -57,6 +58,21 @@ interface Rig {
   sync: PlanSync; build: (over?: Partial<PlanSyncDeps>) => PlanSync;
 }
 const ok = (value: Record<string, unknown> = {}, created: string | null = null): CcrcOpOutcome => ({ ok: true, value, created });
+describe('Linear hierarchy wave 8 (D-8808): a project row pinned to a workspace resolves its key there', () => {
+  it('a key two workspaces share is routed to the workspace the row names, and routes nowhere without it', async () => {
+    const r = await rig();
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: 'bbbbbbbb-1111-4000-8000-00000000000b', key: 'AAA', name: 'Team A in B' }] });
+    r.dir.entries = DIRECTORY;
+    await r.sync.tick(afterDebounce(r));
+    expect(r.asks).toEqual([]);   // team-ambiguous: neither workspace is chosen for the project
+    r.db.prepare('UPDATE project_linking SET teamWorkspace = ? WHERE project = ?').run(WS.b.id, 'project-a');
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(r.asks.length).toBeGreaterThan(0);
+    expect(r.asks.every((a) => a.workspaceId === WS.b.id)).toBe(true);
+  });
+});
+
 const fail = (word: Extract<CcrcOpOutcome, { ok: false; maybeSent: boolean }>['word'], maybeSent = false): CcrcOpOutcome => ({ ok: false, word, maybeSent });
 
 let counter = 1000;
@@ -111,6 +127,38 @@ const dueAt = (r: Rig): number | null => ((r.db.prepare('SELECT dueAt FROM plan_
 const mails = (r: Rig): { subject: string; body: string; toId: string }[] =>
   r.db.prepare("SELECT subject, body, toId FROM mail WHERE subject LIKE 'Linear sync%' ORDER BY id").all() as { subject: string; body: string; toId: string }[];
 const afterDebounce = (r: Rig): number => { r.t.now = Math.max(r.t.now, T + PLAN_SYNC_DEBOUNCE_MS); return r.t.now; };
+
+describe('Upkeep notification routing', () => {
+  it.each([false, true])('uses measured ownership for Upkeep notices (another slot unreadable: %s)', async (partial) => {
+    const r = await rig();
+    if (partial) await seedSlot(r.ccrcDir, 'b');
+    r.db.prepare('UPDATE project_linking SET linearOwner = ? WHERE project = ?').run('coord-first', 'project-a');
+    r.db.prepare('INSERT INTO project_linking (project, teamKey, teamWorkspace, override, linearOwner) VALUES (?, ?, ?, ?, ?)')
+      .run('project-b', 'AAA', WS.a.id, 'private', 'coord-pinned');
+    ensureUpkeepEpicInTx(r.db, 'project-b', T);
+    const fx = linearServicesFake({ db: r.db, ccrcDir: r.ccrcDir });
+    const directory = new LinearDirectory();
+    directory.put(SLOT, DIGEST, { ...DIRECTORY, projectStatuses: [] }, T, 'read');
+    vi.spyOn(fx.refresher, 'directory', 'get').mockReturnValue(directory);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected network request'));
+    const sync = planSyncFor({
+      coord: r.coord, plan: r.plan, ccrcDir: r.ccrcDir, rate: fx.rate, journal: fx.journal,
+      policy: async () => ({ allow: false, why: 'denied', decisionId: null }),
+      refresher: fx.refresher, privateTrackerKeys: [], readLinearStore: async () => {
+        const store = await readLinearStore(r.ccrcDir);
+        if (!partial || store.kind !== 'listed') return store;
+        return { ...store, slots: store.slots.map((slot) => slot.id === WS.b.id ? { ...slot, record: { kind: 'unreadable', code: 'EIO' } } : slot) };
+      },
+      presenceOf: () => 'alive',
+    });
+    await sync.passFor('upkeep:project-b', Date.now() + 60_000);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(r.plan.bindingsOf('upkeep:project-b')).toEqual([expect.objectContaining({ state: 'failed', failedWord: 'status-missing' })]);
+    expect(mails(r).map((m) => [m.toId, m.subject])).toEqual(partial ? [] : [
+      ['coord-first', 'Linear sync: epic upkeep status-missing (upkeep:project-b)'],
+    ]);
+  });
+});
 
 describe('the plan sync (D-8182)', () => {
   it('a due programme is synced once after the debounce, objects bound in order', async () => {

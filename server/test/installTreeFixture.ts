@@ -157,6 +157,9 @@ export const TREE_FILES = [
   // ccrc history's policy ring (`ccd/history/lib.mjs`, copied whole with `ccd/history`) imports the run-id grammar from here
   // (W4 addendum P10, the shared arm); a placed tree without it fails `status --json` at load, and doctor's history check with it.
   'shared/workflow-ids.mjs',
+  // The weekly quiz runner (run 3212): `ccd-quiz-weekly.service` runs it as `%h/ccrc/deploy/history-quiz-unattended.mjs`, so the
+  // versioned audit's unit row needs it in the placed tree.
+  'deploy/history-quiz-unattended.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would
@@ -189,6 +192,8 @@ export const TREE_FILES = [
   // Its fifth library (the Overlord's ccd arms): read, pinned and published exactly as the others.
   'ccd/lib/long-lived.sh',
   'ccd/lib/door.sh',
+  // Its seventh library (the model-class Anthropic arm): read, pinned and published exactly as the others.
+  'ccd/lib/model-aliases.sh',
   // The door program (plan question 2): read with `read_regular`, pinned (`__CCD_DOOR_SHA256`) and published beside the body by the same installer.
   'ccd/door-process.mjs',
   'ccd/ccd-cap-scopes',

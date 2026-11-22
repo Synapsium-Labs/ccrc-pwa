@@ -57,6 +57,9 @@ export const DOOR_TOOL_PREFIX = 'mcp__door__';
 export const DOOR_TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 /** An agent id, as the hook's roster keeps it (D-5232): wholly `[A-Za-z0-9_-]`, 1 to 64 characters. */
 export const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** Whether `v` is such an agent id: the one guard over `AGENT_ID_RE` (desktop polish H1b, D-8862; review 2961 F6 and review
+ *  2978 F5). The hook state reader, the continuity hook reports and the helpers' `isHelperId` all read it. */
+export const isAgentId = (v: unknown): v is string => typeof v === 'string' && AGENT_ID_RE.test(v);
 /** An agent type, a model name: printable text up to these many characters. */
 export const AGENT_TYPE_MAX = 128;
 export const REPORT_MODEL_MAX = 128;

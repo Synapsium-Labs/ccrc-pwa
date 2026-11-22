@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
-import { ROUTES, matchRoute } from '../src/lib/routes';
+import { ROUTES, callParamOf, callPath, matchRoute } from '../src/lib/routes';
 import { ItemListColumn, ItemRoute, ItemRouteAt, WaitingRoute } from '../src/ledgers/WaitingRoutes';
 import { navigate, useLocation } from '../src/lib/router';
 import { refetchWaiting } from '../src/ledgers/waitingStore';
@@ -50,6 +50,18 @@ describe('ItemRoute', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
     await waitFor(() => expect(tick).toHaveBeenCalledTimes(1));
     expect(tick.mock.calls[0]).toEqual([8]);
+  });
+
+  it('a Do item ticked with a note carries the note to the route (D-8931)', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 8 })] }) }));
+    const tick = vi.spyOn(api, 'tickItem').mockResolvedValue({ ok: true, item: itemView({ id: 8, state: 'checking', answer: 'Done at noon.' }) });
+    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView() });
+    render(<ItemRoute id={8} store={store} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /note to the coordinator/i }), { target: { value: 'Done at noon.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(tick).toHaveBeenCalledTimes(1));
+    expect(tick.mock.calls[0]).toEqual([8, 'Done at noon.']);
   });
 
   it('a refused tick shows its sentence and reads nothing again', async () => {
@@ -231,7 +243,71 @@ describe('calls made for you on the route (D-8126)', () => {
   });
 });
 
+describe('a call named in the URL (D-8808, D-8809)', () => {
+  const call = { id: 7, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big' as const, question: 'Which store?', options: ['sql', 'files'],
+    chosen: 'sql', why: 'it is already there', reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null, overturnedAt: null, overturnNote: null };
+  const view = () => waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [{ ...call, id: 6 }, call] });
+
+  it('a cold start at /waiting?call=7 opens the group and marks the call', () => {
+    history.replaceState(null, '', callPath(7));
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: view() }));
+    render(<WaitingRoute store={store} />);
+    const li = document.querySelector('li[data-call="7"]')!;
+    expect(li.getAttribute('aria-current')).toBe('true');
+    expect(li.closest('details')!.hasAttribute('open')).toBe(true);
+    expect(document.querySelector('li[data-call="6"]')!.hasAttribute('aria-current')).toBe(false);
+  });
+
+  it('the live list with the device\'s session rows says gone for a call no longer on it, never "not saved on this device" (review 3217 F2)', () => {
+    history.replaceState(null, '', callPath(99));
+    const store = mk();
+    // The waiting frame first, the fleet frame after: the view is live, the rows are the device's (`saved-rows`).
+    act(() => store.setState({ waiting: view(), sessions: [fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question' })] }));
+    render(<WaitingRoute store={store} />);
+    expect(screen.getAllByRole('status').map((n) => n.textContent)).toContain(SAVED_ROWS_WORD);
+    expect(document.querySelector('[data-call-target="gone"]')).not.toBeNull();
+    expect(document.querySelector('[data-call-target="unheard"]')).toBeNull();
+  });
+
+  it('the device\'s saved list says "not in the list saved on this device" for a call it holds in neither list, never gone (review 3222 F1)', () => {
+    history.replaceState(null, '', callPath(99));
+    vi.spyOn(api, 'waiting').mockReturnValue(new Promise(() => {}));
+    const store = mk();
+    // No live view heard; the device's saved copy of the list and its rows (`saved-list`).
+    act(() => store.setState({ waiting: null, waitingSaved: { savedAt: NOW - MIN, view: view() }, sessions: [fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question' })] }));
+    render(<WaitingRoute store={store} />);
+    expect(document.querySelector('[data-call-target="unheard"]')).not.toBeNull();
+    expect(document.querySelector('[data-call-target="gone"]')).toBeNull();
+  });
+
+  it('a view that arrives after the mount still opens and marks the call', () => {
+    history.replaceState(null, '', callPath(7));
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: null }));
+    render(<WaitingRoute store={store} />);
+    act(() => store.setState({ waiting: view() }));
+    const li = document.querySelector('li[data-call="7"]')!;
+    expect(li.getAttribute('aria-current')).toBe('true');
+    expect(li.closest('details')!.hasAttribute('open')).toBe(true);
+  });
+});
+
 describe('the routes\' own paths', () => {
+  // D-8808, D-8809: a call is a place in the list, so its address is a query on the list's route.
+  it('a call\'s path is the list\'s path with ?call=, on the waiting route, and reads back', () => {
+    expect(callPath(7)).toBe('/waiting?call=7');
+    expect(matchRoute(callPath(7).split('?')[0]!)?.route.id).toBe('waiting');
+    expect(callParamOf(callPath(7).slice(callPath(7).indexOf('?')))).toBe(7);
+    expect(callParamOf('?call=7&programme=prog-a')).toBe(7);
+  });
+  it('callParamOf refuses anything but a canonical positive safe integer', () => {
+    for (const bad of ['?call=0', '?call=07', '?call=-1', '?call=abc', '', '?programme=x', `?call=${Number.MAX_SAFE_INTEGER + 1}`]) {
+      expect(callParamOf(bad), bad).toBeNull();
+    }
+    expect(callParamOf(`?call=${Number.MAX_SAFE_INTEGER}`)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it('itemPath and the list\'s path are the route table\'s, and each is on its own route', () => {
     expect(matchRoute(itemPath(12))?.route.id).toBe('item');
     expect(matchRoute(itemPath(12))?.param).toBe('12');

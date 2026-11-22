@@ -108,7 +108,7 @@ export function ccdLauncherIn(root: string = REPO): string {
 /** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
  *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
  *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
-export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh'];
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh', 'ccd/lib/model-aliases.sh'];
 
 /** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
 export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
@@ -306,6 +306,7 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/coord/dispatch.ts', text: 'const holdRes = await deps.runCcd(holdArgv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/dispatch.ts', text: 'const routeRes = await deps.runCcd(', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },

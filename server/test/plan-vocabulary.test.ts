@@ -62,6 +62,12 @@ describe('the plan vocabulary (D-8181)', () => {
     expect(ok({ verb: 'linear-drift' })).toBeNull();
     expect(ok({ verb: 'linear-initiatives', workspaceId: '' })).toBeNull();
     expect(ok({ verb: 'linear-owner', project: 4 })).toBeNull();
+    // D-8808: the shared-key item's verb, and its key required
+    expect(ok({ verb: 'linear-team-workspace', teamKey: 'AAA' })).toEqual({ verb: 'linear-team-workspace', teamKey: 'AAA' });
+    expect(ok({ verb: 'linear-team-workspace' })).toBeNull();
+    expect(ok({ verb: 'linear-team-workspace', teamKey: '' })).toBeNull();
+    // a verb this build does not know reads as no action, so an older reader of a newer row draws a plain item
+    expect(ok({ verb: 'linear-not-yet', teamKey: 'AAA' })).toBeNull();
     // a run action still needs its runId
     expect(ok({ verb: 'end-run', stuckReason: null })).toBeNull();
     expect(ok({ verb: 'end-run', runId: 1, stuckReason: null })).toEqual({ verb: 'end-run', runId: 1, stuckReason: null });
@@ -71,6 +77,7 @@ describe('the plan vocabulary (D-8181)', () => {
     for (const a of [
       { verb: 'linear-map', migrationId: 1 }, { verb: 'linear-report', migrationId: 1 }, { verb: 'linear-drift', bindingId: 1 },
       { verb: 'linear-initiatives', workspaceId: 'ws-a' }, { verb: 'linear-owner', project: 'project-a' },
+      { verb: 'linear-team-workspace', teamKey: 'AAA' },
     ] as const) {
       expect(actAbandons(a)).toBe(false);
       expect(isLinearItemAction(a)).toBe(true);
@@ -79,7 +86,7 @@ describe('the plan vocabulary (D-8181)', () => {
     expect(isLinearItemAction({ verb: 'end-run', runId: 1, stuckReason: null })).toBe(false);
     expect(LINEAR_ITEM_ACTS).toEqual({
       'linear-map': ['approve', 'return'], 'linear-report': ['put-back', 'done'], 'linear-drift': ['hand', 'keep'],
-      'linear-initiatives': ['check-again'], 'linear-owner': ['name'],
+      'linear-initiatives': ['check-again'], 'linear-owner': ['name'], 'linear-team-workspace': [],
     });
   });
 

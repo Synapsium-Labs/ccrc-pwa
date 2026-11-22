@@ -48,14 +48,17 @@ const openScreen = (id: string, sessions: FleetSession[], leases: ReturnType<typ
   const details = screen.queryByRole('button', { name: 'Session details' });
   if (details !== null && details.getAttribute('aria-expanded') === 'false') fireEvent.click(details);
 };
+/** A worktree whose path ends in its admin record, as Claude Code names them (a row says its path, H3, D-8875). */
+const tree = (over: Parameters<typeof lease>[0] & { adminRecord: string }): ReturnType<typeof lease> =>
+  lease({ canonicalPath: `/work/project-a/.claude/worktrees/${over.adminRecord}`, ...over });
 const section = (): HTMLElement | null => document.querySelector<HTMLElement>('.sess-worktrees');
 const rows = (): string[] => [...document.querySelectorAll('.sess-worktrees .proj-work')].map((r) => r.textContent ?? '');
 
 describe('the session page lists the worktrees the session holds (D-8782)', () => {
   it('SW-S1: the coordinator\'s page lists its worktree with the three controls, and another session\'s worktree is not on it', () => {
     openScreen('coord-a', [coord(), worker], [
-      lease({ leaseId: 'l-mine', parentId: 'coord-a', adminRecord: 'agent-mine', sourceKind: 'raw', disposition: 'retained', expiresAt: null }),
-      lease({ leaseId: 'l-other', parentId: 'coord-b', adminRecord: 'agent-other' }),
+      tree({ leaseId: 'l-mine', parentId: 'coord-a', adminRecord: 'agent-mine', sourceKind: 'raw', disposition: 'retained', expiresAt: null }),
+      tree({ leaseId: 'l-other', parentId: 'coord-b', adminRecord: 'agent-other' }),
     ]);
     const s = section();
     if (s === null) throw new Error('the page draws no worktree section');
@@ -69,7 +72,7 @@ describe('the session page lists the worktrees the session holds (D-8782)', () =
   it('SW-S2 (review 2864 F2, F9): an offline coordinator\'s own page lists the worktree it held, with its controls', () => {
     // The coordinator is archived (a listed session no longer live); the server filed its lease under the offline group.
     openScreen('coord-a', [coord({ archivedAt: Date.now() - 60_000 }), worker], [
-      lease({ leaseId: 'l-held', parentId: 'coord-a', via: 'worker-a', group: 'offline-coordinator', adminRecord: 'agent-held',
+      tree({ leaseId: 'l-held', parentId: 'coord-a', via: 'worker-a', group: 'offline-coordinator', adminRecord: 'agent-held',
         sourceKind: 'raw', disposition: 'ephemeral', expiresAt: null }),
     ]);
     expect(section(), 'the page draws the section').not.toBeNull();
@@ -79,15 +82,15 @@ describe('the session page lists the worktrees the session holds (D-8782)', () =
   });
 
   it('SW-S3: the worker the lease is via lists it too, naming no worker (it is its own page)', () => {
-    openScreen('worker-a', [coord(), worker], [lease({ leaseId: 'l-via', parentId: 'coord-a', via: 'worker-a', adminRecord: 'agent-via' })]);
+    openScreen('worker-a', [coord(), worker], [tree({ leaseId: 'l-via', parentId: 'coord-a', via: 'worker-a', adminRecord: 'agent-via' })]);
     expect(rows().join('|')).toContain('agent-via');
     expect(rows().join('|')).not.toContain('via worker-a');
   });
 
   it('SW-S4 (rule 7): a lease whose path is a listed session\'s workdir is not on the page; the session\'s own row is the honest one', () => {
     openScreen('coord-a', [coord(), worker], [
-      lease({ leaseId: 'l-ws', parentId: 'coord-a', via: 'worker-a', adminRecord: 'agent-ws', canonicalPath: worker.workdir }),
-      lease({ leaseId: 'l-real', parentId: 'coord-a', adminRecord: 'agent-real' }),
+      tree({ leaseId: 'l-ws', parentId: 'coord-a', via: 'worker-a', adminRecord: 'agent-ws', canonicalPath: worker.workdir }),
+      tree({ leaseId: 'l-real', parentId: 'coord-a', adminRecord: 'agent-real' }),
     ]);
     expect(rows().join('|')).toContain('agent-real');
     expect(rows().join('|')).not.toContain('agent-ws');

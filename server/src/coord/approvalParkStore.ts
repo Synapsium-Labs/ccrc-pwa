@@ -165,25 +165,38 @@ export function pruneParks(db: DatabaseSync, before: number): number {
     .run(before, before).changes);
 }
 
+/** What the one write of `parked` did (approvals PR 3c, F-B): `parked` (the row moved; a moved ruling the park did not take,
+ *  because an unspent one stands, is not recorded), `ruled` (moved, and its ruling recorded on the park as the
+ *  coordinator's), `closed` (the key's park is no longer open: nothing parked, and a `held` row was staled), `unmoved`. */
+export type ParkMove = 'parked' | 'ruled' | 'closed' | 'unmoved';
+
 /** THE ONE WRITE of `parked` (approvals PR 3, F8-a), inside the caller's transaction, reached only through the questions
  *  owner's `parkApproval`: a `held` row whose stored word is `live` (its window ended unruled), or an `allowed`/`denied` row
  *  the hook never fetched (the last-poll move, F2), moves to `parked`, and its park records its first park. A moved ruling is
- *  recorded on the park as the coordinator's, unless the park already holds an unspent ruling (the first wins). Answers
- *  whether the row moved. */
-export function parkApprovalRow(db: DatabaseSync, id: number, now: number): boolean {
+ *  recorded on the park as the coordinator's, unless the park already holds an unspent ruling (the first wins).
+ *  First it asks whether the key's park is still open (approvals PR 3c, F-B): `parkOpen`, the one void rule, over the park
+ *  as read here with its own run's closure (`runClosed`, the caller's read of the park's run; doubt answers closed). A park
+ *  that went void, passed its horizon or lost its run takes no row: a `held` row is staled in the same write (the key can
+ *  never meet a ruling, and the hook's next poll stops on `stale`), and a ruled row keeps its state. */
+export function parkApprovalRow(db: DatabaseSync, id: number, now: number, runClosed: (runId: number) => boolean): ParkMove {
   const row = stmt(db, 'SELECT state, parkKey, verdict, reason, answeredBy, parentId, class FROM approvals WHERE id = ? AND parkWord = \'live\'')
     .get(id) as { state: string; parkKey: string | null; verdict: string | null; reason: string | null; answeredBy: string | null; parentId: string; class: string } | undefined;
-  if (row === undefined || row.parkKey === null) return false;
+  if (row === undefined || row.parkKey === null) return 'unmoved';
+  const park = parkByKey(db, row.parkKey);
+  if (park === null || !parkOpen(parkFactsOf(park, runClosed(park.runId)), now)) {
+    stmt(db, "UPDATE approvals SET state = 'stale' WHERE id = ? AND state = 'held'").run(id);
+    return 'closed';
+  }
   const res = stmt(db, "UPDATE approvals SET state = 'parked' WHERE id = ? AND parkWord = 'live' AND (state = 'held' OR (state IN ('allowed','denied') AND fetchedAt IS NULL))")
     .run(id);
-  if (Number(res.changes) === 0) return false;
+  if (Number(res.changes) === 0) return 'unmoved';
   markFirstPark(db, row.parkKey, id, now);
   if ((row.state === 'allowed' || row.state === 'denied') && (row.verdict === 'allow' || row.verdict === 'deny')) {
-    recordParkRuling(db, row.parkKey, {
+    return recordParkRuling(db, row.parkKey, {
       verdict: row.verdict, authority: 'coordinator', by: row.answeredBy ?? row.parentId, reason: row.reason ?? '', class: row.class, rowId: id, now,
-    });
+    }) ? 'ruled' : 'parked';
   }
-  return true;
+  return 'parked';
 }
 
 /** The ruling read's first serve of a ruling (F8-c): `fetchedAt`, written once. */

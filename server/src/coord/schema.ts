@@ -2683,7 +2683,7 @@ export const MIGRATIONS: readonly string[] = [
   // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
   // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
   // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
-  // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
+  // `coord/claudeBuildsStore.ts`; its trust reader is `shared/claudeBuildTrust.ts#buildTrustOf` (and later the capture standing beside it). The seed is the four builds
   // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
   //
   // A NEW TABLE AND ITS SEED, NOTHING ELSE: an older build opening a file at `user_version 60` takes rule 3 (it warns, reads
@@ -4175,6 +4175,160 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX approval_parks_by_horizon ON approval_parks(horizon);
   INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
+  `,
+
+  // ── 116: user_version 115 -> 116 ──────────────────────────────────────────
+  // The project row names its Linear workspace and carries two linking facts (Linear hierarchy wave 8, D-8808 and D-8809,
+  // plan Tasks 8.1, 8.4 and 8.5), three columns on `project_linking`: `teamWorkspace` is the slot id (a workspace id) the
+  // row's team key resolves in, so a key two connected workspaces share never answers `team-ambiguous` for the project (NULL:
+  // none set, the key resolves as before); `teamSuggestions` holds the coordinators' suggestions; `teamCallId` names the call
+  // that recorded the Overlord's link. THREE NULLABLE COLUMNS, no default, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 and never names them. This is the next free slot by position on `main`: door B1 took 110, the
+  // waiting workers' sleep 111, the cap-counts-working seed 112, the admission wait 113, wave 7's per-team migration 114 and
+  // the approvals park (#3106) 115 first, so this entry moved up to 116; whoever lands second renumbers (the coordinator's
+  // standing license). RE-MEASURE the slot before the PR and before merge (it must print 115, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE project_linking ADD COLUMN teamWorkspace TEXT;
+  -- Task 8.4: the coordinators' suggestions, a JSON array, one element per suggesting session; NULL: none. A candidate
+  -- only: nothing in the pass or the decider reads it, and every writer that sets a key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamSuggestions TEXT;
+  -- Task 8.5 (D-8809): the call that recorded the Overlord's link (a coordinator_calls id); NULL: none. Migration 64's CHECK on
+  -- teamSource cannot widen without a table rebuild, so the Overlord's link is stored as teamSource 'auto' with this id set, and
+  -- ONE reader derives its source (linkingStore.ts's linkSourceOf). Every writer that sets or changes the key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamCallId INTEGER;
+  `,
+  // ── 117: user_version 116 -> 117 ─────────────────────────────────────────────
+  // The in-place bind (D-6096, fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave
+  // as the run's own worker, in a sibling worktree. `inPlace` is 1 for such a run and NULL for every other; its one writer
+  // is `CoordStore.bindInPlace`, and its readers decide what an in-place run does NOT do: it starts no process, so it is
+  // charged to neither cap (`dispatchedAt` stays NULL), and its close and abandon compose no `ws-*` verb on the claimant,
+  // whose workspace is the coordinator's own (`closeDecide.ts`).
+  //
+  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 117` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names it, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 116 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN inPlace INTEGER;
+  `,
+
+  // ── 118: user_version 117 -> 118 ──────────────────────────────────────────
+  // What a broker activity's end rests on (session helpers S1, D-8830; spec 2026-11-19-session-helpers-design.md §7.1,
+  // Table 9): `endBasis` is `observed`, `task-report` (an Agent's final task notification) or `backfill-unmeasured` (S2's
+  // one-time pass). NULL means `observed`: every row written before this entry, and every row the fold ends observed (it
+  // writes the basis as absence). The CHECK holds the three words and Table 9's two rules, which
+  // `delegation-end-basis.ts#endBasisDefect` mirrors for the checkpoint: a task report has an `endedAt`, a backfill has none.
+  // ONE NULLABLE COLUMN, nothing else: SQLite tests an added column's CHECK against every row, and every row is NULL here.
+  // An older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing); its
+  // reads and writes name their columns and never this one. The slot is the next free one by position on `main`
+  // (66c63606c3 holds 117; this entry took 112 at d0b7467b9 and 116 at 5041cf1733, and moved up each time other entries
+  // landed first); whoever lands second renumbers (the coordinator rules a collision at landing). RE-MEASURE the slot
+  // before merge (it must print 117, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE delegation_activities ADD COLUMN endBasis TEXT CHECK (
+    endBasis IS NULL
+    OR endBasis = 'observed'
+    OR (endBasis = 'task-report' AND endedAt IS NOT NULL)
+    OR (endBasis = 'backfill-unmeasured' AND endedAt IS NULL)
+  );
+  `,
+
+  // ── 119: user_version 118 -> 119 ──────────────────────────────────────────
+  // A new Claude Code build needs no operator (Overlord, `docs/superpowers/programs/overlord/claude-release-unattended.md`,
+  // slug capture-retry-ceiling): `claude_builds.fails` counts a build's failed capture verdicts. Its one writer is
+  // `recordClaudeBuildVerdict`; its reader is `shared/claudeBuildTrust.ts#captureStandingOf`, which captures a failed build
+  // again by itself until the count reaches the ceiling, and only then asks the operator. The UPDATE counts the one
+  // failure every failed row already carries, so a build that failed before this entry is retried like any other.
+  // ONE COLUMN WITH A DEFAULT, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its reads and writes name their columns and never this one, and the default 0 covers
+  // every row it inserts (a new build's row then reads as never failed, which is what it is). The slot is the next free
+  // one by position on `main` (77a1fefe46 holds 118); whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 118, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claude_builds ADD COLUMN fails INTEGER NOT NULL DEFAULT 0;
+  UPDATE claude_builds SET fails = 1 WHERE capture = 'fail';
+  `,
+
+  // ── 120: user_version 119 -> 120 ──────────────────────────────────────────
+  // The weekly unattended replay quiz's last word (run 3212; the operator's ruling of 2026-11-22: the quiz runs, records and
+  // confirms itself): `continuity_quiz_status`, ONE row (`id` 1), what `deploy/history-quiz-unattended.mjs`'s last tick on
+  // the fleet box reported through `POST /api/continuity/quiz-status`. ONE writer, `continuity/quizStore.ts#writeQuizStatus`;
+  // `mailedKey` is the week and word the coordinator was last mailed for, so a stop word is mailed once a week. The Shadow
+  // lanes card reads it. The coordinator allotted slot 120 to this entry beside run 3213's 119, which landed first (#3170);
+  // it is the next free one by position on `main`.
+  //
+  // Review 3232 (fix round 1) adds the confirmation's binding to the record and the operator's withdraw to the runs table:
+  // `confirmKeyHash` is the sha256 of the single-use key the record door answered an unattended record (NULL for a hand
+  // record; a ruled run's hash is never read, because the ruler reads the key only while the run is pending), so only the caller that recorded a run can have the server confirm it; `withdrawnAt` and
+  // `withdrawnBy` are the operator's withdraw of a wrong baseline (state `withdrawn`); `wokeAt` is when the coordinator was
+  // mailed that this run became the baseline, keyed on the run so a lost wake is sent again on a later tick. The status row
+  // gains the runner's trace and the waiting streak that mails `setup-account-gone` once.
+  //
+  // A NEW TABLE and nullable columns on one existing table: an older build opening a file at this entry's version takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the new table, inserts runs by named columns (each new
+  // one NULL) and reads an unknown state as no state. Every earlier entry is frozen. RE-MEASURE the slot
+  // before merge (it must print 119 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_status (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    week        TEXT,                  -- the ISO week (UTC) the tick worked, or NULL before any week
+    act         TEXT NOT NULL,         -- the act the tick reached
+    outcome     TEXT NOT NULL,         -- ok | waiting | refused | failed
+    word        TEXT,                  -- the stop's word, or NULL
+    detail      TEXT,                  -- one line, or NULL
+    account     TEXT,                  -- the setup's account id, or NULL before setup
+    at          INTEGER NOT NULL,      -- wall ms of the tick (the runner's)
+    receivedAt  INTEGER NOT NULL,      -- wall ms the server stored it
+    mailedKey   TEXT,                  -- '<week> <word>' the coordinator was last mailed for, or NULL
+    reportedBy  TEXT,                  -- the runner's trace ('quiz-unattended <user> <role> <time>')
+    waitingSince TEXT,                 -- the ISO week the current run of waiting ticks began, or NULL
+    goneMailedKey TEXT                 -- the waitingSince week setup-account-gone was mailed for, or NULL
+  );
+  ALTER TABLE continuity_quiz_runs ADD COLUMN confirmKeyHash TEXT;  -- sha256 of the unattended record's single-use key
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnAt INTEGER;  -- wall ms of the operator's withdraw
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
+  ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
+  `,
+
+  // ── 121: user_version 120 -> 121 ──────────────────────────────────────────
+  // The run cap is derived from the machine (D-8920; the operator's ruling of 2026-11-22, task note
+  // `docs/superpowers/programs/overlord/run-cap-derived.md`): `coordinator_state.capMode` says what the stored
+  // `maxConcurrentWorkers` IS. `automatic`: the cap is derived from the fleet host's memory and cores
+  // (`caps.ts#deriveCap`), and the stored number is only what is used while the host is unmeasured. `override`: the
+  // operator set the stored number, and it is the cap. ONE writer, `CoordStore.setCaps`; one reader, `CoordStore.capMode`.
+  //
+  // THE UPGRADE MOVES NO CAP SOMEBODY SET. A fresh box, and a box that still holds the untouched seed (3, never
+  // written: `updatedAt` 0), is `automatic`: nobody chose that number. A row somebody wrote (`updatedAt > 0`, the caps
+  // route's stamp) or edited by hand to another number becomes `override`: that number bounded things the formula does
+  // not measure (other tenants of the box, disk per worktree, account usage), and it may have been LOWERED on purpose,
+  // so an upgrade must not raise it, or drop it, with no operator act. The control then says "Set by hand: N.
+  // Automatic would be M" and offers `use automatic`: one tap, and a recorded one. The UPDATE below is that rule;
+  // `run-cap-derived.test.ts` reds without it.
+  //
+  // AN OLDER BUILD opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing);
+  // its reads and writes name their columns and never this one, so it enforces the stored number as it always did: an
+  // override if one stands, else the number the box ran on before. A number it WRITES leaves the mode as it was. STILL
+  // OPEN: after a roll forward, a number set by the older build under `automatic` is not an override until it is set
+  // again, so a cap lowered during a rollback is replaced by the derived one. It is recorded when it happens (the
+  // automatic cap's feed line, `caps.ts#capAutomaticNotice`, keyed on that write), and nothing prevents it.
+  //
+  // The slot is the next free one by position on `main` (b33a9ae13 holds 120); whoever lands second renumbers.
+  // RE-MEASURE the slot before merge (it must print 120, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE coordinator_state ADD COLUMN capMode TEXT NOT NULL DEFAULT 'automatic'
+    CHECK (capMode IN ('automatic', 'override'));
+  UPDATE coordinator_state SET capMode = 'override' WHERE updatedAt > 0 OR maxConcurrentWorkers <> 3;
   `,
 ];
 

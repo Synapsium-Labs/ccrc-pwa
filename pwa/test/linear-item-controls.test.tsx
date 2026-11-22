@@ -2,7 +2,9 @@
 // each sends, a refusal in its fixed sentence, and the map body's order (counts, then one group per class; D-8737).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ItemAction } from '../../shared/ledgers';
+import { LINEAR_PROJECTS_SETTINGS_PATH, type ItemAction } from '../../shared/ledgers';
+import { matchRoute } from '../src/lib/routes';
+import { linearOf } from '../src/ledgers/ItemActs';
 import type { MapCounts, MapEntry } from '../../shared/plan';
 import { MAP_CLASSES } from '../../shared/plan';
 import { api } from '../src/lib/api';
@@ -141,6 +143,30 @@ describe('the hierarchy items\' controls', () => {
     }
   });
 
+  it('a map Return refused for its owner says the Return sentence and keeps the note; Hand keeps its own (F5, F6)', async () => {
+    const sayings: [string, 'map' | 'drift', string, RegExp][] = [
+      ['no-linear-owner', 'map', 'Return', /no Linear owner to return the map to.*map and your note are kept.*return it again/s],
+      ['team-ambiguous', 'map', 'Return', /More than one connected Linear workspace has this team key.*kept.*Settings.*return it again/s],
+      ['unreachable', 'map', 'Return', /^The Linear owner could not be measured, so nothing was changed\. Try again\.$/],
+      ['unreachable', 'drift', 'Hand to a coordinator', /^The Linear owner could not be measured, so nothing was changed\. Try again\.$/],
+      ['no-linear-owner', 'drift', 'Hand to a coordinator', /Name a Linear owner for the project, or keep the plan/],
+    ];
+    for (const [error, kind, button, pattern] of sayings) {
+      vi.spyOn(api, 'linearItemAct').mockRejectedValue(new ApiError(409, { ok: false, error, detail: 'box text that must not show' }));
+      if (kind === 'map') {
+        controls({ verb: 'linear-map', migrationId: 3 });
+        fireEvent.change(screen.getByRole('textbox', { name: /note/i }), { target: { value: 'Leave it.' } });
+      } else controls({ verb: 'linear-drift', bindingId: 8 });
+      click(button);
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent, `${kind} ${error}`).toMatch(pattern);
+      expect(document.body.textContent).not.toContain('box text');
+      if (kind === 'map') expect((screen.getByRole('textbox', { name: /note/i }) as HTMLInputElement).value).toBe('Leave it.');
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('Name offers the live coordinators and sends {act:"name", owner} after its confirm', async () => {
     vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }, { id: 'coord-b', live: false }] });
     const call = sent();
@@ -172,6 +198,7 @@ describe('the hierarchy items\' controls', () => {
     const actions: ItemAction[] = [
       { verb: 'linear-map', migrationId: 3 }, { verb: 'linear-report', migrationId: 3 }, { verb: 'linear-drift', bindingId: 8 },
       { verb: 'linear-initiatives', workspaceId: 'AAA' }, { verb: 'linear-owner', project: 'project-a' },
+      { verb: 'linear-team-workspace', teamKey: 'AAA' },
     ];
     vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [] });
     for (const action of actions) {
@@ -199,7 +226,7 @@ describe('the hierarchy items\' controls', () => {
     ['not-found', LINEAR_ITEM_REFUSAL_TEXT['not-found']],
     ['not-open', LEDGER_REFUSAL_TEXT['not-open']],
   ])('the %s refusal says its fixed sentence (not-open is the ledger doors\' own)', (word, sentence) => {
-    expect(linearItemErrorText(new ApiError(409, { ok: false, error: word }))).toBe(sentence);
+    expect(linearItemErrorText(new ApiError(409, { ok: false, error: word }), 'done')).toBe(sentence);
   });
 
   it('an act the server refuses shows its fixed sentence, never the box\'s text', async () => {
@@ -273,5 +300,36 @@ describe('an item view handed no body', () => {
     render(<ItemView item={act({ verb: 'linear-map', migrationId: 3 })} migration={{ counts: COUNTS, entries: ENTRIES }}
                      onTick={async () => {}} onDismiss={async () => {}} programmeLive={true} now={NOW} />);
     expect(document.querySelector('[data-migration-counts]')).not.toBeNull();
+  });
+});
+
+describe('the shared-key item (D-8808, review 3048 F5)', () => {
+  it('says what to do on the project row and links the project settings page, with no act to send', () => {
+    const call = sent();
+    const { container } = controls({ verb: 'linear-team-workspace', teamKey: 'AAA' });
+    expect(screen.getByText(LINEAR_ITEM_TEXT.teamWorkspace('AAA'))).toBeTruthy();
+    expect(LINEAR_ITEM_TEXT.teamWorkspace('AAA')).toBe("On the row of the project that owns team AAA, choose its Workspace, then Save. This item closes itself once no waiting issue of the team depends on the workspace choice.");
+    const link = screen.getByRole('link', { name: LINEAR_ITEM_TEXT.openSettings });
+    expect(link.getAttribute('href')).toBe(LINEAR_PROJECTS_SETTINGS_PATH);
+    expect(container.querySelectorAll('button')).toHaveLength(0);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('links a page the route table knows: Settings, Security, where the project rows are', () => {
+    expect(matchRoute(LINEAR_PROJECTS_SETTINGS_PATH)?.route.id).toBe('settings-security');
+  });
+
+  it('draws its link on a Waiting row too', () => {
+    expect(linearOf(act({ verb: 'linear-team-workspace', teamKey: 'AAA' }), 'row')).toEqual({ verb: 'linear-team-workspace', teamKey: 'AAA' });
+  });
+
+  it('a verb this console does not know draws no controls, so the item reads as a plain one', () => {
+    const unknown = { verb: 'linear-not-yet', teamKey: 'AAA' } as unknown as ItemAction;
+    expect(linearOf(act(unknown), 'item')).toBeNull();
+    const { container } = controls(unknown);
+    expect(container.innerHTML).toBe('');
+    render(<ItemView item={act(unknown, { title: 'A later item', why: 'Said by a newer server.', how: [] })}
+                     onTick={async () => {}} onDismiss={async () => {}} programmeLive={true} now={NOW} />);
+    expect(screen.getByText('Said by a newer server.')).toBeTruthy();
   });
 });

@@ -18,6 +18,8 @@
 # (`ccrc-api sessions report`), each one `_hook_timeout` of REPORT_TIMEOUT_S (3 s) inside the same budget, on every PreToolUse of a door tool (the
 # witness, after every deny arm), SubagentStart, SubagentStop, a quiet Stop and a UserPromptSubmit carrying a nudge line: fail-open, spooled and
 # retried never, and no hookstate write. A PreToolUse of any other tool sends nothing (a session with a door still runs the arm's one jq).
+# Since door process B2 the same sender also runs from the main case block: one `model-switch` report on PostModelSwitch from EVERY
+# main-thread, non-child session with a registry row (door or not), and one on a typed `/model` refused in a session with a door.
 # The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
 # worst case before the anchor), and a read that runs out its bound stops every later one in the invocation. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
@@ -112,7 +114,7 @@ _hook_net_bound() {   # <max ms> -> NET_LEFT_MS, and NET_B (seconds, for `_hook_
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
 # is context to inject, on PreToolUse it is a permission decision OR context
 # (`additionalContext`) for the call that proceeds — and those two events are
-# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both. Until D-1613 there was one printf and the
+# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both, and a typed /model's block answer on UserPromptSubmit in a session with a door (Overlord W1 door process B2), printed from its own arm, which then exits. Until D-1613 there was one printf and the
 # rule was "the card, and nothing else, ever"; now there are three builders,
 # each naming its own `hookEventName`, which is what stops a card being
 # delivered as a decision or the other way round. A card that leaked onto
@@ -182,6 +184,9 @@ _hook_deny_json() {   # <reason> -> the deny envelope, one line; 1 when it could
 # is `additionalContext` and the call proceeds. A `Read` is never denied, which
 # is the ruling itself — `Edit` requires a prior `Read`, so a deny here would
 # charge every session told to fix a named file one denial before its edit.
+# The PROMPT's block answer (door process B2, Task 8: "the hook's builders gain" a UserPromptSubmit envelope): the event's own
+# `decision: block` shape, which stops the prompt and shows `reason` to whoever typed it. Called only by `_hook_typed_model`.
+_hook_prompt_block_json() { jq -cn --arg r "$1" '{decision: "block", reason: $r}' 2>/dev/null; }   # <reason> -> one line; 1 when it could not be built
 _hook_nudge_json() {   # <nudge> -> the nudge envelope, one line; 1 when it could not be built
   local j=""
   j=$(jq -cn --arg c "$1" \
@@ -3316,9 +3321,34 @@ _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends th
   return 0
 }
 
+# ── THE MODEL EVENTS AND THE TYPED /model (Overlord W1 door process B2, Task 8; spec §3.6 H1, §3.4 Table 3.4b, W0-12) ───
+# Both model events are REPORT-ONLY (ruled, F11). `PreModelSwitch` refuses nothing and sends nothing: Claude Code's own switch
+# on a flagged request is pinned on, and a refusal there could stop it. `PostModelSwitch` sends one `model-switch` report,
+# `how: switched`, `from` and `to` read from the payload's `from_model` and `to_model` (W0-12), for every session the start
+# report covers (main thread, a registry row, not a child: plan question 11, so a coordinator's switch is measured too). The
+# one refusal is on the PROMPT path: in a session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a
+# fact, never a role's name), a prompt that begins `/model` is blocked with the prompt event's own block answer and reported
+# `typed-refused`, which changed nothing and is never drift (slug `typed-model-refused-on-the-prompt-path`). Each arm EXITS in
+# the case block below, before every writer (ruled, F14): the state file, the turn marker and the spools never see a model
+# event or a refused prompt. The report rides the door's one sender, `_hook_door_report` (B1), defined here so these arms reach
+# it. Whether the pinned build passes a typed `/model` through UserPromptSubmit at all is the pull request's live step.
+REPORT_TIMEOUT_S=3
+_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+MODEL_REPORT_JQ='def mdl: (if type == "string" then . elif type == "object" and (.id | type) == "string" then .id else "" end) | explode | map(select(. >= 32 and . <= 126)) | implode | .[0:128] | if . == "" then null else . end; def typed: (.prompt | strings | until(. == "" or (.[0:1] | IN(" ", "\t", "\n", "\r") | not); .[1:])) // "";'
+_hook_model_report() {   # <how> -> one model-switch report from a main-thread, non-child session with a registry row; silent on every failure
+  local b; [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] || return 0   # the start report's own id, marker and child tests (`_hook_start_report`)
+  b=$(jq -c --arg id "$id" --arg how "$1" --argjson at "$(_hook_epoch_ms)" "$MODEL_REPORT_JQ"'{kind: "model-switch", how: $how, from: (if $how == "switched" then .from_model | mdl else null end), to: (if $how == "switched" then .to_model else typed | .[6:] | (split("\n")[0] // "") | split("\t") | join(" ") | split(" ") | map(select(. != "")) | .[0] end | mdl), fromId: $id, fromUuid: (.session_id // "" | tostring), at: $at}' <<<"$payload" 2>/dev/null) && _hook_door_report "$b"
+}
+_hook_typed_model() {   # -> 0 when this prompt is a typed /model in a session with a door: reported, and its block answer printed
+  local j; [[ "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && "$payload" == *'/model'* ]] || return 1
+  jq -e "$MODEL_REPORT_JQ"'typed | startswith("/model") and (.[6:7] | IN("", " ", "\t", "\n", "\r"))' <<<"$payload" >/dev/null 2>&1 || return 1
+  j=$(_hook_prompt_block_json "ccrc: a typed /model is refused in this session. Its model is the designation's, set at each start; a change inside a generation reads as model drift. Change the designated model in the Overlord's Settings: it takes effect at the next generation.") || return 1
+  _hook_model_report typed-refused; printf '%s\n' "$j"
+}
+
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend="" apr=""
 case "$event" in
-  UserPromptSubmit) state="working" ;;
+  UserPromptSubmit) state="working"; _hook_typed_model && exit 0 ;;
   PostToolUse)
     state="working"
     # ONE payload read for the counter, on the one event that can carry a
@@ -3441,8 +3471,10 @@ case "$event" in
     # clear, compact and a source-less start are fresh or rebuilt contexts and are told to load the `ccrc-coordinator` skill NOW
     # and to read their programme's goals; a `resume` or `fork` carries a transcript that already received the fresh text, so it
     # gets a SHORTER reminder (load the skill only if this context lacks it). No "shown" marker exists or is added. Both texts
-    # keep the same last sentence ("your own go to the operator"), so a rebase over the autonomy plan's edit replaces one
-    # sentence. Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
+    # keep the same last clause, which D-8126 (autonomy plan A9-2, spec §9.2) turned from "your own go to the operator" into
+    # coordinator clause 21's rule: a coordinator works its own questions out from the programme's goals first, and only
+    # operator-only decisions go to the operator. Both are fixed literals here, no registry or server byte in them.
+    # Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
     # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
     # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
     # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
@@ -3454,8 +3486,8 @@ case "$event" in
       [ -e "$REG/$id.hold" ] && return 0
       case "$src" in
         # compact keeps the short reminder: Claude Code re-attaches skills already invoked, so reloading would only spend tokens.
-        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
-        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own you work out from the programme's goals first; only operator-only decisions go to the operator." ;;
+        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own you work out from the programme's goals first; only operator-only decisions go to the operator." ;;
       esac
       return 0
     }
@@ -3514,6 +3546,8 @@ case "$event" in
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
+  PreModelSwitch) exit 0 ;;   # report-only, and it refuses nothing (the model events' block above)
+  PostModelSwitch) _hook_model_report switched; exit 0 ;;
   *) exit 0 ;;
 esac
 # THE HISTORY SCOPE MARKER, FAIL-CLOSED (ccrc history spec 2026-10-05 §5.1,
@@ -3529,7 +3563,11 @@ esac
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
 # reaches this line (all but SessionStart `compact`, which this test leaves out, and an
 # unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
-# registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
+# registry. NOT CAPTURED: PreModelSwitch, PostModelSwitch and a typed `/model` refused
+# in a session with a door exit in the case block above, before every writer (door
+# process B2, ruled F11 and F14), so they skip this arm and the start report's resend
+# pass too; their real payloads stay unmeasured here (the build capture records them).
+# Each file's line 1 is a meta line naming this pane's own session id, sanitised; the
 # rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
 # in it reaches the exit status. Raw files never leave the box:
 # deploy/hook-capture-reduce.mjs reduces a directory to key sets, types and
@@ -5452,6 +5490,17 @@ fi
 # It NEVER refuses a swap path (the operator's Q8 ruling of 2026-10-19): no `ccd` verb but `account-pane`, no bare
 # `ccrc account`, no registry path (`PATHF` is not reused), no `/api/` pattern; `must-allow.json` holds it. An accident
 # guard: `bash -c` with an assembled string, another interpreter or a script file runs past it.
+# THE QUIZ ROW ON EVERY SESSION (review 3232 F1; the operator's ruling of 2026-11-22). `qzmatch` answers the category
+# `quiz`, in `deny` (a child) and `account` (every other session) only, never in `class` (so the classifier needs no twin
+# row): the box client `ccrc-api` (bare, path-qualified, quoted or a `$VAR` program, as written and as `norm` reads it)
+# followed by `quiz` and then `record`, `confirm`, `status` or an act in a variable; and the shell verb that posts them,
+# `ccrc quiz-record` and its script `ccrc-quiz-record` (bare, quoted, `$VAR`, after `env` and its `-u` prefixes, and by
+# path where it is run, so a `cat` or `git add` of the script's path passes; review 3254 F1). Those are the weekly
+# timer's acts, never a session's. `quiz live`, the Overlord coordinator's door, stays OPEN (the server's ownership check
+# guards it). Text that only names one is refused too, as the account arm's is. An accident guard, not a wall: `bash -c`
+# with an assembled string, another interpreter or a script file runs past it. The prefilter of both branches reads
+# `quiz` followed by a blank, a stripped tab or newline (`t`, `n`) or a backslash, or `quiz-record`, never `quiz` alone,
+# so a session whose working directory or transcript path names `quiz` forks no jq on every call.
 # THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
 # `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
 # those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category
@@ -5615,6 +5664,16 @@ def xmatch:
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface"),
   (ACCTV as $v | select(test(WB + "ccrc" + NW) and test(EXPV + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(WB + "ccd" + NW) and test(EXPV + "account-pane" + NW)) | "account\tccd account-pane");
+def QZV: "record", "confirm", "status";
+def QZP: "(?:" + WB + "ccrc-api[" + $q + "\"]?" + SP + "+" + FLAGS + "|" + EXPV + ")quiz" + SP + "+" + FLAGS;
+def QZR: "quiz-record(?![A-Za-z0-9_.-])";
+def QZH: "ccrc-quiz-record(?![A-Za-z0-9_.-])";
+def QZCMD: "(?:^|[\n;&|(`]|\\$\\()" + SP + "*(?:env(?:" + SP + "+(?:-" + NS + "+(?:" + SP + "+[A-Za-z_][A-Za-z0-9_]*)?|[A-Za-z_][A-Za-z0-9_]*=" + NS + "*))*" + SP + "+)?(?:(?:bash|sh)" + SP + "+" + FLAGS + ")?[" + $q + "\"]?";
+def qzmatch:
+  (QZV as $v | select(test(QZP + $v + NW)) | "quiz\tccrc-api quiz \($v)"),
+  (select(test(QZP + EXP)) | "quiz\tccrc-api quiz with its act in a variable"),
+  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + QZR) or (test(WB + "ccrc" + NW) and test(EXPV + QZR))) | "quiz\tccrc quiz-record"),
+  (select(test("(?:^|[" + WS + ";&|()`" + $q + "\"=]|/\\.local/bin/)" + QZH) or test(QZCMD + "[^" + WS + ";&|()`" + $q + "\"]*/" + QZH)) | "quiz\tccrc-quiz-record");
 ([($ARGS.named.deny // "") | try (fromjson | .permissions.deny | arrays | .[] | strings) catch empty]) as $dl
 | ([$dl[] | capture("^Bash\\((?<p>[a-z][a-z0-9-]{0,31}) install:\\*\\)$") | .p | select(. != "claude")
     | . as $p | select(any($dl[]; . == "Bash(" + $p + " update:*)"))] | unique) as $ups
@@ -5758,12 +5817,12 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // first((., norm) | bmatch) // "" else "" end)
      elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
      else "" end)
   elif $mode == "account" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // "" else "" end)
      else acctpath($t; $i) // "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch, pmatch) // "" else "" end)
   elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch, pmatch) != null) then "other\tan MCP call naming a forbidden act"
@@ -5790,14 +5849,14 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
        || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
        || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *account-op* || "$apf" == *accounts.json* \
-       || "$apf" == *accounts.sh* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *accounts.sh* || "$apf" == *quiz[[:space:]tn\\]* || "$apf" == *quiz-record* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   else
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
        || "$apf" == *operator-model.db* || "$apf" == *privacy-journal* || "$apf" == *.ccrc* || "$apf" == *.door* \
-       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *quiz[[:space:]tn\\]* || "$apf" == *quiz-record* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
@@ -5835,6 +5894,8 @@ if [[ -n "$apf" ]]; then
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
         account$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202). Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell. Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
+        quiz$'\t'*)
+          areason="ccrc: this call runs \`${afw#*$'\t'}\`: the replay quiz's record, confirmation and status are the weekly timer's acts (\`ccd-quiz-weekly.timer\`), never a session's, in any form (the operator's ruling of 2026-11-22; review 3232 F1). A session reads the quiz on the Shadow lanes card; the Overlord coordinator's Live (\`ccrc-api quiz live\`) stays open. Text that only names it is refused too; reword it or write it through a file (\`git commit -F <file>\`)." ;;
         prune$'\t'*)
           areason="ccrc: this call runs \`git worktree prune\`, which deletes git's records of every gone worktree of the repository at once, and ccd's cleanup reads those records: one prune holds the cleanup of every lane on this box (the cleanup un-wedge spec, section 5)."
           areason+=" To remove one stale record, use \`git -C <main> worktree remove <path>\`; a dry run (\`-n\`) is allowed."
@@ -5908,6 +5969,24 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* &
     fi
     if [[ -n "$treason" ]] && tjson=$(_hook_deny_json "$treason"); then pre_json=$tjson; fi
   fi
+fi
+
+# THE READER ARMS (Overlord W1 door process B2, Task 8; spec §3.3.10 C55), each keyed on a fact, never a role's name; a denied door call
+# sends no witness. SCOPE: a reader (a recorded join, or an `agent_type`) calling a door tool but `mcp__door__read`. THREE READERS: a fourth
+# main-thread Agent or Task call with a door. MODEL: under the pin, a named model that is not the pin. Residuals: w1-door-process-b2-notes.md.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rd=""
+  case "${tool:-}" in
+    mcp__door__read) ;;
+    mcp__door__?*) { [[ -n "$tmsub" ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
+      && rd="ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, \`mcp__door__read\`. Hand anything else back to the main thread in your answer." ;;
+    Agent|Task)
+      [[ -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && (( $(jq 'length' <<<"$subs" 2>/dev/null || echo 0) >= 3 )) \
+        && rd="ccrc: three readers already run (C55's bound): wait for one to finish before starting another."
+      [[ -z "$rd" && "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}" == 1 && -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]] && rmod=$(jq -r '.tool_input.model | strings' <<<"$payload" 2>/dev/null) \
+        && [[ -n "$rmod" && "$rmod" != "$CLAUDE_CODE_SUBAGENT_MODEL" ]] && rd="ccrc: a subagent here runs on the pinned model, $CLAUDE_CODE_SUBAGENT_MODEL; this call names $rmod. Leave the model out, or name the pinned one." ;;
+  esac
+  [[ -n "$rd" ]] && rj=$(_hook_deny_json "$rd") && pre_json=$rj
 fi
 
 # A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
@@ -6326,8 +6405,7 @@ if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_gate ||
 # (`renderOperatorMessageNudge`, server/src/coord/envelope.ts; session-hook-door-reports.test.ts holds `DOOR_NUDGE_JQ` to it). Each is a SIDE
 # SEND: it writes nothing to the hookstate, spools nothing, retries nothing and fails open. It is the SIXTH declared network exception (see the
 # header): `_hook_net_bound` gives it at most REPORT_TIMEOUT_S (a copy of the L0 constant, held equal by its test) of the invocation's one budget.
-REPORT_TIMEOUT_S=3
-_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+# REPORT_TIMEOUT_S and the sender are defined above the main case block, whose model arms (door process B2) send through it too, from every non-child registry session.
 DOOR_NUDGE_JQ='def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | all(. >= 48 and . <= 57) and .[0] != 48)) | tonumber else empty end;'
 _hook_door_arms() {   # -> the event's reports, one `_hook_door_report` each
   local k="" q="" l; [[ "${tool:-}" == mcp__door__?* && "$pre_json" != *'"permissionDecision":"deny"'* ]] && k=$(printf '%s\n%s' "$tool" "$(jq -cS '.tool_input // {}' <<<"$payload")" | _apr_sha256); [[ -z "$paid" && "$bg" == 0 ]] && q=1
@@ -6641,9 +6719,9 @@ _hook_approval_route_patch() {   # <word> -> rc 0 always
   mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
 }
 # THE TIE'S DROP (approvals plan Task 2.1): the wait saw this subagent prompt's tool_result (a pane Yes or No, the
-# auto-deny, a hook decision), so its entry in `approvals` goes: the entry with this agent's id and this write's stamp,
-# read from the file as it stands NOW (later events have written since), never another agent's. Written only when that
-# entry is there; a write landing inside the one-jq-fork window is overwritten, as every two hook writes race (no lock).
+# auto-deny, a hook decision) or printed its park deny (its dialog goes with it, review 3037 F1), so its entry in
+# `approvals` goes: this agent's id and this write's stamp, read from the file as it stands NOW (later events have
+# written since), never another agent's; only when it is there, and a write in the one-jq-fork window is lost (no lock).
 _hook_approvals_drop() {   # -> rc 0 always
   local new="" tmp
   [[ -n "$aid" && -z "$hs_skip" && -f "$f" && ! -L "$f" ]] || return 0
@@ -6679,7 +6757,7 @@ _hook_approval_wait() {
   apr_tie="" apr_off=0 apr_seen=-1
   while :; do
     now=$(_hook_epoch_ms)
-    (( now < deadline )) || { [[ "$pk" == live ]] && _apr_park_print "$rid"; return 0; }
+    (( now < deadline )) || { [[ "$pk" == live ]] && { _apr_park_print "$rid"; _hook_approvals_drop; }; return 0; }
     if _apr_scan; then _hook_approvals_drop; return 0; fi
     if (( tick % apr_poll == 0 )); then
       if _apr_call approvals ruling "$rid" --nonce "$apr_nonce"; then
@@ -6687,7 +6765,7 @@ _hook_approval_wait() {
           200)
             state=$(jq -r '.state // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || state=""
             for st in $APPROVAL_HOOK_STOP_STATES; do [[ "$state" == "$st" ]] && return 0; done
-            [[ "$state" == parked ]] && { _apr_park_print "$rid"; return 0; }
+            [[ "$state" == parked ]] && { _apr_park_print "$rid"; _hook_approvals_drop; return 0; }
             j=$(jq -c '.ruling // empty' <<<"$APR_BODY" 2>/dev/null) || j=""
             if [[ -n "$j" ]]; then
               verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$apr_digest" "$apr_nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""

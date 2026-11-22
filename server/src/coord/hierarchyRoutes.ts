@@ -15,6 +15,8 @@ import { linearOwnerOf, linearOwnerOfProject } from './planPolicy.js';
 import { planViewOf } from './planRoutes.js';
 import { givenUpWord } from '../linear/inboundPolicy.js';
 import type { LinearMigration } from '../linear/migration.js';
+import { measuredTeamRoutes, type TeamRoutes } from '../linear/route.js';
+import type { LinearStoreRead } from '../linear/store.js';
 
 export interface HierarchyRouteOpts {
   /** The plan tables through their port; undefined (a test, a script): `unavailable`. */
@@ -33,10 +35,12 @@ export interface HierarchyRouteOpts {
   /** The operator's Hand or Keep on a persistent-drift item (`DriftPass#act`, D-8183); undefined (a test, a script): `unavailable`. Hand
    *  with no usable Linear owner to go to is `no-linear-owner` (D-8736, review 2394 A-7): the item stays open, and the answer passes
    *  through `refuseRoute` at its 409 like the others. */
-  driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' | HierarchyItemRefusal };
+  driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number, routes: TeamRoutes | null) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' | 'unreachable' | HierarchyItemRefusal };
   /** The per-team migration (D-8186, wave 7): its start, the map's and the report's acts, the item body's read and each team's
    *  state; undefined (a test, a script): those doors answer `unavailable` and every row reads "Not migrated". */
-  migration?: Pick<LinearMigration, 'start' | 'workspaceOfTeam' | 'act' | 'view' | 'stateOfTeam'>;
+  migration?: Pick<LinearMigration, 'start' | 'workspaceOfProject' | 'act' | 'view' | 'stateOfProject'>;
+  /** The local routing snapshot, never a Linear call. A failed read makes unpinned membership unmeasured. */
+  readLinearStore?: () => Promise<LinearStoreRead>;
   now?: () => number;
 }
 
@@ -57,16 +61,22 @@ function parseSettings(body: unknown): HierarchySettingsBody | null {
 
 export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRouteOpts): void {
   const now = opts.now ?? Date.now;
+  const routingFacts = async (): Promise<TeamRoutes | null> => {
+    const store = await opts.readLinearStore?.().catch(() => null);
+    return store == null ? null : measuredTeamRoutes(store);
+  };
 
   /** The owner now of a project, by the rule `linearOwnerOf` holds (design §7.5): a shared team key answers one project's owner
    *  (`teamOwnerProject`, the one rule the triage route and the drift pass ask too). `ifUnnamed` is what choosing the empty owner
    *  option gives: the same policy function with no named owner, for the project's own latest programme (D-8738). */
-  const ownerNow = (plan: PlanStorePort, rows: readonly HierarchyProjectFacts[], row: HierarchyProjectFacts): HierarchyProjectRow['ownerNow'] => {
-    const o = linearOwnerOfProject(row.project, rows, { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf });
+  const ownerNow = (plan: PlanStorePort, rows: readonly HierarchyProjectFacts[], row: HierarchyProjectFacts, routes: TeamRoutes | null): HierarchyProjectRow['ownerNow'] => {
+    const o = linearOwnerOfProject(row.project, rows, { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf }, routes);
     const u = linearOwnerOf(row.project, {
       named: null, ownsTeamProject: null, latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf,
     });
-    return { id: o.id, source: o.source, live: o.live, project: o.project, ifUnnamed: { id: u.id, live: u.live } };
+    const ifUnnamed = { id: u.id, live: u.live };
+    return o.kind === 'unmeasured' ? { id: null, source: 'none', live: false, unmeasured: true, ifUnnamed }
+      : { id: o.id, source: o.source, live: o.live, project: o.project, ifUnnamed };
   };
 
   /**
@@ -101,10 +111,10 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     if (!PROJECT_RE.test(project)) return refuseRoute(reply, 'bad-request', { detail: 'project' });
     const migration = opts.migration;
     if (migration === undefined) return refuseRoute(reply, 'unavailable');
-    const workspaceId = await migration.workspaceOfTeam(project).catch(() => null);
+    const where = await migration.workspaceOfProject(project).catch((): { ok: false; word: string; detail: string } => ({ ok: false, word: 'unreachable', detail: 'the Linear workspaces could not be read' }));
     try {
       return await opts.serial(async () => {
-        const out = migration.start(project, workspaceId);
+        const out = migration.start(project, where);
         return out.ok ? out : refuseRoute(reply, out.word as RouteRefusal, { detail: out.detail });
       });
     } catch (err) {
@@ -174,7 +184,8 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
         const act = b['act'];
         if (driftAct === undefined || (act !== 'hand' && act !== 'keep')) break;
         try {
-          const done = await opts.serial(async () => driftAct(id, act, action.bindingId));
+          const routes = act === 'hand' ? await routingFacts() : null;
+          const done = await opts.serial(async () => driftAct(id, act, action.bindingId, routes));
           return done.ok ? { ok: true } : refuseRoute(reply, done.word);
         } catch (err) {
           return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
@@ -207,7 +218,8 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
         if (migration === undefined || (act !== 'approve' && act !== 'return' && act !== 'put-back' && act !== 'done')) break;
         if (act === 'return' && (note === null || note.trim() === '')) return refuseRoute(reply, 'bad-request', { detail: 'note' });
         try {
-          const done = await opts.serial(async () => migration.act(id, action.migrationId, act, note));
+          const routes = act === 'return' ? await routingFacts() : null;
+          const done = await opts.serial(async () => migration.act(id, action.migrationId, act, note, routes));
           return done.ok ? { ok: true } : refuseRoute(reply, done.word, { detail: done.detail });
         } catch (err) {
           return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
@@ -247,15 +259,16 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     const plan = opts.plan;
     if (plan === undefined) return refuseRoute(reply, 'unavailable');
     try {
+      const routes = await routingFacts();
       const rows = plan.hierarchyProjectsOf();
       const answer: HierarchyAnswer = {
         ok: true,
         // The team's newest migration names the state and its item (D-8186); the waiting count is the inbound path's (D-8183).
         projects: await Promise.all(rows.map(async (r) => {
-          const st = (await opts.migration?.stateOfTeam(r.teamKey)) ?? { state: 'not-migrated' as const, at: null, itemId: null };
+          const st = (await opts.migration?.stateOfProject({ teamKey: r.teamKey, workspaceId: r.workspaceId ?? null }, routes)) ?? { state: 'not-migrated' as const, at: null, itemId: null };
           return {
             project: r.project, teamKey: r.teamKey, initiatives: r.initiatives, linearOwner: r.linearOwner,
-            ownerNow: ownerNow(plan, rows, r), ownsTeam: r.ownsTeam, state: st.state, stateAt: st.at, itemId: st.itemId, inboundWaiting: plan.inboundWaiting(r.project),
+            ownerNow: ownerNow(plan, rows, r, routes), ownsTeam: r.ownsTeam, state: st.state, stateAt: st.at, itemId: st.itemId, inboundWaiting: plan.inboundWaiting(r.project),
           };
         })),
         coordinators: plan.coordinatorIdsOf().map((id) => ({ id, live: opts.presenceOf(id) === 'alive' })),

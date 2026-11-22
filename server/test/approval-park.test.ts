@@ -4,7 +4,7 @@
 // (`createQuestions`); the route hunks that wire it are pinned through the server in `approval-park-routes.test.ts`. The lane
 // is driven live past its gate (`parkGate`), because this build holds it inert. A case named
 // "inert" pins that hold. Neutral fixtures only; never the live HOME.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createPublicKey, verify } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -300,6 +300,15 @@ describe('the park follows the child\'s live binding run, not its mark (review 2
     expect((parkedApprovalsFor(r.f.coord, Date.now()) ?? []).map((p) => p.id)).toEqual([a.id]);
     expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(200);
   });
+  it('a resumed child\'s parked view names the park\'s run (wave 2), not the run its mark names (approvals PR 3c F-D)', async () => {
+    const r = await rig();
+    const run1 = r.f.runId;
+    const run2 = resume(r, run1);
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    expect(r.row(a.id).runId, 'the row keeps the mark\'s run').toBe(run1);
+    expect((parkedApprovalsFor(r.f.coord, Date.now()) ?? []).map((p) => [p.id, p.runId])).toEqual([[a.id, run2]]);
+  });
   it('a wave 3 retry does not meet a wave 2 ruling of the same command', async () => {
     const r = await rig();
     const run2 = resume(r, r.f.runId);
@@ -529,6 +538,79 @@ describe('the last poll (F8-c, F2)', () => {
     r.f.coord.db.prepare('UPDATE approvals SET parkWord = NULL WHERE id = ?').run(b.id);
     r.lapse(Math.max(r.row(a.id).notifyAt, r.row(b.id).notifyAt) + GRACE + 1);
     expect([r.row(a.id).state, r.row(b.id).state]).toEqual(['allowed', 'allowed']);
+  });
+});
+
+describe('the park write asks whether the key\'s park is still open (approvals PR 3c F-B)', () => {
+  it('an abandoned run while a prompt sits in its window: the row does not park, is not pushed, and is staled', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    expect(r.row(a.id).state).toBe('held');
+    // The abandon door closes the run `failed` (a terminal run state) while the prompt is still inside its window.
+    r.f.coord.db.prepare("UPDATE runs SET state = 'failed' WHERE id = ?").run(r.f.runId);
+    r.lapse(pastWindow(r, a.id));
+    expect(r.row(a.id).state).toBe('stale');
+    expect(parkOf(r, a.id)?.parkedAt ?? null, 'no first park is recorded').toBeNull();
+    expect(r.pushes).toEqual([]);
+    expect(parkedApprovalsFor(r.f.coord, Date.now())).toEqual([]);
+  });
+  it('a park whose run cannot be read parks nothing: doubt closes it, as at the doors', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    const read = vi.spyOn(r.f.coord, 'run').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'the fixture refuses' } as never);
+    try { r.lapse(pastWindow(r, a.id)); } finally { read.mockRestore(); }
+    expect(r.row(a.id).state).toBe('stale');
+    expect(r.pushes).toEqual([]);
+  });
+  it('the last-poll move on a closed run: an unfetched allow is not moved, and no mail says run it again', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    await r.rule(a.id, 'allow');
+    r.f.coord.db.prepare("UPDATE runs SET state = 'failed' WHERE id = ?").run(r.f.runId);
+    r.lapse(r.row(a.id).notifyAt + GRACE);
+    expect(r.row(a.id).state).toBe('allowed');
+    expect(parkOf(r, a.id)?.ruling ?? null).toBeNull();
+    expect(r.mail(CHILD, `approval ${a.id} ruled`)).toBe(0);
+  });
+  it('a row minted before its key\'s park passed its horizon does not park at its window\'s end', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    const t1 = pastWindow(r, a.id);
+    r.lapse(t1);
+    const horizon = t1 + APPROVAL_PARK_HORIZON_MS;
+    // Minted 30 s before the horizon (the key still open), its window ends after it.
+    const b = await minted(r.raise(ORDINARY, {}, horizon - 30_000));
+    expect([b.park, r.row(b.id).state]).toEqual(['live', 'held']);
+    r.lapse(pastWindow(r, b.id));
+    expect(r.row(b.id).state).toBe('stale');
+    expect(r.pushes.map((p) => p.source)).toEqual([`approval:${a.id}`]);
+  });
+  it('a row minted before a pane press voided its key\'s park does not park, and is not pushed', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    const b = await minted(r.raise());
+    expect(r.row(b.id).state).toBe('held');
+    expect(r.f.coord.markApprovalOperatorRows([a.id], Date.now())).toBe(1);
+    expect(parkOf(r, a.id)?.voided).toBe(true);
+    r.lapse(pastWindow(r, b.id));
+    expect(r.row(b.id).state).toBe('stale');
+    expect(r.pushes.map((p) => p.source)).toEqual([`approval:${a.id}`]);
+  });
+  it('the last-poll move honours recordParkRuling: a ruling the park refused (an unspent one stands) is never mailed', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    r.lapse(pastWindow(r, a.id));
+    const b = await minted(r.raise());
+    expect(r.row(b.id).state).toBe('held');
+    expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'deny', reason: 'not now', by: 'operator' }).status).toBe(200);
+    await r.rule(b.id, 'allow');
+    expect(r.row(b.id).state).toBe('allowed');
+    r.lapse(r.row(b.id).notifyAt + GRACE);
+    expect(r.row(b.id).state).toBe('parked');
+    expect(parkOf(r, a.id)?.ruling).toMatchObject({ verdict: 'deny', authority: 'operator', rowId: a.id });
+    expect(r.mail(CHILD, `approval ${b.id} ruled`), 'no "run the same command again" for a ruling the park did not take').toBe(0);
+    expect(r.mail(CHILD, `approval ${a.id} ruled`)).toBe(1);
   });
 });
 

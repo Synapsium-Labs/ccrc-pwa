@@ -16,7 +16,7 @@ function example(): Aliases {
   ]);
   const own = [{
     format: 'current' as const, fetchedAt: '2026-11-18T11:06:40Z',
-    aliasTargets: { haiku: null, sonnet: null, opus: 'claude-opus-9-2', fable: null }, rows,
+    aliasTargets: { haiku: null, sonnet: null, opus: 'claude-opus-9-2', fable: null }, rows, skipped: [],
   }];
   const base = {
     own, box: [], launches: [{ class: 'sonnet' as const, id: 'claude-sonnet-9-1', bornAt: '2026-11-18T12:00:00Z' }],

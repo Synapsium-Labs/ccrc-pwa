@@ -134,14 +134,37 @@ export function isLaneArmQuizState(v: unknown): v is LaneArmQuizState {
   return typeof v === 'string' && (LANE_ARM_QUIZ_STATES as readonly string[]).includes(v);
 }
 
-/** The card's quiz block: the baseline (recorded with its date, not yet, or a read that failed, never folded into "not yet")
- *  and the pending runs, oldest first (or why they could not be read). */
+/** The weekly unattended run's tick outcomes (run 3212; `deploy/history-quiz-unattended.mjs`): advanced or done, a stop
+ *  that the next tick resumes, a stop that waits for attention (its word says why), and an internal failure. */
+export const QUIZ_TICK_OUTCOMES = ['ok', 'waiting', 'refused', 'failed'] as const;
+export type QuizTickOutcome = (typeof QUIZ_TICK_OUTCOMES)[number];
+export function isQuizTickOutcome(v: unknown): v is QuizTickOutcome {
+  return typeof v === 'string' && (QUIZ_TICK_OUTCOMES as readonly string[]).includes(v);
+}
+/** The unattended run's last tick as the server stored it (`POST /api/continuity/quiz-status`): the ISO week, the act it
+ *  reached, its outcome and word, one line of detail, the setup's account id, and when the tick ran. */
+export interface LaneArmQuizTick {
+  week: string | null;
+  act: string;
+  outcome: QuizTickOutcome;
+  word: string | null;
+  detail: string | null;
+  account: string | null;
+  at: number;
+}
+/** The unattended block's three states on the card: no tick reported yet, the last tick, or a read that failed. */
+export const LANE_ARM_QUIZ_TICK_STATES = ['none', 'reported', 'unreadable'] as const;
+
+/** The card's quiz block: the baseline (recorded with its date, not yet, or a read that failed, never folded into "not yet"),
+ *  the pending runs, oldest first (or why they could not be read), and the unattended run's last tick (run 3212; additive:
+ *  an older server sends none, and the card then shows no tick line). */
 export interface LaneArmQuizView {
   baseline:
-    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number }
+    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number; id?: number }
     | { state: Extract<LaneArmQuizState, 'not-yet'> }
     | { state: Extract<LaneArmQuizState, 'unreadable'>; detail: string };
   pending: { ok: true; runs: LaneArmQuizPending[] } | { ok: false; detail: string };
+  unattended?: { state: 'none' } | ({ state: 'reported' } & LaneArmQuizTick) | { state: 'unreadable'; detail: string };
 }
 
 /** `GET /api/coord/lane-arm`'s answer (and a POST's, read after the write): every row, in `LANE_ARM_LANES` order, and the
@@ -300,7 +323,23 @@ export const LANE_ARM_TEXT = {
   quizPendingUnreadable: 'The server could not read the replay quiz runs waiting for you',
   quizConfirm: 'Confirm',
   quizDiscard: 'Discard',
+  /** Review 3232 F1e: the operator's undo of a wrong baseline. Optional; nothing asks for it. */
+  quizWithdraw: 'Withdraw the baseline',
+  quizWithdrawNote: 'Withdraw only a baseline you know is wrong: the run is kept and never counts again. Live on a W1a lane is '
+    + 'then refused until a fresh run is recorded and confirmed while every W1a lane is in shadow; a run confirmed earlier is '
+    + 'never promoted. A lane already live stays live.',
+  /** Review 3254 F4: the withdraw cannot be undone, so it takes a second tap. */
+  quizWithdrawTitle: 'Withdraw this baseline?',
+  quizWithdrawLabel: 'Withdraw',
+  quizWithdrawLines: ['The run is kept and never counts again; no door reinstates it.',
+    'Live on a W1a lane is refused until a fresh run is confirmed. A lane already live stays live.'],
   quizRuleNote: 'Before you confirm, match the run\'s report sha with the one report and ccrc quiz-record printed, and '
     + 'discard any run you did not record. Confirm counts the run; the first one confirmed while every W1a lane is in shadow '
     + 'becomes the baseline. Discard keeps the row and never counts it.',
+  quizTick: {
+    none: 'Weekly unattended run: no run reported yet',
+    unreadable: 'Weekly unattended run: its last report could not be read',
+    reported: (date: string, t: LaneArmQuizTick): string => `Weekly unattended run, ${t.week ?? 'setup'}: ${t.act}, `
+      + `${t.outcome}${t.word === null ? '' : ` (${t.word})`}, ${date}${t.account === null ? '' : `, account ${t.account}`}`,
+  },
 } as const;
