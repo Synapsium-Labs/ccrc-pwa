@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
@@ -45,12 +45,17 @@ import type { FleetIO } from '../src/io.js';
 import {
   STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster, stepRow,
 } from './fixtures/advanceCases.js';
-import { HOLDS_GATE_LINE, holdsAppliedOp, pointImports } from './modelsOpCopy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const OP = path.join(REPO, 'deploy', 'models-op.mjs');
 const ARM = path.join(REPO, 'deploy', 'models-anthropic.mjs');
+
+/** A copy's source with its imports pointed at this checkout: `../shared/` (the shared rules) and
+ *  `./models-anthropic.mjs` (beside the op, so a copy elsewhere cannot find it) at `arm`. */
+const pointImports = (src: string, arm: string = ARM): string => src
+  .replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+  .replaceAll("from './models-anthropic.mjs'", `from '${pathToFileURL(arm).href}'`);
 
 let home: string;
 const rosterPath = (): string => path.join(home, '.ccrc', 'accounts.json');
@@ -85,12 +90,7 @@ function op(...args: string[]): Result {
 
 /** `op`, with `extra` laid over its environment (`CCRC_MODELS_NOW`, the advance file's clock). */
 function opEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Result {
-  return opThrough(OP, extra, ...args);
-}
-
-/** `opEnv`, through another copy of the op (`script`): the Anthropic hold path runs through `holdsAppliedOp`'s. */
-function opThrough(script: string, extra: NodeJS.ProcessEnv, ...args: string[]): Result {
-  const r = spawnSync(process.execPath, [script, ...args],
+  const r = spawnSync(process.execPath, [OP, ...args],
     { env: { ...process.env, HOME: home, ...extra }, encoding: 'utf8' });
   const stdout = r.stdout ?? '';
   // THE CONTRACT: exactly one JSON object on stdout, newline-terminated. A
@@ -4151,6 +4151,19 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
     expect(snapshot()).toEqual(before);
   });
 
+  // Review 2886's F4, measured on the Codex arm before the Anthropic arm was made to match it: while a class is held, a
+  // newer model moves nothing, so the class's `previous` and its history stay exactly as they were and nothing is pushed.
+  it('a held class keeps its previous and its history while a newer model waits (the Codex arm, F4)', () => {
+    const PREV = { model: 'model-5-gamma', effort: 'high' };
+    const ENTRY = { at: '2026-10-21T09:00:00Z', how: 'advance', from: 'model-5-gamma', to: 'model-5.6-gamma', ok: true,
+      canary: 'passed' };
+    plantStep({ advance: stepAdvance({ opus: { hold: HOLD, previous: PREV, history: [ENTRY] } }) });
+    const r = commit();
+    expect(r.body).toMatchObject({ ok: true, outcome: 'abandoned', why: 'held', push: false });
+    expect(laneAdvance().classes.opus.previous).toEqual(PREV);
+    expect(laneAdvance().classes.opus.history).toEqual([ENTRY]);
+  });
+
   it('a failed canary on a class held since the plan abandons too, and records no failure', () => {
     plantStep({ advance: stepAdvance({ opus: { hold: HOLD } }) });
     const before = snapshot();
@@ -5773,12 +5786,11 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     fs.writeFileSync(advFile(), bytes);
     return bytes;
   };
-  // The hold path runs through a copy with the hold gate open (D-8820: the shipped op refuses `hold` and `revert` on an
-  // Anthropic lane until Task A3.4); the gate's own cases below run the shipped op.
+  // The shipped op: D-8820's gate on `hold` and `revert` was lifted with Task A3.4, which puts a held id on every launch.
   const hold = (cls = 'opus', id: string = LANE, at: string = NOW): Result =>
-    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: at }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
+    opEnv({ CCRC_MODELS_NOW: at }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
   const verbOf = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
-    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
+    opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
   /** The op through a COPY with one line replaced: the one way to make one of its writes fail for real. A line of the
    *  Anthropic arm (`inArm`) is replaced in a copy of that module, which the op's copy imports in place of the shipped one. */
   const copyOf = (line: string, instead: string, inArm = false): string => {
@@ -6163,26 +6175,42 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     expect(fs.readFileSync(advFile(), 'utf8')).toBe(before);
   });
 
-  // THE GATE (D-8820): until ccd applies a held id at launch (Task A3.4), the shipped op refuses `hold` and `revert` on an
-  // Anthropic lane at its door, in a state where each would otherwise succeed, and writes nothing; `release` stays open.
-  it('the shipped op refuses hold and revert on an Anthropic lane, alias-hold-not-applied, writing nothing; release stays open', () => {
-    expect(fs.readFileSync(ARM, 'utf8').split(HOLDS_GATE_LINE), 'the arm carries the gate, closed').toHaveLength(2);
+  // Review 2886's F4: an alias move while the class is held is the Codex arm's held class (measured above, 'a held class
+  // keeps its previous and its history while a newer model waits'): no history entry, `previous` untouched, no push. The
+  // aliases file still records where the alias went, so doctor names the class held behind. Without it, a second revert
+  // held at the model the first revert had moved away from.
+  it('an alias move while the class is held records no move and keeps previous, so a second revert holds where the first did (F4)', () => {
+    baseline([{ id: X1 }, { id: X2 }, { id: X3 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }, { id: X3 }]));
+    expect(refresh(T1).body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(verbOf('revert').code).toBe(0);
+    const held = fs.readFileSync(advFile(), 'utf8');
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'revert', model: X1 });
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X3 }, [{ id: X1 }, { id: X2 }, { id: X3 }]));
+    const r = refresh(T2);
+    expect([r.code, r.body['moved']], r.stdout + r.stderr).toEqual([0, []]);
+    expect(fs.readFileSync(advFile(), 'utf8'), 'the advance file is untouched while held').toBe(held);
+    expect(readAliases().classes.opus.id, 'the aliases file still follows the alias').toBe(X3);
+    expect(verbOf('revert').code).toBe(0);
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'revert', model: X1 });
+    expect(adv().classes.opus.previous).toEqual({ model: X1, effort: null });
+  });
+
+  // D-8820's gate, lifted (Task A3.4): the shipped op holds and reverts on an Anthropic lane, and no code of the gate is
+  // left in the arm or on the Models sheet.
+  it('the shipped op holds and reverts on an Anthropic lane: the D-8820 gate is gone', () => {
+    expect(fs.readFileSync(ARM, 'utf8'), 'no gate constant and no gate code in the arm').not.toMatch(/HOLDS_APPLIED|alias-hold-not-applied/);
     baseline([{ id: X1 }, { id: X2 }]);
     plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
     expect(refresh(T1).code).toBe(0);
-    const before = fs.readFileSync(advFile(), 'utf8');
-    for (const v of ['hold', 'revert']) {
-      const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', LANE, '--class', 'opus');
-      expect([r.code, r.body['error']], `${v}: ${r.stdout}${r.stderr}`).toEqual([1, 'alias-hold-not-applied']);
-      expect(String(r.body['detail'])).toContain('Nothing was written.');
-      expect(fs.readFileSync(advFile(), 'utf8'), v).toBe(before);
-    }
-    // The same two, through the copy with the gate open, would have held: the refusal above is the gate's alone.
-    expect(verbOf('revert').code).toBe(0);
-    // A hold made before (by hand, or by A3.4's build before a rollback) is still released by the shipped op.
-    const r = opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
-    expect([r.code, r.body['changed']], r.stdout + r.stderr).toEqual([0, true]);
-    expect(adv().classes.opus.hold).toBeNull();
+    const r = opEnv({ CCRC_MODELS_NOW: T2 }, 'revert', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([r.code, r.body['ok']], r.stdout + r.stderr).toEqual([0, true]);
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'revert', model: X1 });
+    const rel = opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([rel.code, rel.body['changed']], rel.stdout + rel.stderr).toEqual([0, true]);
+    const h = opEnv({ CCRC_MODELS_NOW: T3 }, 'hold', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([h.code, h.body['changed']], h.stdout + h.stderr).toEqual([0, true]);
+    expect(adv().classes.opus.hold).toMatchObject({ by: 'hand', model: X2 });
   });
 
   it('a settings.json that is not JSON refuses the hold without quoting any of its text', () => {
@@ -6341,6 +6369,304 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
       const src = fs.readFileSync(f, 'utf8');
       for (const word of names) expect(src.includes(word), `${path.basename(f)} names ${word}`).toBe(false);
     }
+  });
+
+  // Review 2964's F4, ruled as D-8857 (`held-release-reconcile`): a hold freezes the class's history and `previous`, and the
+  // release records no move. The release keeps the id the class was held at (`releasedHold`, beside `releasedAt`), and the
+  // first refresh after it whose reading is trustworthy (an id the lane's build can launch, in an aliases file that was
+  // there before) records the effective move from that id once, with `previous` at it, and clears the evidence in the
+  // same write. Same id, a renewed hold, a first baseline or an untrustworthy reading record nothing.
+  describe("a hold's alias move is recorded once, at the first trustworthy refresh after the release (review 2964 F4, D-8857)", () => {
+    const ROWS = [{ id: X1 }, { id: X2 }, { id: X3 }];
+    const HELD_AT = '2026-11-16T20:00:00Z'; // after T1, before C3
+    const REL_AT = '2026-11-17T09:00:00Z'; // after T2, before T3
+    const T4 = '2026-11-18T00:00:00Z';
+    const T5 = '2026-11-18T06:00:00Z';
+    const T6 = '2026-11-18T12:00:00Z';
+    const act = (v: string, at: string): Result =>
+      opEnv({ CCRC_MODELS_NOW: at }, v, '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    /** X1 to X2 recorded at T1, the class held at X2, and the alias on to `to` under the hold, refreshed at T2 with
+     *  nothing recorded. Answers the advance file's bytes then. */
+    const heldWhileAliasMoves = (rows: { id: string; min?: string | null }[] = ROWS, to: string = X3): string => {
+      baseline(rows);
+      plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, rows));
+      expect(refresh(T1).body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+      const h = act('hold', HELD_AT);
+      expect([h.code, adv().classes.opus.hold], h.stdout + h.stderr).toEqual([0, { at: HELD_AT, by: 'hand', model: X2 }]);
+      const held = fs.readFileSync(advFile(), 'utf8');
+      plantCache(SUFFIX, 'cache-fixture', cacheJson(C3, { opus: to }, rows));
+      const r = refresh(T2);
+      expect([r.code, r.body['moved']], r.stdout + r.stderr).toEqual([0, []]);
+      expect(readAliases().classes.opus.id).toBe(to);
+      expect(fs.readFileSync(advFile(), 'utf8'), 'nothing is written while held').toBe(held);
+      return held;
+    };
+    const release = (at: string = REL_AT): void => {
+      const r = act('release', at);
+      expect([r.code, r.body['changed']], r.stdout + r.stderr).toEqual([0, true]);
+    };
+    const opus = (): ClassAdvance => adv().classes.opus;
+
+    it('X1 to X2, held at X2, the alias on to X3 under the hold, released: the next refresh records X2 to X3 once, previous X2', () => {
+      heldWhileAliasMoves();
+      release();
+      expect(opus().history, 'the release records no move').toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      expect(opus().hold).toBeNull();
+      expect(opus()['releasedAt']).toBe(REL_AT);
+      expect(opus()['releasedHold'], 'the release keeps the id the class was held at').toEqual({ model: X2, at: REL_AT });
+      const r = refresh(T3);
+      expect([r.code, r.body['moved']], r.stdout + r.stderr).toEqual([0, [{ class: 'opus', from: X2, to: X3 }]]);
+      expect(opus().history).toHaveLength(2);
+      expect(opus().history[1]).toEqual({
+        at: T3, how: 'advance', from: X2, to: X3, ok: true, canary: 'not-run', cause: 'newer', evidenceAt: C3 });
+      expect(opus().previous).toEqual({ model: X2, effort: null });
+      expect(opus()['releasedHold'], 'the evidence is cleared in the same write').toBeUndefined();
+      expect(opus()['releasedAt'], 'the release time keeps its meaning').toBe(REL_AT);
+      // Two more refreshes say nothing and add nothing.
+      expect(refresh(T4).body['moved']).toEqual([]);
+      expect(refresh(T5).body['moved']).toEqual([]);
+      expect(opus().history).toHaveLength(2);
+      // A revert now holds at X2, the model before the move.
+      expect(act('revert', T6).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T6, by: 'revert', model: X2 });
+    });
+
+    it('the alias still at the held id after the release: nothing recorded, the evidence cleared, and a revert holds at X1', () => {
+      heldWhileAliasMoves(ROWS, X2);
+      release();
+      const r = refresh(T3);
+      expect([r.code, r.body['moved']], r.stdout + r.stderr).toEqual([0, []]);
+      expect(opus().history).toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      expect(opus()['releasedHold']).toBeUndefined();
+      expect(opus()['releasedAt']).toBe(REL_AT);
+      expect(act('revert', T4).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T4, by: 'revert', model: X1 });
+    });
+
+    it('a renewed hold before the refresh supersedes the evidence: nothing recorded under it, or after its own release', () => {
+      heldWhileAliasMoves();
+      release();
+      const again = '2026-11-17T10:00:00Z';
+      expect(act('hold', again).code).toBe(0);
+      expect(opus().hold).toEqual({ at: again, by: 'hand', model: X3 });
+      expect(opus()['releasedHold'], 'a renewed hold drops the evidence').toBeUndefined();
+      const held = fs.readFileSync(advFile(), 'utf8');
+      expect(refresh(T3).body['moved']).toEqual([]);
+      expect(fs.readFileSync(advFile(), 'utf8')).toBe(held);
+      release(T4);
+      expect(opus()['releasedHold']).toEqual({ model: X3, at: T4 });
+      expect(refresh(T5).body['moved'], 'the alias is where the second hold held it').toEqual([]);
+      expect(opus().history).toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      expect(opus()['releasedHold']).toBeUndefined();
+    });
+
+    it('an untrustworthy reading after the release records nothing and keeps the evidence; a revert then refuses, writing nothing', () => {
+      plantBuild(SUFFIX, '9.2.0');
+      heldWhileAliasMoves([{ id: X1 }, { id: X2 }, { id: X3, min: '9.2.0' }]);
+      release();
+      // The lane's build falls below X3's minimum: the class's id is one the lane cannot launch.
+      plantBuild(SUFFIX, '9.1.0');
+      const r = refresh(T3);
+      expect([r.code, r.body['moved']], r.stdout + r.stderr).toEqual([0, []]);
+      expect(readAliases().classes.opus).toMatchObject({ id: X3, unlaunchable: { needs: '9.2.0', laneVersion: '9.1.0' } });
+      expect(opus().history).toHaveLength(1);
+      expect(opus()['releasedHold']).toEqual({ model: X2, at: REL_AT });
+      const kept = fs.readFileSync(advFile(), 'utf8');
+      const rv = act('revert', T3);
+      expect([rv.code, rv.body['error']], rv.stdout + rv.stderr).toEqual([1, 'alias-source-absent']);
+      expect(fs.readFileSync(advFile(), 'utf8'), 'the refused revert wrote nothing').toBe(kept);
+      // The build returns: the next refresh records the move once.
+      plantBuild(SUFFIX, '9.2.0');
+      expect(refresh(T4).body['moved']).toEqual([{ class: 'opus', from: X2, to: X3 }]);
+      expect(opus().history).toHaveLength(2);
+      expect(opus().previous).toEqual({ model: X2, effort: null });
+    });
+
+    it('a first baseline after the release records nothing and keeps the evidence for the next refresh', () => {
+      heldWhileAliasMoves();
+      release();
+      fs.rmSync(aliasesFile());
+      expect(refresh(T3).body['moved']).toEqual([]);
+      expect(readAliases().classes.opus.id).toBe(X3);
+      expect(opus().history).toHaveLength(1);
+      expect(opus()['releasedHold']).toEqual({ model: X2, at: REL_AT });
+      expect(refresh(T4).body['moved']).toEqual([{ class: 'opus', from: X2, to: X3 }]);
+      expect(opus().history).toHaveLength(2);
+    });
+
+    it('a revert in the window holds at the held-at id, never X1 from the history, and a second revert holds there too', () => {
+      heldWhileAliasMoves();
+      release();
+      const r = act('revert', T3);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(opus().hold).toEqual({ at: T3, by: 'revert', model: X2 });
+      expect(opus().history).toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      expect(act('revert', T4).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T4, by: 'revert', model: X2 });
+      // The refresh under the revert's hold records nothing; its release opens a window of its own, and the refresh
+      // after it records X2 to X3 once.
+      expect(refresh(T5).body['moved']).toEqual([]);
+      release('2026-11-18T08:00:00Z');
+      expect(refresh(T6).body['moved']).toEqual([{ class: 'opus', from: X2, to: X3 }]);
+      expect(opus().history).toHaveLength(2);
+      expect(opus().previous).toEqual({ model: X2, effort: null });
+    });
+
+    it.each([
+      ['the aliases write fails after the move is recorded', "    return writeJsonFile(aliasesPath(id), parsed, 'aliases-unwritable');",
+        "    return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'aliases-unwritable');", 'aliases-unwritable', true],
+      ['the advance write fails before anything is recorded', "  return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
+        "  return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'advance-unwritable');", 'advance-unwritable', false],
+    ] as [string, string, string, string, boolean][])('a reconcile cut short is recorded once and answered once: %s', (_w, line, instead, error, inArm) => {
+      heldWhileAliasMoves();
+      release();
+      const cut = refreshThrough(copyOf(line, instead, inArm), T3);
+      expect([cut.code, cut.body['error']], cut.stdout + cut.stderr).toEqual([1, error]);
+      expect(cut.body['moved'], 'the cut refresh answered no move').toBeUndefined();
+      expect(readAliases().at, 'the aliases file is as it was').toBe(T2);
+      expect(opus().history).toHaveLength(inArm ? 2 : 1);
+      expect(opus()['releasedHold']).toEqual(inArm ? undefined : { model: X2, at: REL_AT });
+      const next = refresh(T4);
+      expect([next.code, next.body['moved']], next.stdout + next.stderr).toEqual([0, [{ class: 'opus', from: X2, to: X3 }]]);
+      expect(opus().history).toHaveLength(2);
+      expect(opus().history[1]).toMatchObject({ from: X2, to: X3, at: inArm ? T3 : T4 });
+      expect(opus().previous).toEqual({ model: X2, effort: null });
+      expect(opus()['releasedHold']).toBeUndefined();
+      expect(readAliases().at).toBe(T4);
+      // Repeated refreshes neither record it again nor answer it again.
+      expect(refresh(T5).body['moved']).toEqual([]);
+      expect(refresh(T6).body['moved']).toEqual([]);
+      expect(opus().history).toHaveLength(2);
+    });
+
+    it('an advance file the previous build wrote (a release with no evidence) parses, and the refresh and revert act as before', () => {
+      heldWhileAliasMoves();
+      // The previous build's release: the hold cleared and releasedAt set, nothing else.
+      const a = adv();
+      a.classes.opus.hold = null;
+      a.classes.opus['releasedAt'] = REL_AT;
+      fs.writeFileSync(advFile(), serializeAdvance(a));
+      const bytes = fs.readFileSync(advFile(), 'utf8');
+      expect(parseAdvance(JSON.parse(bytes))).toEqual(a);
+      const r = refresh(T3);
+      expect([r.code, r.body['moved']], r.stdout + r.stderr).toEqual([0, []]);
+      expect(fs.readFileSync(advFile(), 'utf8'), 'no evidence, nothing to reconcile').toBe(bytes);
+      expect(act('revert', T4).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T4, by: 'revert', model: X1 });
+    });
+
+    it('evidence a later release did not write (its time is not releasedAt) is never read', () => {
+      heldWhileAliasMoves();
+      release();
+      // A build without the field held and released again: releasedAt moved on, the evidence names the earlier release.
+      const a = adv();
+      a.classes.opus['releasedAt'] = T3;
+      fs.writeFileSync(advFile(), serializeAdvance(a));
+      expect(refresh(T4).body['moved']).toEqual([]);
+      expect(opus().history).toHaveLength(1);
+      expect(act('revert', T5).code).toBe(0);
+      expect(opus().hold).toMatchObject({ by: 'revert', model: X1 });
+    });
+
+    it.each([
+      ['not an object', 'x'],
+      ['a model that is not an id', { model: 'not an id', at: REL_AT }],
+      ['a time not of the form', { model: X2, at: '2026-11-17' }],
+      ['no time', { model: X2 }],
+    ] as [string, unknown][])('a releasedHold that is %s is an invalid advance file, and the refresh writes neither file', (_w, value) => {
+      heldWhileAliasMoves();
+      release();
+      const a = adv();
+      // Deliberately not the declared shape: what a hand edit or a damaged file could hold.
+      a.classes.opus['releasedHold'] = value as { model: string; at: string };
+      fs.writeFileSync(advFile(), serializeAdvance(a));
+      expect(() => parseAdvance(a)).toThrow(/classes\.opus\.releasedHold/);
+      const r = refresh(T3);
+      expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'advance-file-invalid']);
+      expect(readAliases().at).toBe(T2);
+    });
+
+    // Review 3006's F1: a second revert in the window holds where the first did, whichever way the alias went in between.
+    const C4 = '2026-11-17T20:00:00Z'; // after T3, before T4: a cache the alias moves by after the first revert
+    const T7 = '2026-11-18T18:00:00Z';
+
+    it('a revert while the alias is still at the held id holds at X1 and drops the evidence; the alias then moves, and a second revert holds at X1 too (F1)', () => {
+      heldWhileAliasMoves(ROWS, X2);
+      release();
+      expect(act('revert', T3).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T3, by: 'revert', model: X1 });
+      expect(opus()['releasedHold'], 'nothing to settle: the alias had not moved when the hold was placed').toBeUndefined();
+      plantCache(SUFFIX, 'cache-fixture', cacheJson(C4, { opus: X3 }, ROWS));
+      expect(refresh(T4).body['moved'], 'a held class records nothing').toEqual([]);
+      expect(readAliases().classes.opus.id).toBe(X3);
+      expect(act('revert', T5).code).toBe(0);
+      expect(opus().hold, 'the second revert holds where the first did').toEqual({ at: T5, by: 'revert', model: X1 });
+      expect(opus().history).toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      // Released at X1 with the alias at X3: the settle records X1 to X3 once, with previous X1, the id the class was held
+      // at when that release lifted the hold.
+      release(T6);
+      expect(opus()['releasedHold']).toEqual({ model: X1, at: T6 });
+      expect(refresh(T7).body['moved']).toEqual([{ class: 'opus', from: X1, to: X3 }]);
+      expect(opus().history).toHaveLength(2);
+      expect(opus().history[1]).toMatchObject({ at: T7, from: X1, to: X3, ok: true });
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+      expect(opus()['releasedHold']).toBeUndefined();
+    });
+
+    it('a revert after the alias moved holds at X2; the alias moves back to X2, and a second revert still holds at X2 (F1)', () => {
+      heldWhileAliasMoves();
+      release();
+      expect(act('revert', T3).code).toBe(0);
+      expect(opus().hold).toEqual({ at: T3, by: 'revert', model: X2 });
+      expect(opus()['releasedHold']).toEqual({ model: X2, at: REL_AT });
+      plantCache(SUFFIX, 'cache-fixture', cacheJson(C4, { opus: X2 }, ROWS));
+      expect(refresh(T4).body['moved']).toEqual([]);
+      expect(readAliases().classes.opus.id).toBe(X2);
+      expect(act('revert', T5).code).toBe(0);
+      expect(opus().hold, 'the second revert holds where the first did').toEqual({ at: T5, by: 'revert', model: X2 });
+      expect(opus().history).toHaveLength(1);
+      // Released at X2 with the alias at X2: nothing moved, nothing recorded.
+      release(T6);
+      expect(refresh(T7).body['moved']).toEqual([]);
+      expect(opus().history).toHaveLength(1);
+      expect(opus().previous).toEqual({ model: X1, effort: null });
+    });
+
+    it('a second revert over the first one\'s hold at the held id reads no aliases file: an unreadable one does not move it (F1)', () => {
+      heldWhileAliasMoves();
+      release();
+      expect(act('revert', T3).code).toBe(0);
+      expect(opus().hold).toMatchObject({ by: 'revert', model: X2 });
+      fs.rmSync(aliasesFile());
+      fs.mkdirSync(aliasesFile());
+      const r = act('revert', T4);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(opus().hold).toEqual({ at: T4, by: 'revert', model: X2 });
+    });
+
+    it('an older build reads a file carrying the evidence and keeps the field', async () => {
+      // #3107's merge on main: the first build with the Anthropic arm, and none of this field.
+      const OLDER = '6c8f52199c50b1a1848a026c8f7c4af9288c9355';
+      const dir = path.join(home, 'older', 'shared');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of ['model-advance.mjs', 'models.mjs', 'base-url.mjs']) {
+        const r = spawnSync('git', ['-C', REPO, 'show', `${OLDER}:shared/${f}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+        expect(r.status, `this checkout does not hold commit ${OLDER}: ${r.stderr}`).toBe(0);
+        fs.writeFileSync(path.join(dir, f), r.stdout);
+      }
+      const older = await import(pathToFileURL(path.join(dir, 'model-advance.mjs')).href) as { parseAdvance: (j: unknown) => Advance };
+      expect(fs.readFileSync(path.join(dir, 'model-advance.mjs'), 'utf8')).not.toContain('releasedHold');
+      heldWhileAliasMoves();
+      release();
+      const read = older.parseAdvance(JSON.parse(fs.readFileSync(advFile(), 'utf8')));
+      expect(read.classes.opus['releasedHold']).toEqual({ model: X2, at: REL_AT });
+      expect(read.classes.opus['releasedAt']).toBe(REL_AT);
+    });
   });
 });
 

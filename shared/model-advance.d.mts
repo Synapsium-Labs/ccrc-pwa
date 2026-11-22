@@ -110,6 +110,9 @@ export interface ClassAdvance {
   history: HistoryEntry[];
   /** When an Anthropic lane's hold on the class was last released (Task A2.3); no history entry is made for it. */
   releasedAt?: string;
+  /** The id the class was held at when that release lifted the hold, and the release's time (review 2964 F4, D-8857):
+   *  present only until the hourly refresh records the alias move the release lifted, or finds there was none. */
+  releasedHold?: { model: string; at: string };
   /** Programme wave 3: the run of sightings of a missing pin (`markMissing`). */
   missing?: MissingMark;
   /** Programme wave 3: the effort fallback the refresh last wrote on this class (`recordEffortFallbacks`). */

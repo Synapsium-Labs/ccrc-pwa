@@ -519,6 +519,13 @@ export function parseAdvance(input) {
     if (x.releasedAt !== undefined && !isAt(x.releasedAt)) {
       bad(`${f}.releasedAt`, 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
     }
+    // The id an Anthropic lane's class was held at when a release lifted the hold, and that release's time (review 2964
+    // F4, D-8857): absent unless a release is waiting for the hourly refresh to record the alias move it lifted. An older
+    // reader keeps it as an unknown key.
+    if (x.releasedHold !== undefined && !(isObj(x.releasedHold) && typeof x.releasedHold.model === 'string'
+        && MODEL_ID_RE.test(x.releasedHold.model) && isAt(x.releasedHold.at))) {
+      bad(`${f}.releasedHold`, 'is not {"model": <id>, "at": <time of the form YYYY-MM-DDTHH:MM:SSZ>}.');
+    }
     // Programme wave 3: the run of sightings of a missing pin (`markMissing`; `seen` optional, so a record of the
     // first shape still reads, and restarts), and the effort fallback the refresh last wrote (`recordEffortFallbacks`).
     // Optional, so every file written before reads; an older build keeps both.

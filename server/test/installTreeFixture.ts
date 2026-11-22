@@ -192,6 +192,8 @@ export const TREE_FILES = [
   // Its fifth library (the Overlord's ccd arms): read, pinned and published exactly as the others.
   'ccd/lib/long-lived.sh',
   'ccd/lib/door.sh',
+  // Its seventh library (the model-class Anthropic arm): read, pinned and published exactly as the others.
+  'ccd/lib/model-aliases.sh',
   // The door program (plan question 2): read with `read_regular`, pinned (`__CCD_DOOR_SHA256`) and published beside the body by the same installer.
   'ccd/door-process.mjs',
   'ccd/ccd-cap-scopes',

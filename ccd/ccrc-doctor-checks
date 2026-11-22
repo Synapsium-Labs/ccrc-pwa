@@ -12386,7 +12386,7 @@ DR_MA_JQ_DEFS='def clean: explode | map(if . < 32 or . == 127 then 32 else . end
 # calling check returns, already printed.
 _dr_ma_read() {   # <check name>
   local name="$1" fn role="" out rc lt err
-  DR_MA_JSON=''; DR_MA_LANES=0
+  DR_MA_JSON=''; DR_MA_LANES=0; DR_MA_ANTHROPIC='|'
   for fn in _box_env_value _plat_timeout _svc_is_active _models_roster_path _models_lock_path _models_node; do
     if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${CCRC_HERE:-}" ] || [ -z "${_SVC_REG:-}" ]; then
       _dr_fail "$name" "ccrc's own library is not loaded ($fn, CCRC_HERE or _SVC_REG is missing), so no lane's advance state was read" \
@@ -12431,6 +12431,8 @@ _models_node "$@"' _dr_ma_read advance-health --file "$(_models_roster_path)" --
     return 3
   fi
   DR_MA_JSON="$out"
+  # The Anthropic lanes, `|`-delimited, from the answer's `anthropic`: every remedy that words such a lane apart reads it.
+  DR_MA_ANTHROPIC="|$(printf '%s' "$out" | jq -r '[.lanes[] | select(.anthropic == true) | .id] | join("|")' 2>/dev/null)|"
   return 0
 }
 
@@ -12506,7 +12508,13 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
   for c in "$@"; do
     case "$c" in
       advance-file-unreadable|advance-file-invalid)
-        part="advance file — repair the file the finding names; if you remove it instead, its holds and move history are lost and the next hourly refresh seeds every empty class again and fills it, so run 'ccrc models $id hold <class>' at once for each class that must stay where it is" ;;
+        # An Anthropic lane (`DR_MA_ANTHROPIC`) has no registry to refill a class from, and ccd applies its holds from
+        # this file alone (`_held_model_env_to`, ccd/lib/model-aliases.sh): review 2886 R1. ccd reads only what a launch needs
+        # (the classes object and each `hold.model`), so a file the op calls invalid can still carry holds ccd applies (review 2964 F7).
+        case "${DR_MA_ANTHROPIC:-}" in
+          *"|$id|"*) part="advance file — repair the file the finding names; until it is repaired, hold, release and revert on this lane are refused, a hold ccd can no longer read does not reach a launch (that class launches on its alias's current id), and a hold ccd can still read keeps applying. If you remove it instead, its holds and move history are lost and nothing refills them: hold again, from the lane's Models sheet or with 'ccrc models $id hold <class>', each class that must stay where it is" ;;
+          *) part="advance file — repair the file the finding names; if you remove it instead, its holds and move history are lost and the next hourly refresh seeds every empty class again and fills it, so run 'ccrc models $id hold <class>' at once for each class that must stay where it is" ;;
+        esac ;;
       registry-unreadable|registry-invalid)
         part="registry — repair the file the finding names, or 'ccrc models $id rm' then 'ccrc models $id init <probe>'" ;;
       catalogue-unreadable|catalogue-invalid)
@@ -12581,7 +12589,6 @@ _check_model-held-behind() {
     _dr_skip model-held-behind "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no lane's advance state was read"
     return 3
   fi
-  DR_MA_ANTHROPIC="|$(printf '%s' "$DR_MA_JSON" | jq -r '[.lanes[] | select(.anthropic == true) | .id] | join("|")' 2>/dev/null)|"
   _dr_ma_report model-held-behind "$rows" _dr_ma_held_behind_fix \
     "$DR_MA_LANES lane(s) with a model registry or an aliases file: no held class has a newer model in its family"
 }
