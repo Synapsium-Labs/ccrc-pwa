@@ -281,6 +281,13 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     recorded.push(line);
     deps.log(line);
   };
+  // A step whose line the sequence refused is not written, told apart from a compare-and-set miss: one line each (Overlord
+  // §10.4; sequence plan review F11). Every step of this pass goes through it.
+  const stepper: Pick<GenerationsCoord, 'stepGeneration'> = { stepGeneration: (id, ...rest) => {
+    const w = coord.stepGeneration(id, ...rest);
+    if (!w.changed && w.why === 'stamp-refused') deps.log(`ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`);
+    return w;
+  } };
   // Every read that failed, each with what it stopped at the point it failed (review 2006 N3); `unread` is the first.
   const failures: Failure[] = [];
   const fail = (what: NonNullable<GenerationsResult['unread']>, detail: string, stops: string): void => {
@@ -453,7 +460,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   else {
     const feed = cardReadFeed(coord, carded.rows, live);
     for (const f of feed.failed) fail('card-reads', f, 'that generation\'s card read waits for the next pass');
-    cardRead += applyFedEvents(coord, feed.events, live, now, onStep, D.generationStep);
+    cardRead += applyFedEvents(stepper, feed.events, live, now, onStep, D.generationStep);
   }
 
   // ---- THE PROBES: each generation's graded round fed, its next round opened, its `probe-failed` input kept for THREE.
@@ -509,7 +516,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, new Map(tried).set(s.open.kind, key)); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
-    probesFed += applyFedEvents(coord, events, live, now, onStep, D.generationStep);
+    probesFed += applyFedEvents(stepper, events, live, now, onStep, D.generationStep);
     for (const id of [...deps.emptyTries.keys()]) if (!forProbes.rows.some((g) => g.id === id)) deps.emptyTries.delete(id);
   }
 
@@ -596,7 +603,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const from = effectiveGeneration(g, live).state;
       const step = D.generationStep(genViewOf(g, live), e);
       if (!step.changed) continue;
-      if (!coord.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
+      if (!stepper.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
       const again = coord.liveGenerations();
       const next = again.ok ? again.rows.find((x) => x.id === g.id) : undefined;
       // Feeding a soft due spends one of the soft budget's renewals, stamped on the accumulator (ruling R4): live only, since

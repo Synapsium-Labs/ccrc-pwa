@@ -10,13 +10,21 @@
 // row and answers `{ok:false, authority, detail}`; `row-only` (a narrowing the journal could not append) writes the row and
 // appends nothing. Every `from` it states is the row's own value read in the same transaction. A refusal RETURNS from the
 // transaction (it never throws), so a record already appended in it keeps its head row.
+//
+// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending` and `retire` change the
+// designation's state, so each stamps its line(s) with `stampSequenceInTx` after the row write, in its transaction, with the actor
+// it writes to the row. A writer with an append checks its lines' verdict BEFORE the append, so a refused line never follows a
+// record; a stamp that still fails (a failed insert) throws `SequenceStampRefused` inside the transaction, so no row is written,
+// exactly as a failed row write would (slug `stamp-failure-is-a-row-write-failure`). The other writers stamp nothing.
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
+import { sequenceLineVerdict } from './overlordSequence.js';
+import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
 import type { OverlordAuthorityJournal, AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from './overlordAuthority.js';
 import { endOverlordGeneration, restampOverlordGeneration } from '../continuity/continuityStore.js';
 import {
-  ATTEMPT_OUTCOME_MAP, PENDING_KINDS, parseAccountPools, parseOverlordModel,
+  ATTEMPT_OUTCOME_MAP, DESIGNATION_SEQUENCE_STATES, PENDING_KINDS, parseAccountPools, parseOverlordModel,
   type AttemptOutcome, type DesignationRead, type DesignationView, type OverlordModelClass, type PendingKind,
 } from '../../../shared/overlord-designation.js';
 import type { PoolSet } from '../../../shared/poolset.js';
@@ -142,6 +150,21 @@ const SET_ACTOR = 'actor = ?, actorKind = ?, actorIssuer = ?, actorStrength = ?'
 
 const withId = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
 
+/** A designation line that could not be stamped, thrown inside the writer's transaction so the row rolls back with it. */
+export class SequenceStampRefused extends Error {}
+type DesignationState = (typeof DESIGNATION_SEQUENCE_STATES)[number];
+/** One line: the session the move concerns, its state, and the actor the writer writes to the row (`undefined` never reads). */
+const designationLine = (id: string, state: DesignationState, actor: ActorWire | undefined, at: number): SequenceLineInput =>
+  ({ kind: 'designation', id, state, actor: actor?.subject ?? '', actorKind: actor?.kind ?? ('' as ActorWire['kind']), at });
+/** Before an append: a line the verdict refuses stops the writer before any record is written. */
+function checkLines(lines: readonly SequenceLineInput[]): void {
+  for (const l of lines) { const v = sequenceLineVerdict(l); if (!v.ok) throw new SequenceStampRefused(`${v.refusal}: designation ${l.id} -> ${l.state}`); }
+}
+/** After the row write, in the same transaction. */
+function stampLines(db: DatabaseSync, lines: readonly SequenceLineInput[]): void {
+  for (const l of lines) { const s = stampSequenceInTx(db, l); if (!s.ok) throw new SequenceStampRefused(`${s.error}: ${s.detail}`); }
+}
+
 // ── designatePending ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface DesignateInput {
@@ -164,6 +187,8 @@ export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i
     if ('ok' in h) return h;
     const row = h.row;
     if (row !== null && (row.bound !== null || row.pending !== null)) return { ok: false, reason: 'exists' };
+    const lines = [designationLine(i.sessionId, 'pending', i.actor, i.at)];
+    checkLines(lines);
     const set = append(db, journal, { kind: 'authority-account-set', opKey: `${i.opKey}-set`,
       from: row === null ? NARROWEST_SET : row.accountPools, to: i.accountPools });
     if (!set.ok) return set;
@@ -181,6 +206,7 @@ export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i
       + 'actorIssuer = excluded.actorIssuer, actorStrength = excluded.actorStrength, updatedAt = excluded.updatedAt',
     ).run(i.sessionId, i.at, i.deadlineAt, ...actorCols(i.actor), i.model, JSON.stringify({ pools: i.accountPools.pools, untagged: i.accountPools.untagged }),
       ...actorCols(i.actor), i.at);
+    stampLines(db, lines);
     return { ok: true, changed: true };
   });
 }
@@ -218,6 +244,8 @@ export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: 
     const p = h.row?.pending ?? null;
     if (h.row === null || p === null || p.sessionId !== sessionId || p.kind !== 'designate') return { ok: true, changed: false };
     const term = h.row.term + 1;
+    const lines = [designationLine(sessionId, 'live', p.actorDetail, at)]; // the attempt's actor, which the binding copies
+    checkLines(lines);
     const a = append(db, journal, { kind: 'authority-designate', opKey: `go-live-term-${term}`, term, sessionId, generation });
     if (!a.ok) return a;
     db.prepare(
@@ -228,6 +256,7 @@ export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: 
       + 'attemptAt = NULL, updatedAt = ? WHERE id = 1',
     ).run(sessionId, generation, term, term, at);
     restampOverlordGeneration(db, sessionId, term);
+    stampLines(db, lines);
     return { ok: true, changed: true, term };
   });
 }
@@ -249,7 +278,8 @@ export function failPending(db: DatabaseSync, sessionId: string, outcome: Attemp
     const owed = owesStop ? withId(h.row.stopsOwed, sessionId) : h.row.stopsOwed;
     db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, attemptId = ?, attemptOutcome = ?, attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
       .run(sessionId, outcome, at, JSON.stringify(owed), at);
-    endOverlordGeneration(db, sessionId); // the failed attempt's body never went live: its generation ends here (N3)
+    endOverlordGeneration(db, sessionId, at); // the failed attempt's body never went live: its generation ends here (N3)
+    stampLines(db, [designationLine(sessionId, 'failed', p.actorDetail, at)]); // no append: the attempt's actor, as its row recorded it
     return { ok: true, changed: true };
   });
 }
@@ -277,15 +307,19 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
       const id = p!.sessionId;
       db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, ${SET_ACTOR}, attemptId = ?, attemptOutcome = 'retired', attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
         .run(...actorCols(i.actor), id, i.at, JSON.stringify(withId(row.stopsOwed, id)), i.at);
-      endOverlordGeneration(db, id); // a cancelled pending body's generation ends `retired` too (review 2366 N3)
+      endOverlordGeneration(db, id, i.at); // a cancelled pending body's generation ends `retired` too (review 2366 N3)
+      stampLines(db, [designationLine(id, 'retired', i.actor, i.at)]); // no append, no term raised
       return { ok: true, changed: true, term: row.term, owed: [id] };
     }
     const bound = row.bound.sessionId;
     const term = row.term + 1;
+    // A pending attempt it cancels is `failed`, then the binding `retired` (sequence plan review F12), both by the retiring actor.
+    const lines = [...(p === null ? [] : [designationLine(p.sessionId, 'failed', i.actor, i.at)]), designationLine(bound, 'retired', i.actor, i.at)];
+    checkLines(lines);
     const a = append(db, journal, { kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
     if (!a.ok) return a;
-    endOverlordGeneration(db, bound); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
-    if (p !== null) endOverlordGeneration(db, p.sessionId); // and the pending body's it cancels (review 2366 N3)
+    endOverlordGeneration(db, bound, i.at); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
+    if (p !== null) endOverlordGeneration(db, p.sessionId, i.at); // and the pending body's it cancels (review 2366 N3)
     const owed = p === null ? [bound] : withId([bound], p.sessionId);
     const stops = owed.reduce<readonly string[]>(withId, row.stopsOwed);
     const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at: i.at };
@@ -293,6 +327,7 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
       + 'attemptId = ?, attemptOutcome = ?, attemptAt = ?, updatedAt = ? WHERE id = 1')
       .run(term, JSON.stringify(withId(row.pastIds, bound)), JSON.stringify(stops), ...actorCols(i.actor),
         la?.sessionId ?? null, la?.outcome ?? null, la?.at ?? null, i.at);
+    stampLines(db, lines);
     return { ok: true, changed: true, term, owed };
   });
 }
