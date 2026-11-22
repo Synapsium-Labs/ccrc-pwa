@@ -60,6 +60,7 @@ They decide every question the plan leaves open.
 | 8 call pin | the folded trail draws an addressed call once, pinned (`w8-folded-pin`) | D-8809 | #3172 | **merged** 2026-11-22 as `592f6bb23` (head `dbe2b86ab`, by the merge queue; run 3230 closed done): one review round (3235) |
 | 8 skill section | the coordinator plan reference gains its `linking suggest` section, checked against today's code (`w8-skill-section`) | D-8808, D-8809 | #3174 | **merged** 2026-11-22 as `83457077f` (head `6ae8c761c`, by the merge queue; run 3238 closed done): three review rounds (3242, 3245, 3248); accepted at the cap, two wording gaps carried to `w8-suggest-workspace-id` |
 | 8 overlord door | the Overlord skill's door table names `link_team`, and says when the Overlord leaves a team candidate for the operator (`w8-overlord-skill`) | D-8808, D-8809 | #3177 | **merged** 2026-11-22 as `d899d4fb1` (head `575d1b80c`, by the merge queue; run 3251 closed done): three review rounds (3253, 3260, 3261); accepted at the cap, one false note sentence corrected by run 3264 |
+| 8 pair last | the client puts the pane's pair last on the linking suggest, linking confirm and call record doors (`w8-suggest-pair-last`) | D-8808, D-8809 | #3179 | **merged** 2026-11-22 as `3af4842d5` (head `b46aa17bc`, by the merge queue after one flake ejection, re-run green alone; run 3264 closed done): three review rounds (3266, 3271, 3274); accepted at the cap, two refusal pins carried to `w8-pair-refusal-pins` |
 | 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence (built, off), a coordinator's suggestion, the Overlord's link as a call made for the operator, the console | D-8808, D-8809 | #3123 | **merged** 2026-11-21 as `6c3ea2c55` (head `dbc6483eb`, by the merge queue; run 2862 closed done): three review rounds (2971, 2997, 3020); accepted at the cap, migration **116**; six follow-up tickets, one dropped as built |
 
 ## Decisions & deviations
@@ -419,10 +420,10 @@ Every planned wave and every fix before the pilot has landed (#3145, #3150). The
 to the operator before any other team is started. After that rollout the coordinator makes item 498's one read-only
 capture, records it as a scrubbed fixture, and only then may `w8-attached-wire` switch the evidence on.
 
-In flight: run 3264, ticket `w8-suggest-pair-last` (the client puts the pane's pair last on the linking suggest
-and confirm calls and the call record).
+In flight: run 3279, ticket `w8-confirm-unmeasured` (the team confirm, the team suggest and the operator's linking
+write answer `unavailable`, not `team-unknown`, when a workspace cannot be read).
 
 Open follow-up tickets: `w8-attached-wire` (after the capture), `w8-suggest-workspace-id` (a coordinator can learn
-the workspace id the `team-ambiguous` remedy asks for, review 3248 F1 and F2) and `w8-confirm-unmeasured` (the
-Overlord's confirm and the operator's write answer `unavailable`, not `team-unknown`, when a workspace cannot be read;
-review 3253 F1, corrected by review 3261 F1). Each is a rules or small code change of its own.
+the workspace id the `team-ambiguous` remedy asks for, review 3248 F1 and F2) and `w8-pair-refusal-pins` (the nested and
+padded identity-key refusal pinned on the linking and call doors, review 3274 F1). Each is a rules or small code change
+of its own.
