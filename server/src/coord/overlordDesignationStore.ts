@@ -336,7 +336,7 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
   const p = row.pending;
   const owed: string[] = [];
   for (const id of [row.bound?.sessionId, p?.sessionId]) if (id !== undefined && !owed.includes(id)) owed.push(id);
-  for (const id of owed) endOverlordGeneration(db, id);
+  for (const owedId of owed) endOverlordGeneration(db, owedId);
   const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at };
   db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, sessionId = NULL, generation = NULL, term = ?, model = ?, accountPools = ?, `
     + `pastIds = ?, stopsOwed = ?, ${SET_ACTOR}, attemptId = ?, attemptOutcome = ?, attemptAt = ?, updatedAt = ? WHERE id = 1`)

@@ -80,3 +80,9 @@ stamp left `unmeasured`.
   `offerNow` is called once after the commit, and the `restore-detected` latch stands.
 - The server tests were written after the code, not red first; every guard was then mutation-measured as above. The banner's
   test was red first.
+- `CLAUDE.md`'s box-token bullet does not yet name the two doors. The review judge refuses a PR that changes a rules file
+  together with anything else (`rules-mixed`), and no test pins that sentence, so it is left for a rules PR of its own. In the
+  Overlord doors sentence, after "a latch clear always takes the step-up.", the text to add is: "Confirm the restore
+  (authority journal C), `GET /api/overlord/restore` (the guard's state) and `POST /api/overlord/restore/confirm` (behind the
+  step-up), consults no box token either and is session-gated when armed, and refuses `auth-off` dark." The next sentence then
+  begins "All three sets of doors" in place of "Both sets of doors".
