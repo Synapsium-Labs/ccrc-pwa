@@ -682,8 +682,9 @@ ruler, when the single-use key its unattended record was answered and the sha it
 it pending, otherwise), `POST /api/continuity/quiz-status` (each tick's word and trace, which the Shadow lanes card shows and which
 mails the coordinator once per week and stop word) and `POST /api/continuity/quiz-baseline/live` (the programme coordinator's Live
 on a W1a lane once a confirmed baseline exists, attributed and ownership-checked). The record, confirm and status rows of
-`ccrc-api` are the timer's, never a session's: the session hook's quiz arm refuses them on every session, an accident guard as the
-account arm is (a session running the runner's flow outside a pane runs past it); `quiz live` stays open. The operator's
+`ccrc-api` are the timer's, never a session's: the session hook's quiz arm refuses them, and `ccrc quiz-record` (its script too),
+on every session, an accident guard as the account arm is (a script file, `bash -c` with an assembled string or another
+interpreter runs past it); `quiz live` stays open. The operator's
 `POST /api/continuity/quiz-runs/:id/withdraw` (a wrong baseline undone, behind the account gate without a step-up, so it refuses
 while sign-in is dark) consults no box token and is session-gated when armed. All six register from
 `server/src/continuity/quizRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept

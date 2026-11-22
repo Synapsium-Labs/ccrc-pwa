@@ -172,6 +172,7 @@ function QuizTickLine({ tick }: { tick: NonNullable<LaneArmQuizView['unattended'
 function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload: () => void; stepUpDeps: StepUpDeps }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [withdrawing, setWithdrawing] = useState<number | null>(null);
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -226,9 +227,24 @@ function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload
       {b.state === 'recorded' && b.id !== undefined && (
         <div data-quiz-withdraw={b.id}>
           <p className={SETTINGS_NOW_CLASS.note}>{T.quizWithdrawNote}</p>
-          <Button variant="ghost" size="fit" disabled={busy} onClick={() => { void rule(b.id as number, 'withdraw'); }}>{T.quizWithdraw}</Button>
+          <Button variant="ghost" size="fit" disabled={busy} onClick={() => setWithdrawing(b.id as number)}>{T.quizWithdraw}</Button>
         </div>
       )}
+      {/* Review 3254 F4: a withdraw cannot be undone, so it takes a second tap. */}
+      <QuickConfirm
+        open={withdrawing !== null}
+        title={T.quizWithdrawTitle}
+        consequence={[...T.quizWithdrawLines]}
+        confirmLabel={T.quizWithdrawLabel}
+        tone="danger"
+        defaultFocus="cancel"
+        onConfirm={() => {
+          const id = withdrawing;
+          setWithdrawing(null);
+          if (id !== null) void rule(id, 'withdraw');
+        }}
+        onClose={() => setWithdrawing(null)}
+      />
     </div>
   );
 }

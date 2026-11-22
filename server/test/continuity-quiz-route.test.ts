@@ -19,6 +19,7 @@ import { SETTINGS_MODES, TREATMENT_ARM } from '../../deploy/history-replay.mjs';
 import { canonicalJson } from '../../ccd/history/lib.mjs';
 import {
   QUIZ_PENDING_CAP, QUIZ_PILOT_SKIPPED, QUIZ_SETTINGS_MODES, QUIZ_SINGLE_REPORT_KEYS, QUIZ_SINGLE_REPORT_KIND, QUIZ_TREATMENT_ARM,
+  W1A_ARM_ROWS,
 } from '../src/continuity/quiz.js';
 import { QUIZ_RECORD_BODY_LIMIT } from '../src/continuity/quizRoutes.js';
 import { ruleQuizRun } from '../src/continuity/quizStore.js';
@@ -311,6 +312,24 @@ describe('POST /api/continuity/quiz-runs/:id/withdraw (the operator\'s withdraw 
     expect(json(again)).toMatchObject({ ok: false, error: 'bad-request', detail: `run ${id} is withdrawn, not a confirmed baseline` });
     expect(json(await withdraw(r, 999))).toEqual({ ok: false, error: 'bad-request', detail: 'no quiz run 999' });
     expect(json(await withdraw(r, 'x'))).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  // Review 3254 F6: end to end, a withdrawn baseline stops both Live doors, the card's and the coordinator's.
+  it('after the withdraw, the card\'s Live and the coordinator\'s Live both answer baseline-missing, and no lane moves', async () => {
+    const r = await rig({ armed: true });
+    r.coord.openRun({ program: 'overlord', title: 'OVERLORD', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    const lane = W1A_ARM_ROWS[0];
+    const card = () => r.send({ url: '/api/coord/lane-arm', payload: { lane, choice: 'live' } });
+    const coordLive = () => r.send({ url: '/api/continuity/quiz-baseline/live', payload: { fromId: 'lane-a', fromUuid: 'u-lane-a', lane }, headers: TOKEN, cookie: false });
+    const id = await baseline(r);
+    // With the baseline the card's Live reaches its confirm: the baseline is not what stops it.
+    expect(json(await card())).toMatchObject({ ok: false, error: 'confirm-required' });
+    expect((await withdraw(r, id)).statusCode).toBe(200);
+    for (const [door, res] of [['card', await card()], ['coordinator', await coordLive()]] as const) {
+      expect(res.statusCode, `${door}: ${res.body}`).toBe(409);
+      expect(json(res), door).toMatchObject({ ok: false, error: 'baseline-missing' });
+    }
+    expect(r.coord.laneArmSetting(lane)).not.toMatchObject({ choice: 'live' });
   });
 });
 

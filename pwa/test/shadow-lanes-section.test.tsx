@@ -353,8 +353,18 @@ describe('the replay quiz block (Overlord W1a, quiz record)', () => {
     expect(await screen.findByText(T.quizWithdrawNote)).toBeInTheDocument();
     expect(document.querySelector('[data-quiz-withdraw]')?.getAttribute('data-quiz-withdraw')).toBe('4');
     const calls = read.mock.calls.length;
+    // Review 3254 F4: the first tap opens the confirm, and Cancel withdraws nothing.
     fireEvent.click(screen.getByRole('button', { name: T.quizWithdraw }));
+    expect(await screen.findByText(T.quizWithdrawTitle)).toBeInTheDocument();
+    for (const line of T.quizWithdrawLines) expect(screen.getByText(line)).toBeInTheDocument();
+    expect(withdraw).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText(T.quizWithdrawTitle)).toBeNull());
+    expect(withdraw).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: T.quizWithdraw }));
+    fireEvent.click(await screen.findByRole('button', { name: T.quizWithdrawLabel }));
     await waitFor(() => expect(withdraw).toHaveBeenCalledWith(4));
+    expect(withdraw).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(calls));
     expect(rule).not.toHaveBeenCalled();
     cleanup();

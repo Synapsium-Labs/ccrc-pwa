@@ -1,7 +1,8 @@
 /**
  * The session hook's quiz row (review 3232 F1; the operator's ruling of 2026-11-22): on EVERY session, a top-level one
  * and a dispatched child alike, the PreToolUse arm refuses the box client's replay-quiz rows `record`, `confirm` and
- * `status` (the weekly timer's acts) in the bare, path-qualified, quoted and `$VAR` program forms. `quiz live` (the
+ * `status` (the weekly timer's acts) in the bare, path-qualified, quoted and `$VAR` program forms, an act held in a
+ * variable, and the shell verb that posts them (`ccrc quiz-record`, its script; review 3254 F1 and F2). `quiz live` (the
  * Overlord coordinator's door) and every other client call stay open. An accident guard, not a wall.
  *
  * Runs `ccd/session-hook.sh` for real in a fixture HOME (`session-hook-account-deny.test.ts`'s harness). Never the
@@ -80,11 +81,66 @@ describe('the quiz row refuses the weekly timer\'s client acts on every session'
   }
 });
 
+/** Review 3254 F1: the shell verb that posts the rows, `ccrc quiz-record` and its script, in the account arm's forms. */
+const SHELL_FORMS: ReadonlyArray<[string, string]> = [
+  ['the verb, bare', 'ccrc quiz-record --report r.json --sha abc --confirm'],
+  ['the verb after env -u', 'env -u CLAUDECODE -u TMUX_PANE ccrc quiz-record --report r.json --sha abc --confirm'],
+  ['the verb, path-qualified', '~/.local/bin/ccrc quiz-record --report r.json'],
+  ['the verb, quoted', '"ccrc" quiz-record --report r.json'],
+  ['the verb, a $VAR program', 'C=ccrc; $C quiz-record --report r.json'],
+  ['the script, bare', 'ccrc-quiz-record --report r.json --confirm'],
+  ['the script, quoted', '\'ccrc-quiz-record\' --confirm'],
+  ['the script, installed path', '~/.local/bin/ccrc-quiz-record --report r.json'],
+  ['the script, "$HOME" path', '"$HOME/.local/bin/ccrc-quiz-record" --confirm'],
+  ['the script, repository path', './ccd/ccrc-quiz-record --report r.json'],
+  ['the script by path after env -u', 'env -u CLAUDECODE -u TMUX_PANE ./ccd/ccrc-quiz-record --confirm'],
+  ['the script through bash', 'bash ccd/ccrc-quiz-record --confirm'],
+  ['the script by path after a cd', 'cd work && ccd/ccrc-quiz-record --confirm'],
+  ['the script, a $VAR program', 'Q=ccrc-quiz-record; $Q --confirm'],
+];
+
+describe('the quiz row refuses the shell verb that posts the timer\'s rows (review 3254 F1)', () => {
+  for (const [caller, id] of CALLERS) {
+    it.each(SHELL_FORMS)(`${caller}: %s`, (_n, command) => {
+      const why = fire(id, 'Bash', { command });
+      expect(why, command).not.toBeNull();
+      expect(why).toMatch(/replay quiz's record, confirmation and status are the weekly timer's acts/);
+    });
+  }
+});
+
+/** Review 3254 F2: a tab between the words (the prefilter reads it stripped, as `t`) and an act held in a variable. */
+const SPELLINGS: ReadonlyArray<[string, string]> = [
+  ['a tab before the act', 'ccrc-api quiz\trecord --id 1'],
+  ['a tab before quiz', 'ccrc-api\tquiz confirm --id 1'],
+  ['a newline continuation before the act', 'ccrc-api quiz \\\nstatus --json -'],
+  ['the act in a $V', 'V=record; ccrc-api quiz $V --id 1'],
+  ['the act in a "$V"', 'ccrc-api quiz "$V" --id 1'],
+  ['the act in a ${V}', 'ccrc-api quiz ${ACT} --id 1'],
+];
+
+describe('the quiz row reads a tab and an act in a variable (review 3254 F2)', () => {
+  for (const [caller, id] of CALLERS) {
+    it.each(SPELLINGS)(`${caller}: %s`, (_n, command) => {
+      expect(fire(id, 'Bash', { command }), command).not.toBeNull();
+    });
+  }
+});
+
+describe('the deny reason names the way past a text-only refusal (review 3254 F3)', () => {
+  it.each(CALLERS)('%s', (_c, id) => {
+    expect(fire(id, 'Bash', { command: 'git commit -m "note ccrc-api quiz record"' }))
+      .toMatch(/Text that only names it is refused too; reword it or write it through a file/);
+  });
+});
+
 describe('the quiz row leaves everything else open', () => {
   it.each(CALLERS)('%s: live, other client calls, reads and plain text pass', (_c, id) => {
     for (const command of [
       'ccrc-api quiz live', '~/.local/bin/ccrc-api quiz live --id 12', 'ccrc-api mail send --json -',
       'grep -n quiz somefile', 'cat quiz-notes.md', 'ccrc-api quizzes status', 'echo record confirm status',
+      'cat ccd/ccrc-quiz-record', 'git add ccd/ccrc-quiz-record server/test/ccrc-quiz-record.test.ts',
+      './node_modules/.bin/vitest run test/ccrc-quiz-record.test.ts', 'git diff -- ccd/ccrc-quiz-record',
     ]) expect(fire(id, 'Bash', { command }), command).toBeNull();
     expect(fire(id, 'Read', { file_path: '/srv/work/project-a/docs/quiz-unattended-note.md' })).toBeNull();
   });

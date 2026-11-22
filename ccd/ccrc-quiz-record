@@ -108,10 +108,11 @@ if [ "$ok" = true ]; then
   fi
   [[ "$id" =~ ^[1-9][0-9]*$ ]] || die "the record answered no run id; nothing was confirmed"
   # The confirmation: the run id the record answered, the confirm key it answered (none for a run already ruled, whose resend
-  # answers its own state) and the sha the report printed, ruled by the server's matching rule.
-  key=$(printf '%s' "$answer" | jq -r '.confirmKey // ""')
-  cbody=$(jq -n --arg sha "$sha" --arg by "$trace" --arg key "$key" \
-    '{sha256: $sha, by: $by} + (if $key == "" then {} else {confirmKey: $key} end)') || die "could not build the confirm body"
+  # answers its own state) and the sha the report printed, ruled by the server's matching rule. The key is carried from the
+  # record's answer to the confirm body on jq's stdin, never in its argv or a shell variable (review 3254 F5).
+  cbody=$(printf '%s' "$answer" | jq -c --arg sha "$sha" --arg by "$trace" \
+    '{sha256: $sha, by: $by} + (if (.confirmKey // "") == "" then {} else {confirmKey: .confirmKey} end)') \
+    || die "could not build the confirm body"
   answer=$(printf '%s' "$cbody" | "$CLIENT" quiz confirm "$id" --json -)
   rc=$?
   [ "$rc" -eq 0 ] || die "no answer to the confirmation (ccrc-api exited $rc); run $id is recorded, its ruling unknown"

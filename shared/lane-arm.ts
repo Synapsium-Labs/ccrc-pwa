@@ -325,8 +325,14 @@ export const LANE_ARM_TEXT = {
   quizDiscard: 'Discard',
   /** Review 3232 F1e: the operator's undo of a wrong baseline. Optional; nothing asks for it. */
   quizWithdraw: 'Withdraw the baseline',
-  quizWithdrawNote: 'Withdraw only a baseline you know is wrong: the run is kept, never counts again, and the next run confirmed '
-    + 'while every W1a lane is in shadow becomes the baseline. A lane already live stays live.',
+  quizWithdrawNote: 'Withdraw only a baseline you know is wrong: the run is kept and never counts again. Live on a W1a lane is '
+    + 'then refused until a fresh run is recorded and confirmed while every W1a lane is in shadow; a run confirmed earlier is '
+    + 'never promoted. A lane already live stays live.',
+  /** Review 3254 F4: the withdraw cannot be undone, so it takes a second tap. */
+  quizWithdrawTitle: 'Withdraw this baseline?',
+  quizWithdrawLabel: 'Withdraw',
+  quizWithdrawLines: ['The run is kept and never counts again; no door reinstates it.',
+    'Live on a W1a lane is refused until a fresh run is confirmed. A lane already live stays live.'],
   quizRuleNote: 'Before you confirm, match the run\'s report sha with the one report and ccrc quiz-record printed, and '
     + 'discard any run you did not record. Confirm counts the run; the first one confirmed while every W1a lane is in shadow '
     + 'becomes the baseline. Discard keeps the row and never counts it.',

@@ -187,14 +187,17 @@ All five files pass, run together through `ccrc test`.
 | F10 | `history-quiz-single-out` carries a ruling again, for what the runner never collects (a hand-run `--out`, a setup directory left after a refusal), with its pin. |
 | Nits | The marker's journal line is written before the link, and the temp is fsynced; the status door takes the runner's trace; an empty detail is stored as none; a setup-phase stop's mail key carries its week. |
 
-**Schema and README.** Migration 119 gains four nullable columns on `continuity_quiz_runs` and three on its new table, by a
+**Schema and README.** The migration (119 then, 120 since fix round 3) gains four nullable columns on `continuity_quiz_runs` and three on its new table, by a
 second packet on run 3213's yes (it checked the state column has no CHECK). README's confirmation clause changed by a second
 packet on run 1850's coordinator's yes.
 
 **Departures, fix round 2:**
-- **unattended-flow-outside-a-pane**: the remaining residual. A session that runs the runner's exact flow itself, outside a
-  pane, by a script or another interpreter, still records and confirms a run. The key closes confirming a run someone else
-  recorded; the hook arm closes the client called from a session; neither is a wall.
+- **unattended-flow-outside-a-pane**: the remaining residual, corrected by review 3254 F1. Since fix round 3 the hook row also
+  refuses the shell verb `ccrc quiz-record` and its script `ccrc-quiz-record` (bare, path-qualified, quoted, `$VAR`, with or
+  without `env` and its `-u` prefixes), so the one-line `env -u` form is refused too. What stays open is exactly: a script
+  file, `bash -c` with an assembled string, or another interpreter that posts the two rows itself. The key closes confirming
+  a run someone else recorded, or one recorded by hand; it does not stop a caller that can post the record row from recording
+  its own report. It is an accident guard, not a wall.
 - **status-door-trace-not-session**: "the attribution check its siblings have" is the trace the record and confirm doors take
   (`by`, stored as `reportedBy`), because the runner has no session and so no `fromUuid`. The hook arm refuses the status row
   on every session.
@@ -218,6 +221,22 @@ is chosen in `quizRoutes.ts`; a `generated` account with telemetry `none` is adm
 (`week-ended`); `~/.ccrc/quiz/weeks/` keeps four weeks of history-derived transcripts; any session can start the service by
 hand (`systemctl --user start`), which is idempotent and one budget a week.
 
+## Fix round 3 (review 3254, ruled in the coordinator's fix-round mail)
+
+| Item | What changed |
+|---|---|
+| F1 | The hook's quiz row also refuses the shell verb `ccrc quiz-record` and its script `ccrc-quiz-record` on every session: bare, quoted, `$VAR`, after `env` and its `-u` prefixes, and by path where the path is run (at the head of a command, after `env`, or through `bash`/`sh`), so a `cat`, `git add` or test run naming the script's path passes. `quiz-record` is its own prefilter term. The operator's hand use outside a session is unaffected. The departure `unattended-flow-outside-a-pane` now names what stays open. |
+| F2 | The prefilter reads `quiz` followed by a blank, a stripped tab or newline (`t`, `n`) or a backslash, so a tab between the words reaches the matcher on a top-level session too. The row also refuses an act held in a variable (`ccrc-api quiz $V`), since its act cannot be read; `quiz live` written out stays open. Tab, newline and `$V` cases are in the table. |
+| F3 | The deny reason says text that only names a row is refused too, and to reword it or write it through a file (`git commit -F <file>`). As the account arm's, a commit message or an `echo` naming a row is refused. |
+| F4 | Withdraw takes a second tap: a confirm sheet (danger, Cancel focused) says the run never counts again, no door reinstates it, and Live on a W1a lane is refused until a fresh run is confirmed. The card's note says an earlier confirmed run is never promoted. |
+| F5 | The migration comment says a ruled run's hash is never read (the ruler reads the key only while the run is pending). The client carries the key from the record's answer to the confirm body on `jq`'s stdin, never in its argv or a shell variable. |
+| F6 | An end-to-end case: a withdrawn baseline makes the card's Live and the coordinator's Live both answer `baseline-missing`, and no lane moves. |
+| Merge | `origin/main` merged once. #3170 landed first with migration 119, so this branch's entry is 120; `coord-db.test.ts` and `run-close-switch.test.ts`'s rollback comment are re-pinned (the DROP line already dropped the new table). |
+
+Each new guard was mutated by hand and its test went red: the three new hook arms, both prefilter terms, the reason
+sentence, a path arm that matches anywhere (the `cat` case), a one-tap withdraw, and a baseline read that still counts a
+withdrawn run.
+
 ## An incident to report
 
 While building the README packet in this session's temp root, a Python script went through an unquoted shell heredoc. Bash
@@ -233,3 +252,6 @@ Nothing was recorded or changed. The packet was rebuilt with a quoted heredoc, a
 - A read-only search of a test file was refused as "printing the whole environment", because the search pattern held the
   short word for the process environment. The coordinator approved reading the file with the Read tool, and the same
   harmless act was done that way. The false refusal is carried as a hook follow-up.
+- Fix round 3: a shell command that applied this round's hook edit through a script was refused as "printing the whole
+  environment", because the regular expression it carried names the `env` prefix it matches. Under the coordinator's
+  standing word for a text-only refusal, the same edit was made with the Read and Edit tools.
