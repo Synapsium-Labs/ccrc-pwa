@@ -14,6 +14,7 @@
 import path from 'node:path';
 import { TESTBOX_CAPTURE_DEADLINE_MS } from '../../../shared/agent-protocol.js';
 import { CAPTURE_EVENTS, CAPTURE_WRITE_COMMAND } from '../../../shared/claudeBuildCapture.js';
+import { compareClaudeVersions, isClaudeVersion } from '../../../shared/claudeVersion.js';
 import type { HookEvent } from '../../../shared/hook-events.js';
 import { SYSTEM_PATH } from './spec.js';
 
@@ -244,4 +245,36 @@ export const CAPTURE_LATE_DETAIL = 'the capture waited in the queue too long to 
  *  end past the fleet agent's deadline, so its verdict would be lost. The desk ends it with {@link CAPTURE_LATE_DETAIL}. */
 export function captureStartsLate(waitedMs: number, t: CaptureTimings = CAPTURE_TIMINGS, deadlineMs: number = TESTBOX_CAPTURE_DEADLINE_MS): boolean {
   return waitedMs + captureWorstCaseMs(t) + CAPTURE_DEADLINE_MARGIN_MS > deadlineMs;
+}
+
+// ── the tmux socket (review 3226 F8) ─────────────────────────────────────────────────────────────────────────────
+
+/** The longest unix socket path the capture uses, in bytes: under macOS's 104 and Linux's 108 with the terminating byte. */
+export const CAPTURE_SOCKET_PATH_MAX = 103;
+
+/** The capture's tmux directory (its `TMUX_TMPDIR`): a directory of its own under `base`, the service's temporary
+ *  directory (`/tmp`, private to the unit), named by the whole capture id. Under `<CCRC_TESTBOX_ROOT>/captures/<id>` a long
+ *  root made every socket path too long and every capture fail to start. */
+export const captureTmuxDir = (base: string, captureId: string): string => path.join(base, `ccrc-capture-${captureId}`);
+
+/** Where tmux puts the capture server's socket: `<TMUX_TMPDIR>/tmux-<uid>/<-L name>`. */
+export const captureSocketPath = (base: string, captureId: string, uid: number): string =>
+  path.join(captureTmuxDir(base, captureId), `tmux-${uid}`, CAPTURE_SOCKET);
+
+/** Whether every capture's socket path under `base` fits {@link CAPTURE_SOCKET_PATH_MAX} for `uid` (every id is 32
+ *  characters, so one stands for all). When it does not, the service wires no runner, so the box answers `no-runner`. */
+export function captureSocketFits(base: string, uid: number): boolean {
+  return new TextEncoder().encode(captureSocketPath(base, '0'.repeat(32), uid)).length <= CAPTURE_SOCKET_PATH_MAX;
+}
+
+// ── the builds store (review 3226 F8) ────────────────────────────────────────────────────────────────────────────
+
+/** How many builds `captures/builds/` keeps beyond those a capture still needs: the newest, which the lane captures first. */
+export const CAPTURE_BUILDS_KEPT = 3;
+
+/** Which entries of `captures/builds/` to remove: every build past the `kept` newest (by version order), except a build in
+ *  `inUse` (a capture queued or running). A name that is not a build (the copy's stage, anything else) is never one. A
+ *  pruned build the lane captures again is copied again after the box's `build-absent`. */
+export function buildsToPrune(names: readonly string[], inUse: readonly string[], kept: number = CAPTURE_BUILDS_KEPT): string[] {
+  return names.filter((n) => isClaudeVersion(n)).sort((a, b) => compareClaudeVersions(b, a)).slice(kept).filter((b) => !inUse.includes(b));
 }
