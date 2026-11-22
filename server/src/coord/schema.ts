@@ -4298,6 +4298,34 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
   ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
   `,
+
+  // ── 121: user_version 120 -> 121 ──────────────────────────────────────────
+  // The one sequence (Overlord spec §10.4, H3, H27; Table 11.1a's row `overlord_sequence`; plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sequence-monitor.md` Task 1): one line per stamped change, in one order,
+  // written by `overlordSequenceStore.ts#stampSequenceInTx` inside the transaction that writes the stamped row, and deleted only by
+  // `pruneSequenceThrough`, which records the highest seq it ever deleted in `overlord_sequence_pruned` (no row: nothing was
+  // pruned). AUTOINCREMENT, so a prune that empties the table never reissues a number. No index on `at`: the retention lane
+  // reads the oldest lines by `seq`, the primary key. TWO NEW TABLES, nothing else: an older build opening a file at this
+  // entry's version takes rule 3 (it warns, reads as-is and migrates nothing) and never names them. The slot is the next free
+  // one by position on `main` (b33a9ae137 holds 120); whoever lands second renumbers. RE-MEASURE the slot before merge (it must
+  // print 120, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_sequence (
+    seq       INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reissued, even after a prune empties the table
+    kind      TEXT NOT NULL,                      -- a SEQUENCE_KIND_MAP key (shared/overlord-sequence.ts)
+    id        TEXT NOT NULL,                      -- the subject's id, opaque text
+    state     TEXT NOT NULL,                      -- the state the change entered, one of the kind's words
+    actor     TEXT NOT NULL,                      -- the actor the stamped row records
+    actorKind TEXT NOT NULL,                      -- gates A's ActorKind, written at stamp time
+    at        INTEGER NOT NULL CHECK (at >= 0)    -- wall ms the stamped writer took
+  );
+  CREATE TABLE overlord_sequence_pruned (
+    one     INTEGER PRIMARY KEY CHECK (one = 1),
+    through INTEGER NOT NULL CHECK (through >= 1) -- the highest seq any prune has deleted
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

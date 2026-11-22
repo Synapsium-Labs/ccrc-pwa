@@ -275,5 +275,9 @@
   "server/src/coord/overlordGate.ts#counterVerdict": 1,
   "server/src/coord/overlordGate.ts#overlordGate": 1,
   "server/src/continuity/hookReports.ts#witnessVerdict": 1,
-  "server/src/continuity/hookReports.ts#unwitnessedLatchDue": 1
+  "server/src/continuity/hookReports.ts#unwitnessedLatchDue": 1,
+  "server/src/coord/overlordSequence.ts#sequenceLineVerdict": 1,
+  "server/src/coord/overlordSequence.ts#sequenceLineKnown": 1,
+  "server/src/coord/overlordSequence.ts#sequencePage": 1,
+  "server/src/coord/overlordSequence.ts#retentionCut": 1
 }
