@@ -11,6 +11,8 @@ import type { CoordStore } from './store.js';
 import type { LadderCauseRow, LadderLatchCause, Rung } from '../../../shared/overlord-ladder.js';
 import type { AuthorityAppender, BrakeActor, LadderWrite } from './overlordLadderStore.js';
 import type { Clock, Entropy } from '../time/ports.js';
+import { loadLineReading } from '../accountLoad.js';
+import { overlordAccounts, type AccountFacts } from './overlordDesignation.js';
 
 type LatchTable = Readonly<Record<string, LadderCauseRow & { readonly kind: 'latch'; readonly effect: { readonly kind: 'cap'; readonly cap: Rung } }>>;
 /** The only delivery-facing latch raise: cap and notice belong to the cause row, not the caller. */
@@ -46,7 +48,7 @@ export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
 export type SidecarOf = (sessionId: string) => Pick<SessionUsage, 'class' | 'stale'> | null | undefined;
 const sidecarClassOf = (u: ReturnType<SidecarOf>): SidecarClass => (u === null || u === undefined ? { kind: 'absent' } : u.stale ? { kind: 'stale' } : { kind: 'fresh', class: u.class });
 
-export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf }): LadderConditionInputs {
+export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf; accountFacts?: () => AccountFacts | null }): LadderConditionInputs {
   return {
     'generation-degraded': () => {
       try {
@@ -77,6 +79,14 @@ export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<C
       try {
         const read = deps.coord.ladderRungRead();
         return read.kind === 'current' ? rungWordReading(read.current, deps.serverCaps) : 'unmeasured';
+      } catch { return 'unmeasured'; }
+    },
+    // Table 7.5a's 95% row (serviceability PR B): the tick's facts (`accountFacts`, absent: no reading, so unmeasured), read
+    // once; nobody designated lifts it, and an unreadable designation or an unmeasured line caps (the ladder's rule, F3).
+    'load-past-95': () => {
+      try {
+        const f = deps.accountFacts?.() ?? null;
+        return loadLineReading(deps.coord.designationRead(), (row) => overlordAccounts(row.accountPools, row.model, f!).list, f, 'chat');
       } catch { return 'unmeasured'; }
     },
   };

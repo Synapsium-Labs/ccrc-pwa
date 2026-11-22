@@ -58,6 +58,7 @@ import { PLAN_EPIC_WAVES_MUTANT_SETS } from './planEpicWavesSets.js';
 import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
+import { ACCOUNT_LOAD_MUTANT_SETS } from './accountLoadSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
 import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
@@ -247,6 +248,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...APPROVAL_PARK_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
   ...WITNESS_MUTANT_SETS,
+  ...ACCOUNT_LOAD_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

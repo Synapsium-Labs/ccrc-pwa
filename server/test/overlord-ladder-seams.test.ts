@@ -79,7 +79,7 @@ describe('ladder latch seam', () => {
       { cause: 'latch-a', cap: 'chat', raiseSequence: 9 }, { cause: 'latch-b', cap: 'advise', raiseSequence: 3 }, { cause: 'latch-c', cap: 'chat', raiseSequence: 9 },
     ]);
     const coord = new CoordStore(db);
-    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted' }, { heldFor: () => 'held' }, []);
+    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'load-past-95': () => 'lifted' }, { heldFor: () => 'held' }, []);
     expect(read).toMatchObject({ kind: 'measured', lastChange: { narrowing: { state: 'done' } } });
     db.close();
   });

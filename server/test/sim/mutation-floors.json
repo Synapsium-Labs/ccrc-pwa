@@ -275,5 +275,7 @@
   "server/src/coord/overlordGate.ts#counterVerdict": 1,
   "server/src/coord/overlordGate.ts#overlordGate": 1,
   "server/src/continuity/hookReports.ts#witnessVerdict": 1,
-  "server/src/continuity/hookReports.ts#unwitnessedLatchDue": 1
+  "server/src/continuity/hookReports.ts#unwitnessedLatchDue": 1,
+  "server/src/poolRunway.ts#poolRunway": 1,
+  "server/src/accountLoad.ts#loadLines": 1
 }
