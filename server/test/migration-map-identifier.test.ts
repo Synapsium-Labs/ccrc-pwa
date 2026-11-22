@@ -48,6 +48,8 @@ async function routed(setup: (r: MigRig) => void | Promise<void> = (r) => { r.ad
 }
 const itemsOf = (r: MigRig): unknown[] => r.db.prepare("SELECT id FROM operator_items WHERE action LIKE '%linear-map%'").all();
 const stored = (r: MigRig) => { const m = r.plan.migrationsOf()[0]!; return { state: m.state, entries: m.map?.entries ?? null, snapshot: m.map?.snapshot ?? null }; };
+/** The workspace a file slot serves (its id); a legacy slot has none. */
+const slotId = (s: { source: string; id?: string }): string | null => (s.source === 'file' ? s.id ?? null : null);
 const writes = (r: MigRig): string[] => r.asks.map((a) => a.op).filter((op) => op !== 'teamOpenIssues');
 
 describe('plan map-propose by visible identifier (D-8186)', () => {
@@ -164,7 +166,7 @@ describe('a second reachable workspace serving team AAA (D-8186, review 3350 F1)
     r.db.prepare("UPDATE project_linking SET linearOwner = 'coord-b' WHERE project = 'project-b'").run();
     const base = r.issues.get(U(101))!;
     const elsewhere = [{ ...base, id: U(191) }, { ...base, id: U(199), identifier: 'AAA-9', title: 'Only in b' }];
-    r.override.current = (ask) => ask.op === 'teamOpenIssues' && ask.slot.id === WS.b.id ? ok({ nodes: elsewhere, next: null }) : undefined;
+    r.override.current = (ask) => ask.op === 'teamOpenIssues' && slotId(ask.slot) === WS.b.id ? ok({ nodes: elsewhere, next: null }) : undefined;
   };
   const covering = [byIdentifier('AAA-1'), byIdentifier('AAA-2', { ...target, ticketKey: 'k2' })];
 
@@ -174,7 +176,7 @@ describe('a second reachable workspace serving team AAA (D-8186, review 3350 F1)
     const openB = await r.mig.readOpen('AAA', WS.b.id);
     if (!openB.ok) throw new Error(openB.detail);
     expect(openB.rows.map((x) => [x.linearId, x.identifier])).toEqual([[U(191), 'AAA-1'], [U(199), 'AAA-9']]);
-    expect(r.asks.map((a) => [a.op, a.slot.id])).toEqual([['teamOpenIssues', WS.b.id]]);
+    expect(r.asks.map((a) => [a.op, slotId(a.slot)])).toEqual([['teamOpenIssues', WS.b.id]]);
     const openA = await r.mig.readOpen('AAA', WS.a.id);
     if (!openA.ok) throw new Error(openA.detail);
     expect(openA.rows.map((x) => x.identifier)).toEqual(['AAA-1', 'AAA-2']);
@@ -190,7 +192,7 @@ describe('a second reachable workspace serving team AAA (D-8186, review 3350 F1)
     r.asks.length = 0;
     const res = await post({ entries: [...covering, byIdentifier('AAA-9', { ...target, ticketKey: 'k9' })] });
     expect([res.status, res.json.error, res.json.detail]).toEqual([409, 'map-incomplete', 'not-open:AAA-9']);
-    expect(r.asks.filter((a) => a.op === 'teamOpenIssues').map((a) => [a.workspaceId, a.slot.id])).toEqual([[WS.a.id, WS.a.id]]);
+    expect(r.asks.filter((a) => a.op === 'teamOpenIssues').map((a) => [a.workspaceId, slotId(a.slot)])).toEqual([[WS.a.id, WS.a.id]]);
     expect(itemsOf(r)).toEqual([]);
     expect(stored(r)).toEqual({ state: 'proposing', entries: null, snapshot: null });
     expect(writes(r)).toEqual([]);
