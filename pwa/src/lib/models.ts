@@ -181,14 +181,19 @@ export function liveModelNames(live: string | null, key: string): boolean {
  *  when the session's `route` rides the wire — see `RoutingOverride`'s own docstring.
  *
  *  EACH ROW: its route is `{class: <alias>}`, the bare class alias the lane resolves (a tap sends nothing else); its
- *  label is the catalogue's label for the model the registry maps the class to, with the class name as the sublabel,
- *  or the class name alone when the lane cannot name that model; its readback key is the registry's model id. A class
- *  the registry says is unavailable on this lane (a `null` slot) has no row.
+ *  label is the catalogue's label for the model the lane's files map the class to, with the class name as the sublabel,
+ *  or the class name alone when the lane cannot name that model.
  *
- *  WITH NO REGISTRY, the readback stays what it was: on the Anthropic list the bare FAMILY word (the class alias
- *  itself), which the statusline's family name carries whatever its version, so the row stays lit across a release;
- *  on the dedicated list nothing, since there the pane prints a model id no class word is part of. When two rows'
- *  keys both appear in the live string, the longer key alone is lit (an id that extends another names its own row). */
+ *  ON THE DEDICATED LIST the readback key is the registry's model id (the pane prints one), and a class the registry
+ *  says is unavailable on this lane (a `null` slot) has no row; with no registry there is no readback, since the pane
+ *  prints a model id no class word is part of.
+ *
+ *  ON AN ANTHROPIC LANE (`telemetry: 'anthropic'`; a lane with a registry on the Anthropic list, an external or
+ *  OpenRouter one, reads as the dedicated list does above) every class is a row whatever its `model` (a class whose alias has no id shows its class
+ *  word), and the readback key is always the bare FAMILY word (the class alias itself): an Anthropic pane prints a
+ *  family name such as "<Family> <version> (1M context)", not an id, and the family word stays in it across a release,
+ *  so the row stays lit when the alias moves. Only the label comes from the read. When two rows' keys both appear in
+ *  the live string, the longer key alone is lit (an id that extends another names its own row). */
 export function modelOptions(
   wrapper: string, entry: LaneKindFacts | undefined, lane: LaneModelsRead | null, current: string | null,
   routing?: RoutingOverride,
@@ -199,8 +204,13 @@ export function modelOptions(
   const degraded = routing?.degraded ?? null;
   const list = modelListProvider(wrapper, entry);
   const classes = lane?.kind === 'read' ? lane.classes : null;
-  const keyOf = (cls: ModelClass): string => (classes !== null ? classes[cls].model ?? '' : list === 'anthropic' ? cls : '');
-  const shown = CLASS_ORDER[list].filter((cls) => classes === null || classes[cls].model !== null);
+  // An Anthropic lane (the roster's `telemetry`, the one fact of the lane's kind, D-8751) keys on the family word and keeps
+  // every class; a lane with a class registry keys on the registry's id and drops an unavailable class, on either list
+  // (an external or OpenRouter lane carries a registry and still gets the Anthropic list).
+  const aliasLane = list === 'anthropic' && entry?.telemetry === 'anthropic';
+  const keyOf = (cls: ModelClass): string =>
+    (classes !== null && !aliasLane ? classes[cls].model ?? '' : list === 'anthropic' ? cls : '');
+  const shown = CLASS_ORDER[list].filter((cls) => aliasLane || classes === null || classes[cls].model !== null);
   // The longest key the live string names, so an id that is a prefix of another lights only its own row.
   const best = Math.max(0, ...shown.map(keyOf).filter((k) => liveModelNames(current, k)).map((k) => fold(k).length));
   const row = (label: string, alias: string, key: string, sublabel?: string): PickOption => {
@@ -259,7 +269,9 @@ const INVALID_ADVANCE: LaneAdvanceRead = { state: 'invalid', detail: null, pendi
 const asHold = (v: unknown): Hold | null | undefined => {
   if (v === null) return null;
   if (!isObj(v) || typeof v.at !== 'string' || !inList(HOLD_BY, v.by)) return undefined;
-  return { at: v.at, by: v.by as Hold['by'] };
+  // An Anthropic lane's hold names the id it holds (`hold.model`, Task A2.3), which the Models sheet shows; the server has
+  // already held it to the model-id grammar, so a value that is not a string is dropped and the hold is kept.
+  return { at: v.at, by: v.by as Hold['by'], ...(typeof v.model === 'string' ? { model: v.model } : {}) };
 };
 const asPrevious = (v: unknown): Previous | null | undefined => {
   if (v === null) return null;
@@ -312,11 +324,31 @@ function asLaneAdvance(raw: unknown): LaneAdvanceRead | undefined {
   return { state, detail, pending, classes };
 }
 
+/** The optional fields of an Anthropic lane's class row (`LaneClassModel`, Task A4.1), each kept when well-formed and
+ *  left out when not: one malformed field costs only itself, never the class row or the read. A key is present only
+ *  when its value read, so an older server's row comes out with exactly today's three keys. */
+function asClassExtras(c: Record<string, unknown>): Partial<LaneClassModel> {
+  const out: { -readonly [K in keyof LaneClassModel]?: LaneClassModel[K] } = {};
+  if (c.takesNoEffort === true) out.takesNoEffort = true;
+  if (c.source === 'cache' || c.source === 'use' || c.source === null) out.source = c.source;
+  if (strOrNull(c.cacheTarget)) out.cacheTarget = c.cacheTarget;
+  if (strOrNull(c.seenId)) out.seenId = c.seenId;
+  if (c.unobserved === true) out.unobserved = true;
+  const u = c.unlaunchable;
+  if (isObj(u) && typeof u.needs === 'string' && strOrNull(u.laneVersion)) out.unlaunchable = { needs: u.needs, laneVersion: u.laneVersion };
+  if (typeof c.aliasId === 'string') out.aliasId = c.aliasId;
+  const o = c.orphanedEffort;
+  if (o === null) out.orphanedEffort = null;
+  else if (isObj(o) && typeof o.id === 'string' && typeof o.level === 'string') out.orphanedEffort = { id: o.id, level: o.level };
+  return out;
+}
+
 /** D-8406: `GET /api/models/:lane`'s answer, held to its shape: the lane's `LaneModelsRead`, or `null` for anything
  *  else (an older server's 404 body, a malformed answer). A `read` must carry every class with a model and a label that
  *  are each a string or null, and (D-8686) an `efforts` that is an array of strings, or null; one that does not is not
  *  trusted for any class. An `efforts` that is absent (an older server) or null reads as `null`, "not known": absence
- *  permits. An `advance` key (model-class-advance R4) is read through `asLaneAdvance`: ABSENT stays absent (an agent
+ *  permits. The Anthropic lane's optional fields (`asClassExtras`) are kept when well-formed and dropped to absent when
+ *  not, so a class row and the read survive a malformed one. An `advance` key (model-class-advance R4) is read through `asLaneAdvance`: ABSENT stays absent (an agent
  *  without the op: the advance file was not read, which is not `unreported`), and one off its grammar reads as an
  *  `invalid` advance with no detail (F8), never as a lost answer: the classes are kept. The POST's 200 carries `models` too, and reads through here. The ONE
  *  reader of that wire. Pure. */
@@ -354,7 +386,10 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
     if (efforts !== undefined && efforts !== null && !(Array.isArray(efforts) && efforts.every((e) => typeof e === 'string'))) {
       return null;
     }
-    out[cls] = { model, label, efforts: efforts === undefined || efforts === null ? null : [...(efforts as string[])] };
+    out[cls] = {
+      model, label, efforts: efforts === undefined || efforts === null ? null : [...(efforts as string[])],
+      ...asClassExtras(c as Record<string, unknown>),
+    };
   }
   const rawAdvance = (models as { advance?: unknown }).advance;
   if (rawAdvance === undefined) return { kind: 'read', classes: out };

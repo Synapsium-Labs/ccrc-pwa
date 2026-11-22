@@ -2016,13 +2016,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
               : '; if the lane is meant to be a codex lane, its row in this box\'s accounts.json needs a complete codex '
                 + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, '
                 + 'exec.proxyPort and exec.litellmPort), and the server refuses a roster with an incomplete one at '
-                + 'start: fix the row, and restart the server')
+                + 'start: fix the row, and restart the server; if it is meant to be an Anthropic lane, its row in this '
+                + 'box\'s accounts.json needs telemetry "anthropic", and no codex exec block: fix the row, and restart '
+                + 'the server')
           : decision.reason === 'over-cap'
             ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
               + 'ids is refused this way by design, and the banner carries it'
             : '';
         console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
-          + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
+          + `or Anthropic lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
       } else {
         notifyPushOnly(deps, { title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' },
           'ccrc-server: /api/notify: the push did not go out');
@@ -2376,7 +2378,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    ladder: ladderDeps,
+    ladder: ladderDeps, restore: deps.overlordRestore,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: ccdOverlordBody({
