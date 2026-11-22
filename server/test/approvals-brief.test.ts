@@ -14,9 +14,9 @@ import { mkTmp } from './tmpHelpers.js';
 const PLACEHOLDER = '<one line, in plain words>';
 const HOSTILE = 'denied: `touch pwned-tick` and $(touch pwned-dollar) say "no" — it\'s a \\ path; ${HOME}';
 
-const brief = (cls: 'ordinary' | 'escalate', denyCurrent = true, untrustedBuild: string | null = null): string => renderApprovalBrief({
+const brief = (cls: 'ordinary' | 'escalate', denyCurrent = true): string => renderApprovalBrief({
   id: 7, childId: 'project-a-quiet-basin', tool: 'Bash', agentId: '', inputRedacted: 'rm -rf build',
-  class: cls, digest: 'a'.repeat(64), notifyAt: Date.UTC(2026, 9, 18, 12, 0, 0), denyCurrent, untrustedBuild,
+  class: cls, digest: 'a'.repeat(64), notifyAt: Date.UTC(2026, 9, 18, 12, 0, 0), denyCurrent,
 });
 
 /** The text between two of the brief's fixed headings: the command block, whatever its form. */
@@ -94,15 +94,5 @@ describe('the claimant\'s rule commands keep the reason out of the shell (D-5489
     const body = brief('escalate', false);
     expect(body).toContain('You may not allow this class: deny it, or hand it over.');
     expect(body).toContain('This child does not run under the box\'s current deny rules');
-  });
-  // Slug untrusted-build-routes-escalate: a prompt on a build not yet trusted is held as escalate, and its brief says why.
-  it('a row on a build not yet trusted names the build\'s state, offers no allow, and keeps deny and hand-over', () => {
-    const body = brief('escalate', true, 'build 2.1.330 is waiting for its capture on the test box');
-    expect(body).toContain('This child\'s Claude Code build is not trusted yet (build 2.1.330 is waiting for its capture on the test box)');
-    expect(body).toContain('nothing is allowed through ccrc for it');
-    expect(body).not.toContain('verdict:"allow"');
-    expect(body).toContain('verdict:"deny"');
-    expect(body).toContain('Hand it over');
-    expect(brief('escalate')).not.toContain('not trusted yet');
   });
 });

@@ -56,13 +56,16 @@ export function recordClaudeBuildVerdict(db: DatabaseSync, r: BuildCaptureResult
     .run(r.pass ? 'pass' : 'fail', r.pass && r.cwd ? 1 : 0, r.output, now, r.pass ? 0 : 1, r.build).changes) === 1;
 }
 
-/** **Capture again**, the operator's and the capture lane's automatic retry alike (the one writer of the move): a `fail` row
- *  goes back to `queued`, its verdict and output cleared and its retry clock reset, so the next pass sends it. Its `fails`
- *  count is kept, so the retry ceiling still counts. */
+/** **Capture again**, one writer of the move for two callers: a `fail` row goes back to `queued`, its retry clock reset, so
+ *  the next pass sends it. The operator's (no option) restarts the retry ladder (`fails` back to 0) and clears the verdict
+ *  and its output. The capture lane's automatic retry (`keepLadder`) keeps `fails`, so the ceiling still counts, and keeps
+ *  the last verdict's output and time, so a retry the test box cannot take yet loses nothing (review 3234 F6, F12). */
 export type ClaudeBuildRequeue = 'queued' | 'unknown-build' | 'not-failed';
-export function requeueClaudeBuild(db: DatabaseSync, build: string): ClaudeBuildRequeue {
+export type ClaudeBuildRequeueOptions = { readonly keepLadder?: boolean };
+export function requeueClaudeBuild(db: DatabaseSync, build: string, opts: ClaudeBuildRequeueOptions = {}): ClaudeBuildRequeue {
+  const reset = opts.keepLadder === true ? '' : ', output = NULL, verdictAt = NULL, fails = 0';
   const changed = Number(db.prepare(
-    "UPDATE claude_builds SET capture = 'queued', cwd = 0, output = NULL, verdictAt = NULL, lastAttemptAt = NULL, notSent = NULL WHERE build = ? AND capture = 'fail'",
+    `UPDATE claude_builds SET capture = 'queued', cwd = 0, lastAttemptAt = NULL, notSent = NULL${reset} WHERE build = ? AND capture = 'fail'`,
   ).run(build).changes);
   if (changed === 1) return 'queued';
   return db.prepare('SELECT 1 AS x FROM claude_builds WHERE build = ?').get(build) === undefined ? 'unknown-build' : 'not-failed';

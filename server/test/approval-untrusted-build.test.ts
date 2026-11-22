@@ -1,9 +1,10 @@
 /**
  * The untrusted-build item (approvals plan 2026-11-18, §3.2.2 and Task 2.2; narrowed by slug item-only-when-given-up,
- * `docs/superpowers/programs/overlord/claude-release-unattended.md`). A child's prompt on a build ccrc is still capturing is
- * routed to its coordinator and raises NOTHING for the operator: the build's capture is ccrc's own work. Only a build ccrc
- * has given up on (its capture failed at the ceiling) raises ONE Waiting on you item, keyed by the build, from the capture
- * lane; every other open item settles on the lane's next pass, those raised before this change included.
+ * `docs/superpowers/programs/overlord/claude-release-unattended.md`). A child's prompt on an untrusted build is refused
+ * `version-unverified` at mint, as on main (slug routing-reverted-until-capture), and the refusal raises NOTHING on Waiting on
+ * you: the build's capture is ccrc's own work. Only a build ccrc has given up on (its capture failed at the ceiling) raises
+ * ONE Waiting on you item, keyed by the build, from the capture lane; every other open item settles on the lane's next pass,
+ * those raised before this change included.
  *
  * The deciders run case by case (`untrustedBuildItemCases.ts`, also the mutation floors' suite); the rest drives the real
  * questions owner's `raiseApproval` and the real capture lane over a fixture coordination store.
@@ -49,16 +50,24 @@ const plantOldItem = (fx: Approvals, build: string): void => {
 const lane = (fx: Approvals, clock: () => number, transport?: BuildCaptureTransport) =>
   new BuildCaptureLane(() => ({ coord: fx.coord, feedEpoch: '', notifyLog: { record: (e: unknown) => e } as never, ...(transport ? { buildCapture: transport } : {}) }) as never, clock);
 
-describe('a prompt on a build ccrc is still capturing raises nothing for the operator', () => {
-  it('no row, queued, or failed below the ceiling: the prompt is minted for the coordinator, and no item is raised', async () => {
+describe('a prompt on an untrusted build is refused at mint, and the refusal raises nothing on Waiting on you', () => {
+  it('no row, queued, failed below the ceiling, and given up: each refused with its reason, nothing minted, no item', async () => {
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
-    expect((await q.raiseApproval(req('rm -rf one'), raiseDeps(f, '2.1.330'), NOW)).kind).toBe('minted');
-    f.coord.noteClaudeBuildsSeen(['2.1.331', '2.1.332'], NOW);
+    f.coord.noteClaudeBuildsSeen(['2.1.331', '2.1.332', '2.1.333'], NOW);
     f.coord.recordClaudeBuildVerdict({ build: '2.1.332', pass: false, cwd: false, output: 'red' }, NOW);
-    expect((await q.raiseApproval(req('rm -rf two'), raiseDeps(f, '2.1.331'), NOW + 1)).kind).toBe('minted');
-    expect((await q.raiseApproval(req('rm -rf three'), raiseDeps(f, '2.1.332'), NOW + 2)).kind).toBe('minted');
-    expect(approvalCount(f.coord)).toBe(3);
+    for (let k = 0; k < BUILD_CAPTURE_FAIL_CEILING; k++) {
+      if (k > 0) f.coord.requeueClaudeBuild('2.1.333', { keepLadder: true });
+      f.coord.recordClaudeBuildVerdict({ build: '2.1.333', pass: false, cwd: false, output: 'red' }, NOW);
+    }
+    const cases: [string, string, string][] = [
+      ['2.1.330', 'rm -rf one', 'not-captured'], ['2.1.331', 'rm -rf two', 'capture-queued'],
+      ['2.1.332', 'rm -rf three', 'capture-failed'], ['2.1.333', 'rm -rf four', 'capture-failed'],
+    ];
+    for (const [build, command, trust] of cases) {
+      expect(await q.raiseApproval(req(command), raiseDeps(f, build), NOW + 1), build).toMatchObject({ kind: 'version-unverified', trust });
+    }
+    expect(approvalCount(f.coord)).toBe(0);
     expect(buildItems(f)).toEqual([]);
   });
   it('a build that could not be read is refused as before, and raises none', async () => {

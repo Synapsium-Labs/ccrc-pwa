@@ -51,7 +51,7 @@ import type { PushPayload } from '../push.js';
 import type { BoundRowRef, BoundWrite } from './pushOutboxStore.js';
 import { changeLatch } from '../changeLatch.js';
 import { freshAskAt, freshHookState, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
-import { approvalBuildRoute, approvalClass, approvalCommandWords, classOnBuild, literalInRoot, rootsForChild } from './approvalguard.js';
+import { approvalClass, approvalCommandWords, literalInRoot, rootsForChild } from './approvalguard.js';
 import type { DenyStanding } from './approvalDenyFloor.js';
 import {
   classMeets, parkedApprovalViewOf, parkFactsOf, parkKeyOf, parkOpen, parkRecordRefusal, signingRefusal,
@@ -704,18 +704,16 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     if (standing === 'none') return { kind: 'deny-not-engaged' };
     const denyCurrent = standing === 'current';
     // D-8289: the build is trusted only when the record says its capture passed (`buildTrustOf`, the one decider); a record
-    // that cannot be read trusts nothing. Slug untrusted-build-routes-escalate: a build the record names but has not trusted
-    // is routed to the coordinator, never better than `escalate` and never parked (`approvalBuildRoute`, L1), so nothing is
-    // allowed through ccrc for it; only a build or a record that could not be read is refused, with the typed reason.
+    // that cannot be read trusts nothing. The verdict carries the typed reason, and the detail says it in words. The refusal
+    // raises nothing on Waiting on you: the capture lane raises a build's item only once ccrc has given up capturing it (the
+    // Overlord's `docs/superpowers/programs/overlord/claude-release-unattended.md`, slug routing-reverted-until-capture).
     const version = await d.liveVersionOf(rec);
     let records: readonly ClaudeBuildRecord[] | null;
     try { records = coord.claudeBuilds(); } catch { records = null; }
     const trust = buildTrustOf(records, version);
-    const route = approvalBuildRoute(trust);
-    if (trust.kind === 'untrusted' && route.kind === 'refused') {
+    if (trust.kind === 'untrusted') {
       return { kind: 'version-unverified', trust: trust.reason, detail: `this child's live Claude Code build is not trusted: ${buildUntrustedSentence(trust.reason, version)}` };
     }
-    const untrustedNote = trust.kind === 'untrusted' ? buildUntrustedSentence(trust.reason, version) : null;
 
     // The digest, then the re-canonicalisation: the server's own sha256 over the string sent, and that string parsed and
     // canonicalised again by `approvalDigestBytes`, the one home of the form (spec §6.3 "The canonical form, exactly").
@@ -751,9 +749,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const tool = shaped ? parsedRequest!.tool as string : '';
     const input = shaped ? parsedRequest!.input as Record<string, unknown> : {};
     const cwd = shaped ? parsedRequest!.cwd as string | null : null;
-    const cwdTrusted = route.kind === 'trusted' && route.cwd;
+    const cwdTrusted = trust.cwd;
     const roots = rootsForChild(rec, d.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: d.cfg.home };
-    const cls = classOnBuild(shaped ? approvalClass(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null }) : 'escalate', route);
+    const cls = shaped ? approvalClass(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null }) : 'escalate';
     // The census's two facts (approvals plan 2026-11-18, Task 1.4, F7), computed here with the class and from the same
     // context: the statements' command words and `literalInRoot`. Kept on the row; never an operand.
     const commandWords = shaped ? approvalCommandWords(tool, input) : null;
@@ -776,7 +774,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     // tool_input]`, the request's own cwd), and the lane's and sign-in's state; the store decides the word inside the mint's
     // transaction (F1, the cap race). No binding run measured: no park step, the row answers as before PR 3.
     const bindingRunId = verdict.bindingRunId ?? null;
-    const keyInput = releaseReason === null && bindingRunId !== null && route.kind === 'trusted' ? canonicalJson([tool, cwd, input]) : null;
+    const keyInput = releaseReason === null && bindingRunId !== null ? canonicalJson([tool, cwd, input]) : null;
     const parkKey = keyInput === null || bindingRunId === null ? null
       : parkKeyOf(rec.id, bindingRunId, createHash('sha256').update(keyInput, 'utf8').digest('hex'));
     let laneLive = false;
@@ -805,7 +803,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     approvalInputs.set(id, { tool, input, cwd: cwdTrusted ? cwd : null, until: notifyAt });
     queueSystemMail(coord, null, {
       fromId: 'operator', toId: parent, runId: null, kind: 'question', subject: approvalNudgeSubject(id),
-      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt, denyCurrent, untrustedBuild: untrustedNote }),
+      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt, denyCurrent }),
     });
     return { kind: 'minted', id, waitS: Math.floor((notifyAt - now) / 1000), park: minted.parkWord };
   };

@@ -90,57 +90,28 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
     expect(approvalCount(f.coord)).toBe(0);
   });
 
-  it('a build with no passed capture is held for its coordinator as escalate and never parked: a deny lands, an allow is refused (slug untrusted-build-routes-escalate)', async () => {
+  it('a build with no passed capture is refused with its reason, nothing minted (D-8289)', async () => {
     f = await approvalsFixture();
     f.seed(PARENT, 'project-a');
     f.seed(CHILD, 'project-a', '2.1.299');
     f.child(CHILD, f.run(PARENT, CHILD));
     const { res } = await ask(f);
-    expect(res.statusCode).toBe(201);
-    const id = (res.json() as { id: number }).id;
-    const coord = f.coord;
-    const row = (): NonNullable<Extract<ReturnType<typeof coord.approvalById>, { ok: true }>['row']> => {
-      const r = coord.approvalById(id);
-      if (!r.ok || r.row === null) throw new Error('the row could not be read');
-      return r.row;
-    };
-    expect(row()).toMatchObject({ state: 'held', class: 'escalate', parentId: PARENT, parkKey: null, releaseReason: null });
-    const allow = await f.rule(id, PARENT, 'allow');
-    expect(allow.statusCode).toBe(409);
-    expect(allow.json()).toMatchObject({ error: 'guard-escalate' });
-    expect((await f.rule(id, PARENT, 'deny')).statusCode).toBe(200);
-    expect(row().state).toBe('denied');
-    expect(f.coord.itemsFor('overlord', Date.now()).open.filter((i) => i.action?.verb === 'untrusted-build'), 'nothing waits on the operator').toEqual([]);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'version-unverified', trust: 'not-captured' });
+    expect(approvalCount(f.coord)).toBe(0);
   });
 
-  it('a build only becomes allowable once its capture passed: escalate while it has no row and while it is queued, ordinary after (D-8289)', async () => {
+  it('a build the queue captured and passed is trusted: the same request mints (D-8289)', async () => {
     f = await approvalsFixture();
     f.seed(PARENT, 'project-a');
     f.seed(CHILD, 'project-a', '2.1.330');
     f.child(CHILD, f.run(PARENT, CHILD));
-    const classOf = async (): Promise<string | undefined> => {
-      const { res } = await ask(f!);
-      expect(res.statusCode).toBe(201);
-      const r = f!.coord.approvalById((res.json() as { id: number }).id);
-      return r.ok ? r.row?.class : undefined;
-    };
-    expect(await classOf()).toBe('escalate');
+    expect((await ask(f)).res.json()).toMatchObject({ error: 'version-unverified', trust: 'not-captured' });
     f.coord.noteClaudeBuildsSeen(['2.1.330'], 1);
-    expect(await classOf()).toBe('escalate');
+    expect((await ask(f)).res.json()).toMatchObject({ error: 'version-unverified', trust: 'capture-queued' });
     f.coord.recordClaudeBuildVerdict({ build: '2.1.330', pass: true, cwd: true, output: 'replay: 40 passed' }, 2);
-    expect(await classOf()).toBe('ordinary');
-    expect(approvalCount(f.coord)).toBe(3);
-  });
-
-  it('a build that cannot be read is still refused with its reason, nothing minted (D-8289)', async () => {
-    f = await approvalsFixture();
-    f.seed(PARENT, 'project-a');
-    f.seed(CHILD, 'project-a', null);
-    f.child(CHILD, f.run(PARENT, CHILD));
-    const { res } = await ask(f);
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ error: 'version-unverified', trust: 'unread' });
-    expect(approvalCount(f.coord)).toBe(0);
+    expect((await ask(f)).res.statusCode).toBe(201);
+    expect(approvalCount(f.coord)).toBe(1);
   });
 
   it('no .deny-settings, one naming another digest, or no bash pin: deny-not-engaged, nothing minted', async () => {
@@ -683,8 +654,7 @@ describe('POST /api/approvals — the raise ladder and its input map (W3 Q3e cha
     });
     await run(() => requestBody(ORDINARY, DUNE));
     await run((fx) => { fx.child(CHILD, fx.runId as number, { deny: null }); return requestBody(ORDINARY); });
-    // Slug untrusted-build-routes-escalate: rung 10 refuses a build that cannot be read; one with no capture is minted.
-    await run((fx) => { fx.seed(CHILD, 'project-a', null); return requestBody(ORDINARY); });
+    await run((fx) => { fx.seed(CHILD, 'project-a', '2.1.299'); return requestBody(ORDINARY); });
     await run(() => ({ ...requestBody(ORDINARY), digest: 'a'.repeat(64) }));
     await run((fx) => {
       vi.spyOn(fx.coord, 'run').mockReturnValue({ ok: false, detail: 'fixture: the runs table is unreadable' } as never);

@@ -46,7 +46,8 @@ export interface ClaudeBuildRecord {
   /** Why that last try sent nothing; null when it sent a job, or before any try. */
   readonly notSent: BuildCaptureNotSent | null;
   readonly verdictAt: number | null;
-  /** The replay output's tail, at most {@link BUILD_CAPTURE_OUTPUT_MAX} characters; null before a verdict. */
+  /** The replay output's tail, at most {@link BUILD_CAPTURE_OUTPUT_MAX} characters; null before a verdict. An automatic
+   *  retry keeps the last one while the build is queued again. */
   readonly output: string | null;
   /** How many capture verdicts for the build failed, the retry ceiling's count (slug capture-retry-ceiling). 0 from a server
    *  that predates it, which retries nothing: {@link captureStandingOf} reads its failed row as given up. */
@@ -74,7 +75,7 @@ export function buildTrustOf(records: readonly ClaudeBuildRecord[] | null, versi
   if (records === null) return { kind: 'untrusted', reason: 'record-unreadable' };
   const row = records.find((r) => r.build === version);
   if (row === undefined) return { kind: 'untrusted', reason: 'not-captured' };
-  if (row.capture === 'pass') return { kind: 'trusted', cwd: row.cwd };
+  if (captureStandingOf(row).kind === 'trusted') return { kind: 'trusted', cwd: row.cwd };
   return { kind: 'untrusted', reason: row.capture === 'fail' ? 'capture-failed' : 'capture-queued' };
 }
 
@@ -132,8 +133,8 @@ export type CaptureStanding =
   | { readonly kind: 'retrying'; readonly fails: number; readonly at: number }
   | { readonly kind: 'given-up'; readonly fails: number };
 
-/** THE STANDING's one decider. A failed row with no count (a server that predates the ceiling) is given up: nothing
- *  retries it. */
+/** THE STANDING's one decider, and the one home of "a passed capture is trusted", which {@link buildTrustOf} reads (review
+ *  3234 F16). A failed row with no count (a server that predates the ceiling) is given up: nothing retries it. */
 export function captureStandingOf(r: ClaudeBuildRecord): CaptureStanding {
   if (r.capture === 'pass') return { kind: 'trusted' };
   if (r.capture === 'queued') return { kind: 'queued' };
@@ -146,10 +147,17 @@ export function captureGivenUp(r: ClaudeBuildRecord): boolean {
   return captureStandingOf(r).kind === 'given-up';
 }
 
-/** The failed builds ccrc captures again at `now` by itself: each `retrying` one whose time has come, newest first. */
-export function capturesToRetry(records: readonly ClaudeBuildRecord[], now: number): string[] {
-  return records.filter((r) => { const s = captureStandingOf(r); return s.kind === 'retrying' && now >= s.at; })
+/** The failed builds ccrc captures again at `now` by itself: each `retrying` one whose time has come and that a session still
+ *  runs (`versions`, the sessions' builds), newest first. A build no session runs is not retried (review 3234 F5). */
+export function capturesToRetry(records: readonly ClaudeBuildRecord[], now: number, versions: readonly (string | null)[]): string[] {
+  return records.filter((r) => { const s = captureStandingOf(r); return s.kind === 'retrying' && now >= s.at && versions.includes(r.build); })
     .map((r) => r.build).sort(newestFirst);
+}
+
+/** Whether ccrc tells the operator it gave up on `r`: given up, and a session still runs the build. One no session runs gives
+ *  up quietly, with no push and no item (review 3234 F5). */
+export function givenUpToTell(r: ClaudeBuildRecord, versions: readonly (string | null)[]): boolean {
+  return captureGivenUp(r) && versions.includes(r.build);
 }
 
 /** Why the queue cannot capture anything right now, read from the record alone: the queued build it tried last sent

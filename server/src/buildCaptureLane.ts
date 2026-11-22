@@ -7,10 +7,12 @@
 //
 // A FAILURE IS RETRIED BEFORE ANYONE IS TOLD (the Overlord's "a new Claude Code release needs no operator",
 // `docs/superpowers/programs/overlord/claude-release-unattended.md`, slug capture-retry-ceiling). Each pass first puts every
-// failed build whose time has come back in the queue (`capturesToRetry`: an hour after its first failure, two after its
-// second), through the same writer as the operator's Capture again. Only the failed verdict that reaches the ceiling
-// (`captureGivenUp`) tells the operator: one push, and one Waiting on you item naming the act only they
-// can do (`untrustedBuildItemOf`). Every other open item settles on the next pass (`untrustedBuildItemsToSettle`).
+// failed build whose time has come and that a session still runs back in the queue (`capturesToRetry`: an hour after its
+// first failure, two after its second), through the same writer as the operator's Capture again, keeping its count and its
+// last output (`keepLadder`). Only the failed verdict that reaches the ceiling on a build a session runs (`givenUpToTell`)
+// tells the operator, with one push; a build no session runs gives up quietly. Each pass raises the Waiting on you item
+// naming the act only the operator can do for any such build that has none (`untrustedBuildItemsToRaise`), and settles
+// every other open item (`untrustedBuildItemsToSettle`).
 //
 // NO VERDICT IS NOT A FAILURE. A box that is not there, a runner that is not built, a throw or an answer off its shape keeps
 // the build `queued`, its retry clock stamped, so it is tried again after the spacing. ONLY A JOB THAT WENT OUT IS AN
@@ -21,12 +23,12 @@
 //
 // `watch.ts` owns one of these and calls `sweep()` from its tick beside the roll, never awaited.
 import {
-  BUILD_CAPTURE_OUTPUT_MAX, captureGivenUp, capturesToRetry, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds,
+  BUILD_CAPTURE_OUTPUT_MAX, capturesToRetry, givenUpToTell, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds,
   type BuildCaptureJob, type BuildCaptureNotSent, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import {
-  openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemOf, untrustedBuildItemsToSettle,
+  openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemsToRaise, untrustedBuildItemsToSettle,
 } from './coord/untrustedBuildItem.js';
 import { notify, type NoticeDeps } from './notice.js';
 import type { TestboxBlock } from './testbox.js';
@@ -102,12 +104,13 @@ export class BuildCaptureLane {
       coord.noteClaudeBuildsSeen(unrecordedBuilds(records, versions), at);
       records = coord.claudeBuilds();
     }
-    const retry = capturesToRetry(records, at);
+    const retry = capturesToRetry(records, at, versions);
     if (retry.length > 0) {
-      for (const b of retry) coord.requeueClaudeBuild(b);
+      for (const b of retry) coord.requeueClaudeBuild(b, { keepLadder: true });
       records = coord.claudeBuilds();
     }
     this.settleItems(coord, records, at);
+    this.raiseItems(coord, records, versions, at);
     const transport = d.buildCapture;
     const build = transport === undefined ? null : nextCaptureJob(records, at);
     if (transport === undefined || build === null) return;
@@ -124,9 +127,11 @@ export class BuildCaptureLane {
     }
     if (!coord.recordClaudeBuildVerdict(result, this.now()) || result.pass) return;
     // A failure ccrc will capture again tells nobody: only the verdict that gives up does.
-    const row = coord.claudeBuilds().find((r) => r.build === build);
-    if (row === undefined || !captureGivenUp(row)) return;
-    this.raiseGivenUp(d, coord, row, at);
+    const after = coord.claudeBuilds();
+    const row = after.find((r) => r.build === build);
+    if (row === undefined || !givenUpToTell(row, versions)) return;
+    this.raiseItems(coord, after, versions, at);
+    this.pushGivenUp(d, coord, row);
   }
 
   /** Each pass, the open untrusted-build items whose build ccrc has not given up on settle, each with its note (L1's
@@ -138,19 +143,21 @@ export class BuildCaptureLane {
     }
   }
 
-  /** ccrc has given up on `row`: its Waiting on you item (L1's `untrustedBuildItemOf`, none while one is open for the build;
-   *  the read and the raise run with no await between), then one push opening Settings, keyed by build and attempt. A store
-   *  that cannot answer the dedupe read costs the dedupe only: a repeat beats silence (the disk alarm's rule). A raise that
-   *  throws is logged and never stops the push. */
-  private raiseGivenUp(d: BuildCaptureLaneDeps, coord: NonNullable<BuildCaptureLaneDeps['coord']>, row: ClaudeBuildRecord, at: number): void {
-    const { build } = row;
+  /** The Waiting on you items L1 says are missing (`untrustedBuildItemsToRaise`: a build given up with a session on it and no
+   *  open item; the read and the raise run with no await between). A raise that throws is logged, and a later pass raises it. */
+  private raiseItems(coord: NonNullable<BuildCaptureLaneDeps['coord']>, records: readonly ClaudeBuildRecord[], versions: readonly (string | null)[], at: number): void {
     try {
       const open = openUntrustedBuildItems(coord.itemsFor(UNTRUSTED_BUILD_ITEM_PROGRAMME, at).open);
-      const input = untrustedBuildItemOf(new Set(open.map((i) => i.build)), row);
-      if (input !== null) coord.raiseItem(input, at, 'ccrc');
+      for (const input of untrustedBuildItemsToRaise(open, records, versions)) coord.raiseItem(input, at, 'ccrc');
     } catch (err) {
-      console.warn(`ccrc-server: build capture: the item for ${build} was not raised (${err instanceof Error ? err.message : String(err)})`);
+      console.warn(`ccrc-server: build capture: an untrusted-build item was not raised (${err instanceof Error ? err.message : String(err)}) — the next pass retries`);
     }
+  }
+
+  /** ccrc has given up on `row`, a build a session runs: one push opening Settings, keyed by build and attempt. A store that
+   *  cannot answer the dedupe read costs the dedupe only: a repeat beats silence (the disk alarm's rule). */
+  private pushGivenUp(d: BuildCaptureLaneDeps, coord: NonNullable<BuildCaptureLaneDeps['coord']>, row: ClaudeBuildRecord): void {
+    const { build } = row;
     const dedupeKey = `claude-build-capture-failed:${build}:${row.attempts}`;
     try { if (coord.hasNotice('coord', '', dedupeKey)) return; } catch { /* send it */ }
     notify(d, {

@@ -1,7 +1,6 @@
 // D-8289 (plan docs/superpowers/plans/2026-11-11-new-build-capture.md): Settings › Automation › Test box's list of Claude Code
 // builds and their capture verdicts. A build is trusted only when the test box captured its hook and status-file output and
-// the replay tests passed; a child on any other build has nothing allowed through ccrc (its coordinator may deny a prompt or
-// hand it over, slug untrusted-build-routes-escalate). The list reads `GET /api/testbox/builds` through
+// the replay tests passed; children on any other build are refused approvals. The list reads `GET /api/testbox/builds` through
 // the one wire reader (`readClaudeBuildRecords`) once a minute, and a failed build carries the replay output behind a
 // disclosure and the operator's one act, **Capture again** (`POST /api/testbox/builds/capture`), whose answer is the re-read
 // list.
@@ -18,7 +17,8 @@
 //
 // A FAILURE CCRC RETRIES IS NOT THE OPERATOR'S (slug capture-retry-ceiling, the Overlord's "a new Claude Code release needs
 // no operator"): a failed build ccrc captures again by itself (`captureStandingOf` answers `retrying`) says so, quietly, with
-// its count; only one ccrc has stopped retrying is amber. Capture again stays on every failed row, as a manual option.
+// its count; only one ccrc has stopped retrying is amber. A failed row with no count (an older server) says only that it
+// failed. Capture again stays on every failed row, as a manual option; a row queued again by itself keeps its last output.
 //
 // A FAILED WRITE has one reader, the card's (`testboxFailure`): the server's refusal in the refusal tone, and no answer at
 // all (the fetch rejected) as `No answer from the server` in the answer tone.
@@ -46,8 +46,8 @@ export const TESTBOX_BUILDS_POLL_MS = 60_000;
 export const TESTBOX_BUILDS_TEXT = {
   title: 'Claude Code builds',
   note: 'A build is trusted once the test box has captured its hooks and status files and the replay tests passed. '
-    + 'A child on any other build has its permission prompts sent to its coordinator, who may deny one or hand it to you, '
-    + 'never allow it. Each new build the fleet runs is queued for its capture, and a failed capture is tried again by itself.',
+    + 'Children on any other build are refused approvals, so their prompts come to you in the pane. Each new build the fleet '
+    + 'runs is queued for its capture, and a failed capture is tried again by itself while a session runs the build.',
   trusted: 'Trusted',
   trustedNoCwd: 'Trusted, without the working directory check',
   queued: 'Waiting for its capture',
@@ -63,7 +63,8 @@ export const TESTBOX_BUILDS_TEXT = {
     'no-runner': 'The test box has no capture runner yet, so no build can be captured: the builds waiting here stay untrusted until it has one.',
   } satisfies Record<BuildCaptureNotSent, string>,
   failed: 'Capture failed, not trusted: ccrc has stopped retrying',
-  failedRetrying: (n: number) => `Capture failed (${n} of ${BUILD_CAPTURE_FAIL_CEILING}): ccrc tries again by itself`,
+  failedRetrying: (n: number) => `Capture failed (${n} of ${BUILD_CAPTURE_FAIL_CEILING}): ccrc tries again by itself while a session runs it`,
+  failedUncounted: 'Capture failed, not trusted',
   rig: 'From the rig record',
   seen: (ago: string) => `First seen on the fleet ${ago} ago`,
   output: 'Replay output',
@@ -85,7 +86,8 @@ export function buildVerdict(r: ClaudeBuildRecord, said: BuildCaptureNotSent | n
   if (r.capture === 'pass') return { text: r.cwd ? T.trusted : T.trustedNoCwd, amber: false };
   if (r.capture === 'fail') {
     const s = captureStandingOf(r);
-    return s.kind === 'retrying' ? { text: T.failedRetrying(s.fails), amber: false } : { text: T.failed, amber: true };
+    if (s.kind === 'retrying') return { text: T.failedRetrying(s.fails), amber: false };
+    return { text: r.fails < 1 ? T.failedUncounted : T.failed, amber: true };
   }
   if (r.notSent !== null) return { text: r.notSent === said ? T.notSentSaid : T.notSent[r.notSent], amber: true };
   return { text: r.attempts === 0 ? T.queued : T.queuedSent(r.attempts), amber: false };
@@ -151,17 +153,17 @@ export function TestBoxBuilds({ band }: { band: TestboxBand }): ReactNode {
           <span className={v.amber ? 'testbox-build-verdict settings-catalogue--amber' : 'testbox-build-verdict'}>{v.text}</span>
         </p>
         <p className="settings-note">{r.source === 'rig' ? T.rig : T.seen(elapsedWords(Math.max(0, now - r.seenAt)))}</p>
+        {(r.capture === 'fail' || (r.capture === 'queued' && r.output !== null)) && (
+          <details className="testbox-build-output">
+            <summary className="settings-note">{T.output}</summary>
+            <pre className="testbox-build-log">{r.output === null || r.output === '' ? T.noOutput : r.output}</pre>
+          </details>
+        )}
         {r.capture === 'fail' && (
-          <>
-            <details className="testbox-build-output">
-              <summary className="settings-note">{T.output}</summary>
-              <pre className="testbox-build-log">{r.output === null || r.output === '' ? T.noOutput : r.output}</pre>
-            </details>
-            <Button variant="ghost" size={band === 'phone' ? 'full' : 'fit'} className="testbox-build-again" disabled={sending !== null}
-              onClick={() => again(r.build)} data-testbox="capture-again">
-              {sending === r.build ? T.sending : T.again}
-            </Button>
-          </>
+          <Button variant="ghost" size={band === 'phone' ? 'full' : 'fit'} className="testbox-build-again" disabled={sending !== null}
+            onClick={() => again(r.build)} data-testbox="capture-again">
+            {sending === r.build ? T.sending : T.again}
+          </Button>
         )}
       </li>
     );

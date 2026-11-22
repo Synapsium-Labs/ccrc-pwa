@@ -306,7 +306,7 @@ const DISK_WARN: PushPayload = {
   sessionId: '', tag: 'disk',
 };
 
-// ── #20 BuildCaptureLane.raiseGivenUp ──────────────────────────────────────────────────────────────────────────────
+// ── #20 BuildCaptureLane.pushGivenUp ──────────────────────────────────────────────────────────────────────────────
 
 const failCapture = (job: BuildCaptureJob): BuildCaptureAnswer =>
   ({ kind: 'answered', result: { build: job.build, pass: false, cwd: true, output: 'replay: 1 failed' } });
@@ -1069,7 +1069,7 @@ const SITES: Site[] = [
   { n: '19', row: true, name: 'DiskAlarmLane.raiseNotice (coord, push)',
     drive: async (e) => { const r = await diskRig(e, [reading(40), reading(40), reading(86), reading(86)]); for (let i = 0; i < 4; i += 1) await r.sweep(); return {}; },
     sent: () => [DISK_WARN], sentVisible: () => [DISK_WARN] },
-  { n: '20', row: true, name: 'BuildCaptureLane.raiseGivenUp (coord, push)', drive: captureSite, sent: () => [CAPTURE], sentVisible: () => [CAPTURE] },
+  { n: '20', row: true, name: 'BuildCaptureLane.pushGivenUp (coord, push)', drive: captureSite, sent: () => [CAPTURE], sentVisible: () => [CAPTURE] },
   { n: '21a', row: true, name: 'pushBlocking from the raise route (neededBy blocking)',
     drive: async (e) => { const r = await ledgerRig(e); e.coord = r.coord; return { item: await itemRaise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA }) }; },
     sent: (i) => [waitingPayload(i['item']!)], sentVisible: (i) => [waitingPayload(i['item']!)] },

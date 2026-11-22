@@ -2683,7 +2683,7 @@ export const MIGRATIONS: readonly string[] = [
   // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
   // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
   // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
-  // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
+  // `coord/claudeBuildsStore.ts`; its trust reader is `shared/claudeBuildTrust.ts#buildTrustOf` (and later the capture standing beside it). The seed is the four builds
   // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
   //
   // A NEW TABLE AND ITS SEED, NOTHING ELSE: an older build opening a file at `user_version 60` takes rule 3 (it warns, reads

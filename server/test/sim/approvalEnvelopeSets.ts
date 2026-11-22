@@ -119,6 +119,8 @@ export const ITEM_OF_SET: MutantSet<UntrustedBuildItemModule> = {
     { id: 'UB-9 the step links nothing', old: '`Open ${UNTRUSTED_BUILD_SETTINGS_PATH} and find', new: '`Open Settings › Automation and find' },
     { id: 'UB-10 the operator\'s act is not named', old: "'Once the cause is fixed (the test box, the replay tests, or ccrc\\'s readers for this build), choose Capture again. '", new: "'Once the cause is fixed, ccrc captures it again. '" },
     { id: 'UB-11 the count is not said', old: 'failed its capture ${times(row.fails)}, and ccrc', new: 'failed its capture, and ccrc' },
+    { id: 'RA-1 a build no session runs raises', old: 'const input = givenUpToTell(r, versions) ?', new: 'const input = captureGivenUp(r) ?' },
+    { id: 'RA-2 a pass raises nothing missing', old: 'return input === null ? [] : [input];', new: 'return [];' },
     { id: 'UB-8 any action is an untrusted-build item', old: 'return isUntrustedBuildAction(a) ? [{ id: i.id, build: a.build }] : [];', new: 'return a !== null ? [{ id: i.id, build: (a as { build: string }).build }] : [];' },
   ],
   suite: itemSuite,

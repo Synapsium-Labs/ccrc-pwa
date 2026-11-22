@@ -97,7 +97,7 @@ describe('the record\'s writers (D-8289)', () => {
     expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toMatchObject({ capture: 'queued', lastAttemptAt: null, notSent: null, verdictAt: null, output: null, attempts: 1 });
   });
 
-  it('a failed verdict counts one more fails, a pass none, and a re-queue keeps the count (slug capture-retry-ceiling)', () => {
+  it('a failed verdict counts one more fails, a pass none, and the automatic re-queue keeps the count (slug capture-retry-ceiling)', () => {
     const c = store();
     c.noteClaudeBuildsSeen(['2.1.320', '2.1.321'], 100);
     const fails = (b: string): number | undefined => c.claudeBuilds().find((r) => r.build === b)?.fails;
@@ -107,12 +107,25 @@ describe('the record\'s writers (D-8289)', () => {
       expect(fails('2.1.320')).toBe(k);
       expect(c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'red' }, 100 + k), 'a verdict never overwrites another').toBe(false);
       expect(fails('2.1.320')).toBe(k);
-      expect(c.requeueClaudeBuild('2.1.320')).toBe('queued');
+      expect(c.requeueClaudeBuild('2.1.320', { keepLadder: true })).toBe('queued');
       expect(fails('2.1.320')).toBe(k);
     }
     c.recordClaudeBuildVerdict({ build: '2.1.321', pass: true, cwd: true, output: 'ok' }, 200);
     expect(fails('2.1.321')).toBe(0);
     expect(c.claudeBuilds().filter((r) => r.source === 'rig').map((r) => r.fails)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('the operator\'s Capture again restarts the ladder; the automatic retry keeps the count and the last output (review 3234 F6, F12)', () => {
+    const c = store();
+    c.noteClaudeBuildsSeen(['2.1.320'], 100);
+    const row = () => c.claudeBuilds().find((r) => r.build === '2.1.320');
+    c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'replay: 1 failed' }, 160);
+    expect(c.requeueClaudeBuild('2.1.320', { keepLadder: true })).toBe('queued');
+    expect(row()).toMatchObject({ capture: 'queued', fails: 1, output: 'replay: 1 failed', verdictAt: 160, lastAttemptAt: null, notSent: null });
+    c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'replay: 2 failed' }, 170);
+    expect(row()).toMatchObject({ capture: 'fail', fails: 2, output: 'replay: 2 failed', verdictAt: 170 });
+    expect(c.requeueClaudeBuild('2.1.320')).toBe('queued');
+    expect(row()).toMatchObject({ capture: 'queued', fails: 0, output: null, verdictAt: null });
   });
 });
 

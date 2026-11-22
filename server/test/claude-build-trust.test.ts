@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILD_CAPTURE_FAIL_CEILING, BUILD_CAPTURE_OUTPUT_MAX, BUILD_CAPTURE_RETRY_MS, BUILD_UNTRUSTED_REASONS, buildTrustOf, buildUntrustedSentence,
-  captureBlockedBy, captureGivenUp, captureRetryAfterMs, captureStandingOf, capturesToRetry, nextCaptureJob, readBuildCaptureResult, readClaudeBuildRecords,
+  captureBlockedBy, captureGivenUp, captureRetryAfterMs, captureStandingOf, capturesToRetry, givenUpToTell, nextCaptureJob, readBuildCaptureResult, readClaudeBuildRecords,
   unrecordedBuilds, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 
@@ -162,9 +162,29 @@ describe('a failed capture is captured again before anyone is told (slug capture
       failed('2.1.318', 1), failed('2.1.319', 2), failed('2.1.320', 3), failed('2.1.317', 1, V + 5),
       rec('2.1.322'), rec('2.1.302', { capture: 'pass' }),
     ];
-    expect(capturesToRetry(records, V + BUILD_CAPTURE_RETRY_MS - 1)).toEqual([]);
-    expect(capturesToRetry(records, V + BUILD_CAPTURE_RETRY_MS)).toEqual(['2.1.318']);
-    expect(capturesToRetry(records, V + BUILD_CAPTURE_RETRY_MS + 5)).toEqual(['2.1.318', '2.1.317']);
-    expect(capturesToRetry(records, V + 100 * BUILD_CAPTURE_RETRY_MS)).toEqual(['2.1.319', '2.1.318', '2.1.317']);
+    const all = records.map((r) => r.build);
+    expect(capturesToRetry(records, V + BUILD_CAPTURE_RETRY_MS - 1, all)).toEqual([]);
+    expect(capturesToRetry(records, V + BUILD_CAPTURE_RETRY_MS, all)).toEqual(['2.1.318']);
+    expect(capturesToRetry(records, V + BUILD_CAPTURE_RETRY_MS + 5, all)).toEqual(['2.1.318', '2.1.317']);
+    expect(capturesToRetry(records, V + 100 * BUILD_CAPTURE_RETRY_MS, all)).toEqual(['2.1.319', '2.1.318', '2.1.317']);
+  });
+
+  it('capturesToRetry: a build no session runs is not retried, however due (review 3234 F5)', () => {
+    const records = [failed('2.1.318', 1), failed('2.1.319', 2)];
+    const late = V + 100 * BUILD_CAPTURE_RETRY_MS;
+    expect(capturesToRetry(records, late, ['2.1.319', null])).toEqual(['2.1.319']);
+    expect(capturesToRetry(records, late, [])).toEqual([]);
+  });
+
+  it('givenUpToTell: given up, and a session still runs the build; one no session runs gives up quietly (review 3234 F5)', () => {
+    expect(givenUpToTell(failed('2.1.320', 3), ['2.1.320'])).toBe(true);
+    expect(givenUpToTell(failed('2.1.320', 3), ['2.1.321', null])).toBe(false);
+    expect(givenUpToTell(failed('2.1.320', 2), ['2.1.320'])).toBe(false);
+    expect(givenUpToTell(rec('2.1.320', { capture: 'pass' }), ['2.1.320'])).toBe(false);
+  });
+
+  it('one rule for "a passed capture is trusted": buildTrustOf and captureStandingOf agree on every row (review 3234 F16)', () => {
+    const rows = [rec('2.1.302', { capture: 'pass', cwd: true }), rec('2.1.320'), failed('2.1.321', 1), failed('2.1.322', 3)];
+    for (const r of rows) expect(buildTrustOf(rows, r.build).kind === 'trusted', r.build).toBe(captureStandingOf(r).kind === 'trusted');
   });
 });

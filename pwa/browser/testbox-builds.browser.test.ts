@@ -33,7 +33,7 @@ const rec = (build: string, over: Partial<ClaudeBuildRecord> = {}): ClaudeBuildR
 });
 const LONG_LINE = `Stop payload: ${'background_tasks_field_missing_'.repeat(12)}end`;
 const BUILDS: ClaudeBuildRecord[] = [
-  rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, output: `replay: 39 passed, 1 failed\n${LONG_LINE}` }),
+  rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, fails: 3, output: `replay: 39 passed, 1 failed\n${LONG_LINE}` }),
   // Tried with no capture runner on the box: the row says it was not sent, and the card says no build can be captured.
   rec('2.1.320', { lastAttemptAt: 5, notSent: 'no-runner' }),
   rec('2.1.312', { capture: 'pass', cwd: true, attempts: 1 }),

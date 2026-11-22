@@ -28,9 +28,6 @@ export function renderApprovalBrief(a: {
   readonly id: number; readonly childId: string; readonly tool: string; readonly agentId: string;
   readonly inputRedacted: string; readonly class: string; readonly digest: string; readonly notifyAt: number;
   readonly denyCurrent: boolean;
-  /** Why the child's Claude Code build is not trusted, in one clause (`buildUntrustedSentence`), or null on a trusted build
-   *  (slug untrusted-build-routes-escalate: such a prompt is held as `escalate`, so its allow is closed). */
-  readonly untrustedBuild: string | null;
 }): string {
   const deadline = new Date(a.notifyAt).toISOString().slice(11, 19);
   const cls = isApprovalClass(a.class) ? a.class : 'escalate';
@@ -45,9 +42,6 @@ export function renderApprovalBrief(a: {
   const thread = a.agentId === '' ? 'its main thread' : 'one of its subagents';
   return `You are the parent of session \`${a.childId}\`: ${thread} asks permission to run a ${toolWord(a.tool)} call.\n` +
     `Class (the server's, not the child's): ${cls} — ${APPROVAL_CLASS_MAP[cls]}.\n` +
-    (a.untrustedBuild === null ? '' : `This child's Claude Code build is not trusted yet (${a.untrustedBuild}), so nothing is ` +
-      'allowed through ccrc for it: ccrc captures the build on its own, and until a capture passes you may deny this prompt ' +
-      'or hand it over.\n') +
     (a.denyCurrent ? '' : 'This child does not run under the box\'s current deny rules: it was spawned under another ' +
       'deny list, and a running session never loads a new one. The server refuses any allow for it.\n') +
     `Your window closes at ${deadline} UTC: then the child's hook returns, the operator has the prompt, ` +

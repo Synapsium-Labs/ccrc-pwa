@@ -6,11 +6,12 @@
 // where it stands, and nothing waits on the operator. So this raises ONE Waiting on you item per build only when ccrc has
 // given up on it (`captureGivenUp`: its capture failed {@link BUILD_CAPTURE_FAIL_CEILING} times), keyed
 // by the build (the item's `untrusted-build` action), and names the act only the operator can do: Capture again, the
-// session-gated door, once the cause is fixed. The capture lane raises it on the failed verdict that gives up, and settles
-// every open one whose build is no longer given up (`untrustedBuildItemsToSettle`): trusted, or back in ccrc's hands.
+// session-gated door, once the cause is fixed. The capture lane raises it on any pass that finds a build given up with no
+// open item and a session still on it (`untrustedBuildItemsToRaise`), and settles every open one whose build is no longer
+// given up (`untrustedBuildItemsToSettle`): trusted, or back in ccrc's hands.
 //
 // The capture lane raises and settles; it acts on these answers only.
-import { BUILD_CAPTURE_FAIL_CEILING, captureGivenUp, captureStandingOf, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_FAIL_CEILING, captureGivenUp, captureStandingOf, givenUpToTell, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import { isClaudeVersion } from '../../../shared/claudeVersion.js';
 import { isUntrustedBuildAction, UNTRUSTED_BUILD_SETTINGS_PATH, UNTRUSTED_BUILD_VERB, type ItemAction } from '../../../shared/ledgers.js';
 import { OVERLORD_PROJECT } from '../../../shared/overlord-designation.js';
@@ -38,8 +39,8 @@ export function untrustedBuildItemOf(openBuilds: ReadonlySet<string>, row: Claud
     program: UNTRUSTED_BUILD_ITEM_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do',
     title: `Claude Code ${version} failed its capture ${times(row.fails)}, and ccrc has stopped retrying`,
     why: `The test box captured ${version} and the replay tests failed ${times(row.fails)}, so ccrc no longer captures it by `
-      + `itself (it retries up to ${BUILD_CAPTURE_FAIL_CEILING} times). Until a capture passes, nothing is allowed through ccrc `
-      + 'for a child on it: its coordinator may deny a permission prompt or hand it to you, and you answer it in the session.',
+      + `itself (it stops after ${BUILD_CAPTURE_FAIL_CEILING} failed captures). Until a capture passes, ccrc refuses a child's `
+      + 'permission prompt on it, so the prompt comes to you in the session.',
     how: [
       `Open ${UNTRUSTED_BUILD_SETTINGS_PATH} and find Claude Code ${version} in the Test box's build list: its replay output `
         + 'says what failed.',
@@ -54,10 +55,10 @@ export function untrustedBuildItemOf(openBuilds: ReadonlySet<string>, row: Claud
   };
 }
 
-/** The note an item settles with: its build passed its capture, or it is back in ccrc's hands. */
+/** The note an item settles with: its build passed its capture, or it is back in ccrc's hands (or has no row). */
 export const UNTRUSTED_BUILD_SETTLED_NOTES = {
   captured: 'The build passed its capture, so its children\'s prompts can be allowed again.',
-  handled: 'ccrc is capturing this build itself, and the Test box card shows where it stands, so nothing here waits on you.',
+  handled: 'ccrc captures this build itself once its capture runner is wired; until then a child\'s prompt on it comes to you in the pane.',
 } as const;
 
 /** The open items to settle, each with its note: every one whose build ccrc has not given up on (trusted, queued, being
@@ -71,5 +72,17 @@ export function untrustedBuildItemsToSettle(
     if (row !== undefined && captureGivenUp(row)) return [];
     const captured = row !== undefined && captureStandingOf(row).kind === 'trusted';
     return [{ id: i.id, build: i.build, note: captured ? UNTRUSTED_BUILD_SETTLED_NOTES.captured : UNTRUSTED_BUILD_SETTLED_NOTES.handled }];
+  });
+}
+
+/** The items to raise on a pass (review 3234 F11): one for each build ccrc has given up on, that a session still runs
+ *  (`givenUpToTell`), and that has no open item, so a raise lost to a throw or a restart is raised on a later pass. */
+export function untrustedBuildItemsToRaise(
+  open: readonly { readonly build: string }[], records: readonly ClaudeBuildRecord[], versions: readonly (string | null)[],
+): RaiseItemInput[] {
+  const openBuilds = new Set(open.map((i) => i.build));
+  return records.flatMap((r) => {
+    const input = givenUpToTell(r, versions) ? untrustedBuildItemOf(openBuilds, r) : null;
+    return input === null ? [] : [input];
   });
 }
