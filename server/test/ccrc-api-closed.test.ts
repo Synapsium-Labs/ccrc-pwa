@@ -186,6 +186,7 @@ describe('the corpora no longer invoke curl', () => {
       'linear.statuses',
       'linear.update',
       'linking.show',
+      'linking.suggest',
       'mail.inbox',
       'mail.send',
       'peers.list',
