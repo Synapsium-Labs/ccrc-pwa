@@ -85,10 +85,10 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
   by the packet the README's holding run approved; the ticket can close with the PR.
 - `w8-overlord-skill`: built by run 3251 (below). The Overlord skill's door table gains `link team`, and says what it does below `full`.
-- `w8-confirm-unmeasured`: the Overlord's confirm route answers `team-unknown` for an unreadable slot or no connected
-  workspace. The operator's write answers `team-unknown` there only when it names a workspace; with none named it stores the
-  key with no workspace. The fix: both answer `unavailable` when a slot they need cannot be read, and the operator is told
-  plainly when no workspace is connected. Found by review 3253 F1 on run 3251, corrected by reviews 3261 F1 and 3266 F4.
+- `w8-confirm-unmeasured`: built by run 3279 (below). The Overlord's confirm route answered `team-unknown` for an
+  unreadable slot or no connected workspace. The operator's write answered `team-unknown` there only when it named a
+  workspace; with none named it stored the key with no workspace. Found by review 3253 F1 on run 3251, corrected by reviews
+  3261 F1 and 3266 F4.
 - `w8-suggest-pair-last`: built by run 3264 (below). The client puts the pane's pair last on the linking suggest and
   confirm doors and on the call record.
 - `w8-call-anchor`: built by run 3209 (below).
@@ -355,3 +355,28 @@ Fix round 2 (review 3271, as the coordinator ruled):
 - F2: the probe answer's slice ends at its own block's closing `fi` too, through the same helper, so the `programme.remaining`
   block can no longer satisfy it. Measured: the probe door reverted to `splice_body_field` turns its assertion red; restored,
   it passes.
+
+## Run 3279 (`w8-confirm-unmeasured`): what was built
+
+The three team doors resolve a (key, workspace) pair through the measured resolver (`measuredTeamRoutes`,
+`measuredProjectTeam`), as the plan, migration and triage paths already did, so an unreadable slot is no longer read as a
+slot with no teams.
+
+- `teamPairVerdict` (`server/src/linking/policy.ts`) takes the measured answer: `unavailable` when a slot the answer depends
+  on could not be read, `not-configured` (the router's existing word, 501) when no Linear workspace is connected,
+  `team-ambiguous` as before, and `team-unknown` only when every workspace was read and none holds the pair. Each refusal
+  carries its fixed detail, decided there. `measuredPairRoute` beside `PairRoute` hands the operator's write the same
+  measured route; `workspaceAfterWrite` itself is unchanged.
+- The suggest and confirm doors answer `unavailable` for an unread workspace and `not-configured` for none. The operator's
+  write answers `unavailable` when a slot the answer depends on cannot be read (it stored the key with none, or with the one
+  readable holder, before). With no workspace connected it keeps its answers, as the coordinator ruled: a named workspace is
+  `team-unknown`, and with none named the key is stored with none, because the console has no sentence for `not-configured`
+  on that write.
+- An intended change on all three doors: a key one readable slot holds, while another slot is unreadable and no workspace is
+  named, answers `unavailable`, because the unread slot could hold it too (the measured resolver's fail-closed reading).
+- Characterization pins (`linking-routes.test.ts` for the write and the suggestion, `linking-overlord-confirm.test.ts` for
+  the confirm) were green on `main` first; each door's changed cells moved in that door's own commit and were measured red
+  before it.
+- The Overlord skill's team candidate paragraph and the coordinator plan reference's `## linking suggest` say what each word
+  now means: `unavailable`, try once more later, then tell the operator; `not-configured`, do not retry, tell the operator
+  that no Linear workspace is connected. Their pins name `not-configured` beside the other words.

@@ -540,14 +540,15 @@ number from `POST /api/ledger/deviations`.
   Return alike (review 3073 F5, F6). Migration completion waits rather than dropping an unnamed declared
   programme whose membership cannot be measured. Ambiguous inbound with no owner waits, counts in the console and, since run
   3187, raises the shared-key item above. Follow-ups this wave leaves:
-  `w8-attached-wire` and `w8-confirm-unmeasured` (the confirm route answers `unavailable` when the pair is unmeasured);
+  `w8-attached-wire`;
   `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
   `w8-triage-l1` by run 3155, `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
   coordinator's call, since it only adds an item, `w8-call-anchor` by run 3209, `w8-folded-pin` by run 3230 (#3172),
   and `w8-skill-section` (Task 8.6's skill step, which the review judge's rules-mixed rule moved to a PR of its own) by
-  run 3238, `w8-overlord-skill` by run 3251, and `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
-  suggest and confirm doors and the call record) by run 3264. Record: the
-  wave 8 note.
+  run 3238, `w8-overlord-skill` by run 3251, `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
+  suggest and confirm doors and the call record) by run 3264, and `w8-confirm-unmeasured` (the team doors answer
+  `unavailable` when a workspace the pair depends on cannot be read, and the suggest and confirm doors `not-configured` when
+  none is connected) by run 3279. Record: the wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
   with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`
