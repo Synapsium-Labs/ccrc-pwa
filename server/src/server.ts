@@ -94,6 +94,7 @@ import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/ro
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
+import { expectedSurfaceOf } from './continuity/sandboxCheck.js';
 import { registerQuizRoutes } from './continuity/quizRoutes.js';
 import { witnessPorts } from './continuity/witnessPorts.js';
 import { liveStateOf, markOperatorPrompt } from './continuity/promptHandoffs.js';
@@ -2273,6 +2274,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerContinuityRoutes(app, {
     // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
     settle: designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
+      expected: () => expectedSurfaceOf('overlord', deps.overlordSandbox?.ownLists), settled: deps.overlordSandbox?.settled,
       goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
       failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
       drain: async (id) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id]); },

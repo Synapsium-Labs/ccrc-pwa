@@ -2,20 +2,31 @@
 // designated body's newest `startup` or `resume` start by its own report through `profileEngagedOf`. Not engaged stands; no
 // designation lifts; an unreadable read, or a store without the read, is unmeasured, and both apply the effect: the gate
 // order's step 6 (`launch-profile-unmet`) reads it from `readBy`.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LADDER_CAUSE_MAP } from '../../shared/overlord-ladder.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { effectiveRung } from '../src/coord/overlordLadder.js';
 import { ladderConditionInputs } from '../src/coord/overlordLadderRead.js';
 import type { NewestStartLoadsRead } from '../src/continuity/continuityStore.js';
 import { expectedSurfaceOf } from '../src/continuity/sandboxCheck.js';
-import { heldReport, startRow } from './sim/sandboxSets.js';
+import { FIXTURE_OWN_LISTS, heldReport, pendingRead, startRow } from './sim/sandboxSets.js';
+
+// The input reads the release's own lists, which list no build (review 3325 F4). A case that needs a held report swaps in the
+// isolated fixture lists through this mock; `release` puts the release's table back for the fail-closed case.
+const lists = vi.hoisted(() => ({ fixture: true }));
+vi.mock('../src/continuity/sandboxCheck.js', async (actual) => {
+  const m = await actual<typeof import('../src/continuity/sandboxCheck.js')>();
+  const { FIXTURE_OWN_LISTS: fixture } = await import('./sim/sandboxSets.js');
+  return { ...m, expectedSurfaceOf: (role: Parameters<typeof m.expectedSurfaceOf>[0], own?: Parameters<typeof m.expectedSurfaceOf>[1]) =>
+    m.expectedSurfaceOf(role, own ?? (lists.fixture ? fixture : undefined)) };
+});
+afterEach(() => { lists.fixture = true; });
 
 const OV = 'lane-a-overlord';
 const VIEW = { bound: { sessionId: OV, generation: 'g1' }, pending: null, term: 2, designatedTerm: 2, model: 'opus', accountPools: { pools: [], untagged: true },
   pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] } as DesignationView;
 const bound: DesignationRead = { kind: 'designated', sessionId: OV, term: 2, row: VIEW };
-const e = expectedSurfaceOf('overlord')!;
+const e = expectedSurfaceOf('overlord', FIXTURE_OWN_LISTS)!;
 
 function reading(designation: DesignationRead | 'throws', loads?: NewestStartLoadsRead | 'absent') {
   const asked: string[] = [];
@@ -43,9 +54,20 @@ describe('the launch-profile-unengaged input (W1 sandbox B)', () => {
     expect(reading(bound, newest(null)).value).toBe('standing');
     expect(reading(bound, newest(heldReport(e, { launchRc: 'on' }))).value).toBe('standing');
   });
-  it('no designation, or a pending one only, lifts', () => {
+  it('no designation, or a pending one only, lifts, and reads no start (review 3325 F7)', () => {
     expect(reading({ kind: 'not-designated', row: null }).value).toBe('lifted');
     expect(reading({ kind: 'not-designated', row: { ...VIEW, bound: null } }).value).toBe('lifted');
+    const pending = pendingRead({ sessionId: OV });
+    expect(pending.kind === 'not-designated' && pending.row?.pending?.sessionId).toBe(OV);
+    const r = reading(pending, newest(heldReport(e, { launchRc: 'on' })));
+    expect(r.value).toBe('lifted');
+    expect(r.asked).toEqual([]);
+  });
+  it('with the release\'s lists, a designated body on 2.1.330 stands: no build is listed (review 3325 F4)', () => {
+    lists.fixture = false;
+    const p = expectedSurfaceOf('overlord')!;
+    expect(Object.keys(p.ownLists)).toStrictEqual([]);
+    expect(reading(bound, newest(heldReport(p, { claudeVersion: '2.1.330' }))).value).toBe('standing');
   });
   it('an unreadable designation, a failed read, a throw and a store without the read are unmeasured', () => {
     expect(reading({ kind: 'unmeasured', why: 'x' }).value).toBe('unmeasured');

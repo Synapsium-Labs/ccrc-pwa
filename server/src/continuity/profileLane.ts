@@ -230,9 +230,10 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
 }
 
 /** The skew notice (W1 sandbox B, question 5, slug `dead-overlord-waits-for-build-agreement`): the Overlord's body, bound or
- *  pending, is down while its route carries `profiledigest` and the two boxes run different builds, so ccd refuses every
- *  respawn until they agree. `skewNoticeOf` decides; this raises its one notice, keyed once per session and build pair in the
- *  feed (`hasNotice`), so a restart does not raise it again. A designation it cannot read raises nothing. */
+ *  pending, is down while its route carries `profiledigest` and the two boxes run different builds, where a digest mismatch
+ *  can keep ccd from respawning it (review 3325 F1: nothing here reads a refusal). `skewNoticeOf` decides; this raises its
+ *  one notice, keyed once per session and build pair in the feed (`hasNotice`), so a restart does not raise it again. A
+ *  designation it cannot read raises nothing. */
 function skewPass(deps: ProfileLaneDeps, rows: readonly ProfileRow[], read: DesignationRead | null, seen: BuildAgreement | null): void {
   const s = deps.skew;
   if (s === undefined || read === null || read.kind === 'unmeasured') return;

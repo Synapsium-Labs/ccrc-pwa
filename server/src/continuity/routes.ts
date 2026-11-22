@@ -39,7 +39,7 @@ import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
 import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, READ_LEDGER_WRITTEN, bookOf, gradeAnswers, ledgerFactsOf, maskedQuestion, probePages, type LastRead, type ReadLedgerCount } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
-import { expectedSurfaceOf, sandboxSettle, sandboxVerdict, type WorkspaceFact } from './sandboxCheck.js';
+import { sandboxSettle, sandboxVerdict, type ExpectedSurface, type WorkspaceFact } from './sandboxCheck.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
@@ -72,6 +72,8 @@ export interface MessagePickUp {
  *  coordination serialiser, so a settle never interleaves with a designate or a retire. */
 export interface SandboxSettlePort {
   serial<T>(fn: () => Promise<T>): Promise<T>;
+  /** The Overlord's expected surface: `expectedSurfaceOf('overlord')` with the release's own lists (a test's isolated ones). */
+  expected(): ExpectedSurface | null;
   read(): DesignationRead;
   /** The pending attempt becomes the binding; `ok: false` names why (the authority journal refused it, a row it cannot read). */
   goLive(sessionId: string, generation: string, at: number): { readonly ok: boolean; readonly detail?: string };
@@ -81,6 +83,16 @@ export interface SandboxSettlePort {
   drain(sessionId: string): Promise<void>;
   /** The session's registry project, measured or not (`registry.ts#measuredProjectOf`). */
   workspaceOf(sessionId: string): Promise<WorkspaceFact>;
+  /** Told what each settle did, once it is done; absent in production. A test's completion signal (review 3325 F6). */
+  settled?(outcome: SettleOutcome): void;
+}
+
+/** What one settle did: the act it decided (`none` included, so a negative is seen evaluated), `unread` when the designation
+ *  or the newest start could not be read, `refused` when go-live was refused, `threw` when a step threw. */
+export interface SettleOutcome {
+  readonly sessionId: string;
+  readonly startId: number;
+  readonly act: 'none' | 'go-live' | 'fail-pending' | 'unread' | 'refused' | 'threw';
 }
 
 export interface ContinuityRouteDeps {
@@ -345,9 +357,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       return refuseRoute(reply, START_LOADS_REFUSALS.unknownStart, { detail: 'no start of this session carries that reportId yet' });
     }
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_start_loads could not be written' });
-    // THE SETTLE STEP (Task 9): after the write, on every accepted body (a resend retries a settle that did not finish; once
-    // settled the pending slot is clear and it acts on nothing). It runs after the answer, on the serialiser, so the hook's
-    // send budget never waits on the stop; it decides nothing here: `sandboxVerdict` and `sandboxSettle` do.
+    // THE SETTLE STEP (Task 9): after the write, on every accepted body. It runs after the answer, on the serialiser, so the
+    // hook's send budget never waits on the stop; it decides nothing here: `sandboxVerdict` and `sandboxSettle` do. A 202
+    // clears the hook's spool, so nothing resends an answered report (review 3325 F2): a settle lost after the answer (a
+    // restart, a throw, a refused go-live) leaves the attempt pending until the designation's reconciliation re-runs this
+    // function from the stored report.
     if (deps.settle !== undefined) void settleLoads(deps.settle, coord, id, r.startId, deps.wall);
     return reply.code(202).send({ ok: true, startId: r.startId, fresh: r.fresh });
   });
@@ -1143,29 +1157,46 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
 /** The settle step's acts (Task 9), on the serialiser: read the designation, the newest start with its report and the carry,
  *  and the workspace; ask `sandboxVerdict` and `sandboxSettle`; then `go-live` calls the designation's `live` writer, and
  *  `fail-pending` records `overlord-sandbox-unmet` with its stop owed and drains it (the profile digest cleared, then the
- *  stop). An unreadable read acts on nothing. A refusal or a failed stop is logged; the owed stop stays on the row. */
+ *  stop). An unreadable read acts on nothing. A refusal or a failed stop is logged; the owed stop stays on the row. Every
+ *  check runs again inside the serialiser on each call, so a call for a report that is no longer the newest start's, or for
+ *  another session or generation, acts on nothing. */
 export function settleLoads(port: SandboxSettlePort, coord: Pick<CoordStore, 'startLoadsOfNewestStart'>, id: string, startId: number,
-  wall: () => number): Promise<void> {
+  wall: () => number): Promise<SettleOutcome> {
   return port.serial(async () => {
+    let act: SettleOutcome['act'] = 'threw';
     try {
-      const expected = expectedSurfaceOf('overlord');
-      const read = port.read();
-      const newest = coord.startLoadsOfNewestStart(id);
-      if (expected === null || !newest.ok || newest.newest === null) return;
-      const n = newest.newest;
-      const verdict = sandboxVerdict(expected, n.report, await port.workspaceOf(id), n.carry);
-      const act = sandboxSettle(read, startId, n.start, verdict);
-      if (act.kind === 'go-live') {
-        const g = port.goLive(act.sessionId, act.generation, wall());
-        if (!g.ok) console.warn(`ccrc-server: the sandbox check held for ${act.sessionId}, but it could not go live: ${g.detail ?? 'refused'}`);
-      } else if (act.kind === 'fail-pending') {
-        console.warn(`ccrc-server: the sandbox check failed for ${act.sessionId} (${act.properties.map((p) => `${p.property}: ${p.detail}`).join('; ')}); stopping it`);
-        const f = port.failPending(act.sessionId, wall());
-        if (f.ok && f.changed !== false) await port.drain(act.sessionId);
-        else if (!f.ok) console.warn(`ccrc-server: the failed attempt of ${act.sessionId} could not be recorded`);
-      }
+      act = await settleOnce(port, coord, id, startId, wall);
     } catch (e) {
       console.warn(`ccrc-server: the sandbox settle for ${id} threw: ${e instanceof Error ? e.message : String(e)}`);
     }
+    const outcome = { sessionId: id, startId, act };
+    port.settled?.(outcome);
+    return outcome;
   });
+}
+
+async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'startLoadsOfNewestStart'>, id: string, startId: number,
+  wall: () => number): Promise<SettleOutcome['act']> {
+  const expected = port.expected();
+  const read = port.read();
+  const newest = coord.startLoadsOfNewestStart(id);
+  if (expected === null || read.kind === 'unmeasured' || !newest.ok) return 'unread';
+  if (newest.newest === null) return 'none';
+  const n = newest.newest;
+  const verdict = sandboxVerdict(expected, n.report, await port.workspaceOf(id), n.carry);
+  const act = sandboxSettle(read, startId, n.start, verdict);
+  if (act.kind === 'go-live') {
+    const g = port.goLive(act.sessionId, act.generation, wall());
+    if (g.ok) return 'go-live';
+    console.warn(`ccrc-server: the sandbox check held for ${act.sessionId}, but it could not go live: ${g.detail ?? 'refused'}`);
+    return 'refused';
+  }
+  if (act.kind === 'fail-pending') {
+    console.warn(`ccrc-server: the sandbox check failed for ${act.sessionId} (${act.properties.map((p) => `${p.property}: ${p.detail}`).join('; ')}); stopping it`);
+    const f = port.failPending(act.sessionId, wall());
+    if (f.ok && f.changed !== false) await port.drain(act.sessionId);
+    else if (!f.ok) console.warn(`ccrc-server: the failed attempt of ${act.sessionId} could not be recorded`);
+    return 'fail-pending';
+  }
+  return 'none';
 }

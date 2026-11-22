@@ -8,14 +8,16 @@ import type { MutantSet, SuiteCase } from './mutate.js';
 import type { StartLoadsRow } from '../../src/continuity/startLoads.js';
 import type { StartRow } from '../../../shared/continuity.js';
 import type { DesignationRead, DesignationView } from '../../../shared/overlord-designation.js';
-import { SANDBOX_PROPERTIES, type SandboxProperty } from '../../../shared/overlord-sandbox.js';
+import { SANDBOX_PROPERTIES, type ClaudeCodeOwnLists, type SandboxProperty } from '../../../shared/overlord-sandbox.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 export type SandboxModule = typeof import('../../src/continuity/sandboxCheck.js');
 type Expected = NonNullable<ReturnType<SandboxModule['expectedSurfaceOf']>>;
 
-export const BUILD = '2.1.330';
+/** An isolated fixture build and its own lists (review 3325 F4): no real build, and never the release's table, which lists none. */
+export const BUILD = '0.0.0-fixture';
+export const FIXTURE_OWN_LISTS: ClaudeCodeOwnLists = { [BUILD]: { agents: ['Explore'], skills: ['dataviz'] } };
 export const GEN = '11111111-2222-3333-4444-555555555555';
 export const BODY = 'lane-a-overlord';
 const WS = { kind: 'measured', project: 'overlord' } as const;
@@ -49,7 +51,7 @@ export const pendingRead = (over: Partial<NonNullable<DesignationView['pending']
 });
 
 export function sandboxCases(m: SandboxModule): Record<string, SuiteCase> {
-  const e = m.expectedSurfaceOf('overlord')!;
+  const e = m.expectedSurfaceOf('overlord', FIXTURE_OWN_LISTS)!;
   const state = (r: StartLoadsRow | null, p: SandboxProperty, ws: Parameters<SandboxModule['sandboxVerdict']>[2] = WS,
     carry?: Parameters<SandboxModule['sandboxVerdict']>[3]) => m.sandboxVerdict(e, r, ws, carry).properties.find((x) => x.property === p)?.state;
   const unread = (k: keyof StartLoadsRow['loaded']) => heldReport(e, {}, { [k]: 'unmeasured' });
@@ -108,6 +110,15 @@ export function sandboxCases(m: SandboxModule): Record<string, SuiteCase> {
       expect(v.find((p) => p.property === 'agents')).toMatchObject({ state: 'unmeasured', detail: expect.stringContaining('9.9.9') });
       expect(state(heldReport(e, { claudeVersion: null }), 'skills')).toBe('unmeasured');
     },
+    'the release lists no build: a 2.1.330 report reads skills and agents unmeasured, naming it, and is not engaged (review 3325 F4)': () => {
+      const p = m.expectedSurfaceOf('overlord')!;
+      expect(Object.keys(p.ownLists)).toStrictEqual([]);
+      const v = m.sandboxVerdict(p, heldReport(p, { claudeVersion: '2.1.330' }), WS);
+      expect(v.properties.filter((x) => x.state !== 'held').map((x) => [x.property, x.state])).toStrictEqual([['skills', 'unmeasured'], ['agents', 'unmeasured']]);
+      expect(v.properties.find((x) => x.property === 'skills')?.detail).toContain('2.1.330');
+      expect(v.engaged).toBe(false);
+      expect(m.profileEngagedOf({ start: startRow(), report: heldReport(p, { claudeVersion: '2.1.330' }) }, p, WS)).toBe('not-engaged');
+    },
     'agents: a plugin agent or a missing reader type fails; unread is unmeasured': () => {
       expect(state(heldReport(e, {}, { agents: ['Explore', 'overlord-reader', 'plug:agent'] }), 'agents')).toBe('failed');
       expect(state(heldReport(e, {}, { agents: ['Explore'] }), 'agents')).toBe('failed');
@@ -157,11 +168,23 @@ export function sandboxCases(m: SandboxModule): Record<string, SuiteCase> {
       expect(m.profileEngagedOf({ start: startRow(), report: heldReport(e) }, e, WS)).toBe('engaged');
       expect(m.profileEngagedOf({ start: startRow({ source: 'resume' }), report: heldReport(e) }, e, WS)).toBe('engaged');
     },
+    'profileEngagedOf: a report of any start but the newest reads not-engaged, never an older start\'s (review 3325 F8)': () => {
+      expect(m.profileEngagedOf({ start: startRow({ id: 9 }), report: heldReport(e, { startId: 7 }) }, e, WS)).toBe('not-engaged');
+      expect(m.profileEngagedOf({ start: startRow({ id: 9 }), report: heldReport(e, { startId: 9 }) }, e, WS)).toBe('engaged');
+    },
+    'profileEngagedOf: a carried resume is engaged only on a carry the server vouches for': () => {
+      const start = startRow({ source: 'resume' });
+      const carried = heldReport(e, { carriedFrom: 'r-0000-start' });
+      const good = { kind: 'read', source: 'startup', report: { profileDigest: e.digest, claudeVersion: BUILD, conflicted: false } } as const;
+      expect(m.profileEngagedOf({ start, report: carried }, e, WS, good)).toBe('engaged');
+      expect(m.profileEngagedOf({ start, report: carried }, e, WS, { kind: 'absent' })).toBe('not-engaged');
+      expect(m.profileEngagedOf({ start, report: carried }, e, WS)).toBe('not-engaged');
+    },
   };
 }
 
 export function settleCases(m: SandboxModule): Record<string, SuiteCase> {
-  const e = m.expectedSurfaceOf('overlord')!;
+  const e = m.expectedSurfaceOf('overlord', FIXTURE_OWN_LISTS)!;
   const held = m.sandboxVerdict(e, heldReport(e), WS);
   const failed = m.sandboxVerdict(e, heldReport(e, { launchRc: 'on' }), WS);
   const unmeasured = m.sandboxVerdict(e, null, WS);
@@ -220,13 +243,28 @@ export function skewCases(m: SandboxModule): Record<string, SuiteCase> {
     'a new build pair is noticed again': () => {
       expect(m.skewNoticeOf({ ...base, serverBuild: 'v0.9.3', noticed: (k) => k === `${BODY}:v0.9.1:v0.9.2` })).not.toBeNull();
     },
+    'the notice says what is measured: the builds differ and a digest mismatch can keep it from respawning (review 3325 F1)': () => {
+      const body = m.skewNoticeOf(base)!.body;
+      expect(body).toContain('is down while the two boxes run different builds');
+      expect(body).toContain('the digest mismatch can keep it from respawning');
+      expect(body).not.toMatch(/refused|stays down|would be|impossible|cannot respawn/);
+    },
+    'skewRunningOf: here runs; gone and asleep are down; doubt and an unlisted session are unmeasured (review 3325 F9)': () => {
+      expect(m.skewRunningOf({ presence: 'alive' })).toBe(true);
+      expect(m.skewRunningOf({ presence: 'dead' })).toBe(false);
+      expect(m.skewRunningOf({ presence: 'asleep' })).toBe(false);
+      expect(m.skewRunningOf({ presence: 'unknown', lifecycle: 'unmeasurable' })).toBe(false);
+      expect(m.skewRunningOf({ presence: 'alive', lifecycle: 'restarting' })).toBe('unmeasured');
+      expect(m.skewRunningOf({ presence: 'unknown' })).toBe('unmeasured');
+      expect(m.skewRunningOf(undefined)).toBe('unmeasured');
+    },
   };
 }
 
 const MODULE = path.join(ROOT, 'server/src/continuity/sandboxCheck.ts');
 
 /** `sandboxVerdict`'s mutants: a property that reads `unmeasured` (or fails) as held, an empty tool-server set passing, a
- *  dropped property; `profileEngagedOf`'s: a start with no report read as engaged. */
+ *  dropped property. */
 const SANDBOX_VERDICT_SET: MutantSet<SandboxModule> = {
   modulePath: MODULE,
   mutants: [
@@ -246,13 +284,23 @@ const SANDBOX_VERDICT_SET: MutantSet<SandboxModule> = {
     { id: 'S14', old: "  if (carry.report.conflicted) return \"the carried start's report is conflicted\";\n", new: '' },
     { id: 'S15', old: "  return { engaged: out.every((p) => p.state === 'held'), properties: out };", new: "  return { engaged: out.every((p) => p.state === 'held'), properties: out.filter((p) => p.property !== 'workspace') };" },
     { id: 'S16', old: "else if (!names(L.tools).some((t) => t.startsWith(door)))", new: 'else if (false)' },
-    { id: 'S17', old: "if (newest === null || newest.report === null) return 'not-engaged';", new: "if (newest === null) return 'not-engaged'; if (newest.report === null) return 'engaged';" },
   ],
   suite: (mod) => sandboxCases(mod),
 };
 
-/** `sandboxSettle`'s mutants: settle an older start's report, settle a non-pending or rebind row, go live on a failed verdict;
- *  `skewNoticeOf`'s: notice a live Overlord, notice twice. */
+/** `profileEngagedOf`'s mutants (review 3325 F8): a start with no report, a report of an older start, and a carry dropped. */
+const PROFILE_ENGAGED_SET: MutantSet<SandboxModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'S17', old: "if (newest === null || newest.report === null) return 'not-engaged';", new: "if (newest === null) return 'not-engaged'; if (newest.report === null) return 'engaged';" },
+    { id: 'P1', old: "  if (newest.report.startId !== newest.start.id) return 'not-engaged';\n", new: '' },
+    { id: 'P2', old: "return sandboxVerdict(expected, newest.report, workspace, carry).engaged", new: "return sandboxVerdict(expected, newest.report, workspace, { kind: 'read', source: 'startup', report: { profileDigest: expected.digest, claudeVersion: newest.report.claudeVersion, conflicted: false } }).engaged" },
+  ],
+  suite: (mod) => sandboxCases(mod),
+};
+
+/** `sandboxSettle`'s mutants: settle an older start's report, a rebind row or another session's report, go live on a failed
+ *  verdict, settle another generation. */
 const SANDBOX_SETTLE_SET: MutantSet<SandboxModule> = {
   modulePath: MODULE,
   mutants: [
@@ -260,13 +308,30 @@ const SANDBOX_SETTLE_SET: MutantSet<SandboxModule> = {
     { id: 'T2', old: "if (p === null || p.kind !== 'designate' || p.sessionId !== newest.sessionId)", new: "if (p === null || p.sessionId !== newest.sessionId)" },
     { id: 'T3', old: "if (verdict.engaged) return { kind: 'go-live'", new: "if (true) return { kind: 'go-live'" },
     { id: 'T4', old: "if (p.generation === null || p.generation !== newest.rowIncarnation) return { kind: 'none' };", new: "if (p.generation === null) return { kind: 'none' };" },
+    { id: 'T7', old: "|| p.kind !== 'designate' || p.sessionId !== newest.sessionId)", new: "|| p.kind !== 'designate')" },
+  ],
+  suite: (mod) => settleCases(mod),
+};
+
+/** `skewNoticeOf`'s and `skewRunningOf`'s mutants (review 3325 F8, F9): notice a live Overlord, notice twice, notice without the
+ *  digest or under unknown builds, and read doubt, asleep or an unlisted session as down or running. */
+const SKEW_NOTICE_SET: MutantSet<SandboxModule> = {
+  modulePath: MODULE,
+  mutants: [
     { id: 'T5', old: "if (f.sessionId === null || f.running !== false ||", new: "if (f.sessionId === null || f.running === 'unmeasured' ||" },
     { id: 'T6', old: '  if (f.noticed(key)) return null;\n', new: '' },
+    { id: 'K1', old: "|| !f.digestStands ||", new: '||' },
+    { id: 'K2', old: "|| f.agreement !== 'skewed') return null;", new: "|| f.agreement === 'agreed') return null;" },
+    { id: 'R1', old: "return st === 'doubt' ? 'unmeasured' : st === 'here';", new: "return st === 'here';" },
+    { id: 'R2', old: "return st === 'doubt' ? 'unmeasured' : st === 'here';", new: "return st === 'doubt' ? 'unmeasured' : st !== 'gone';" },
+    { id: 'R3', old: "if (row === undefined) return 'unmeasured';", new: 'if (row === undefined) return false;' },
   ],
-  suite: (mod) => ({ ...settleCases(mod), ...skewCases(mod) }),
+  suite: (mod) => skewCases(mod),
 };
 
 export const SANDBOX_MUTANT_SETS: Readonly<Record<string, MutantSet<SandboxModule>>> = {
   'server/src/continuity/sandboxCheck.ts#sandboxVerdict': SANDBOX_VERDICT_SET,
+  'server/src/continuity/sandboxCheck.ts#profileEngagedOf': PROFILE_ENGAGED_SET,
   'server/src/continuity/sandboxCheck.ts#sandboxSettle': SANDBOX_SETTLE_SET,
+  'server/src/continuity/sandboxCheck.ts#skewNoticeOf': SKEW_NOTICE_SET,
 };

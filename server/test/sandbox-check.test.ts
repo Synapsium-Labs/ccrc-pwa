@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import * as sandbox from '../src/continuity/sandboxCheck.js';
 import { CLAUDE_CODE_OWN_LISTS } from '../../shared/overlord-sandbox.js';
 import { launchRowOf } from '../src/continuity/launchProfile.js';
-import { BUILD, sandboxCases } from './sim/sandboxSets.js';
+import { BUILD, FIXTURE_OWN_LISTS, sandboxCases } from './sim/sandboxSets.js';
 
 describe('sandboxVerdict and profileEngagedOf (Task 8)', () => {
   for (const [name, run] of Object.entries(sandboxCases(sandbox))) it(name, run);
@@ -19,7 +19,11 @@ describe('the expected surface comes from the one projection (Review Focus 4)', 
     expect(Object.keys(JSON.parse(row.flags[row.flags.indexOf('--agents') + 1]!) as object)).toStrictEqual([...e.readerTypes]);
     expect(Object.keys(row.stagedSkills)).toStrictEqual([...e.skills]);
   });
-  it('the fixture build is one the own lists carry, so the held case is not held by an absent list', () => {
-    expect(Object.keys(CLAUDE_CODE_OWN_LISTS)).toContain(BUILD);
+  it('the fixture build is one the fixture\'s own lists carry, so the held case is not held by an absent list', () => {
+    expect(Object.keys(FIXTURE_OWN_LISTS)).toContain(BUILD);
+  });
+  it('the fixture lists are isolated: the release\'s table lists no build, the fixture\'s included (review 3325 F4)', () => {
+    expect(CLAUDE_CODE_OWN_LISTS).toStrictEqual({});
+    expect(sandbox.expectedSurfaceOf('overlord')!.ownLists).toBe(CLAUDE_CODE_OWN_LISTS);
   });
 });

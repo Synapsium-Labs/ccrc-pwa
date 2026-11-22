@@ -20,8 +20,10 @@ import type { StartRow } from '../../../shared/continuity.js';
 import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import {
-  CLAUDE_CODE_OWN_LISTS, SANDBOX_PROPERTIES, UNMEASURED, type LoadedEntry, type LoadedInstruction, type SandboxProperty,
+  CLAUDE_CODE_OWN_LISTS, SANDBOX_PROPERTIES, UNMEASURED, type ClaudeCodeOwnLists, type LoadedEntry, type LoadedInstruction,
+  type SandboxProperty,
 } from '../../../shared/overlord-sandbox.js';
+import { rowStanding, type RowStandingFacts } from '../sessionReading.js';
 import { LAUNCH_HOOK_COMMAND, launchDigestOf } from './launchProfile.js';
 import type { StartLoadsRow } from './startLoads.js';
 
@@ -45,17 +47,18 @@ export interface ExpectedSurface {
   /** sha256 of ccrc's hook command, as the hook hashes a SessionStart hook's command (its bytes, no newline). */
   readonly hookSha256: string;
   /** Claude Code's own agent types and skills, by build (question 4). */
-  readonly ownLists: Readonly<Record<string, { readonly agents: readonly string[]; readonly skills: readonly string[] }>>;
+  readonly ownLists: ClaudeCodeOwnLists;
 }
 
-/** The expected surface of a role, or null for a role whose profile has no surface. */
-export function expectedSurfaceOf(role: FleetRole): ExpectedSurface | null {
+/** The expected surface of a role, or null for a role whose profile has no surface. `ownLists` is the release's table; only a
+ *  test passes its own isolated lists (review 3325 F4). */
+export function expectedSurfaceOf(role: FleetRole, ownLists: ClaudeCodeOwnLists = CLAUDE_CODE_OWN_LISTS): ExpectedSurface | null {
   const s = FLEET_ROLES[role].launchProfile.surface;
   if (s === null) return null;
   return {
     role, digest: launchDigestOf(role), tools: s.tools, toolServer: s.toolServer, readerTypes: Object.keys(s.readerTypes),
     skills: s.skills, constitutionSha256: s.constitutionSha256,
-    hookSha256: createHash('sha256').update(LAUNCH_HOOK_COMMAND, 'utf8').digest('hex'), ownLists: CLAUDE_CODE_OWN_LISTS,
+    hookSha256: createHash('sha256').update(LAUNCH_HOOK_COMMAND, 'utf8').digest('hex'), ownLists,
   };
 }
 
@@ -189,11 +192,12 @@ export function sandboxVerdict(expected: ExpectedSurface, report: StartLoadsRow 
 }
 
 /** The ladder's condition input: the verdict of the session's newest `startup` or `resume` start, by that start's own
- *  report. The read (`startLoadsOfNewestStart`) already passes over `clear` and `compact` starts. No such start, or one with
- *  no report, reads `not-engaged`. */
+ *  report. The read (`startLoadsOfNewestStart`) already passes over `clear` and `compact` starts. No such start, one with no
+ *  report, or a report of any other start (never an older start's, review 3325 F8), reads `not-engaged`. */
 export function profileEngagedOf(newest: { readonly start: StartRow; readonly report: StartLoadsRow | null } | null,
   expected: ExpectedSurface, workspace: WorkspaceFact, carry: CarryFact = { kind: 'none' }): 'engaged' | 'not-engaged' {
   if (newest === null || newest.report === null) return 'not-engaged';
+  if (newest.report.startId !== newest.start.id) return 'not-engaged';
   return sandboxVerdict(expected, newest.report, workspace, carry).engaged ? 'engaged' : 'not-engaged';
 }
 
@@ -232,12 +236,24 @@ export interface SkewFacts {
 
 /** The one notice a dead Overlord under build skew raises (question 5, slug `dead-overlord-waits-for-build-agreement`): once
  *  per session and build pair. A live body, an unmeasured one, one whose route no longer carries the digest, and agreed or
- *  unknown builds raise none; `key` is what the caller records so the same pair is never noticed again. */
+ *  unknown builds raise none; `key` is what the caller records so the same pair is never noticed again. The words say what
+ *  is measured (review 3325 F1): the builds differ, and a digest mismatch CAN keep the body from respawning. Nothing here reads
+ *  whether a respawn was refused, and a release that leaves the `overlord` row alone keeps its digest, so the notice never says
+ *  a respawn was or will be refused. */
 export function skewNoticeOf(f: SkewFacts): { readonly key: string; readonly body: string } | null {
   if (f.sessionId === null || f.running !== false || !f.digestStands || f.agreement !== 'skewed') return null;
   const fleet = f.fleetBuild ?? 'an unread build';
   const server = f.serverBuild ?? 'an unread build';
   const key = `${f.sessionId}:${fleet}:${server}`;
   if (f.noticed(key)) return null;
-  return { key, body: `The Overlord (${f.sessionId}) is down and stays down until both boxes run one build: the fleet box runs ${fleet}, the server ${server}. Its launch profile is checked against the server's build, so a respawn now would be refused.` };
+  return { key, body: `The Overlord (${f.sessionId}) is down while the two boxes run different builds: the fleet box runs ${fleet}, the server ${server}. Its route carries its launch profile's digest, and if the two builds disagree on that profile, the digest mismatch can keep it from respawning until both boxes run one build.` };
+}
+
+/** Whether the Overlord's body runs, for the skew notice (review 3325 F9), from its fleet-state row read through
+ *  `rowStanding`: `here` runs; `gone` and `asleep` are down; `doubt`, or a session the state does not list, is unmeasured and
+ *  raises nothing. */
+export function skewRunningOf(row: RowStandingFacts | undefined): boolean | 'unmeasured' {
+  if (row === undefined) return 'unmeasured';
+  const st = rowStanding(row);
+  return st === 'doubt' ? 'unmeasured' : st === 'here';
 }

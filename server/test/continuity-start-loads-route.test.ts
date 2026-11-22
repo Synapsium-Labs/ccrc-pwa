@@ -3,7 +3,7 @@
 // then `startLoadsOf` (the body's one narrowing, `bad-request` naming the field), then the registry's attribution of the
 // sender, then `insertStartLoads`, which finds the start the `reportId` names (`unknown-start`, 404) and keeps the first body.
 // The read side (`startLoadsOfNewestStart`, `startLoadsRowOf`) is pinned here too. Fixture HOMEs only.
-import { describe, it, expect, afterEach, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
@@ -18,6 +18,8 @@ import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { goodLoads, startLoadsCases } from './sim/startLoadsSets.js';
 import { expectedSurfaceOf } from '../src/continuity/sandboxCheck.js';
+import type { SettleOutcome } from '../src/continuity/routes.js';
+import { BUILD, FIXTURE_OWN_LISTS } from './sim/sandboxSets.js';
 import type { OverlordAuthorityJournal } from '../src/coord/overlordAuthorityJournal.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
@@ -26,6 +28,8 @@ import type { FleetState } from '../src/fleetstate.js';
 
 const ID = 'lane-a-project-a';
 const UUID = '11111111-2222-3333-4444-555555555555';
+/** The stop the drain composes for the Overlord's body: one call, naming that session alone. */
+const STOP_OV = ['stop', 'lane-a-overlord'];
 
 let home: string;
 let app: FastifyInstance | undefined;
@@ -159,15 +163,20 @@ describe('the read side (Task 5)', () => {
 });
 
 // ── The settle step (W1 sandbox PR B, Task 9; spec §3.2 C2): the first report of a pending designation decides it ──────────
+// Each case waits on the settle's own completion signal (`overlordSandbox.settled`, review 3325 F6), which names the act it
+// decided, so a case that expects nothing proves the settle ran and decided `none`. The positive surface is an isolated
+// fixture build and its own lists (F4); the release's table lists no build.
 describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () => {
   const OV = 'lane-a-overlord';
   const OV_UUID = '22222222-3333-4444-5555-666666666666';
   const GEN = '0189abcd-1234-5678-9abc-0123456789ab';
   const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
     .operator(gateActorOf('operator-a', '0123456789abcdef'));
-  const e = expectedSurfaceOf('overlord')!;
+  const e = expectedSurfaceOf('overlord', FIXTURE_OWN_LISTS)!;
   let calls: string[][];
   let journalRefuses = false;
+  let stopThrows = false;
+  let waiting: ((o: SettleOutcome) => void)[] = [];
   const journal = { appendInTx: () => (journalRefuses ? { ok: false, error: 'authority-rolled-back', detail: 'refused for the test' }
     : { ok: true, kind: 'appended', record: { sequence: 1 } }) } as unknown as OverlordAuthorityJournal;
   const openOv = async (): Promise<FastifyInstance> => {
@@ -176,9 +185,14 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     const rec = recorder();
     calls = rec.calls;
     // keep-awake answers its `released <id>` line, so the drain clears the set and the profile digest before the stop.
-    const run: typeof rec.run = async (cmd, args) => (args[0] === 'keep-awake' ? (rec.calls.push([...args]), { ran: true, code: 0, stdout: `released ${args[2]}\n`, stderr: '' }) : rec.run(cmd, args));
+    const run: typeof rec.run = async (cmd, args) => {
+      if (args[0] === 'keep-awake') { rec.calls.push([...args]); return { ran: true, code: 0, stdout: `released ${args[2]}\n`, stderr: '' }; }
+      if (args[0] === 'stop' && stopThrows) { rec.calls.push([...args]); throw new Error('the stop threw for the test'); }
+      return rec.run(cmd, args);
+    };
     const r = await appFor(home, run, { overlordAuthority: journal,
-      fleetState: { ccdVerbs: [ROUTE_CAP, KEEP_AWAKE_CAP, POOL_SET_CAP] } as unknown as FleetState });
+      fleetState: { ccdVerbs: [ROUTE_CAP, KEEP_AWAKE_CAP, POOL_SET_CAP] } as unknown as FleetState,
+      overlordSandbox: { ownLists: FIXTURE_OWN_LISTS, settled: (o) => { waiting.shift()?.(o); } } });
     coord = r.coord;
     await r.app.ready();
     return r.app;
@@ -188,62 +202,95 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       actor: OPERATOR, at: FAKE_T0 - 1000, opKey: 'designate-settle' }).ok).toBe(true);
     expect(coord!.bindPendingGeneration(OV, GEN, FAKE_T0 - 900).ok).toBe(true);
   };
-  const startOv = (a: FastifyInstance, reportId = 'r-ov1-abcd', source = 'startup') => a.inject({
-    method: 'POST', url: `/api/sessions/${OV}/start`, headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN },
-    payload: { fromId: OV, fromUuid: OV_UUID, reportId, source, reportedAt: FAKE_T0 - 50, rowIncarnation: GEN },
+  const startAs = (a: FastifyInstance, sid: string, uuid: string, reportId: string, source = 'startup') => a.inject({
+    method: 'POST', url: `/api/sessions/${sid}/start`, headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN },
+    payload: { fromId: sid, fromUuid: uuid, reportId, source, reportedAt: FAKE_T0 - 50, rowIncarnation: GEN },
   });
+  const startOv = (a: FastifyInstance, reportId = 'r-ov1-abcd', source = 'startup') => startAs(a, OV, OV_UUID, reportId, source);
   const loads = (over: Record<string, unknown> = {}, reportId = 'r-ov1-abcd') => ({
-    fromId: OV, fromUuid: OV_UUID, reportId, profileRole: 'overlord', profileDigest: e.digest, launchRc: 'off', claudeVersion: '2.1.330',
+    fromId: OV, fromUuid: OV_UUID, reportId, profileRole: 'overlord', profileDigest: e.digest, launchRc: 'off', claudeVersion: BUILD,
     permissionMode: 'bypassPermissions', cwdInWorkspace: true, reportedAt: FAKE_T0 - 40,
     loaded: { instructions: [{ type: 'Project', name: 'CLAUDE.md', inWorkspace: true, sha256: e.constitutionSha256 }], hooks: [e.hookSha256],
       skills: ['ccrc-overlord'], agents: ['Explore', 'overlord-reader'], tools: ['Agent', 'Skill', 'mcp__door__read'], toolServers: ['door'] },
     ...over,
   });
-  /** Posts a loads report, then waits for the settle the door queued after its answer. */
-  const report = async (a: FastifyInstance, body: unknown): Promise<number> => {
-    const r = await post(a, body, OV);
-    return r.statusCode;
+  /** Posts a loads report and waits for the settle the door queued after its 202: the outcome it reports. */
+  const report = async (a: FastifyInstance, body: unknown, id = OV): Promise<SettleOutcome> => {
+    const done = new Promise<SettleOutcome>((res) => { waiting.push(res); });
+    const r = await post(a, body, id);
+    expect(r.statusCode, r.body).toBe(202);
+    return done;
   };
   const view = () => { const d = coord!.designationRead(); if (d.kind === 'unmeasured') throw new Error(d.why); return d; };
-  /** The settle runs after the door's answer, on the serialiser: wait for it. */
-  const settled = (): Promise<void> => new Promise((res) => setTimeout(res, 300));
-  const naming = (id: string) => calls.filter((c) => c.includes(id) || c.some((w) => w.includes(id)));
-  beforeEach(() => { journalRefuses = false; });
+  const stops = () => calls.filter((c) => c[0] === 'stop');
+  beforeEach(() => { journalRefuses = false; stopThrows = false; waiting = []; });
 
   it('go-live: a held first report binds the pending session, once', async () => {
     app = await openOv(); pend();
     await startOv(app);
-    expect(await report(app, loads())).toBe(202);
-    await settled();
+    expect(await report(app, loads())).toStrictEqual({ sessionId: OV, startId: 1, act: 'go-live' });
     expect(view()).toMatchObject({ kind: 'designated', sessionId: OV });
     const term = view().kind === 'designated' ? (view() as { term: number }).term : -1;
-    expect(await report(app, loads())).toBe(202);
-    await settled();
+    expect((await report(app, loads())).act).toBe('none');
     expect(view()).toMatchObject({ kind: 'designated', sessionId: OV, term });
-    expect(naming(OV).filter((c) => c[0] === 'stop' || c.includes('stop'))).toStrictEqual([]);
+    expect(stops()).toStrictEqual([]);
   });
 
-  it('fail-pending: an unheld report clears the row, records overlord-sandbox-unmet, clears profiledigest and stops that session alone', async () => {
+  it('fail-pending: an unheld report records overlord-sandbox-unmet, clears profiledigest and stops that one session', async () => {
     app = await openOv(); pend();
-    seedRow(home, 'lane-a-project-a', { uuid: UUID, project: 'project-a' });
     await startOv(app);
-    expect(await report(app, loads({ launchRc: 'on' }))).toBe(202);
-    await settled();
+    expect((await report(app, loads({ launchRc: 'on' }))).act).toBe('fail-pending');
     const d = view();
     expect(d.kind).toBe('not-designated');
     expect(d.kind === 'not-designated' && d.row?.pending).toBeNull();
     expect(d.kind === 'not-designated' && d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+    expect(d.kind === 'not-designated' && d.row?.stopsOwed).toStrictEqual([]);
     expect(calls.some((c) => c.join(' ').includes('profiledigest=') && c.join(' ').includes(OV)), JSON.stringify(calls)).toBe(true);
-    expect(calls.filter((c) => c.join(' ').includes('lane-a-project-a'))).toStrictEqual([]);
-    expect(calls.length).toBeGreaterThan(0);
+    expect(stops(), JSON.stringify(calls)).toStrictEqual([STOP_OV]);
   });
 
-  it('a report for a start that is not the newest, or another session\'s, settles nothing', async () => {
+  it('a stop that throws keeps the failure record, leaves the stop owed and logs it', async () => {
+    app = await openOv(); pend();
+    await startOv(app);
+    stopThrows = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await report(app, loads({ launchRc: 'on' }))).act).toBe('fail-pending');
+      const d = view();
+      expect(d.kind === 'not-designated' && d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+      expect(d.kind === 'not-designated' && d.row?.stopsOwed).toStrictEqual([OV]);
+      expect(stops()).toStrictEqual([STOP_OV]);
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes(OV) && l.includes('stays owed')), JSON.stringify(warn.mock.calls)).toBe(true);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('an unreadable designation writes nothing and stops nothing', async () => {
+    app = await openOv(); pend();
+    await startOv(app);
+    coord!.db.prepare("UPDATE overlord_designation SET stopsOwed = 'not json' WHERE id = 1").run();
+    expect(coord!.designationRead().kind).toBe('unmeasured');
+    const before = JSON.stringify(coord!.db.prepare('SELECT * FROM overlord_designation').all());
+    expect((await report(app, loads({ launchRc: 'on' }))).act).toBe('unread');
+    expect(JSON.stringify(coord!.db.prepare('SELECT * FROM overlord_designation').all())).toBe(before);
+    expect(calls).toStrictEqual([]);
+  });
+
+  it('a report for a start that is not the newest settles nothing', async () => {
     app = await openOv(); pend();
     await startOv(app, 'r-ov1-abcd');
     await startOv(app, 'r-ov2-abcd', 'resume');
-    expect(await report(app, loads({ launchRc: 'on' }, 'r-ov1-abcd'))).toBe(202);
-    await settled();
+    expect((await report(app, loads({ launchRc: 'on' }, 'r-ov1-abcd'))).act).toBe('none');
+    expect(view().kind === 'not-designated' && view().row?.pending?.sessionId).toBe(OV);
+    expect(calls).toStrictEqual([]);
+  });
+
+  it('another session\'s report settles nothing, held or not', async () => {
+    app = await openOv(); pend();
+    await startOv(app);
+    seedRow(home, ID, { uuid: UUID, project: 'overlord' });
+    await startAs(app, ID, UUID, 'r-pa1-abcd');
+    const other = (over: Record<string, unknown>) => ({ ...loads(over, 'r-pa1-abcd'), fromId: ID, fromUuid: UUID });
+    expect(await report(app, other({}), ID)).toMatchObject({ sessionId: ID, act: 'none' });
     expect(view().kind === 'not-designated' && view().row?.pending?.sessionId).toBe(OV);
     expect(calls).toStrictEqual([]);
   });
@@ -252,8 +299,7 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     app = await openOv(); pend();
     await startOv(app);
     journalRefuses = true;
-    expect(await report(app, loads())).toBe(202);
-    await settled();
+    expect((await report(app, loads())).act).toBe('refused');
     expect(view().kind === 'not-designated' && view().row?.pending?.sessionId).toBe(OV);
     expect(calls).toStrictEqual([]);
   });
@@ -261,8 +307,7 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
   it('with no pending designation the report only records', async () => {
     app = await openOv();
     await startOv(app);
-    expect(await report(app, loads({ launchRc: 'on' }))).toBe(202);
-    await settled();
+    expect((await report(app, loads({ launchRc: 'on' }))).act).toBe('none');
     expect(view()).toMatchObject({ kind: 'not-designated', row: null });
     expect(calls).toStrictEqual([]);
     expect(rows()).toHaveLength(1);
@@ -271,16 +316,16 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
   it('the carry the read answers: none, absent, or the carried start with its report', async () => {
     app = await openOv();
     await startOv(app, 'r-ov1-abcd');
-    await post(app, loads(), OV);
+    await report(app, loads());
     await startOv(app, 'r-ov2-abcd', 'resume');
-    await post(app, loads({ carriedFrom: 'r-ov1-abcd' }, 'r-ov2-abcd'), OV);
+    await report(app, loads({ carriedFrom: 'r-ov1-abcd' }, 'r-ov2-abcd'));
     const n = coord!.startLoadsOfNewestStart(OV);
-    expect(n).toMatchObject({ ok: true, newest: { carry: { kind: 'read', source: 'startup', report: { profileDigest: e.digest, claudeVersion: '2.1.330', conflicted: false } } } });
+    expect(n).toMatchObject({ ok: true, newest: { carry: { kind: 'read', source: 'startup', report: { profileDigest: e.digest, claudeVersion: BUILD, conflicted: false } } } });
     await startOv(app, 'r-ov3-abcd', 'resume');
-    await post(app, loads({ carriedFrom: 'r-nosuch-ab' }, 'r-ov3-abcd'), OV);
+    await report(app, loads({ carriedFrom: 'r-nosuch-ab' }, 'r-ov3-abcd'));
     expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { carry: { kind: 'absent' } } });
     await startOv(app, 'r-ov4-abcd', 'resume');
-    await post(app, loads({}, 'r-ov4-abcd'), OV);
+    await report(app, loads({}, 'r-ov4-abcd'));
     expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { carry: { kind: 'none' } } });
   });
 });

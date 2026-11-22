@@ -147,7 +147,7 @@ import {
   type DelegationObservationInterval, type DelegationRecoveryState,
 } from './coord/delegation-model.js';
 import { claimExpiry, claimLivenessProbe, type LivenessProbe } from './coord/claims.js';
-import { readSession, rowStanding, type RowStandingFacts } from './sessionReading.js';
+import { readSession, type RowStandingFacts } from './sessionReading.js';
 import { claimantMeasuredDead, measureClaimant, measureClaimantHeld } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
@@ -189,6 +189,7 @@ import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { skewRunningOf } from './continuity/sandboxCheck.js';
 import { MAIL_HOLD_LANE_ROW, mailHoldPass, type MailHoldLaneMemory } from './coord/mailHoldLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
@@ -6317,13 +6318,13 @@ export class FleetWatcher {
           // Whether the fleet node runs this server's build, from the node inventory (W1 sandbox: `profiledigest` waits for it).
           buildAgreement: () => inventoryBuildAgreement(coord),
         },
-        // The skew notice (W1 sandbox B): the body's liveness from the fleet state's presence (`rowStanding`), both builds from the node inventory, and
-        // one feed row and push per session and build pair, its once-only key read back through `hasNotice`.
+        // The skew notice (W1 sandbox B): the body's liveness from its fleet-state row (`skewRunningOf`), both builds from the node inventory,
+        // and one feed row and push per session and build pair, its once-only key read back through `hasNotice`.
         skew: {
-          running: (id) => { const x = this.currentFleet()?.find((r) => r.id === id); const st = x === undefined ? 'doubt' : rowStanding(x); return st === 'doubt' ? 'unmeasured' : st === 'here'; },
+          running: (id) => skewRunningOf(this.currentFleet()?.find((r) => r.id === id)),
           builds: () => { const b = inventoryBuilds(coord); const w = (i: typeof b.own) => (i === null ? null : i.version ?? i.sha.slice(0, 9)); return { fleet: w(b.fleet), server: w(b.own) }; },
           noticed: (id, key) => coord.hasNotice('coord', id, key),
-          raise: (id, key, body) => this.pushOne({ kind: 'coord', sessionId: id, project: '', title: 'The Overlord waits for one build', body, runId: null, recordAlways: true, dedupeKey: key }, this.activeProjects),
+          raise: (id, key, body) => this.pushOne({ kind: 'coord', sessionId: id, project: '', title: 'The Overlord is down while the builds differ', body, runId: null, recordAlways: true, dedupeKey: key }, this.activeProjects),
         },
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
     });
