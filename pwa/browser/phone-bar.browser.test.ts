@@ -86,6 +86,27 @@ const FIXTURE_99: AppFixture = (() => {
   };
 })();
 
+/** A server advertising `overlord-v1` with a bound Overlord on the `chat` rung (Overlord W1 home, Task 3): the phone bar draws the
+ *  Overlord's door first, eight doors in all. */
+const FIXTURE_OVERLORD: AppFixture = {
+  ...FIXTURE,
+  api: {
+    ...FIXTURE.api,
+    '/health': { ok: true, build: null, caps: ['overlord-v1'] },
+    '/api/overlord/designation': {
+      ok: true,
+      designation: {
+        bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
+        accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
+      },
+    },
+    '/api/overlord/ladder': {
+      ok: true, operatorRung: 'chat', operatorRungSource: 'set', effectiveRung: 'chat', binding: [], latches: [], conditions: [],
+      readBy: [], lastChange: null, rungs: [],
+    },
+  },
+};
+
 const SKINS = [REFINED, INSTRUMENT] as const;
 const PHONES = [360, 390] as const;
 const DESKS = [900, 1280] as const;
@@ -93,7 +114,7 @@ const PHONE_DOORS = ['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accoun
 /** Each page with the selector that says it is drawn. */
 const PAGES = [
   ['/waiting', '.wl-group'], ['/waiting/2', '.wi'], ['/programmes/prog-a', '.pv'], ['/docs', '.shell-detail'],
-  ['/settings', '.shell-detail h1'], ['/', '.shell-nav .fleet'],
+  ['/settings', '.shell-detail h1'], ['/fleet', '.shell-nav .fleet'],
 ] as const;
 
 let dist: string | undefined;
@@ -151,6 +172,34 @@ const measureBar = (page: Page) => page.evaluate(() => {
   };
 });
 
+// Overlord W1 home, Task 3 (plan question 13, slug `phone-bar-sheds-doors-to-search`): with the Overlord's door the bar has
+// eight doors. At 360 and 390 all eight fit at 44 px or more; at 320 the bar keeps seven, Docs reached through Search.
+describe.each(SKINS)('the phone bar with the Overlord in %s', (skin) => {
+  const EIGHT = ['go-overlord', ...PHONE_DOORS];
+  const cases = [[320, EIGHT.filter((d) => d !== 'go-docs')], [360, EIGHT], [390, EIGHT]] as const;
+  for (const [width, doors] of cases) {
+    it(`at ${width}: the Overlord's door is first, ${doors.length} doors, each at least 44 x 44 inside the viewport, words whole`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/fleet', '[data-command="go-overlord"]', undefined, FIXTURE_OVERLORD);
+      try {
+        const bar = await measureBar(page);
+        expect(bar, 'the bar').not.toBeNull();
+        expect(bar!.doors.map((d) => d.command)).toEqual([...doors]);
+        for (const d of bar!.doors) {
+          expect(d.h, `${d.command} height`).toBeGreaterThanOrEqual(44);
+          expect(d.w, `${d.command} width ${JSON.stringify(d)}`).toBeGreaterThanOrEqual(44);
+          expect(d.left, `${d.command}`).toBeGreaterThanOrEqual(0);
+          expect(d.right, `${d.command}`).toBeLessThanOrEqual(bar!.innerWidth + 0.5);
+          expect(d.wordWhole, `${d.command}: its word is whole ${JSON.stringify(d)}`).toBe(true);
+        }
+        expect(bar!.sideways, 'sideways scroll').toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
 describe.each(SKINS)('the phone bar in %s', (skin) => {
   for (const width of PHONES) {
     it(`at ${width}: the bar is fixed to the foot on every ledger page, Docs, Settings and the fleet, seven doors, each at least 44 x 44, words whole`, async () => {
@@ -176,7 +225,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           const clear = await page.evaluate(() => {
             window.scrollTo(0, document.documentElement.scrollHeight);
             const top = document.querySelector('nav.shell-phone-nav')!.getBoundingClientRect().top;
-            const pane = document.querySelector<HTMLElement>(location.pathname === '/' ? '.shell-nav .fleet' : '.shell-detail')!;
+            const pane = document.querySelector<HTMLElement>(location.pathname === '/fleet' ? '.shell-nav .fleet' : '.shell-detail')!;
             const last = [...pane.querySelectorAll<HTMLElement>('*')].filter((e) => e.children.length === 0 && e.getBoundingClientRect().height > 0).at(-1);
             return last === undefined ? null : { lastBottom: last.getBoundingClientRect().bottom, barTop: top };
           });
@@ -196,7 +245,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           const clear = await page.evaluate(() => {
             window.scrollTo(0, document.documentElement.scrollHeight);
             const bar = document.querySelector('nav.shell-phone-nav')!.getBoundingClientRect();
-            const pane = document.querySelector<HTMLElement>(location.pathname === '/' ? '.shell-nav .fleet' : '.shell-detail')!;
+            const pane = document.querySelector<HTMLElement>(location.pathname === '/fleet' ? '.shell-nav .fleet' : '.shell-detail')!;
             const last = [...pane.querySelectorAll<HTMLElement>('*')].filter((e) => e.children.length === 0 && e.getBoundingClientRect().height > 0).at(-1);
             return { lastBottom: last?.getBoundingClientRect().bottom ?? null, barTop: bar.top, barHeight: bar.height };
           });
@@ -243,7 +292,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
     });
 
     it(`at ${width}: on the fleet, + New sits above the bar`, async () => {
-      const { ctx, page, errors } = await open(skin, width, '/', '.shell-nav .fleet');
+      const { ctx, page, errors } = await open(skin, width, '/fleet', '.shell-nav .fleet');
       try {
         const at = await page.evaluate(() => {
           const fab = document.querySelector<HTMLElement>('[data-command="new-session"]');
@@ -370,7 +419,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
 
   for (const width of DESKS) {
     it(`at ${width}: no bar at a desk`, async () => {
-      for (const [path, ready] of [['/waiting', '.wl-group'], ['/waiting/2', '.wi'], ['/', '.shell-nav .fleet']] as const) {
+      for (const [path, ready] of [['/waiting', '.wl-group'], ['/waiting/2', '.wi'], ['/fleet', '.shell-nav .fleet']] as const) {
         const { ctx, page, errors } = await open(skin, width, path, ready);
         try {
           expect(await page.locator('nav.shell-phone-nav').count(), path).toBe(0);

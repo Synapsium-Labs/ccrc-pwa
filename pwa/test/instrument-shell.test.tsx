@@ -534,6 +534,44 @@ describe('the desk top bar (desk-nav Task A)', () => {
     expect(window.location.pathname).toBe('/fleet');
   });
 
+  // Overlord W1 home, Task 3 (ruled F5, plan question 14): with the Overlord designated and the home the Overlord, the bar draws
+  // the Overlord's door and the Fleet's; the Fleet door is current on /fleet and on a session, the wordmark nowhere, so every
+  // path marks at most one door. With the rung off the home is the Fleet again: no Fleet door, and the wordmark is current.
+  it('with the Overlord: /fleet marks the Fleet door alone, and the wordmark runs go-home to the place', () => {
+    stubAt(1280);
+    const at = 1_700_000_000_000;
+    const row = {
+      bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
+      accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
+    } as const;
+    const withRung = (rung: string): void => act(() => useOverlordStore.setState({
+      caps: { state: 'answered', value: ['overlord-v1'], at }, designation: { state: 'answered', value: row, at },
+      ladder: { state: 'answered', value: { operatorRung: rung } as never, at },
+    }));
+    const currents = (): (string | null)[] =>
+      [...topBar().querySelectorAll('[aria-current="page"]')].map((d) => d.getAttribute('data-command'));
+    for (const where of ['/fleet', `/s/${S.id}`]) {
+      withRung('chat');
+      mount(where);
+      expect([...primary().children].map((c) => c.getAttribute('data-command')), where)
+        .toEqual(['go-home', 'go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+      expect(currents(), where).toEqual(['go-fleet']);
+      cleanup();
+    }
+    withRung('chat');
+    mount('/overlord');
+    expect(currents()).toEqual(['go-overlord']);
+    fireEvent.click(homeDoor());
+    expect(window.location.pathname).toBe('/overlord');
+    cleanup();
+    withRung('off');
+    mount('/fleet');
+    expect([...primary().children].map((c) => c.getAttribute('data-command')))
+      .toEqual(['go-home', 'go-overlord', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+    expect(currents()).toEqual(['go-home']);
+    act(() => useOverlordStore.setState({ caps: { state: 'loading' }, designation: { state: 'loading' }, ladder: { state: 'loading' } }));
+  });
+
   it('it is current nowhere else', () => {
     stubAt(1280);
     for (const at of ['/runs', '/mail', '/settings', '/settings/updates', '/docs', '/waiting', '/waiting/1', '/archive', '/digest', '/nope']) {

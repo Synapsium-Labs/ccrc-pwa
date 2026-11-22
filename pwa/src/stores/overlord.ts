@@ -68,6 +68,8 @@ function failureWords(err: unknown): string {
 }
 
 const isAbsent = (v: object): v is Absent => 'absent' in v && (v as Absent).absent === true;
+/** A 2xx body without the read's own field: not a value, so it is a failure the place prints, never a row read as nothing. */
+const UNREADABLE = { kind: 'failed', error: 'unreadable answer' } as const;
 
 export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore {
   const reads = deps.reads ?? DEFAULT_READS;
@@ -94,11 +96,13 @@ export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore
       await Promise.all([
         read('designation', async () => {
           const body = await reads.designation();
-          return isAbsent(body) ? { kind: 'absent' } : { kind: 'value', value: body.designation };
+          if (isAbsent(body)) return { kind: 'absent' };
+          return 'designation' in body ? { kind: 'value', value: body.designation } : UNREADABLE;
         }),
         read('ladder', async () => {
           const body = await reads.ladder();
-          return isAbsent(body) ? { kind: 'absent' } : { kind: 'value', value: body };
+          if (isAbsent(body)) return { kind: 'absent' };
+          return typeof body.operatorRung === 'string' ? { kind: 'value', value: body } : UNREADABLE;
         }),
       ]);
     };

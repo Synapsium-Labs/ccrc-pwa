@@ -58,6 +58,27 @@ function fixtureWith(items: number): AppFixture {
 }
 const FIXTURE = fixtureWith(100);
 
+/** A server advertising `overlord-v1` with a bound Overlord on the `chat` rung (Overlord W1 home, Task 3): the bar draws the
+ *  Overlord's door first and, the home being the Overlord, the Fleet's second (ruled F5). */
+const FIXTURE_OVERLORD: AppFixture = {
+  ...FIXTURE,
+  api: {
+    ...FIXTURE.api,
+    '/health': { ok: true, build: null, caps: ['overlord-v1'] },
+    '/api/overlord/designation': {
+      ok: true,
+      designation: {
+        bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
+        accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
+      },
+    },
+    '/api/overlord/ladder': {
+      ok: true, operatorRung: 'chat', operatorRungSource: 'set', effectiveRung: 'chat', binding: [], latches: [], conditions: [],
+      readBy: [], lastChange: null, rungs: [],
+    },
+  },
+};
+
 let dist: string | undefined;
 let server: DistServer | undefined;
 let browser: Browser | undefined;
@@ -92,7 +113,7 @@ describe('the bar fits on one line with every badge at 99+', () => {
       for (const width of [900, 930, 1100, 1279, 1280, 1920]) {
         const view: AppView = { skin: INSTRUMENT, theme, width, touch };
         it(viewName(view), async () => {
-          const { ctx, page, errors } = await open(view, '/');
+          const { ctx, page, errors } = await open(view, '/fleet');
           try {
             const m = await page.evaluate(() => {
               const bar = document.querySelector<HTMLElement>('.ins-topbar')!;
@@ -146,10 +167,56 @@ describe('the bar fits on one line with every badge at 99+', () => {
   }
 });
 
+// Overlord W1 home, Task 3 (ruled F5, plan question 14): with the Overlord designated, the bar gains the Overlord's door and
+// the Fleet's, still one line with nothing cut and no sideways scroll; `/fleet` marks the Fleet door alone, and the wordmark
+// nowhere.
+describe("the bar with the Overlord's and the Fleet's doors", () => {
+  for (const width of [900, 1100, 1280, 1920]) {
+    it(`${PHOSPHOR}, ${width}px: one line, every control inside it, and /fleet marks the Fleet door alone`, async () => {
+      const opened = await openApp(browser!, { skin: INSTRUMENT, theme: PHOSPHOR, width }, FIXTURE_OVERLORD);
+      await seedStripExpanded(opened.ctx);
+      const { ctx, page, errors } = opened;
+      try {
+        await page.goto(server!.origin + '/fleet');
+        await page.waitForSelector('nav.ins-doors [data-command="go-fleet"]', { timeout: 20_000 });
+        await page.waitForTimeout(300);
+        const m = await page.evaluate(() => {
+          const bar = document.querySelector<HTMLElement>('.ins-topbar')!;
+          const b = bar.getBoundingClientRect();
+          const doors = [...document.querySelectorAll<HTMLElement>('nav.ins-doors > .ins-door')];
+          const parts = [...doors, bar.querySelector('.ins-command > :last-child'), bar.querySelector('.ins-bar-doors > .bell'),
+            bar.querySelector('.ins-bar-doors > .ins-door'), bar.querySelector('.ins-new')];
+          const outside = parts.filter((el) => {
+            if (el === null) return true;
+            const r = el.getBoundingClientRect();
+            return r.width === 0 || r.left < b.left - 0.5 || r.right > b.right + 0.5 || r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5;
+          }).length;
+          return {
+            commands: doors.map((d) => d.getAttribute('data-command')),
+            current: [...document.querySelectorAll('header.shell-accounts [aria-current="page"]')].map((c) => c.getAttribute('data-command')),
+            line: b.height, outside,
+            barScroll: bar.scrollWidth - bar.clientWidth,
+            pageScroll: document.documentElement.scrollWidth - window.innerWidth,
+          };
+        });
+        expect(m.commands).toEqual(['go-home', 'go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+        expect(m.current, '/fleet marks exactly one door').toEqual(['go-fleet']);
+        expect(m.line, 'the bar is one 44 px line').toBeLessThanOrEqual(44.5);
+        expect(m.outside, 'every door, ⌘K, the bell, Settings and + inside the bar').toBe(0);
+        expect(m.barScroll, 'the bar does not scroll sideways').toBeLessThanOrEqual(0);
+        expect(m.pageScroll, 'the page does not scroll sideways').toBeLessThanOrEqual(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
+  }
+});
+
 describe('the doors show words from 1280', () => {
   for (const width of [900, 1279, 1280, 1920]) {
     it(`${width}px`, async () => {
-      const { ctx, page } = await open({ skin: INSTRUMENT, theme: PHOSPHOR, width }, '/');
+      const { ctx, page } = await open({ skin: INSTRUMENT, theme: PHOSPHOR, width }, '/fleet');
       try {
         const m = await page.evaluate(() => {
           const doors = [...document.querySelectorAll<HTMLElement>('nav.ins-doors > .ins-door:not(.ins-home)')];
@@ -226,7 +293,7 @@ async function measureTip(page: Page, name: string): Promise<TipFit> {
 describe('the tip is drawn below the icon, by hover and by Tab', () => {
   for (const theme of THEMES) {
     for (const width of [900, 1279]) {
-      for (const route of ['/', '/runs']) {
+      for (const route of ['/fleet', '/runs']) {
         it(`${theme}, ${width}px, ${route}`, async () => {
           const { ctx, page, errors } = await open({ skin: INSTRUMENT, theme, width }, route);
           try {
@@ -277,7 +344,7 @@ describe('the widest tips, by hover: Waiting on you and Settings (review 1638 A1
     for (const width of [900, 1279]) {
       for (const [door, items] of [['Waiting on you', 1100], ['Settings', 100]] as const) {
         it(`${theme}, ${width}px, ${door}${door === 'Waiting on you' ? ', its count at 1200' : ''}`, async () => {
-          const { ctx, page, errors } = await open({ skin: INSTRUMENT, theme, width }, '/', fixtureWith(items));
+          const { ctx, page, errors } = await open({ skin: INSTRUMENT, theme, width }, '/fleet', fixtureWith(items));
           try {
             if (door === 'Waiting on you') {
               await page.waitForSelector('nav.ins-doors .ins-door[aria-label="Waiting on you, 1200 waiting on you"]', { timeout: 20_000 });
@@ -302,7 +369,7 @@ describe('the widest tips, by hover: Waiting on you and Settings (review 1638 A1
 
 describe("the current door's underline", () => {
   for (const theme of THEMES) {
-    for (const [route, door] of [['/runs', 'Runs'], ['/', 'ccrc, Fleet']] as const) {
+    for (const [route, door] of [['/runs', 'Runs'], ['/fleet', 'ccrc, Home']] as const) {
       it(`${theme}, 1280px, ${route}: 2px of the accent on ${door}'s bottom edge`, async () => {
         const { ctx, page } = await open({ skin: INSTRUMENT, theme, width: 1280 }, route);
         try {
@@ -338,7 +405,7 @@ describe("the current door's underline", () => {
 describe('a touch screen keeps the floor', () => {
   for (const [theme, width] of THEMES.flatMap((t) => [900, 1280].map((w) => [t, w] as const))) {
     it(`at ${width} under a coarse pointer every bar control is at least 44 x 44 (${theme})`, async () => {
-      const { ctx, page } = await open({ skin: INSTRUMENT, theme, width, touch: true }, '/');
+      const { ctx, page } = await open({ skin: INSTRUMENT, theme, width, touch: true }, '/fleet');
       try {
         const m = await page.evaluate(() => {
           const controls = [...document.querySelectorAll<HTMLElement>('.ins-topbar button')];

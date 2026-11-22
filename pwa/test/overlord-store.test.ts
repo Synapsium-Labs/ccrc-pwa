@@ -154,6 +154,16 @@ describe('the Overlord store', () => {
     }
   });
 
+  it('a 2xx body without the read\'s own field is a failure, never a row read as nothing', async () => {
+    const odd = fakeReads({ designation: async () => ({}) as never, ladder: async () => ({ ok: true }) as never });
+    const store = createOverlordStore({ reads: odd.reads });
+    const stop = store.getState().start();
+    await settle();
+    expect(store.getState().designation).toEqual({ state: 'unmeasured', error: 'unreadable answer' });
+    expect(store.getState().ladder).toEqual({ state: 'unmeasured', error: 'unreadable answer' });
+    stop();
+  });
+
   it('a failure after an answer is stale, with its last value', async () => {
     let fail = false;
     const { reads } = fakeReads({ designation: async () => { if (fail) throw new ApiError(503, {}); return { designation: ROW }; } });
