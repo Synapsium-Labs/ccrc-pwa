@@ -47,6 +47,9 @@ TBA_HERE="$(cd "${TBA_HERE%/*}" && pwd)"
 . "$TBA_HERE/ccrc" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/ccrc, so no setting can be read" >&2; exit 1; }
 # shellcheck source=testbox-knobs
 . "$TBA_HERE/testbox-knobs" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/testbox-knobs, so no setting can be checked" >&2; exit 1; }
+# The build capture's copy sub, `build-copy` (capture runner spec 2026-11-22 §2.2): its own file, read here.
+# shellcheck source=testbox-build-copy
+. "$TBA_HERE/testbox-build-copy" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/testbox-build-copy" >&2; exit 1; }
 PROG="ccrc testbox-admin"
 
 TBA_DIR="$HOME/.ccrc"
@@ -62,13 +65,14 @@ TBA_ROWS="$TBA_DIR/testbox-rows"
 
 # ── the closed vocabularies: shared/testbox-admin.ts, word for word ────────────────────────────────────────────
 TBA_SUBS=(status read key probe pin preflight connect settings-fleet settings-box cancel parity repair apply-release disconnect key-rotate key-revoke
-  tools-home)
+  tools-home build-copy)
 TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refused host-key-unknown host-key-changed
   fingerprint-mismatch from-mismatch no-root no-sudo os-mismatch systemd-too-old no-nftables not-xfs-reflink
   address-not-ip no-egress other-release verify-failed copy-failed box-value-refused install-refused install-failed
   pair-failed status-not-ok pairing-keys-in-ccrc-env key-in-ccrc-env runs-in-progress idle-deadline cancelled
   gh-signed-out parity-differs not-connected box-side-skipped unpair-failed address-not-private box-already-set interrupted
-  new-key-refused old-line-kept revoked-box-skipped revoked-unpair-failed tools-home-failed)
+  new-key-refused old-line-kept revoked-box-skipped revoked-unpair-failed tools-home-failed build-not-on-fleet build-not-regular
+  build-too-large build-hash-mismatch build-copy-failed)
 # The long subs whose parent asks them for a precheck before it detaches (`settings-box` only with --when-idle).
 TBA_PRECHECK_SUBS=(connect settings-box repair apply-release parity)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
@@ -117,6 +121,7 @@ _tba_fields() {   # <sub>
     settings-box) printf '%s\n' '--set setting-box + 1' '--unset unset-box + 1' '--when-idle true 0 0' ;;
     parity) printf '%s\n' '--pr pr 0 1' ;;
     disconnect) printf '%s\n' '--replace true 0 0' ;;
+    build-copy) printf '%s\n' '--version version 1 0' ;;
     *) return 1 ;;
   esac
 }
@@ -247,6 +252,7 @@ _tba_parse() {
       user) _tba_word_ok "$val" && _tba_is_user "$val" || { TBA_BAD="$name"; return 1; } ;;
       fingerprint) _tba_word_ok "$val" && _tba_is_fingerprint "$val" || { TBA_BAD="$name"; return 1; } ;;
       true) [ "$val" = true ] || { TBA_BAD="$name"; return 1; }; [ "$name" != --when-idle ] || TBA_WHENIDLE=1 ;;
+      version) _tba_word_ok "$val" && _tba_is_claude_version "$val" || { TBA_BAD="$name"; return 1; } ;;
       pr)
         _tba_is_pr "$val" || { TBA_BAD="$name"; return 1; }
         [ -z "${keys[pr:$val]:-}" ] && [ "${cnt[$name]}" -le 20 ] || { TBA_BAD="$name"; return 1; }

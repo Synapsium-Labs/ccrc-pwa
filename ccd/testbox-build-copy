@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# testbox-build-copy — `ccrc testbox-admin build-copy --version=<build>`, the build capture's copy (capture runner spec
+# docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.2, Table 2, slug build-source-is-the-fleet). SOURCED by
+# ccd/ccrc-testbox-admin, never run: it defines the sub's grammar check and its body, and uses the verb's lock, state, log,
+# answers and box calls (`_tba_short_lock`, `_tba_ra_precheck`, `_tba_cx_out`, `_tba_box_file_sha`). It is a file of its own
+# because the verb sits at its growth cap.
+#
+# A build waits for its capture only because a fleet session runs it, so this host already holds that exact build in Claude
+# Code's versions directory. ccrc never downloads one: this sub copies the fleet's own copy to the test box, in the repair
+# sub's three phases, and the server's capture lane asks for it only after the box refused a capture `build-absent`
+# (`shared/claudeBuildTrust.ts#captureNextAct`).
+#   verify  (this host) the build file is read, never written: it must exist, be a regular file and not a link, and be at
+#           most TBA_BUILD_COPY_MAX bytes; then it is hashed (SHA-256). Each refusal is its own code, and none reaches the box.
+#   copy    (the box)   its bytes stream over the lane's one way to the box into a fresh stage beside the store, and the box
+#           hashes what arrived (`_tba_box_file_sha`). A hash that differs removes the stage and refuses build-hash-mismatch.
+#   install (the box)   the checked stage moves to `<box root>/captures/builds/<version>`, mode 0555, owned by the box root's
+#           owner (the test service's user), which the capture desk reads as the build being present.
+# Nothing here writes this host's versions directory or Claude Code's launcher, and the box side writes only under the box's
+# own root. Short (four box calls at most), under the verb's lock, recorded in no ledger row (the build's own row says what
+# the copy came to). Its answer is `{"ok":true,"build":"<version>","sha256":"<hex>"}`.
+#
+# The box's two programs are one line each: `_tba_ssh` quotes each word with `%q`, and a newline would reach the box's login
+# shell as bash's `$'...'`. They run on the box (GNU userland, the preflight's `os` check), yet spell only POSIX tools, and
+# the owner is read with `ls -ldn` so no GNU-only spelling sits in this file.
+
+# The largest build ccrc copies: 1 GiB (a build is about 380 MB in 2026-11).
+TBA_BUILD_COPY_MAX=$((1024 * 1024 * 1024))
+
+# A Claude Code build, `shared/claudeVersion.ts#CLAUDE_VERSION`'s grammar: three decimal parts, no leading zero.
+_tba_is_claude_version() { [[ "${1-}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; }
+
+# The fleet's own copy of <version>, where Claude Code keeps its builds on this host. Read only.
+_tba_build_copy_src() { printf '%s/.local/share/claude/versions/%s' "$HOME" "$1"; }
+
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_BUILD_STAGE_SH='set -e; r=$1; d=$r/captures/builds; o=$(ls -ldn -- "$r" | awk '"'"'{print $3":"$4}'"'"'); mkdir -p -- "$d"; chown -- "$o" "$r/captures" "$d"; t=$(mktemp "$d/.copy.XXXXXXXX"); cat >"$t" || { rm -f -- "$t"; exit 1; }; echo "$t"'
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_BUILD_INSTALL_SH='set -e; r=$1; t=$2; d=$r/captures/builds; case $t in "$d"/.copy.*) ;; *) exit 2;; esac; o=$(ls -ldn -- "$r" | awk '"'"'{print $3":"$4}'"'"'); chmod 0555 -- "$t"; chown -- "$o" "$t"; mv -f -- "$t" "$d/$3"; echo installed'
+
+_tba_build_copy_refuse() {   # <code> <log words> — the log line, then the answer
+  _tba_log "build-copy: refused $1 ($2)"
+  _tba_refuse "$1"
+}
+
+# build-copy --version=<build>
+_tba_run_build-copy() {
+  local v="" w src size sum root stage got
+  for w in "$@"; do case "$w" in --version=*) v="${w#*=}" ;; esac; done
+  _tba_short_lock || return 0
+  # verify, on this host: read only.
+  src="$(_tba_build_copy_src "$v")"
+  if [ ! -e "$src" ] && [ ! -L "$src" ]; then _tba_build_copy_refuse build-not-on-fleet "$v"; return 0; fi
+  if [ -L "$src" ] || [ ! -f "$src" ]; then _tba_build_copy_refuse build-not-regular "$v"; return 0; fi
+  size="$(_plat_size "$src" 2>/dev/null)" || size=""
+  [[ "$size" =~ ^[0-9]+$ ]] || { _tba_build_copy_refuse build-copy-failed "$v: size unread"; return 0; }
+  [ "$size" -le "$TBA_BUILD_COPY_MAX" ] || { _tba_build_copy_refuse build-too-large "$v: $size bytes"; return 0; }
+  sum="$(_plat_sha256 "$src" 2>/dev/null)" || sum=""
+  sum="${sum%% *}"
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { _tba_build_copy_refuse build-copy-failed "$v: hash unread"; return 0; }
+  _tba_ra_precheck || { _tba_refuse "$TBA_CODE"; return 0; }
+  root="$(_tba_state_get box_root 2>/dev/null)" || root=""
+  : "${root:=$TBA_BOX_ROOT_DEFAULT}"
+  [[ "$root" =~ ^/[A-Za-z0-9._/-]+$ ]] || { _tba_build_copy_refuse build-copy-failed "$v: the box root is not an absolute path"; return 0; }
+  _tba_log "build-copy: begins ($v, $size bytes)"
+  # copy: the bytes into a stage on the box, then the box's own hash of them.
+  _tba_cx_out sh -c "$TBA_BUILD_STAGE_SH" sh "$root" <"$src"
+  stage="${CX_OUT%$'\n'}"
+  if [ "$CX_RC" != 0 ] || [[ ! "$stage" =~ ^/[A-Za-z0-9._/-]+/captures/builds/\.copy\.[A-Za-z0-9]+$ ]] || [ "${stage%/captures/builds/*}" != "$root" ]; then
+    _tba_cx_fail "$CX_RC" build-copy-failed
+    _tba_build_copy_refuse "$TBA_CODE" "$v: the stage"
+    return 0
+  fi
+  _tba_box_file_sha "$stage"
+  got="${CX_OUT%% *}"
+  if [ "$CX_RC" != 0 ] || [ "$got" != "$sum" ]; then
+    [ "$CX_RC" = 0 ] && TBA_CODE=build-hash-mismatch || _tba_cx_fail "$CX_RC" build-copy-failed
+    _tba_cx_out rm -f -- "$stage"
+    _tba_build_copy_refuse "$TBA_CODE" "$v: the box's hash"
+    return 0
+  fi
+  # install: the checked bytes, read only, in the capture store.
+  _tba_cx_out sh -c "$TBA_BUILD_INSTALL_SH" sh "$root" "$stage" "$v"
+  if [ "$CX_RC" != 0 ] || [ "${CX_OUT%$'\n'}" != installed ]; then
+    _tba_cx_fail "$CX_RC" build-copy-failed
+    _tba_cx_out rm -f -- "$stage"
+    _tba_build_copy_refuse "$TBA_CODE" "$v: the install"
+    return 0
+  fi
+  _tba_log "build-copy: ok ($v)"
+  _tba_ok "\"build\":\"$v\",\"sha256\":\"$sum\""
+}
