@@ -1267,6 +1267,8 @@ describe('calls made for you (D-8126)', () => {
       it('Show all with a shown target keeps its row drawn and marked (A-i)', () => {
         render(<WaitingScreen view={view()} call={50} {...props} />);
         expect(row()!.getAttribute('aria-current')).toBe('true');
+        // Among the shown rows, the folded trail draws the target once: clearedFolded's place.beyond arm (review 3225 F1).
+        expect(document.querySelectorAll('.wl-cleared-row[data-call="50"]').length).toBe(1);
         fireEvent.click(screen.getByRole('button', { name: /Show all/ }));
         expect(row()!.getAttribute('aria-current')).toBe('true');
         expect(document.querySelector('.wl-cg-head[data-program="prog-b"]')!.getAttribute('aria-expanded')).toBe('true');
