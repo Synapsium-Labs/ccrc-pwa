@@ -140,10 +140,24 @@ Is taking a W1a lane Live a session's act today? No: it is an operator switch. `
 - **weekly-item-grace**: the weekly item is held until three days into the week (`QUIZ_UNATTENDED_GRACE_DAYS`) and says the unattended run runs the quiz; its titles are unchanged, so a week is never raised twice across the deploy.
 - **week-is-one-directory**: a refusal that needs a fresh `--out` (`release-moved`, `pilot-failed`, `out-refused`) or that resuming cannot cure (`budget-exhausted`) closes the week `failed`, so one week never spends more than one `--budget`; the next week tries again. A week still running when the next ISO week starts closes `week-ended`.
 - **setup-phase-latch**: a refusal in the one-time setup phase is retried at most once per ISO week, so a deterministic refusal never spends writer tokens every six hours.
-- **unattended-test-not-on-node-floor**: `history-quiz-unattended.test.ts` is not added to `ci.yml`'s node-floor list, which every other `history-*` test is on. It stubs the driver and opens no store, and a `.github/` edit would move this pull request onto the full run. The driver's floor coverage stays in `history-quiz-single.test.ts`.
 - **runner-red-by-mutation**: the runner's, the doctor's and the install censuses' tests were written beside their code, so their red was measured by mutation (above), not before the code.
 - **schema-and-readme-by-packet**: `server/src/coord/schema.ts` (run 3213's claim) and `README.md` (run 1850's) were changed by one additive packet each, applied on their holders' yes. The README packet's digest was checked against the holder's reading before it was applied.
 - **no-room-detail-by-position**: a `no-room` detail names each candidate account by position, never by id.
+
+## Fix round 1 (CI on the first push)
+
+The pull request's fast run was red in six cases, none of them run locally in the build round:
+- `ci-pipeline`'s node-floor case pins that the floor leg runs every `history-*.test.ts`. The build round had left
+  `history-quiz-unattended.test.ts` off that list as a departure; the pin says otherwise, so the test is now on the list
+  in `ci.yml`, and the departure is withdrawn. The `.github/` edit puts this pull request on the full run.
+- `ccrc-versioned-audit`'s unit row walks every `%h/ccrc/...` path a shipped unit names: the install fixture now places
+  `deploy/history-quiz-unattended.mjs`.
+- `run-close-switch`'s migration case rebuilds a version-53 database by dropping every later table: it now drops
+  `continuity_quiz_status` too.
+- `lane-arm-route` and `continuity-quiz` pinned the card read and the ruler's answer exactly: they now carry the new
+  `unattended` block and the ruler's `changed` and `reportSha`.
+
+All five files pass, run together through `ccrc test`.
 
 ## An incident to report
 

@@ -168,9 +168,9 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
     const { coord, read } = setup();
     const a = idOf(ins(coord, {}, 1000));
     const b = idOf(ins(coord, { reportSha: SHA('c') }, 2000));
-    expect(rule(coord, a, 'confirm', read)).toEqual({ ok: true, id: a, state: 'confirmed', baseline: true });
+    expect(rule(coord, a, 'confirm', read)).toEqual({ ok: true, id: a, state: 'confirmed', baseline: true, changed: true, reportSha: SHA('a') });
     expect(quizBaselineRead(coord.db)).toEqual({ ok: true, exists: true, at: 1000 });
-    expect(rule(coord, b, 'confirm', read)).toEqual({ ok: true, id: b, state: 'confirmed', baseline: false });
+    expect(rule(coord, b, 'confirm', read)).toEqual({ ok: true, id: b, state: 'confirmed', baseline: false, changed: true, reportSha: SHA('c') });
     const runs = quizRuns(coord.db);
     expect(runs.ok && runs.rows.map((r) => [r.state, r.baseline, r.ruledAt, r.ruledBy])).toEqual([
       ['confirmed', true, 5000, 'device-a'], ['confirmed', false, 5000, 'device-a'],
@@ -198,7 +198,7 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
   it('a discard leaves the row and never counts: not the baseline, not a recorded week, not pending', () => {
     const { coord, read } = setup();
     const a = idOf(ins(coord, {}, 1000));
-    expect(rule(coord, a, 'discard', read)).toEqual({ ok: true, id: a, state: 'discarded', baseline: false });
+    expect(rule(coord, a, 'discard', read)).toEqual({ ok: true, id: a, state: 'discarded', baseline: false, changed: true, reportSha: SHA('a') });
     expect(quizBaselineRead(coord.db)).toEqual({ ok: true, exists: false, at: null });
     expect(quizRecordedAts(coord.db)).toEqual({ ok: true, value: [] });
     expect(quizPendingRead(coord.db)).toEqual({ ok: true, runs: [] });
