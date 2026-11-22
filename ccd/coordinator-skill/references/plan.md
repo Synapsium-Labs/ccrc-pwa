@@ -250,10 +250,10 @@ link: it appears on the console's Project linking card, under the project, with 
 operator taps it, or the Overlord confirms it within its authority. The reason is shown in the console only, never written
 to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
 `team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
-`team-unknown` (no connected workspace has that team, or the named workspace does not), `team-ambiguous` (no workspace named
+`team-unknown` (no connected workspace has that team, or the named workspace does not; the workspace the pair depends on was read), `not-configured` (no Linear workspace is connected: do not retry; tell the operator), `team-ambiguous` (no workspace named
 and the key is in more than one connected workspace: send it again with `workspace`), `not-a-coordinator` (the session claims
 no open run: only a programme's coordinator suggests), `run-unreadable` (the open run claimants could not be read: try again),
-`unavailable` (the Linear store could not be read: try again later), `write-failed` (the store write failed: try once more;
+`unavailable` (the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the operator), `write-failed` (the store write failed: try once more;
 if it is refused again, stop and tell the operator), `no-project`, `linear-text-public` and `bad-request` (a body with a key
 other than these, or a field missing or malformed: the project, the team key, a `workspace` that is present but not a Linear
 id, or a reason that is empty, over 280 characters (an emoji counts as two) or not one plain line; the detail names the
