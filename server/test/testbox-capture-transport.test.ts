@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { testboxCaptureTransport } from '../src/testboxCapture.js';
 import type { CaptureAsked } from '../src/io.js';
+import type { BuildCaptureUnavailable } from '../src/buildCaptureLane.js';
 import { createIo } from '../src/remote/io.js';
 import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import { localIOFor } from '../src/io.js';
@@ -27,22 +28,16 @@ const via = (asked: CaptureAsked | Error) => testboxCaptureTransport(() => ({
   testboxCapture: async () => { if (asked instanceof Error) throw asked; return asked; },
 }));
 const run = (asked: CaptureAsked | Error) => via(asked).capture({ build: BUILD });
-const un = (why: 'no-test-box' | 'no-runner' | 'unanswered') => ({ kind: 'unavailable', why });
+const un = (why: BuildCaptureUnavailable) => ({ kind: 'unavailable', why });
 
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('testboxCaptureTransport: spec Table 6, one case per row', () => {
   it('the seam says the agent has no op: no-runner', async () => { expect(await run({ ok: false, reason: 'no-op' })).toEqual(un('no-runner')); });
   it('the seam says the job went unanswered: unanswered', async () => { expect(await run({ ok: false, reason: 'unanswered' })).toEqual(un('unanswered')); });
-  it.each([['not-started', 'no-test-box'], ['busy', 'no-runner']] as const)(
-    'the seam says %s (no job went out): %s, so no attempt counts, plus one warning naming the seam\'s word', async (reason, why) => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      expect(await run({ ok: false, reason })).toEqual(un(why));
-      expect(warn).toHaveBeenCalledTimes(1);
-      const line = String(warn.mock.calls[0]![0]);
-      expect(line).toContain('ccrc-server: build capture:');
-      expect(line).toContain(reason);
-      expect(line).toContain(BUILD);
+  it.each(['not-started', 'busy'] as const)(
+    'the seam says %s (no job went out): that word of its own (capture runner PR 2), so no attempt counts', async (reason) => {
+      expect(await run({ ok: false, reason })).toEqual(un(reason));
     });
   it.each(['unconfigured', 'unreachable', 'bad-answer'] as const)('%s: no-test-box', async (o) => {
     expect(await run(reply(o, { detail: 'why' }))).toEqual(un('no-test-box'));
@@ -54,14 +49,8 @@ describe('testboxCaptureTransport: spec Table 6, one case per row', () => {
     expect(await run(refused('no-runner'))).toEqual(un('no-runner'));
     expect(warn).not.toHaveBeenCalled();
   });
-  it.each(['build-absent', 'path-refused'] as const)('refused %s: no-runner plus one warning naming the refusal', async (r) => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(await run(refused(r))).toEqual(un('no-runner'));
-    expect(warn).toHaveBeenCalledTimes(1);
-    const line = String(warn.mock.calls[0]![0]);
-    expect(line).toContain('ccrc-server: build capture:');
-    expect(line).toContain(r);
-    expect(line).toContain(BUILD);
+  it.each(['build-absent', 'path-refused'] as const)('refused %s: that word of its own (capture runner PR 2), nothing sent', async (r) => {
+    expect(await run(refused(r))).toEqual(un(r));
   });
   it('refused capture-id-used: unanswered (a job went out)', async () => { expect(await run(refused('capture-id-used'))).toEqual(un('unanswered')); });
   it('answered with a result: answered, the result handed on unread', async () => {

@@ -4,8 +4,9 @@
 // typed, the recording polled until the step's events are in or its deadline passes), then the replay of the recording.
 //
 // A build that started but stalled FAILS, its output naming what was never recorded (spec §2.4): the lane must not keep
-// a broken contract queued for ever. Only a capture that could not START (the stand-in or the launcher threw) answers no
-// verdict, so the lane tries the build again. The scratch directory is the runner's own and is removed at the end.
+// a broken contract queued for ever. A capture that could not START (the stand-in or the launcher threw), and the box faults
+// below, answer no verdict, so the lane tries the build again. The scratch directory is the runner's own and is removed at
+// the end.
 //
 // THE VERDICT CUT (review 3226, F1 and F2): a fault of the box is not a fault of the build. A `type` that throws while the
 // build is gone is a build that exited mid-drive, a FAIL naming the events never recorded; while the build lives it is the
