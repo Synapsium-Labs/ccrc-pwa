@@ -7525,6 +7525,20 @@ units instead. An act whose unit is gone (a reboot, an OOM kill, a stopped unit)
 seconds: after that, with its lock free, the status ends it as failed with the code `interrupted` and the card offers its
 controls again.
 
+No act holds the lock without a ceiling. One table (`TBA_DEADLINE_S` in `ccd/ccrc-testbox-admin`, mirrored as
+`TESTBOX_ADMIN_DEADLINE_S` in `shared/testbox-admin.ts`) gives every detached act its limit, and the system manager
+enforces it on the unit (`RuntimeMaxSec`): Connect 58 minutes; Repair, Apply release and a box settings edit 30 minutes;
+parity 60 minutes. An Apply when idle has one limit for its 6-hour wait and its edit together, so an edit that hangs
+after a short wait is stopped only when that whole limit ends. An act stopped at its limit reads `interrupted` at the
+next status read, or when the next act begins. A parity act that is only slow ends before its limit by itself: its
+tool starts nothing in the last five minutes and each of its steps (an install, or one run on one side) is stopped
+after 15 minutes, so the act ends `parity-differs` with a record, and the log says which steps did not run. While an act
+holds the lock, another act's `busy` answer names it: which act, when it began and the latest time it can end, and the
+status says the same latest end on its running act (`deadlineAt`), which the card shows. A server older than this
+build cannot read a status that carries it, so roll this build out with `ccrc rollout --server-first`. `ccrc
+testbox-admin cancel` ends a parity act that is still running its legs, as it ends an Apply when idle that is still
+waiting.
+
 - **Repair** re-pushes the release recorded on the box, verified again on the fleet host, and re-runs the installer from
   it with the box's current settings file. It never changes the tag.
 - **Replace** is Disconnect of the old box followed by Connect of a new address, in one flow, with the new fingerprint

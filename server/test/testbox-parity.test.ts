@@ -14,12 +14,12 @@
 // detached act runs in this process as the unit would. HOME is a fixture; ghContainedEnv poisons the user manager and tmux.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { parityArmable, readTestboxAdminStatus, readTestboxParityRecord } from '../../shared/testbox-admin.js';
+import { TESTBOX_ADMIN_DEADLINE_S, parityArmable, readTestboxAdminStatus, readTestboxParityRecord } from '../../shared/testbox-admin.js';
 
 removeTmpFixturesEachTest();
 
@@ -31,6 +31,8 @@ const SCANFAKE = join(REPO, 'server', 'test', 'fixtures', 'testbox-admin-ssh.sh'
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 const has = (c: string): boolean => spawnSync('bash', ['-c', `command -v ${c}`], { encoding: 'utf8' }).status === 0;
 const HAS_ALL = has('ssh-keygen') && has('flock') && has('node') && has('git');
+/** GNU `timeout`: the bound of a parity leg and the process group of the tool (D-8899). */
+const HAS_TIMEOUT = has('timeout');
 const ADDR = '203.0.113.9';
 const SRC_ADDR = '192.0.2.5';
 const TOOLS = '/opt/tools';
@@ -76,7 +78,12 @@ if [ -n "$m" ]; then
   echo "decoration before"; echo "TP|$m|k|$v"; echo "decoration after"; exit 0
 fi
 `;
-  writeFileSync(join(tdir, 'ccd', 'ccrc-test'), `#!/usr/bin/env bash\n${fxLines('local')}echo '${JUNIT(false)}'\n`, { mode: 0o755 });
+  // FAKE_LOCAL_HANG: the local leg never ends by itself (it sleeps that long, and leaves its pid in $HOME/leg-pid), as the leg
+  // that once held the admin lock did. FAKE_LOCAL_RC: the leg ends at once with that status and no report.
+  writeFileSync(join(tdir, 'ccd', 'ccrc-test'), `#!/usr/bin/env bash
+[ -z "\${FAKE_LOCAL_RC:-}" ] || exit "$FAKE_LOCAL_RC"
+if [ -n "\${FAKE_LOCAL_HANG:-}" ]; then echo $$ > "$HOME/leg-pid"; exec sleep "$FAKE_LOCAL_HANG"; fi
+${fxLines('local')}echo '${JUNIT(false)}'\n`, { mode: 0o755 });
   const clientLog = join(dir, 'client-log');
   writeFileSync(join(tdir, 'agent', 'dist', 'agent', 'src', 'testbox', 'client.js'), `const fs = require('fs');
 const a = process.argv.slice(2);
@@ -238,6 +245,134 @@ process.exit(r.status ?? 1);
   });
 });
 
+// D-8899: one leg that never ended kept a parity act, and the admin lock, for 23 hours.
+describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('testbox-parity: a step has a bound (D-8899)', () => {
+  const KILL = ['--leg-kill', '2'];
+  const runBounded = (t: ToolFix, args: string[]): { out: string; err: string; rc: number; ms: number } => {
+    const t0 = Date.now();
+    const r = spawnSync(BASH, [t.tool, '--repo', t.repo, '--package', 'server', ...args, '--', 'vitest', 'run'], { env: t.env, encoding: 'utf8', cwd: t.dir, timeout: 60_000 });
+    return { out: r.stdout ?? '', err: r.stderr ?? '', rc: r.status ?? -1, ms: Date.now() - t0 };
+  };
+
+  it('a leg that does not end within --leg-deadline is stopped and counted as a leg that could not run, and the tool goes on', () => {
+    const t = toolFixture({ FAKE_LOCAL_HANG: '120' });
+    const rec = join(t.dir, 'rec.json');
+    const r = runBounded(t, ['--recent', '5', '--leg-deadline', '1', ...KILL, '--record', rec, ...META]);
+    expect(r.rc, `${r.out}${r.err}`).toBe(1);
+    // far inside the 120 s either leg would have taken: each was stopped at its one-second bound
+    expect(r.ms).toBeLessThan(30_000);
+    // every pull request ran: a leg's stop did not end the tool
+    expect(r.out.split('\n').filter((l) => l.startsWith('== '))).toEqual(t.revs.slice(1).reverse().map((v) => `== ${v}`));
+    expect(r.err.split('\n').filter((l) => l.includes('the local leg did not end within 1s and was stopped'))).toHaveLength(5);
+    // the box leg of each still ran, and the stopped side reads absent, never as an agreement
+    expect(readFileSync(t.clientLog, 'utf8').trim().split('\n')).toHaveLength(5);
+    expect(r.out).toContain('a.test.ts: local absent, box pass');
+    const read = readTestboxParityRecord(readFileSync(rec, 'utf8'));
+    expect(read.ok && read.value.result).toBe('fail');
+  });
+
+  it('a leg that ends inside its bound is untouched, and the bound is a whole number of seconds with a kill behind it', () => {
+    const t = toolFixture();
+    const r = runTool(t, ['--recent', '1', '--leg-deadline', '900', ...KILL]);
+    expect(r.rc, r.out + r.err).toBe(0);
+    expect(r.err).not.toContain('did not end');
+    for (const bad of ['0', '15m', '-1', '']) expect(runTool(t, ['--recent', '1', '--leg-deadline', bad, ...KILL]).rc, bad).toBe(2);
+    for (const bad of ['0', '30s', '']) expect(runTool(t, ['--recent', '1', '--leg-deadline', '900', '--leg-kill', bad]).rc, bad).toBe(2);
+    for (const bad of ['0', 'soon', '17', '']) expect(runTool(t, ['--recent', '1', '--until', bad, ...KILL]).rc, bad).toBe(2);
+    // no default hides in the tool: a bound with no kill behind it is refused, and names why
+    const bare = runTool(t, ['--recent', '1', '--leg-deadline', '900']);
+    expect(bare.rc).toBe(2);
+    expect(bare.err).toContain('need --leg-kill');
+    expect(runTool(t, ['--recent', '1', '--until', String(Math.floor(Date.now() / 1000) + 600)]).rc).toBe(2);
+  });
+
+  it('a leg that ends with a kill\'s status inside its bound is not said to have run out of time', () => {
+    // 137 is also what a test process the slice's memory cap killed leaves; 124 what a `timeout` of the leg's own does.
+    for (const rc of ['137', '124']) {
+      const t = toolFixture({ FAKE_LOCAL_RC: rc });
+      const r = runBounded(t, ['--recent', '1', '--leg-deadline', '900', ...KILL]);
+      expect(r.err, rc).not.toContain('did not end within');
+      // the leg printed no report, so its side reads absent and the pull request differs: that is its one reason
+      expect(r.out, rc).toContain('a.test.ts: local absent, box pass');
+      expect(r.rc, rc).toBe(1);
+    }
+  });
+
+  it('after --until nothing more is started: every pull request is said not to have run, and the record is still written, as a fail', () => {
+    const t = toolFixture({ FAKE_LOCAL_HANG: '120' });
+    const rec = join(t.dir, 'rec.json');
+    const r = runBounded(t, ['--recent', '5', '--fixtures', '--until', String(Math.floor(Date.now() / 1000) - 1), '--leg-deadline', '900', ...KILL, '--record', rec, ...META]);
+    expect(r.rc, r.out + r.err).toBe(1);
+    expect(r.ms).toBeLessThan(30_000);
+    expect(r.err.split('\n').filter((l) => l.includes('not run: the time given to this run is over (--until)'))).toHaveLength(5);
+    // no worktree, no leg on either side
+    expect(r.out).not.toContain('== ');
+    expect(existsSync(t.clientLog)).toBe(false);
+    expect(existsSync(join(t.env['HOME']!, 'leg-pid'))).toBe(false);
+    const read = readTestboxParityRecord(readFileSync(rec, 'utf8'));
+    expect(read.ok, JSON.stringify(read)).toBe(true);
+    if (read.ok) expect(read.value).toMatchObject({ result: 'fail', prs: [], fixtures: FX.map((name) => ({ name, result: 'fail' })) });
+  });
+
+  it('a step that begins near --until gets only what is left, so a run that is only slow ends by itself with its record', () => {
+    const t = toolFixture({ FAKE_LOCAL_HANG: '120' });
+    const rec = join(t.dir, 'rec.json');
+    // --until two to three seconds away: the first local leg is cut to what is left, and what follows it is not started
+    const r = runBounded(t, ['--recent', '5', '--until', String(Math.floor(Date.now() / 1000) + 3), '--leg-deadline', '900', ...KILL, '--record', rec, ...META]);
+    expect(r.rc, r.out + r.err).toBe(1);
+    expect(r.ms).toBeLessThan(30_000);
+    expect(r.err).toMatch(/r0: the local leg did not end within [123]s and was stopped/);
+    expect(r.err).not.toContain('within 900s');
+    expect(r.err).toContain('r0: the box leg did not run: the time given to this run is over (--until)');
+    expect(r.err.split('\n').filter((l) => l.includes('not run: the time given to this run is over (--until)') && !l.includes('leg'))).toHaveLength(4);
+    const read = readTestboxParityRecord(readFileSync(rec, 'utf8'));
+    expect(read.ok && read.value.result).toBe('fail');
+  });
+
+  it('a signal to the tool\'s process group reaches a running leg: the leg\'s bound keeps it in that group (--foreground)', () => {
+    // `ccrc testbox-admin parity` runs the tool under a `timeout` of its own and cancels by a TERM to that `timeout`, which
+    // signals its process group. A leg's `timeout` without --foreground would move the leg to a group of its own, out of reach.
+    const t = toolFixture({ FAKE_LOCAL_HANG: '120' });
+    const legPid = join(t.env['HOME']!, 'leg-pid');
+    const r = spawnSync(BASH, ['-c', `timeout -k 5 100 "$BASH" "$1" --repo "$2" --package server --recent 1 --leg-deadline 900 --leg-kill 2 -- vitest run >/dev/null 2>&1 & o=$!
+      for i in $(seq 1 400); do [ -s "$3" ] && break; sleep 0.05; done
+      [ -s "$3" ] || { echo no-leg; kill "$o"; exit 1; }
+      leg=$(cat "$3"); kill -0 "$leg" || { echo leg-not-running; exit 1; }
+      kill "$o"; wait "$o"
+      for i in $(seq 1 100); do kill -0 "$leg" 2>/dev/null || { echo leg-gone; exit 0; }; sleep 0.05; done
+      echo leg-alive; kill "$leg"`, '_', t.tool, t.repo, legPid], { env: t.env, encoding: 'utf8', cwd: t.dir, timeout: 60_000 });
+    expect(r.stdout, r.stdout + r.stderr).toBe('leg-gone\n');
+  });
+
+  it('--merge is the rows\' records as one: a pass needs every row a pass, the three fixtures and a pull request', () => {
+    const t = toolFixture();
+    const row = (name: string, result: string, fixtures: unknown[]): string => {
+      const f = join(t.dir, `${name}.json`);
+      writeFileSync(f, `${JSON.stringify({ v: 1, result, prs: [{ repo: name, number: 7, rev: 'c'.repeat(40) }], fixtures, release: 'v1.2.3', toolsKey: 'k', fingerprint: FP, boxFileSha256: SHA, at: 1 })}\n`);
+      return f;
+    };
+    const fx = FX.map((name) => ({ name, result: 'pass' }));
+    const merge = (fail: string, files: string[]): ReturnType<typeof readTestboxParityRecord> => {
+      const r = spawnSync(BASH, [t.tool, '--merge', fail, 'v1.2.3', 'node-20.1.0', FP, SHA, ...files], { env: t.env, encoding: 'utf8', cwd: t.dir });
+      expect(r.status, r.stderr).toBe(0);
+      return readTestboxParityRecord(r.stdout);
+    };
+    const a = row('project-a', 'pass', fx);
+    const b = row('project-b', 'pass', []);
+    const both = merge('0', [a, b]);
+    expect(both.ok && both.value).toMatchObject({
+      result: 'pass', release: 'v1.2.3', toolsKey: 'node-20.1.0', fingerprint: FP, boxFileSha256: SHA, fixtures: fx,
+      prs: [{ repo: 'project-a', number: 7 }, { repo: 'project-b', number: 7 }],
+    });
+    const failOf = (fail: string, files: string[]): unknown => { const m = merge(fail, files); return m.ok && m.value.result; };
+    expect(failOf('1', [a, b]), 'a row could not run').toBe('fail');
+    expect(failOf('0', [a, row('project-c', 'fail', [])]), 'a row failed').toBe('fail');
+    expect(failOf('0', [b]), 'no fixtures').toBe('fail');
+    expect(failOf('0', [a, join(t.dir, 'absent.json')]), 'a record that cannot be read').toBe('fail');
+    expect(failOf('0', []), 'no row at all').toBe('fail');
+  });
+});
+
 // ── the verb ────────────────────────────────────────────────────────────────────────────────────────────────────────
 const ROW = (name: string): unknown => ({
   name, fetchUrl: `https://testbox.invalid/${name}.git`, mirrorPath: `/srv/mirror/${name}.git`,
@@ -292,6 +427,16 @@ for ((i = 0; i < \${#args[@]}; i++)); do
     --tools-key) tk="\${args[i+1]}" ;; --fingerprint) fp="\${args[i+1]}" ;; --box-sha256) sha="\${args[i+1]}" ;; --fixtures) fx=1 ;;
   esac
 done
+# FAKE_TOOL_LEAVE: a process the legs left behind, alive after the tool ends. FAKE_TOOL_HANG: a leg that never ends by itself.
+if [ -n "\${FAKE_TOOL_LEAVE:-}" ]; then sleep "$FAKE_TOOL_LEAVE" </dev/null >/dev/null 2>&1 & echo $! >> "$HOME/left-pid"; fi
+if [ -n "\${FAKE_TOOL_HANG:-}" ]; then sleep "$FAKE_TOOL_HANG" & echo $! > "$HOME/leg-pid"; echo $$ > "$HOME/tool-pid"; wait; fi
+# FAKE_TOOL_LINES: after FAKE_TOOL_DELAY, one line written in two halves FAKE_TOOL_GAP apart, then that many lines, and the tool
+# ends at once.
+if [ -n "\${FAKE_TOOL_LINES:-}" ]; then
+  sleep "\${FAKE_TOOL_DELAY:-0}"
+  printf '%s' "$name first half, "; sleep "\${FAKE_TOOL_GAP:-0}"; echo "second half"
+  for ((k = 1; k <= FAKE_TOOL_LINES; k++)); do echo "$name line $k"; done
+fi
 res="\${FAKE_TOOL_RESULT:-pass}"
 fxs='[]'
 [ "$fx" = 0 ] || fxs='[{"name":"git-state","result":"pass"},{"name":"socket","result":"pass"},{"name":"workers","result":"'"\${FAKE_FX_RESULT:-pass}"'"}]'
@@ -305,7 +450,7 @@ echo "parity: done"
   Object.assign(base, {
     HOME: home, TMPDIR: join(home, 'tmp'), LANG: 'C', PATH: `${fakes}:${process.env['PATH'] ?? '/usr/bin:/bin'}`,
     FAKE_LOG: join(home, 'fake-log'), FAKE_RULES: join(home, 'rules'), FAKE_STDIN_DIR: join(home, 'stdin'), FAKE_IP_OUT: `${ADDR} dev eth0 src ${SRC_ADDR} uid 0`,
-    FAKE_SSH_KEYSCAN_RC: '1', TBA_GH: ghAuth, TBA_PARITY_TOOL: tool, SYSTEMD_RUN_RC: '0', TBA_CHECK_DEADLINE: '0', ...extra,
+    FAKE_SSH_KEYSCAN_RC: '1', TBA_GH: ghAuth, TBA_PARITY_TOOL: tool, SYSTEMD_RUN_RC: '0', TBA_CHECK_DEADLINE: '0', TBA_CANCEL_POLL: '0.05', ...extra,
   });
   return {
     home, env: ghContainedEnv(home, base, { systemd: true, tmux: true }), log: join(home, 'fake-log'), toolLog,
@@ -356,7 +501,7 @@ function status(h: Home): NonNullable<ReturnType<typeof readTestboxAdminStatus> 
 }
 const flag = (call: string[], name: string): string[] => call.flatMap((w, i) => (w === name ? [call[i + 1]!] : []));
 
-describe.skipIf(!HAS_ALL)('ccrc testbox-admin parity (D-8166, TC9)', () => {
+describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('ccrc testbox-admin parity (D-8166, TC9)', () => {
   it('with no --pr the unit asks each installed row for the five most recent merged pull requests, with the checkout and command prefilled', () => {
     const h = fixture();
     connectedTo(h);
@@ -511,5 +656,153 @@ describe.skipIf(!HAS_ALL)('ccrc testbox-admin parity (D-8166, TC9)', () => {
     const read = readTestboxParityRecord(readFileSync(h.parity, 'utf8'));
     expect(read.ok && read.value.result).toBe('pass');
     if (read.ok) expect(parityArmable(read.value, { fingerprint: FP, boxFileSha256: SHA, stale: false })).toBe(true);
+  });
+  // ── D-8899 ──────────────────────────────────────────────────────────────────────────────────────────────
+  const alive = (pid: string): boolean => spawnSync(BASH, ['-c', 'kill -0 "$1" 2>/dev/null', '_', pid]).status === 0;
+  const pidOf = (h: Home, name: string): string => readFileSync(join(h.home, name), 'utf8').trim();
+  const lockFree = (h: Home): boolean => spawnSync('flock', ['-n', join(h.home, '.ccrc', 'testbox-admin.lock'), 'true']).status === 0;
+  const gone = (pid: string): boolean => {
+    for (let i = 0; i < 100 && alive(pid); i++) spawnSync('sleep', ['0.05']);
+    return !alive(pid);
+  };
+
+  it('the parity unit has the parity row as its ceiling, and hands the tool its step\'s bound, its kill and the time to end by from the same table', () => {
+    const h = fixture();
+    connectedTo(h);
+    const d = detach(h, []);
+    expect(d.id, d.out).not.toBeNull();
+    expect(readFileSync(h.calls, 'utf8')).toContain(` --property=RuntimeMaxSec=${TESTBOX_ADMIN_DEADLINE_S.parity} `);
+    unit(h, d.id!);
+    const calls = toolCalls(h);
+    expect(calls).toHaveLength(2);
+    // the legs end by the act's recorded start plus its ceiling less the tail: every row is given the same time
+    const started = Number(/^act_started=(\d+)$/m.exec(readFileSync(h.state, 'utf8'))![1]);
+    const until = Math.floor(started / 1000) + TESTBOX_ADMIN_DEADLINE_S.parity - TESTBOX_ADMIN_DEADLINE_S['parity/tail'];
+    for (const c of calls) {
+      expect(flag(c, '--leg-deadline')).toEqual([String(TESTBOX_ADMIN_DEADLINE_S['parity/leg'])]);
+      expect(flag(c, '--leg-kill')).toEqual([String(TESTBOX_ADMIN_DEADLINE_S['parity/kill'])]);
+      expect(flag(c, '--until')).toEqual([String(until)]);
+    }
+  });
+
+  /** The unit with the table's parity rows set for this run: `parity` and `parity/tail` equal, so the legs' time is already over. */
+  const unitOutOfTime = (h: Home, id: string, tail: number): { rc: number; ms: number } => {
+    const t0 = Date.now();
+    const r = spawnSync(BASH, ['-c', SRC + `TBA_DEADLINE_S[parity]=${tail}; TBA_DEADLINE_S[parity/tail]=${tail}; TBA_DEADLINE_S[parity/kill]=1; CCRC_TBA_ACT=${id} _tba_main parity >"$HOME/unit-out" 2>"$HOME/unit-err"`, '_', VERB],
+      { env: h.env, encoding: 'utf8', cwd: h.home, timeout: 60_000 });
+    return { rc: r.status ?? -1, ms: Date.now() - t0 };
+  };
+
+  it('a tool that does not end by the act\'s time is stopped half the tail later: the act ends parity-differs with a record and the reason, and never waits for its ceiling', () => {
+    const h = fixture({ FAKE_TOOL_HANG: '120' });
+    connectedTo(h);
+    const d = detach(h, []);
+    expect(d.id, d.out).not.toBeNull();
+    const r = unitOutOfTime(h, d.id!, 4);
+    expect(r.rc).toBe(0);
+    // two rows, each stopped two seconds (half the tail) after a time that had already passed: far inside the tool's 120 s
+    expect(r.ms).toBeLessThan(30_000);
+    expect(toolCalls(h)).toHaveLength(2);
+    expect(gone(pidOf(h, 'tool-pid')), 'the tool is stopped').toBe(true);
+    expect(status(h).act).toMatchObject({ id: d.id, sub: 'parity', outcome: 'failed', code: 'parity-differs' });
+    expect(status(h).act?.phases.map((p) => p.name)).toEqual(['legs', 'record']);
+    const read = readTestboxParityRecord(readFileSync(h.parity, 'utf8'));
+    expect(read.ok && read.value.result).toBe('fail');
+    const log = readFileSync(join(h.home, '.ccrc', 'testbox-admin.log'), 'utf8');
+    expect(log.split('\n').filter((l) => l.endsWith("the tool did not end by the act's time and was stopped"))).toEqual([
+      "parity: project-a: the tool did not end by the act's time and was stopped", "parity: project-b: the tool did not end by the act's time and was stopped",
+    ]);
+    expect(lockFree(h)).toBe(true);
+  });
+
+  /** The log's parity lines after one act whose tool printed `lines` lines per row. */
+  const parityLog = (extra: NodeJS.ProcessEnv): string[] => {
+    const h = fixture(extra);
+    connectedTo(h);
+    act(h);
+    return readFileSync(join(h.home, '.ccrc', 'testbox-admin.log'), 'utf8').split('\n').filter((l) => l.startsWith('parity: '));
+  };
+  const wantLog = (lines: number): string[] => [
+    'parity: begins',
+    ...['project-a', 'project-b'].flatMap((n) => [
+      `parity: ${n}: ${n} first half, second half`, ...Array.from({ length: lines }, (_, k) => `parity: ${n}: ${n} line ${k + 1}`), `parity: ${n}: parity: done`,
+    ]),
+    'parity: ok',
+  ];
+
+  it('every line the tool wrote is in the log, in order, before the act\'s own last line; a line written in two halves with a look between them is one line', () => {
+    // the unit looks every 50 ms and the halves are 400 ms apart, so a look falls between them
+    expect(parityLog({ FAKE_TOOL_LINES: '300', FAKE_TOOL_GAP: '0.4' })).toEqual(wantLog(300));
+  });
+
+  it('what the tool wrote just before it ended is in the log too: the unit looks once more after the tool is gone', () => {
+    // the unit looks at once (nothing yet), then sleeps 1.5 s; the tool writes all its lines 0.3 s in and ends, so the unit's
+    // next look at the tool finds it gone, and only the look after the wait can read them
+    expect(parityLog({ FAKE_TOOL_LINES: '5', FAKE_TOOL_DELAY: '0.3', TBA_CANCEL_POLL: '1.5' })).toEqual(wantLog(5));
+  });
+
+  it('cancel ends a running parity act: the tool and its leg are stopped, the act ends cancelled, the lock is free and no record is written', () => {
+    const h = fixture({ FAKE_TOOL_HANG: '120' });
+    connectedTo(h);
+    const d = detach(h, []);
+    expect(d.id, d.out).not.toBeNull();
+    const t0 = Date.now();
+    const r = spawnSync(BASH, ['-c', SRC + `CCRC_TBA_ACT=${d.id} _tba_main parity >"$HOME/unit-out" 2>"$HOME/unit-err" & u=$!
+      for i in $(seq 1 400); do [ -s "$HOME/tool-pid" ] && break; sleep 0.05; done
+      ( _tba_main status ) >"$HOME/status-mid"
+      ( _tba_main cancel --from pwa )
+      wait "$u"; echo "rc=$?"`, '_', VERB], { env: h.env, encoding: 'utf8', cwd: h.home, timeout: 60_000 });
+    expect(r.stdout, r.stdout + r.stderr).toBe('{"ok":true,"cancelled":true}\nrc=0\n');
+    // far inside the 120 s the leg would have taken
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    const mid = readTestboxAdminStatus(readFileSync(join(h.home, 'status-mid'), 'utf8').trim());
+    expect(mid.ok && mid.value.act).toMatchObject({ id: d.id, sub: 'parity', outcome: 'running', phase: 'legs' });
+    expect(status(h).act).toMatchObject({ id: d.id, sub: 'parity', outcome: 'failed', code: 'cancelled', phase: 'legs' });
+    expect(gone(pidOf(h, 'tool-pid')), 'the tool is stopped').toBe(true);
+    expect(gone(pidOf(h, 'leg-pid')), 'the leg the tool started is stopped with it').toBe(true);
+    expect(lockFree(h)).toBe(true);
+    // the first row was cancelled, so the second never ran, and nothing was recorded
+    expect(toolCalls(h)).toHaveLength(1);
+    expect(existsSync(h.parity)).toBe(false);
+    expect(existsSync(join(h.home, '.ccrc', 'testbox-admin.cancel'))).toBe(false);
+    expect(readFileSync(join(h.home, '.ccrc', 'testbox-admin.log'), 'utf8')).toContain('parity: cancelled');
+    // an act that has ended is not cancelled
+    expect(JSON.parse(sh(h, SRC + '_tba_main cancel --from pwa', [VERB]).out)).toEqual({ ok: true, cancelled: false });
+  });
+
+  it('cancel is refused once parity writes its record, and a cancel left by an earlier act never ends this one', () => {
+    const h = fixture();
+    connectedTo(h);
+    const d = detach(h, []);
+    expect(d.id, d.out).not.toBeNull();
+    appendFileSync(h.state, 'act_phase=record\n');
+    expect(JSON.parse(sh(h, SRC + '_tba_main cancel --from pwa', [VERB]).out)).toEqual({ ok: true, cancelled: false });
+    sh(h, SRC + '_tba_state_write act_phase=', [VERB]);
+    writeFileSync(join(h.home, '.ccrc', 'testbox-admin.cancel'), 'f'.repeat(32));
+    unit(h, d.id!);
+    expect(status(h).act).toMatchObject({ id: d.id, outcome: 'ok', code: null });
+    expect(existsSync(join(h.home, '.ccrc', 'testbox-admin.cancel'))).toBe(false);
+  });
+
+  it('a process a leg leaves behind does not carry the act\'s lock: the lock is free when the act ends', () => {
+    const h = fixture({ FAKE_TOOL_LEAVE: '30' });
+    connectedTo(h);
+    const d = detach(h, []);
+    expect(d.id, d.out).not.toBeNull();
+    // The unit's own output goes to files, as a unit's goes nowhere: the log reader of a row lives while a left-behind process
+    // keeps its pipe open, and a pipe to this process would make the test wait for it.
+    const out = openSync(join(h.home, 'unit-std'), 'w');
+    const r = spawnSync(BASH, ['-c', SRC + `CCRC_TBA_ACT=${d.id} _tba_main parity`, '_', VERB], { env: h.env, cwd: h.home, stdio: ['ignore', out, out], timeout: 60_000 });
+    closeSync(out);
+    expect(r.status).toBe(0);
+    const left = readFileSync(join(h.home, 'left-pid'), 'utf8').trim().split('\n');
+    try {
+      expect(left).toHaveLength(2);
+      for (const pid of left) expect(alive(pid), 'the left-behind process outlives the act').toBe(true);
+      expect(status(h).act).toMatchObject({ sub: 'parity', outcome: 'ok' });
+      expect(lockFree(h), 'no later act is answered busy for it').toBe(true);
+    } finally {
+      for (const pid of left) spawnSync(BASH, ['-c', 'kill "$1" 2>/dev/null', '_', pid]);
+    }
   });
 });
