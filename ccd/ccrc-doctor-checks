@@ -7025,6 +7025,26 @@ _check_models() {
 # "SERVED BY DOCS" is a row whose `state` is `ready`: a repository with a
 # default branch, the one state whose tree the Docs screen opens. The other
 # six states are listed and serve no page.
+#
+# ── the one reader of `ccd caps` in these checks (model classes follow-up doctor-caps-one-reader; wave 7 review F6) ──
+# Every check that asks which words this box's ccd advertises asks here, once, under one bound (CCRC_DOCTOR_DOCS_TIMEOUT,
+# the docs check's bound for its ccd calls), reading no stdin and with fd 3 closed. It answers two states a caller tells
+# apart: rc 0, MEASURED, with ccd's word list (one word a line; it may lack the word asked about, or be empty) in
+# DR_CCD_CAPS; rc 1, UNMEASURED (no ccd, a non-zero exit, or the bound passed), with DR_CCD_CAPS empty. A caller never
+# folds rc 1 into an empty list: that would say "ccd does not list" of a word nobody measured. `cmd_doctor` runs each
+# check in its own subshell (`out="$( "_check_$name" )"`), so one read serves one check, never the whole run.
+DR_CCD_CAPS_FIX="run \$HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers"
+_dr_ccd_caps() {
+  DR_CCD_CAPS=""
+  local out
+  out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null 3>&-)" || return 1
+  DR_CCD_CAPS="$out"
+}
+# rc 0 when the measured list holds <word> as one whole line (bash only, no grep on the doctor's PATH).
+_dr_ccd_lists() {   # <word>
+  [[ $'\n'"$DR_CCD_CAPS"$'\n' == *$'\n'"$1"$'\n'* ]]
+}
+
 _check_docs() {
   # A server-role box runs no ccd verb for Docs: the fleet box's doctor
   # measures the verb where the agent execs it. The role read is
@@ -7119,10 +7139,10 @@ _check_docs() {
       fi
       # Rich-docs spec A12 (W5b): the tokens are read from `ccd caps`, as the server reads them; words only, never a
       # project name. A caps read that fails names both, since neither was measured.
-      local caps="" tok missing=""
-      caps="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$ccd" caps </dev/null 2>/dev/null)" || caps=""
+      local tok missing=""
+      _dr_ccd_caps || :
       for tok in $CCRC_DOCTOR_DOCS_CAPS; do
-        case $'\n'"$caps"$'\n' in *$'\n'"$tok"$'\n'*) ;; *) missing="$missing $tok" ;; esac
+        _dr_ccd_lists "$tok" || missing="$missing $tok"
       done
       if [ -n "$missing" ]; then
         _dr_warn docs "$line; this ccd does not list$missing, so Docs here has no per-doc history or no vision and promise sections" \
@@ -12257,19 +12277,18 @@ _check_browser-mcp() {
 # no `x` is `pools-unlistable`'s (`_check_pools`), so it SKIPs here; one with `x` but no `r` no other check names, so it
 # FAILs here as unmeasured.
 _check_cap-floor() {
-  local reg="$HOME/.cc-sessions" row fact word say ids caps bad="" fix=""
+  local reg="$HOME/.cc-sessions" row fact word say ids bad="" fix=""
   if [ -e "$reg" ] || [ -L "$reg" ]; then
     [ -x "$reg" ] || { _dr_skip cap-floor "the registry ~/.cc-sessions cannot be searched, which the pools check reports"; return 3; }
   fi
   _cap_floor_standing || { _dr_fail cap-floor "unmeasured: ~/.cc-sessions can be searched but not listed, so nobody knows whether a fact stands that needs a capability" \
     "give ~/.cc-sessions its read bit back (chmod u+r ~/.cc-sessions), then re-run: ccrc doctor"; return 1; }
   [ "${#CAP_FLOOR_STANDING[@]}" -gt 0 ] || { _dr_pass cap-floor "no fact stands on this box that needs a ccd capability"; return 0; }
-  # Bounded, and reading no stdin, as the docs check's ccd calls are: `cmd_doctor` has no per-check timeout.
-  caps="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null 3>&-)" || { _dr_fail cap-floor "unmeasured: a fact stands, and this box's ccd caps did not answer" \
-    "run \$HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers"; return 1; }
+  # The one bounded reader (`cmd_doctor` has no per-check timeout); its remedy is this check's, word for word.
+  _dr_ccd_caps || { _dr_fail cap-floor "unmeasured: a fact stands, and this box's ccd caps did not answer" "$DR_CCD_CAPS_FIX"; return 1; }
   for row in "${CAP_FLOOR_STANDING[@]}"; do
     IFS='|' read -r fact word say ids <<<"$row"
-    [[ $'\n'"$caps"$'\n' == *$'\n'"$word"$'\n'* ]] && continue   # one whole line; bash only, no grep on the doctor's PATH
+    _dr_ccd_lists "$word" && continue
     bad+="${bad:+; }this box's ccd lacks $word while a $fact stands for$ids, so it fails open there"
     fix+="${fix:+; }ccrc update to a release whose ccd advertises $word, or $say"
   done
@@ -12649,7 +12668,7 @@ _check_model-sessions-behind() {
 }
 
 _check_model-advance-blocked() {
-  local rc rows caps id key text ma_kept="" ma_note=""
+  local rc rows id key text ma_kept="" ma_note=""
   _dr_ma_read model-advance-blocked; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   if ! rows="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
@@ -12662,17 +12681,15 @@ _check_model-advance-blocked() {
   fi
   # `alias-source-absent` WARNs only once this box's ccd marks alias launches (`ccd caps` lists `alias-launch-v1`, the
   # Anthropic arm's A3.2); before that a lane with no catalogue cache has no source by design, so it is a note.
-  caps="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null)" || caps=""
-  case $'\n'"$caps"$'\n' in
-    *$'\n'alias-launch-v1$'\n'*) ;;
-    *)
-      while IFS=$'\x1f' read -r id key text; do
-        [ -n "$id" ] || continue
-        if [ "$key" = alias-source-absent ]; then ma_note+="${ma_note:+, }$id"; else ma_kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi
-      done <<< "$rows"
-      rows="$ma_kept"
-      [ -z "$ma_note" ] || ma_note="; no source until ccd marks alias launches ($ma_note)" ;;
-  esac
+  _dr_ccd_caps || :
+  if ! _dr_ccd_lists alias-launch-v1; then
+    while IFS=$'\x1f' read -r id key text; do
+      [ -n "$id" ] || continue
+      if [ "$key" = alias-source-absent ]; then ma_note+="${ma_note:+, }$id"; else ma_kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi
+    done <<< "$rows"
+    rows="$ma_kept"
+    [ -z "$ma_note" ] || ma_note="; no source until ccd marks alias launches ($ma_note)"
+  fi
   _dr_ma_report model-advance-blocked "$rows" _dr_ma_blocked_fix \
     "$DR_MA_LANES lane(s) with a model registry or an aliases file: nothing blocks an advance" "$ma_note"
 }
