@@ -455,7 +455,7 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       let warn: ReturnType<typeof vi.spyOn>;
       beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
       afterEach(() => { warn.mockRestore(); });
-      const warned = (frag: string) => warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes(frag));
+      const warned = (frag: string) => warn.mock.calls.map((c: unknown[]) => String(c[0])).some((l: string) => l.includes(frag));
 
       it('a refused record stops exactly the attempted body through the drain as unrecorded, and says so', async () => {
         await failing();
