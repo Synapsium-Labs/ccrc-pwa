@@ -6,11 +6,11 @@
 // `watch.ts` owns one of these and calls `sweep()` from its tick, never awaited. The server never reaches the test box
 // itself: the fleet agent does, so it sees what the wrapper sees (spec §2.7).
 import { TESTBOX_ADMIN_SUBS, type TestboxActState, type TestboxAdminStatus } from '../../shared/testbox-admin.js';
-import { actorOf, knownFleetIdentity } from './accounts/audit.js';
+import { actorOf, knownFleetIdentity, type AccountActor } from './accounts/audit.js';
 import type { Deps } from './deps.js';
 import type { MeasuredRead, TestboxSyncAsked } from './io.js';
-import { runsLogDates, testboxBlock, type RunsLogRead, type TestboxAnswer, type TestboxBlock } from './testbox.js';
-import { readAdminStatus } from './testboxAdmin.js';
+import { runsLogDates, testboxBlock, toolsSyncNeedsHome, type RunsLogRead, type TestboxAnswer, type TestboxBlock } from './testbox.js';
+import { decisionOf, readAdminStatus } from './testboxAdmin.js';
 
 /** `CCRC_TESTBOX_POLL`'s default (`ccd/testbox-knobs`), the lane's interval only until an answer carries the setting. */
 export const TESTBOX_POLL_DEFAULT_MS = 30_000;
@@ -121,11 +121,28 @@ export class TestboxLane {
   }
 
   /** The card's **Bring tools up to date** and the update lane's signal (spec §2.7, §2.10): the op's one write, then
-   *  a fresh pass so the block shows the sync. */
-  async toolsSync(): Promise<TestboxSyncAsked> {
+   *  a fresh pass so the block shows the sync. A box whose last sync died for want of a HOME (`toolsSyncNeedsHome`, the
+   *  decision; stale-tree-recovery-over-admin-lane) first gets the admin lane's `tools-home`, recorded as a repair by
+   *  `caller`, the session or the box token the route measured (box-token-runs-fixed-repair; the server's own actor only
+   *  for a caller that names none). Its answer, whatever it is, never stops the sync. */
+  async toolsSync(caller: AccountActor = SERVER_ACTOR): Promise<TestboxSyncAsked> {
+    const d = this.deps();
+    if (d.testboxAdmin !== undefined && toolsSyncNeedsHome(this.held)) await this.toolsHome(d, d.testboxAdmin, caller);
     let r: TestboxSyncAsked;
     try { r = await this.deps().io.testboxToolsSync(); } catch { r = { ok: false, reason: 'unanswered' }; }
     void this.sweep(true);
     return r;
+  }
+
+  /** `tools-home` once, and its ledger row by `caller` (a short act: no act id). A `kept` answer changed nothing on the box, so
+   *  it writes no row (review 3223 F3): a repeat call never adds what reads as a second repair. */
+  private async toolsHome(d: TestboxLaneDeps, ops: NonNullable<TestboxLaneDeps['testboxAdmin']>, caller: AccountActor): Promise<void> {
+    const ran = await ops.run('tools-home', {}).catch(() => ({ kind: 'lost' as const }));
+    const decided = decisionOf(ran);
+    if (decided.kind === 'ok' && decided.json['home'] === 'kept') return;
+    const act = TESTBOX_ADMIN_SUBS['tools-home'].act;
+    const outcome = decided.kind === 'ok' ? { outcome: 'ok' as const } : { outcome: decided.audit, code: decided.code };
+    if (act !== null) d.testboxAudit?.write({ act, ...outcome, fleetIdentity: knownFleetIdentity(d.fleetIdentity), actor: caller });
+    if (decided.kind !== 'ok') console.warn(`ccrc-server: testbox: tools-home did not apply (${decided.code}) — the tool sync is sent anyway`);
   }
 }

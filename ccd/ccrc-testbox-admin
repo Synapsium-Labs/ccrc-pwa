@@ -61,13 +61,14 @@ TBA_CANCEL="$TBA_DIR/testbox-admin.cancel"
 TBA_ROWS="$TBA_DIR/testbox-rows"
 
 # ── the closed vocabularies: shared/testbox-admin.ts, word for word ────────────────────────────────────────────
-TBA_SUBS=(status read key probe pin preflight connect settings-fleet settings-box cancel parity repair apply-release disconnect key-rotate key-revoke)
+TBA_SUBS=(status read key probe pin preflight connect settings-fleet settings-box cancel parity repair apply-release disconnect key-rotate key-revoke
+  tools-home)
 TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refused host-key-unknown host-key-changed
   fingerprint-mismatch from-mismatch no-root no-sudo os-mismatch systemd-too-old no-nftables not-xfs-reflink
   address-not-ip no-egress other-release verify-failed copy-failed box-value-refused install-refused install-failed
   pair-failed status-not-ok pairing-keys-in-ccrc-env key-in-ccrc-env runs-in-progress idle-deadline cancelled
   gh-signed-out parity-differs not-connected box-side-skipped unpair-failed address-not-private box-already-set interrupted
-  new-key-refused old-line-kept revoked-box-skipped revoked-unpair-failed)
+  new-key-refused old-line-kept revoked-box-skipped revoked-unpair-failed tools-home-failed)
 # The long subs whose parent asks them for a precheck before it detaches (`settings-box` only with --when-idle).
 TBA_PRECHECK_SUBS=(connect settings-box repair apply-release parity)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
@@ -108,7 +109,7 @@ _tba_phases() {   # <sub> -> its phases in order, one per line; nothing for a su
 # value, resets one to its default, or both).
 _tba_fields() {   # <sub>
   case "${1-}" in
-    status|read|probe|preflight|cancel|repair|apply-release|key-rotate|key-revoke) ;;
+    status|read|probe|preflight|cancel|repair|apply-release|key-rotate|key-revoke|tools-home) ;;
     key) printf '%s\n' '--address address 1 0' '--port port 0 0' '--login user 0 0' '--source address 0 0' ;;
     pin) printf '%s\n' '--fingerprint fingerprint 1 0' ;;
     connect) printf '%s\n' '--set setting-box 1 1' '--repo repo 1 1' ;;
@@ -1986,6 +1987,41 @@ _tba_run_apply-release() {
   [ "$rc" = 0 ] || { _tba_log "apply-release: failed ($TBA_CODE)"; return 1; }
   ( _tba_read_snapshot ) >/dev/null 2>&1 || :
   _tba_log "apply-release: ok"
+}
+
+# ── tools-home (stale-tree-recovery-over-admin-lane, testbox-sync-home) ───────────────────────────────────────────────────
+# The box's tool sync runs from its installed tree, in a unit that is root's with no User=, so the system manager gives it no
+# HOME. A tree whose tool sync predates `_tbt_home` (deploy/testbox/bin/tools-sync#@tbt-home) then dies at every release step
+# (`ccd/ccrc: line 103: HOME: unbound variable`), and the release it cannot fetch is the one that fixes it, so the box cannot
+# heal itself; only the fleet host reaches in. This sub writes ONE runtime drop-in for the tools unit, `Environment=HOME=%h`
+# (systemd documents the system manager's `%h` as `/root`, which is root's row in the password database, the home `_tbt_home`
+# takes, wherever that row says `/root`), and reloads the system manager. It is under /run, so a reboot removes it, and it touches nothing the installer wrote under /etc. The next
+# tool sync runs the installed script with that HOME, fetches and switches the release, and from then on the new tree's own
+# `_tbt_home` gives the script a HOME without it. Short (two box calls) and under the lock, so it never runs beside a long act.
+# A drop-in that already holds these lines is kept (`"home":"kept"`, else `"home":"written"`), and the system manager is
+# reloaded either way (review 3223 F1): the file is placed before the reload, so a reload that failed once left it in place
+# and unloaded, and the next call must load it rather than call it done.
+TBA_TOOLS_HOME_DROPIN=/run/systemd/system/ccrc-testbox-tools.service.d/60-ccrc-testbox-home.conf
+# One line: `_tba_ssh` quotes each word with `%q`, and a newline would reach the box's login shell as bash's `$'...'`.
+# shellcheck disable=SC2016  # expanded by the box's sh, not here
+TBA_TOOLS_HOME_SH='set -e; f=$1; d=${f%/*}; shift; want=$(printf "%s\n" "$@"); said=kept; if [ ! -f "$f" ] || [ "$(cat -- "$f")" != "$want" ]; then mkdir -p -- "$d"; printf "%s\n" "$want" >"$f.tmp"; chmod 0644 "$f.tmp"; mv -f -- "$f.tmp" "$f"; said=written; fi; systemctl daemon-reload; echo "$said"'
+_tba_run_tools-home() {
+  local said
+  _tba_short_lock || return 0
+  _tba_ra_precheck || { _tba_refuse "$TBA_CODE"; return 0; }
+  _tba_log "tools-home: begins"
+  _tba_cx_out sh -c "$TBA_TOOLS_HOME_SH" sh "$TBA_TOOLS_HOME_DROPIN" \
+    '# Written by ccrc testbox-admin tools-home (testbox-sync-home): the tool sync gets a HOME; a reboot removes it.' \
+    '[Service]' 'Environment=HOME=%h'
+  said="${CX_OUT%$'\n'}"
+  if [ "$CX_RC" != 0 ] || { [ "$said" != written ] && [ "$said" != kept ]; }; then
+    _tba_cx_fail "$CX_RC" tools-home-failed
+    _tba_log "tools-home: failed ($TBA_CODE)"
+    _tba_refuse "$TBA_CODE"
+    return 0
+  fi
+  _tba_log "tools-home: ok ($said)"
+  _tba_ok "\"home\":\"$said\""
 }
 
 # ── parity [--pr=<n>...] ───────────────────────────────────────────────────────────────────────────────────────────────

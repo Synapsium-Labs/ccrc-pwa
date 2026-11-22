@@ -315,7 +315,8 @@ function nodeTarball(dir: string, version: string, log: string): Buffer {
   return readFileSync(out);
 }
 
-/** npm's registry tarball: `package/bin/npm-cli.js` records its argv and, for `ci`, lays out a `node_modules`. */
+/** npm's registry tarball: `package/bin/npm-cli.js` records its argv and the HOME it was given (which its npmrc's
+ *  `cache=${HOME}/.npm` reads) and, for `ci`, lays out a `node_modules`. */
 function npmTarball(dir: string, version: string, log: string): Buffer {
   const pkg = path.join(dir, `npmpkg-${version}`, 'package');
   mkdirSync(path.join(pkg, 'bin'), { recursive: true });
@@ -323,6 +324,7 @@ function npmTarball(dir: string, version: string, log: string): Buffer {
   const cli = `#!/usr/bin/env node
 const fs = require('fs');
 fs.appendFileSync(${JSON.stringify(path.join(log, 'npm-argv'))}, process.cwd() + '\\t' + process.argv.slice(2).join(' ') + '\\n');
+fs.appendFileSync(${JSON.stringify(path.join(log, 'npm-home'))}, (process.env.HOME ?? '-') + '\\n');
 if (process.argv[2] === 'ci') fs.mkdirSync('node_modules/.fixture-ci', { recursive: true });
 `;
   writeFileSync(path.join(pkg, 'bin', 'npm-cli.js'), cli, { mode: 0o755 });
@@ -493,9 +495,9 @@ function writeToolsSpec(b: Box, f: ToolsSync, keep: string[] = []): void {
 }
 interface Ran { code: number; stdout: string; stderr: string }
 /** A child run without blocking this process, whose fixture servers must answer it. */
-function exec(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<Ran> {
+function exec(file: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string): Promise<Ran> {
   return new Promise((resolve, reject) => {
-    const c = spawn(file, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const c = spawn(file, args, { env, stdio: ['ignore', 'pipe', 'pipe'], ...(cwd === undefined ? {} : { cwd }) });
     let stdout = '';
     let stderr = '';
     c.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -517,7 +519,7 @@ const npmOfSet = (setDir: string): string => npmVersionAt(path.dirname(path.dirn
 const report = (b: Box): ReturnType<typeof parseReport> => parseReport(existsSync(path.join(b.tools, 'sync-report')) ? readFileSync(path.join(b.tools, 'sync-report'), 'utf8') : null);
 const resetLogs = (): void => {
   for (const h of [W.hostA, W.hostB, W.hostC, W.dl, W.registry]) h.log.length = 0;
-  for (const f of ['verify-argv', 'verify-mode', 'npm-argv']) rmSync(path.join(W.log, f), { force: true });
+  for (const f of ['verify-argv', 'verify-mode', 'npm-argv', 'npm-home']) rmSync(path.join(W.log, f), { force: true });
 };
 const verifyMode = (m: string): void => writeFileSync(path.join(W.log, 'verify-mode'), `${m}\n`);
 const builtSha = (b: Box): string => (JSON.parse(readFileSync(path.join(b.tools, 'release', 'installed', 'build.json'), 'utf8')) as { sha: string }).sha;
@@ -865,6 +867,76 @@ describe('the release base is the box file\'s (D-7457)', () => {
     resetLogs();
     await sync(b);
     expect(W.hostC.log.length, 'the environment\'s host was contacted').toBeGreaterThan(0);
+  });
+});
+
+// The tools unit is root's and names no User=, and the system manager sets HOME only for a unit with User=
+// (systemd.exec(5)), so the script starts with no HOME. Every row above passes one. These rows run the script in the
+// unit's own environment. The password database is a fixture `getent` on PATH that answers from a file, so no row
+// reads the test user's real home. CURL_HOME keeps curl on root's fixture .curlrc, whatever HOME the script ends with.
+describe('the tools unit gives the script no HOME (testbox-sync-home)', () => {
+  const unitEnv = (b: Box, passwdHome: string | null): NodeJS.ProcessEnv => {
+    const fx = path.dirname(b.root);
+    const row = path.join(fx, 'passwd-row');
+    stub(path.join(b.bin, 'getent'), `#!/bin/sh\n[ "$1" = passwd ] && [ "$2" = '${UID}' ] && [ -f '${row}' ] && cat '${row}'\n`);
+    if (passwdHome !== null) writeFileSync(row, `root:x:${UID}:${UID}:root:${passwdHome}:/bin/bash\n`);
+    const env: NodeJS.ProcessEnv = { ...b.env, CURL_HOME: b.home };
+    delete env['HOME'];
+    return env;
+  };
+
+  it('the sync takes the running user\'s home from the password database, fetches the release and switches it (it died: HOME: unbound variable)', async () => {
+    const b = makeBox();
+    const env = unitEnv(b, b.home);
+    writeToolsSpec(b, frameOf(NEW_TAG));
+    resetLogs();
+    const r = await exec(b.script, [b.spec], env);
+    expect(r.stderr).not.toMatch(/unbound variable/);
+    expect(r.code, r.stderr).toBe(0);
+    expect(W.hostA.log.length).toBe(3);
+    expect(W.hostB.log, 'root\'s home ccrc.env was read').toEqual([]);
+    expect(W.hostC.log, 'the unit\'s environment was read').toEqual([]);
+    expect(linkOf(path.join(b.tools, 'release', 'installed'))).toBe(NEW_TAG);
+    expect(report(b).result).toBe('ok');
+    // npm (its own version's install, and `npm ci` for the release's dependencies) is given that home, exported.
+    const homes = readFileSync(path.join(W.log, 'npm-home'), 'utf8').trim().split('\n');
+    expect(homes.length).toBeGreaterThan(0);
+    expect(new Set(homes)).toEqual(new Set([b.home]));
+  });
+
+  it.each([
+    ['names no home', null],
+    // Relative to the script's working directory, where it names a directory: refused because it is not absolute.
+    ['names a relative home', 'home'],
+    ['names a home that is not a directory', '/nonexistent/ccrc-testbox-home'],
+  ])('a password database that %s fails the sync (home: ...) before anything is fetched', async (_n, h) => {
+    const b = makeBox();
+    const env = unitEnv(b, h);
+    writeToolsSpec(b, frameOf(NEW_TAG));
+    resetLogs();
+    const r = await exec(b.script, [b.spec], env, path.dirname(b.root));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/tool sync failed \(home: HOME is not set, and the password database names no usable home for uid /);
+    expect(report(b)).toMatchObject({ result: 'failed', tool: 'home' });
+    expectUnchanged(b);
+    expect([W.hostA.log, W.hostB.log, W.hostC.log, W.dl.log, W.registry.log]).toEqual([[], [], [], [], []]);
+  });
+
+  // Review 3223 F6: a HOME the environment gives is held to the same rule as one the password database gives.
+  it.each([
+    ['relative', 'home'],
+    ['not a directory', '/nonexistent/ccrc-testbox-home'],
+  ])('a HOME from the environment that is %s fails the sync (home: ...) before anything is fetched', async (_n, h) => {
+    const b = makeBox();
+    const env = { ...unitEnv(b, b.home), HOME: h };
+    writeToolsSpec(b, frameOf(NEW_TAG));
+    resetLogs();
+    const r = await exec(b.script, [b.spec], env, path.dirname(b.root));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/tool sync failed \(home: the environment's HOME is not an absolute directory\)/);
+    expect(report(b)).toMatchObject({ result: 'failed', tool: 'home' });
+    expectUnchanged(b);
+    expect([W.hostA.log, W.hostB.log, W.hostC.log, W.dl.log, W.registry.log]).toEqual([[], [], [], [], []]);
   });
 });
 
