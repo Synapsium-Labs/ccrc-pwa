@@ -120,7 +120,8 @@ canary, and neither recorded a cause. The other Codex lane (lane-a) did not move
   probe's clock seam (`CCRC_MODELS_NOW`, the same one the op reads):
   - the two-hour flap: the record follows each sighting and is gone on the third, with no move and no history entry;
   - a missed hour restarts the run;
-  - a direct lane's first hour after a drop names the refused lowering beside the fallback, and lowers the next hour.
+  - a direct lane whose dropped catalogue an earlier hour's probe left on disk (an older build's, whose materialise
+    refused the level) names the refused lowering beside the fallback, and lowers the next hour.
 - **Mutation rows** (the build). Each of 24 rows edited one guard in place, ran its named cases, and restored the file
   from a saved copy. Every row was killed.
 - **Fix round 1's guards were not all pinned** (review 2999 N3, A-4). The reviewer's runs killed most of them, but four
