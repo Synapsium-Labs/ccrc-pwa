@@ -24,7 +24,7 @@ import {
   confirmedCandidate, confirmedWorkspaceName, overlordLinkCallBody, parseLinkingWrite, parseTeamConfirm, parseTeamSuggestion,
   suggesterVerdict, suggestionReasonVerdict, teamPairVerdict, workspaceAfterWrite, writeReadsStore,
 } from './policy.js';
-import { routableSlots, routableTeams, routeProjectTeam } from '../linear/route.js';
+import { measuredProjectTeam, measuredTeamRoutes, routableSlots, routableTeams, routeProjectTeam } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
 
 export interface LinkingRouteOpts {
@@ -218,7 +218,9 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
    * token first (never the cookie), then the body's shape, then THE GATE (every step of the order: the Overlord alone, at the
    * `full` rung; below it `rung-below`, any other session `not-the-overlord`), then the store, the row (`no-project`, 404), the
    * pass's own rule (`autoLinkAllowed`: a key stored or the operator's decision is `team-set`), the pair among the candidates
-   * (`team-unknown`), the pair in the LIVE Linear store (unreadable `unavailable`; `teamPairVerdict`'s `team-unknown` or `team-ambiguous`), then
+   * (`team-unknown`), the pair in the LIVE Linear store, measured (`teamPairVerdict`: the store, or a workspace the pair depends on,
+   * unreadable is `unavailable`; no workspace connected `not-configured`; every workspace read and none holding it `team-unknown`;
+   * a key two hold with none named `team-ambiguous`), then
    * the call and the link in ONE transaction (`linkTeamOverlord`), whose rule refuses a row that changed meanwhile (`team-set`).
    * The big call is announced as the call record's route announces one (`announceBigCall`). The operator overturns it with their
    * own write, which makes the key `manual`. The 200 is the link and the call's id only, never the project's row.
@@ -249,16 +251,17 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
       const candidates = row.teamCandidates ?? [];
       const chosen = confirmedCandidate(candidates, c.team, c.workspace);
       if (chosen === null) return refuseRoute(reply, 'team-unknown', { detail: 'the pair is not one of the project\'s current candidates' });
-      // The pair re-checked against the LIVE Linear store (final review I3): a store that cannot be read is `unavailable`; a slot
-      // that no longer holds the key `team-unknown`; a candidate stored with no workspace whose key two workspaces hold
-      // `team-ambiguous` (`teamPairVerdict`). Nothing is written on a refusal.
+      // The pair re-checked against the LIVE Linear store (final review I3), measured: a store, or a workspace the pair depends on,
+      // that cannot be read is `unavailable`; no workspace connected `not-configured`; a slot that no longer holds the key, every
+      // workspace read, `team-unknown`; a candidate stored with no workspace whose key two workspaces hold `team-ambiguous`
+      // (`teamPairVerdict`). Nothing is written on a refusal.
       let linear: LinearStoreRead | null = null;
       if (opts.readLinearStore !== undefined) {
         try { linear = await opts.readLinearStore(); } catch { linear = null; }
       }
       if (linear === null || linear.kind !== 'listed') return refuseRoute(reply, 'unavailable', { detail: 'the Linear store could not be read' });
-      const pair = teamPairVerdict(routeProjectTeam(routableSlots(linear), { teamKey: chosen.key, workspaceId: chosen.workspaceId ?? null }));
-      if (!pair.ok) return refuseRoute(reply, pair.error, { detail: 'the pair is not held in the connected Linear workspaces now' });
+      const pair = teamPairVerdict(measuredProjectTeam(measuredTeamRoutes(linear), { teamKey: chosen.key, workspaceId: chosen.workspaceId ?? null }));
+      if (!pair.ok) return refuseRoute(reply, pair.error, { detail: pair.detail });
       const at = now();
       const call = callBodyOf(overlordLinkCallBody(c.project, chosen, candidates), at);
       if (!call.ok) return refuseRoute(reply, 'write-failed', { detail: call.detail });

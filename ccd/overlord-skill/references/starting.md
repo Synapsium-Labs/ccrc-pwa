@@ -65,11 +65,13 @@ W1a with no word, and they answer while a generation finishes starting, so they 
 the door answers `rung-below`: leave the candidate for the operator's tap on the Project linking card in Settings, and name
 it in your decision brief, never by another route. After the gate, the door's own refusals are these. `team-set`: the
 project has a key or the operator decided it, so drop the candidate. `team-unknown`: its detail says which of two causes.
-Either the pair is not a current candidate, so there is nothing to confirm and you drop it; or it is not held in a
-workspace the door could read now, and the candidate stays on the card, so leave it for the operator, name it in your
-brief, and do not retry it in a loop. `team-ambiguous`: two workspaces hold the key, so leave it for the operator.
-`no-project`: the server has no such project, so drop it. `unavailable`: the Linear store could not be read, so try again
-on a later turn. `write-failed`: the store write failed, so bring it to the operator.
+Either the pair is not a current candidate, so there is nothing to confirm and you drop it; or it is not held in any
+connected workspace now, though every one was read, and the candidate stays on the card, so leave it for the operator, name
+it in your brief, and do not retry it in a loop. `team-ambiguous`: two workspaces hold the key, so leave it for the operator.
+`no-project`: the server has no such project, so drop it. `unavailable`: the Linear store, or a workspace the pair depends
+on, could not be read, so try once more on a later turn, then tell the operator. `not-configured`: no Linear workspace is
+connected, so do not retry: leave the candidate for the operator and tell them in your brief that no workspace is connected.
+`write-failed`: the store write failed, so bring it to the operator.
 
 ## The refusals
 

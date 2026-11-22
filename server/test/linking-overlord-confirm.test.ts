@@ -358,12 +358,12 @@ describe('characterization: unread and unconnected workspaces (w8-confirm-unmeas
     ['(a) held, unnamed', 'both', 'BBB', null, 200, WS_B],
     ['(b) held by none, named', 'lost-a', 'AAA', WS_A, 404, 'team-unknown'],
     ['(b) held by none, unnamed', 'lost-a', 'AAA', null, 404, 'team-unknown'],
-    ['(c) only possible slot unread, named', 'a-unread', 'AAA', WS_A, 404, 'team-unknown'],
-    ['(c) only possible slot unread, unnamed', 'a-unread', 'AAA', null, 404, 'team-unknown'],
-    ['(d) none connected, named', 'none', 'AAA', WS_A, 404, 'team-unknown'],
-    ['(d) none connected, unnamed', 'none', 'AAA', null, 404, 'team-unknown'],
+    ['(c) only possible slot unread, named', 'a-unread', 'AAA', WS_A, 503, 'unavailable'],
+    ['(c) only possible slot unread, unnamed', 'a-unread', 'AAA', null, 503, 'unavailable'],
+    ['(d) none connected, named', 'none', 'AAA', WS_A, 501, 'not-configured'],
+    ['(d) none connected, unnamed', 'none', 'AAA', null, 501, 'not-configured'],
     ['(e) one holder, another unread, named', 'b-unread', 'AAA', WS_A, 200, WS_A],
-    ['(e) one holder, another unread, unnamed', 'b-unread', 'AAA', null, 200, WS_A],
+    ['(e) one holder, another unread, unnamed', 'b-unread', 'AAA', null, 503, 'unavailable'],
   ];
   for (const [name, linear, team, workspace, status, expected] of CASES) {
     it(name, async () => {

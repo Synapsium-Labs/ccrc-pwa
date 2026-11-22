@@ -722,8 +722,8 @@ describe('characterization: unread and unconnected workspaces (w8-confirm-unmeas
     ['(b) held by none, unnamed', 'readable', 'ZZZ', null, 404, 'team-unknown'],
     ['(c) only slot unread, named', 'only-unread', 'AAA', WS_C, 404, 'team-unknown'],
     ['(c) only slot unread, unnamed', 'only-unread', 'AAA', null, 404, 'team-unknown'],
-    ['(d) none connected, named', 'none', 'AAA', WS_A, 404, 'team-unknown'],
-    ['(d) none connected, unnamed', 'none', 'AAA', null, 404, 'team-unknown'],
+    ['(d) none connected, named', 'none', 'AAA', WS_A, 501, 'not-configured'],
+    ['(d) none connected, unnamed', 'none', 'AAA', null, 501, 'not-configured'],
     ['(e) one holder, another unread, named', 'one-readable-one-unread', 'AAA', WS_A, 200, WS_A],
     ['(e) one holder, another unread, unnamed', 'one-readable-one-unread', 'AAA', null, 200, WS_A],
   ];

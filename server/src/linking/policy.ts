@@ -7,7 +7,7 @@ import type {
 } from '../../../shared/linking.js';
 import { TEAM_SUGGESTION_WHY_MAX, teamEvidenceClause } from '../../../shared/linking.js';
 import { CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_TEXT_MAX, CALL_WHY_MAX } from '../coord/coordCalls.js';
-import type { LinearRoute } from '../linear/route.js';
+import { measuredProjectTeam, type LinearRoute, type TeamRoutes } from '../linear/route.js';
 import { claimsOpenRunOf } from '../roleOf.js';
 import { isWsProject } from '../../../shared/slug.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
@@ -131,12 +131,19 @@ export function confirmedCandidate(candidates: readonly TeamCandidateWire[], tea
   return candidates.find((c) => c.key === team && (c.workspaceId ?? null) === workspace) ?? null;
 }
 
-/** D-8808 (final review I2, I3): what a (key, workspace) pair's route through the LIVE Linear store (`routeProjectTeam`) means for a
- *  suggestion or a confirm: the workspace of the one slot that holds it; `team-ambiguous` for a key two connected workspaces hold
- *  with no workspace named (storing it with none would resolve nowhere); every other refusal `team-unknown`. */
-export function teamPairVerdict(route: LinearRoute): { ok: true; workspaceId: string } | { ok: false; error: 'team-unknown' | 'team-ambiguous' } {
+/** D-8808 (final review I2, I3), D-8809: what a (key, workspace) pair's MEASURED route through the live Linear store
+ *  (`measuredProjectTeam`) means for a suggestion or a confirm: the workspace of the one slot that holds it; `unavailable` when a
+ *  slot the answer depends on could not be read (never `team-unknown`: the pair may well be held there); `team-ambiguous` for a key
+ *  two connected workspaces hold with no workspace named (storing it with none would resolve nowhere); `not-configured` when no
+ *  Linear workspace is connected at all; every other refusal `team-unknown` (every workspace was read, none holds the pair). A
+ *  refusal carries its fixed `detail`, decided here. */
+export function teamPairVerdict(route: LinearRoute | { kind: 'unmeasured' }):
+  { ok: true; workspaceId: string } | { ok: false; error: 'team-unknown' | 'team-ambiguous' | 'unavailable' | 'not-configured'; detail: string } {
   if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId };
-  return { ok: false, error: route.word === 'team-ambiguous' ? 'team-ambiguous' : 'team-unknown' };
+  if (route.kind === 'unmeasured') return { ok: false, error: 'unavailable', detail: 'a Linear workspace the pair depends on could not be read' };
+  if (route.word === 'team-ambiguous') return { ok: false, error: 'team-ambiguous', detail: 'more than one connected Linear workspace holds the key' };
+  if (route.word === 'not-configured') return { ok: false, error: 'not-configured', detail: 'no Linear workspace is connected' };
+  return { ok: false, error: 'team-unknown', detail: 'the pair is not held in the connected Linear workspaces now' };
 }
 
 /** One line of at most `max` characters: whitespace runs folded, a longer text cut with an ellipsis. */
@@ -166,6 +173,15 @@ export function overlordLinkCallBody(project: string, chosen: TeamCandidateWire,
 /** D-8808: what the Linear store answers for a team key in a workspace (null: in no named one), through the one resolver
  *  (`routeProjectTeam`), or `unmeasured` when the store could not be read. */
 export type PairRoute = (teamKey: string, workspace: string | null) => LinearRoute | 'unmeasured';
+
+/** D-8808, D-8809: the measured route over one store reading (`measuredTeamRoutes`; null when the store could not be listed):
+ *  `unmeasured` when a slot the answer depends on cannot be read (`measuredProjectTeam`'s rule), else the route. */
+export function measuredPairRoute(routes: TeamRoutes | null): PairRoute {
+  return (teamKey, workspace) => {
+    const r = measuredProjectTeam(routes, { teamKey, workspaceId: workspace });
+    return r.kind === 'unmeasured' ? 'unmeasured' : r;
+  };
+}
 
 /** D-8808 (review 2971 F5): whether the operator's write must read the Linear store to decide its workspace. Never for a cleared
  *  key, nor for the stored key sent back with no workspace named (it keeps what is stored); every other write with a key does. */
