@@ -2254,12 +2254,14 @@ describe('archived footer row', () => {
       expect(screen.getByRole('button', { name: /^work no session owns · 1$/i })).toBeInTheDocument();
     });
 
-    it('both: one row says both, in one line', () => {
+    // HF2 (review 2988 F8): "one row", not one line: the row draws its halves as two boxes joined by a `·` after a no-break
+    // space, so a narrow row breaks between them (measured in a real Chrome, `archive-unowned.browser.test.ts`).
+    it('both: one row says both, its halves joined by " · "', () => {
       const store = makeStore();
       renderFleet(<FleetScreen store={store} />);
       seed(store, { conn: 'open', sessions: archivedTwo, delegation: frame(owned) });
       expect(screen.getAllByRole('button', { name: /^archived on disk/i })).toHaveLength(1);
-      expect(screen.getByRole('button', { name: /^archived on disk · 2 · 2\.3 gb · work no session owns · 2$/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^archived on disk · 2 · 2\.3 gb\u00A0· work no session owns · 2$/i })).toBeInTheDocument();
     });
 
     it('draws nothing for neither, for no frame, and for a lease a listed session owns', () => {
@@ -2337,7 +2339,7 @@ describe('the head count', () => {
       sessions: [session({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, bucket: 'dead' })],
     });
 
-    expect(screen.getByText('1 session')).toBeInTheDocument(); // not '1 session · 1 waiting'
+    expect(screen.getByText('0 sessions')).toBeInTheDocument(); // an exited session is not counted, and nothing waits
     expect(screen.getByText('Exited')).toBeInTheDocument();
     expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText(/waiting/)).not.toBeInTheDocument();

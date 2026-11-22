@@ -9,7 +9,7 @@ import { fingerprint, recording, type Recorded } from './characterise';
 import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
 import { activity, frame } from './delegationFixture';
-import { activitiesStartedBy, readDelegation } from '../src/fleet/delegationWords';
+import { readDelegation } from '../src/fleet/delegationWords';
 
 /** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
 const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
@@ -300,10 +300,10 @@ describe('fleetTree and the delegation frame (delegation broker wave 4, D-8782)'
       activity({ activityId: 'a-arch', parentId: 'coord-arch' }),
       activity({ activityId: 'a-rel', parentId: 'w-rel' }),
     ] });
-    // Those are no row on that card (no offline group either); the frame still names them for their parents' details.
+    // Those are no row on that card (no offline group either). The frame still names them; since H3 (D-8875) no page draws a
+    // recorded entry (the session panel's Helpers section is its one list).
     expect(ids(fleetTreeOf([coordA, arch, rel], [], [], {})).flatMap(([, rows]) => rows)).toEqual(['coord-a']);
-    expect(activitiesStartedBy('coord-arch', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-arch']);
-    expect(activitiesStartedBy('w-rel', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-rel']);
+    expect(readDelegation(w).activities.map((a) => a.activityId)).toEqual(['a-late', 'a-arch', 'a-rel']);
   });
 });
 

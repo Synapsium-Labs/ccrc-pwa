@@ -662,7 +662,7 @@ describe('every strip head keeps the height it had on main — the whole chrome,
     ['mail-strip.css', '.mail-strip .mail-strip-head', mailStripCss],
     ['task-strip.css', '.task-head', readUi('components', 'task-strip.css')],
     ['fleet.css', '.hotfiles-head', fleetCss],
-    ['workflow-strip.css', '.workflow-strip .workflow-head', readUi('components', 'workflow-strip.css')],
+    ['workflow-strip.css', '.helpers-strip .helpers-head', readUi('components', 'workflow-strip.css')],
   ];
 
   // THE FLOOR IS CHOSEN IN ONE COMPONENT, PER STRIP. All three heads declared

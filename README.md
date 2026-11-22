@@ -1501,7 +1501,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the ninety-six machine lanes the
+liveness gate reads the shipped sha out of it), the ninety-nine machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1515,7 +1515,12 @@ the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`
 (`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
 (`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`), the replay quiz's record door
 (`POST /api/continuity/quiz-runs`, which the operator's `ccrc quiz-record` reaches through `ccrc-api` and which records a run
-as pending only; its rule door, `POST /api/continuity/quiz-runs/:id/rule`, is gated, behind a session and a step-up),
+as pending only; its rule door, `POST /api/continuity/quiz-runs/:id/rule`, is gated, behind a session and a step-up), the weekly
+unattended run's confirmation (`POST /api/continuity/quiz-runs/:id/confirm`, which `ccrc quiz-record --confirm` reaches through
+`ccrc-api` and which confirms a recorded run when its record's single-use key and the sha its report printed match, and
+refuses otherwise) and its tick report
+(`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
+(`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -7825,7 +7830,8 @@ you need to reason about one.*
   `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
   route fields `poolset` and `acctorder`) and `lib/long-lived.sh` (the Overlord's ccd arms: the
   `keep-awake` verb's region) and `lib/door.sh` (the Overlord's door process: its registry directory's purge and its
-  program's pin check); `ccrc`, the box
+  program's pin check) and `lib/model-aliases.sh` (the model-class Anthropic arm: a lane's aliases and holds, the launch
+  marker and the model id the routing record carries); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -8594,6 +8600,7 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ~/.local/libexec/ccrc/lib/long-lived.sh   # its fifth library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-door.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-door.sh ~/.local/libexec/ccrc/lib/door.sh   # its sixth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ~/.local/libexec/ccrc/lib/model-aliases.sh   # its seventh library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-door-process.mjs ] || restore ~/ccrc-backups/<ts>/ccd-door-process.mjs ~/.local/libexec/ccrc/door-process.mjs   # the door program, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
@@ -8971,10 +8978,10 @@ These conventions carry more weight here than style:
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
   `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
-  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth, and `ccd/lib/door.sh` (the Overlord's door process) the sixth;
+  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth, and `ccd/lib/door.sh` (the Overlord's door process) the sixth, and `ccd/lib/model-aliases.sh` (the model-class Anthropic arm) the seventh;
   each is treated the same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install`,
   `__CCD_LIB_LEASE_SHA256=stamp-at-install`, `__CCD_LIB_POOLSET_SHA256=stamp-at-install` and
-  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` and `__CCD_LIB_DOOR_SHA256=stamp-at-install`; the body reads and checks all six before it evaluates any.
+  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` and `__CCD_LIB_DOOR_SHA256=stamp-at-install` and `__CCD_LIB_ALIASES_SHA256=stamp-at-install`; the body reads and checks all seven before it evaluates any.
   `ccd/door-process.mjs` (the Overlord's door program, a Node program: not a library, not a launcher) is installed beside the body at
   `~/.local/libexec/ccrc/door-process.mjs` (mode 644, not on `PATH`) and pinned the same way (`__CCD_DOOR_SHA256=stamp-at-install`, rendered from the
   installed bytes in the same run, like the redactor's two files); the updater's backup carries it as `ccd-door-process.mjs`.

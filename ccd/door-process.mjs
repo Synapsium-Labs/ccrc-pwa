@@ -191,7 +191,6 @@ export const DOOR_ONLY_TOOLS = Object.freeze({
   read: "starting.md's door table is the Overlord's; the read tool is the readers' one door, and the Overlord itself never calls it",
   probe: "starting.md's door table has no row for reading a probe round; the first line sends the Overlord to it",
   note_handover: "starting.md's door table has no row for the handover note, which the renewal asks for",
-  link_team: "starting.md's door table has no row for the Overlord's team link yet (D-8809); the skill's owner adds it",
 });
 
 /** Does `v` name an attribution field as a key, at any depth? */

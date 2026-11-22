@@ -56,21 +56,9 @@
   .chat-head .ref-chip-rail .chat-coord-goals {
     order: -1;
   }
-  /* D-7784 (review 1424 F2): the session's recorded entries, once opened. `.chat-facts` is `display: contents` here, so
-     the list is an item of this one sideways row, and the only one that may shrink: beside a full rail it shrank to
-     nothing. While it is open the rail wraps, as the desk's rail always does, so the list's own `flex-basis: 100%`
-     (chat.css) gives it a line of its own, the rail's whole width, under the chips: each row keeps its condition word
-     whole, and its note wraps inside that width rather than running on as one line. Closed, the rail is the one
-     sideways row it always was. (`SessionDetails`' `showEntries` brings the opened list into view.) */
-  .chat-head .ref-chip-rail:has(.sess-entries) {
-    flex-wrap: wrap;
-  }
-  .chat-head .ref-chip-rail .sess-entries .chat-fact {
-    white-space: normal;
-  }
-  /* D-8782 (review 2864 F6): the session's worktrees are the entries list's twin in this rail (the section's own
-     `flex-basis: 100%` is chat.css's): while they are drawn the rail wraps, so they take a line of their own, and their
-     heading and chips wrap inside it rather than running on as one line. */
+  /* D-8782 (review 2864 F6): the session's worktrees in this rail (the section's own `flex-basis: 100%` is chat.css's): while
+     they are drawn the rail wraps, so they take a line of their own, and their heading and chips wrap inside it rather than
+     running on as one line. (The recorded entries' list that shared this rule left the panel with H3, D-8875.) */
   .chat-head .ref-chip-rail:has(.sess-worktrees) {
     flex-wrap: wrap;
   }
@@ -80,6 +68,19 @@
   /* The rail's `> *` rule gives every item `flex: none`, which would size the section to its content: it takes the whole line. */
   .chat-head .ref-chip-rail .sess-worktrees {
     flex: 1 1 100%;
+  }
+  /* While it wraps, the rail is a block, not a sideways row (session helpers HF2, D-8877; review 3184 F1): each item and chip
+     is capped at the row's width and its text wraps inside, as at a desk, so nothing is wider than the rail. A chip wider
+     than the closed rail scrolled it to reach the door; with nothing left to scroll to, the open rail is back at its start,
+     and every line, the door's and each worktree path's, starts on the screen (measured: they sat 80 px left of it). */
+  .chat-head .ref-chip-rail:has(.sess-worktrees) > *,
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .chat-fact,
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .sess-meta > * {
+    max-width: 100%;
+    white-space: normal;
+  }
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .chat-coord {
+    flex-wrap: wrap;
   }
 }
 
@@ -100,6 +101,14 @@
   .chat-head .ref-chip-rail .status-line--coordinator,
   .chat-head .ref-chip-rail .status-line-name {
     max-width: none;
+  }
+  /* The wrapping rail (above) gives them the shared caps back. */
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .metachip,
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .status-line-name {
+    max-width: 100%;
+  }
+  .chat-head .ref-chip-rail:has(.sess-worktrees) .status-line--coordinator {
+    max-width: calc(100% - 8px - var(--sp-2));
   }
 }
 

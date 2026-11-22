@@ -104,7 +104,10 @@ export {
   type ToolResultEvent,
 } from './components/tool-card';
 export { TaskStrip, orderTasks, summarize } from './components/task-strip';
-export { WorkflowStrip, formatElapsed, formatTokens, workflowFacts, workflowHeadline } from './components/workflow-strip';
+export {
+  HelpersList, HelpersPanel, HelpersStrip, activityWords, finishedFacts, formatElapsed, formatTokens, mainFacts,
+  type HelperItem, type HelperReportView, type HelpersView,
+} from './components/workflow-strip';
 // `BuildLine` knows that a box whose version it cannot vouch for is the thing
 // to say loudly; it reads a `NodeWire[]` and nothing else.
 export { BuildLine } from './components/build-line';

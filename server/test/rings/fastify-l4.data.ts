@@ -29,7 +29,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/delegationBackfillRoutes.ts': { reason: "the one-time pass's door over the broker's unmeasured records: the dry run's GET and the pass's or undo's POST, session-gated (session helpers S2, D-8874)", since: '2026-11-21' },
   'server/src/coord/decisionModelRoutes.ts': { reason: "the operator's decision-model doors: the read, arm, off, ceiling and the key's PUT and DELETE (Overlord W2, decision model B)", since: '2026-11-17' },
   'server/src/operatorModel/nameListRoutes.ts': { reason: "the private-name list's upload door and status read (Overlord W2, private names B)", since: '2026-11-17' },
-  'server/src/continuity/quizRoutes.ts': { reason: "the replay quiz's record door and its rule door (Overlord W1a quiz record)", since: '2026-11-17' },
+  'server/src/continuity/quizRoutes.ts': { reason: "the replay quiz's record door and its rule door (Overlord W1a quiz record), and the weekly unattended run's confirm, status and Live doors (run 3212)", since: '2026-11-17' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
   'server/src/docs/hooks.ts': { reason: "the docs plugin's request and response hooks (L4 by its header)", since: '2026-10-20' },
   'server/src/token/routes.ts': { reason: "the box token's HTTP routes", since: '2026-10-20' },

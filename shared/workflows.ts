@@ -75,10 +75,6 @@ export interface WorkflowView {
   lastActivityAt?: number | null;
 }
 
-/** A finished row stays this long after its end, then drops off — Claude Code
- *  2.1.302's own `evictAfter = endTime + 30000`. */
-export const WORKFLOW_EVICT_MS = 30_000;
-
 /** The most agents one row carries on the wire; a run measured up to 629. */
 export const WORKFLOW_AGENTS_MAX = 120;
 
@@ -176,7 +172,9 @@ export interface HelperFrameMembers {
   readEvery?: { refreshed: number; of: number };
 }
 
-/** A finished Agent helper or workflow stays this long after its end time, folded (the coordinator's ruling on review 2861, F5). */
+/** A finished Agent helper or workflow stays this long after its end time, folded (the coordinator's ruling on review 2861, F5).
+ *  Since H2 (D-8872) it is the workflows' keep too: Claude Code's own 30 s (`WORKFLOW_EVICT_MS`) retired with its pins, and
+ *  `server/src/workflows/model.ts#isFinishedKept` is the one clock both arms ask. */
 export const HELPER_FINISHED_KEEP_MS = 600_000;
 /** The most finished rows kept per arm, the newest. */
 export const HELPER_KEPT_MAX = 20;
@@ -197,6 +195,10 @@ export const HELPER_LABEL_MAX = 64;
 export const HELPER_SUMMARY_MAX_BYTES = 200;
 /** A report is at most this many bytes, and a cut one says so. */
 export const HELPER_REPORT_MAX_BYTES = 16_384;
+/** What a cut report says under its text, with the cap in it, and the finished fold's label, with the keep's minutes in it:
+ *  each written once, from its constant, and handed to the strip by the PWA's words module (H2, review 3072 F12). */
+export const HELPER_CUT_NOTE = `The report was cut at ${HELPER_REPORT_MAX_BYTES / 1024} KiB.`;
+export const HELPER_FOLD_LABEL = `Finished · last ${HELPER_FINISHED_KEEP_MS / 60_000} min`;
 /** The most ids whose launch results and notifications the fold remembers, the oldest evicted first. */
 export const HELPER_FACTS_MAX = 256;
 /** A finished (kept) workflow carries at most this many agents, failed and running first. */
@@ -209,3 +211,14 @@ export const WORKFLOW_AGENT_TYPE = 'workflow-subagent';
  *  definition and its one guard (review 2961 F6; H1b, D-8862). The fact parser and the decision both read it, and an id that
  *  fails it is never a row. */
 export const isHelperId: (v: unknown) => v is string = isAgentId;
+
+/** The PWA asks for one finished helper's report over the session socket (H2, D-8872; spec §4.3, §8 Table 11, J10): reports
+ *  never ride the frame. It carries no `visible`, so an older server's parser (`visible` only) reads it as null and ignores
+ *  it. Parsed by `server/src/server.ts#asSessionClientMsg`; `id` must pass `isHelperId`. */
+export interface HelperReportRequest { type: 'helper-report'; id: string }
+
+/** The server's answer (`server/src/workflows/model.ts#reportAnswer`). `report` is null when no row the last reading drew
+ *  with `hasReport` has this id (an unknown id, or one evicted from the keep): never a stale or another helper's text. A
+ *  report is masked, then cut at `HELPER_REPORT_MAX_BYTES` at parse time, and `cut` says so. One reader:
+ *  `pwa/src/stores/session.ts#applySessionMsg`. */
+export interface HelperReportAnswer { type: 'helper-report'; id: string; report: string | null; cut: boolean }

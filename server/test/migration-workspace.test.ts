@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanMigRigs, entry, leaf, migRig, SLUG } from './migrationRig.js';
 import { seedSlot, WS } from './linearProxyRig.js';
+import type { LinearStoreRead } from '../src/linear/store.js';
 
 afterEach(cleanMigRigs);
 
@@ -160,6 +161,77 @@ describe('the console view is the project row\'s own', () => {
     r.db.prepare("UPDATE linear_migrations SET state = 'failed'").run();
     r.plan.insertMigration({ workspaceId: 'ws-gone-2', teamKey: 'QQQ', project: 'project-x', now: r.t.now });
     expect(await r.mig.stateOfProject({ teamKey: 'QQQ', workspaceId: null })).toMatchObject({ state: 'not-migrated' });
+  });
+});
+
+// F1 (D-8186, D-8808): a row whose owner or own workspace cannot be measured says so, never "Not migrated" (review 3087 F1, F4).
+describe('the console view when the routing is not measured', () => {
+  /** `record-unreadable` makes ONE workspace's team record unreadable (the other slots stay readable); `no-listing` fails the whole read. */
+  type Mode = { kind: 'ok' } | { kind: 'record-unreadable'; workspaceId: string } | { kind: 'no-listing' };
+  const OK: Mode = { kind: 'ok' };
+  const rigWith = async (mode: () => Mode): ReturnType<typeof migRig> => migRig({ routing: (store: LinearStoreRead): LinearStoreRead => {
+    const m = mode();
+    if (m.kind === 'no-listing') return { kind: 'unreadable', code: 'EIO' };
+    if (m.kind === 'record-unreadable' && store.kind === 'listed') {
+      return { ...store, slots: store.slots.map((s) => (s.id === m.workspaceId ? { ...s, record: { kind: 'unreadable', code: 'EIO' } } : s)) };
+    }
+    return store;
+  } });
+  /** project-b pinned to ws-b with team AAA, which ws-b holds; project-a keeps its row in ws-a. */
+  const withPinnedB = async (r: Awaited<ReturnType<typeof migRig>>): Promise<void> => {
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
+    r.db.prepare('INSERT INTO project_linking (project, teamKey, override, teamWorkspace) VALUES (?, ?, ?, ?)').run('project-b', 'AAA', 'private', WS.b.id);
+  };
+  it('an unpinned row with one slot record unreadable is unmeasured even when a migration exists for its key', async () => {
+    let mode: Mode = OK;
+    const r = await rigWith(() => mode);
+    r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toMatchObject({ state: 'migrating' });
+    mode = { kind: 'record-unreadable', workspaceId: WS.a.id };
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+  });
+  it('an unpinned row with no listing at all is unmeasured too', async () => {
+    const r = await rigWith(() => ({ kind: 'no-listing' }));
+    r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: null }, null)).toEqual({ state: 'unmeasured', at: null, itemId: null });
+  });
+  it('a pinned row outranked by an unpinned holder whose routing cannot be read is unmeasured, its own slot readable, even with a migration in its workspace', async () => {
+    let mode: Mode = OK;
+    const r = await rigWith(() => mode);
+    await withPinnedB(r);
+    r.db.prepare('UPDATE project_linking SET teamWorkspace = NULL WHERE project = ?').run('project-a');
+    r.plan.insertMigration({ workspaceId: WS.b.id, teamKey: 'AAA', project: 'project-b', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.b.id })).toMatchObject({ state: 'migrating' });
+    mode = { kind: 'record-unreadable', workspaceId: WS.a.id };            // only the OTHER workspace: the outranking row's routing is the cause
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.b.id })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+  });
+  it('a pinned top row whose own slot cannot be read, with no migration stored, is unmeasured, never "Not migrated" (Reshape would refuse it)', async () => {
+    let mode: Mode = OK;
+    const r = await rigWith(() => mode);
+    await withPinnedB(r);
+    pin(r, 'project-a', WS.a.id);                                          // project-b tops its key in ws-b: the owner is measured there
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.b.id })).toMatchObject({ state: 'not-migrated' });
+    mode = { kind: 'record-unreadable', workspaceId: WS.b.id };
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.b.id })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+    expect(await r.mig.workspaceOfProject('project-b')).toMatchObject({ ok: false, word: 'unreachable' });
+  });
+  it('a pinned top row with no listing at all is unmeasured, even with a migration stored', async () => {
+    const r = await rigWith(() => ({ kind: 'no-listing' }));
+    pin(r, 'project-a', WS.a.id);
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.a.id })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+    r.plan.insertMigration({ workspaceId: WS.a.id, teamKey: 'AAA', project: 'project-a', now: r.t.now });
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.a.id })).toEqual({ state: 'unmeasured', at: null, itemId: null });
+  });
+  it('a pinned top row needs only its own slot: another workspace unreadable leaves its state, and a row with no team key has none to measure', async () => {
+    let mode: Mode = OK;
+    const r = await rigWith(() => mode);
+    await withPinnedB(r);
+    pin(r, 'project-a', WS.a.id);
+    r.plan.insertMigration({ workspaceId: WS.b.id, teamKey: 'AAA', project: 'project-b', now: r.t.now });
+    mode = { kind: 'record-unreadable', workspaceId: WS.a.id };
+    expect(await r.mig.stateOfProject({ teamKey: 'AAA', workspaceId: WS.b.id })).toMatchObject({ state: 'migrating' });
+    expect(await r.mig.stateOfProject({ teamKey: null, workspaceId: null })).toMatchObject({ state: 'not-migrated' });
   });
 });
 

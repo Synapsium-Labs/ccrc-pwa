@@ -5,7 +5,7 @@
 // checks each connection's `hello` to the fleet agent's contract (`hello.ts`) against the service's token file, and
 // speaks `shared/testbox.ts`'s frames, `TESTBOX_PROTO`, never the fleet agent's `AgentReq` (D-7428). It imports
 // nothing of the fleet agent's (`agent/test/testbox-imports.test.ts`).
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { BlockList, isIP } from 'node:net';
 import os from 'node:os';
@@ -15,6 +15,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { isReleaseTag } from '../../../shared/api.js';
 import { readTestboxFrame } from '../../../shared/testbox.js';
 import { startedAsProgram } from './entry.js';
+import { CaptureDesk } from './captureDesk.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe, reflinkProbeDir } from './fsprobe.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from './hello.js';
@@ -175,6 +176,15 @@ export function probeDeskFor(cfg: TestboxConfig, runner: ProbeRunner | null, hom
   });
 }
 
+/** The build capture desk (spec 2026-11-22): the role and the fleet directories as the probe desk has them. The runner is
+ *  wired in PR 3 of the spec, so until then every capture is refused `no-runner`. */
+export function captureDeskFor(cfg: TestboxConfig, home: string = os.homedir()): CaptureDesk {
+  return new CaptureDesk({
+    role: probeRole(cfg.lines), runner: null, root: cfg.root, fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf,
+    buildPresent: (file) => { try { return statSync(file).isFile(); } catch { return false; } },
+  });
+}
+
 export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c), seams: ServiceSeams = {}): TestboxService {
   const facts = releaseFacts(release);
   const sysEnv = { PATH: SERVICE_PATH, LANG: 'C' };
@@ -198,7 +208,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
       settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths) => runTreeFiles(git, m, id, paths)),
       node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
-    probes: probeDeskFor(cfg, seams.probeRunner ?? null),
+    probes: probeDeskFor(cfg, seams.probeRunner ?? null), captures: captureDeskFor(cfg),
   });
   tools.serve({
     status: () => svc.status(), idle: () => svc.idle(), tick: () => svc.tick(), liveRuns: () => liveRunIds(svc.poolNow()),

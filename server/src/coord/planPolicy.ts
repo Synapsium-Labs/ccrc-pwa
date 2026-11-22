@@ -806,13 +806,14 @@ function rankHolders(holders: readonly HierarchyProjectFacts[]): HierarchyProjec
     ?? holders[0];
 }
 
-const teamHolders = (team: string, rows: readonly HierarchyProjectFacts[]) => rows.filter((r) => r.teamKey?.toUpperCase() === team.toUpperCase());
+export const teamHolders = (team: string, rows: readonly HierarchyProjectFacts[]) => rows.filter((r) => r.teamKey?.toUpperCase() === team.toUpperCase());
 const NO_HOLDER = { kind: 'none', reason: null } as const;
 type NoTeamOwner = { kind: 'none'; reason: 'team-ambiguous' | null };
 type ProjectPick = { kind: 'owner'; row: HierarchyProjectFacts } | NoTeamOwner | { kind: 'unmeasured'; possible: readonly HierarchyProjectFacts[] };
 
-/** The one workspace-qualified owner rule (D-8808). Unpinned holders can all join this workspace or none can;
- *  rank both possibilities before using a failed read. The candidates on `unmeasured` are for refusals only. */
+/** The one workspace-qualified owner rule (D-8808). A holder pinned to this workspace that outranks every row naming the key is the
+ *  owner whatever the routing says (a failed listing and an unreadable slot answer alike); the answer is unmeasured only when an
+ *  unpinned row that outranks it exists and its routing cannot be read. The candidates on `unmeasured` are for refusals only. */
 export function teamOwnerProject(team: string, rows: readonly HierarchyProjectFacts[], workspace: string, routes: TeamRoutes | null): ProjectPick {
   const holders = teamHolders(team, rows).filter((r) => r.workspaceId == null || r.workspaceId === workspace);
   const best = rankHolders(holders);
@@ -821,7 +822,6 @@ export function teamOwnerProject(team: string, rows: readonly HierarchyProjectFa
   const unmeasured = (): ProjectPick => ({ kind: 'unmeasured', possible: pinned === undefined || pinned === best ? [best] : [best, pinned] });
   const own = best.workspaceId == null ? measuredProjectTeam(routes, { teamKey: team, workspaceId: null }) : null;
   if (pinned === undefined && own?.kind === 'refused' && own.word === 'team-ambiguous') return { kind: 'none', reason: 'team-ambiguous' };
-  if (routes !== null && measuredProjectTeam(routes, { teamKey: team, workspaceId: workspace }).kind === 'unmeasured') return unmeasured();
   if (own === null) return { kind: 'owner', row: best };
   if (own.kind === 'unmeasured') return unmeasured();
   if (own.kind === 'slot' && own.slot.workspaceId === workspace) return { kind: 'owner', row: best };
@@ -829,7 +829,7 @@ export function teamOwnerProject(team: string, rows: readonly HierarchyProjectFa
 }
 
 /** What the owner rule reads beyond the rows: the latest programme coordinator and a session's standing. */
-type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
+export type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
 type Owner = ReturnType<typeof linearOwnerOf> & { kind: 'owner'; project: string };
 export type TeamOwner = Owner | NoTeamOwner | { kind: 'unmeasured'; possibleIds: readonly string[] };
 
@@ -855,7 +855,7 @@ export function linearOwnerOfTeam(team: string, rows: readonly HierarchyProjectF
 }
 
 /** Read a project's team owner, and its workspace for waiting-issue checks, without a project fallback. */
-function projectTeamOwner(row: HierarchyProjectFacts | undefined, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): { pick: ProjectPick; workspace: string | null } {
+function projectTeamOwner(row: Pick<HierarchyProjectFacts, 'teamKey' | 'workspaceId'> | undefined, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): { pick: ProjectPick; workspace: string | null } {
   if (row === undefined || row.teamKey === null) return { pick: NO_HOLDER, workspace: null };
   const pin = row.workspaceId ?? null;
   if (pin !== null) return { pick: teamOwnerProject(row.teamKey, rows, pin, routes), workspace: pin };
@@ -863,6 +863,12 @@ function projectTeamOwner(row: HierarchyProjectFacts | undefined, rows: readonly
   if (route.kind === 'unmeasured') return { pick: { kind: 'unmeasured', possible: [] }, workspace: null };
   if (route.kind === 'refused') return { pick: route.word === 'team-ambiguous' ? { kind: 'none', reason: route.word } : NO_HOLDER, workspace: null };
   return { pick: teamOwnerProject(row.teamKey, rows, route.slot.workspaceId, routes), workspace: route.slot.workspaceId };
+}
+
+/** Whether a project row's team owner is not measured: the one pick the hierarchy card's owner display reads, so the console's
+ *  migration state and Reshape cannot disagree with it (D-8186, D-8808). */
+export function teamOwnerUnmeasured(row: Pick<HierarchyProjectFacts, 'teamKey' | 'workspaceId'>, rows: readonly HierarchyProjectFacts[], routes: TeamRoutes | null): boolean {
+  return projectTeamOwner(row, rows, routes).pick.kind === 'unmeasured';
 }
 
 /** The project fallback is for display and handoff only, and applies only on a measured `none`. */
@@ -882,6 +888,28 @@ export function ownerItemReady(
   const owner = resolvePick(pick, f);
   return owner.kind === 'owner' && owner.live && !waiting.some((issue) => workspace === issue.workspaceId && row?.teamKey?.toUpperCase() === issue.teamKey.toUpperCase());
 }
+
+/** D-8808 (review 3048 F5): the shared-key item's decision, over the inbound route step's owner verdicts for the `waiting` issues.
+ *  `raise`: the team keys (upper-case, sorted) whose issues wait because the owner rule MEASURED them `team-ambiguous` (the holders
+ *  that could serve the issue's workspace are rows naming no workspace, and two readable workspaces hold the key), less the keys an
+ *  open item already carries. `settle`: the open items once no waiting issue of their key is team-ambiguous or unmeasured; none
+ *  while the routing is unread, so an item never settles on unmeasured. */
+export function sharedKeyItemVerdict(
+  verdicts: readonly { teamKey: string; owner: TeamOwner }[], open: readonly { id: number; teamKey: string }[], routesRead: boolean,
+): { raise: string[]; settle: number[] } {
+  const up = (k: string): string => k.toUpperCase();
+  const ambiguous = new Set(verdicts.filter((v) => v.owner.kind === 'none' && v.owner.reason === 'team-ambiguous').map((v) => up(v.teamKey)));
+  const unsettled = new Set([...ambiguous, ...verdicts.filter((v) => v.owner.kind === 'unmeasured').map((v) => up(v.teamKey))]);
+  const carried = new Set(open.map((i) => up(i.teamKey)));
+  return {
+    raise: [...ambiguous].filter((k) => !carried.has(k)).sort(),
+    settle: routesRead ? open.filter((i) => !unsettled.has(up(i.teamKey))).map((i) => i.id) : [],
+  };
+}
+
+/** The projects the shared-key item names: the rows holding the key that name no workspace, sorted. */
+export const sharedKeyProjects = (team: string, rows: readonly HierarchyProjectFacts[]): string[] =>
+  teamHolders(team, rows).filter((r) => r.workspaceId == null).map((r) => r.project).sort();
 
 // ── The inbound path's bodies and verdict (Task 4.3) ──
 
@@ -943,6 +971,40 @@ export function parsePlanTake(body: unknown): { ok: true; take: PlanTakeBody } |
   const text = arm[field];
   if (!textOk(text, PLAN_BOUNDS.reasonChars, false) || text.trim() === '') return verbBad(`${field} is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
   return { ok: true, take: arms[0] === 'close' ? { issue, close: { why: text } } : { issue, return: { note: text } } };
+}
+
+/** `plan triage`'s lookup (D-8808): the workspaces whose inbound row under the identifier the route reads — each holder's resolved
+ *  workspace, every workspace the listing could not read, every slot listing the key while an unpinned holder's routing is unmeasured,
+ *  and each pinned holder's workspace whose routing is unmeasured (a stored pin can name an unmeasured legacy workspace). With no
+ *  workspace candidate it answers `[null]`: an identifier unique across workspaces. `team` must be upper-cased, as the route
+ *  passes it: a slot's `teamKeys`, upper-cased when listed, are compared to it exactly. */
+export function triageLookup(
+  team: string, rows: readonly HierarchyProjectFacts[], ws: ReadonlyMap<string, string | null>, routes: TeamRoutes | null,
+): readonly (string | null)[] {
+  const holders = teamHolders(team, rows);
+  const unpinnedUnmeasured = holders.some((r) => r.workspaceId == null)
+    && measuredProjectTeam(routes, { teamKey: team, workspaceId: null }).kind === 'unmeasured';
+  const where = [...new Set([
+    ...holders.map((r) => ws.get(r.project)).filter((w): w is string => w != null),
+    ...(routes?.unreadableWorkspaces ?? []),
+    ...(unpinnedUnmeasured ? (routes?.slots ?? []).filter((s) => s.teamKeys.includes(team)).map((s) => s.workspaceId) : []),
+    ...holders.flatMap((r) => r.workspaceId != null && routes !== null
+      && measuredProjectTeam(routes, { teamKey: team, workspaceId: r.workspaceId }).kind === 'unmeasured' ? [r.workspaceId] : []),
+  ])];
+  return where.length === 0 ? [null] : where;
+}
+
+/** `plan triage`'s row choice (D-8808): among the rows the lookup found for the key, the one whose owner in its own workspace is the caller,
+ *  else one the caller may own while that ownership is unmeasured, else the first; with none, the key-only diagnostic, which can never
+ *  authorize a read or write. */
+export function triageChoice<R extends Pick<InboundRow, 'teamKey' | 'workspaceId'>>(
+  team: string, caller: string, found: readonly R[], rows: readonly HierarchyProjectFacts[], f: OwnerReads, routes: TeamRoutes | null,
+): { row: R | null; owner: TeamOwner } {
+  const each = found.filter((r) => r.teamKey.toUpperCase() === team.toUpperCase())
+    .map((row) => ({ row, owner: linearOwnerOfTeam(team, rows, f, row.workspaceId, routes) }));
+  return each.find((x) => x.owner.kind === 'owner' && x.owner.id === caller)
+    ?? each.find((x) => x.owner.kind === 'unmeasured' && x.owner.possibleIds.includes(caller))
+    ?? each[0] ?? { row: null, owner: teamOwnerDiagnostic(team, rows, f) };
 }
 
 /** Who may triage which issue: only the team's Linear owner (`not-linear-owner`, judged first), and only an issue that is

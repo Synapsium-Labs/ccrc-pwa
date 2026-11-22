@@ -880,7 +880,7 @@ describe('the hierarchy settings', () => {
 
 // D-8808 (wave 8, Task 8.6): the workspace picker, the candidates' workspaces and suggestions, an Overlord link as its call.
 import type { TeamCandidateWire } from '../../shared/linking';
-import { waitingPath } from '../src/lib/routes';
+import { callPath, waitingPath } from '../src/lib/routes';
 import { KEY_WRITE_WORDS, OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel } from '../src/fleet/linkingWords';
 
 const wsView = (id: string, name: string, keys: string[]): LinearWorkspaceView =>
@@ -1053,7 +1053,7 @@ describe('the candidates (D-8808)', () => {
     fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
     const sentence = await within(rowOf('project-a')).findByRole('status');
     expect(sentence.textContent).toBe(KEY_WRITE_WORDS.unavailable);
-    expect(sentence.textContent).toMatch(/Linear keys .*could not be read, so nothing was changed/);
+    expect(sentence.textContent).toMatch(/Linear keys, or a Linear workspace, could not be read, so nothing was changed\. Try again later\./);
     expect(document.body.textContent).not.toContain('the Linear store could not be read');
     // A refusal before any write: the row is not locked behind a re-read.
     expect(keyField('project-a')).not.toBeDisabled();
@@ -1078,17 +1078,25 @@ describe('an Overlord link (D-8809, D-8808)', () => {
     const r = within(rowOf('project-a'));
     expect(r.getByText(teamLinkLine(l)!)).toBeInTheDocument();
     expect(teamLinkLine(l)).toContain(OVERLORD_LINK_WORDS.overturn);
-    const link = r.getByRole('link', { name: OVERLORD_LINK_WORDS.call });
+    const link = r.getByRole('link', { name: OVERLORD_LINK_WORDS.openCall });
+    expect(link.getAttribute('href')).toBe(callPath(7));
+  });
+
+  it('with no readable call id the link is the list, in the old words', async () => {
+    serveWorkspaces('unreadable');
+    const l = wire({ teamKey: 'AAA', teamLink: { source: 'overlord', teamName: 'Alpha', evidence: { kind: 'ticket-ids', ids: 9, of: 10 }, at: NOW } as never });
+    await mount([row('project-a', l)]);
+    const link = within(rowOf('project-a')).getByRole('link', { name: OVERLORD_LINK_WORDS.call });
     expect(link.getAttribute('href')).toBe(waitingPath());
   });
 });
 
 // Reshape in Linear (Linear hierarchy design §11.1, D-8186, Task 5.1): the button, its confirm, the re-read and the fixed sentences.
 describe('Reshape in Linear', () => {
-  const STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back'] as const;
+  const STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back', 'unmeasured'] as const;
   const reshape = (n: string): HTMLElement | null => within(rowOf(n)).queryByRole('button', { name: HIERARCHY_TEXT.reshape });
 
-  it('the control shows only when not migrated or put back (each of the five states)', async () => {
+  it('the control shows only when not migrated or put back (each of the six states)', async () => {
     for (const state of STATES) {
       cleanup();
       await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state })]));

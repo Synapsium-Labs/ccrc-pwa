@@ -5,12 +5,12 @@ import { isPlanKey, MAP_CLASSES, TICKET_KINDS, type HierarchyState, type IssueSn
 import type { LinkingMode } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
-import { parsePlanPut } from '../coord/planPolicy.js';
-import type { StoredPlan } from '../coord/planStore.js';
+import { parsePlanPut, teamOwnerUnmeasured } from '../coord/planPolicy.js';
+import type { HierarchyProjectFacts, StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
 import { normalText } from './driftPolicy.js';
 import { publicTextVerdict } from '../linking/policy.js';
-import { routeProjectTeam, type LinearRouteSlot } from './route.js';
+import { measuredProjectTeam, routeProjectTeam, type LinearRouteSlot, type TeamRoutes } from './route.js';
 
 export type IssueSnapshotRow = IssueSnapshot & { linearId: string; identifier: string };
 export interface IssueAfter {
@@ -393,6 +393,19 @@ export function hierarchyStateOf(m: MigrationFacts | null): { state: HierarchySt
     case 'put-back': return { state: 'put-back', at: m.putBackAt, itemId: m.reportItemId };
     default: return { state: 'not-migrated', at: null, itemId: null };
   }
+}
+
+/** F1 (D-8186, D-8808): the console state of a project row. It says `unmeasured`, never "not-migrated", and Reshape is not offered,
+ *  when either measurement cannot be made: the row's own workspace (`measuredProjectTeam` with the row's pin, the measurement
+ *  Reshape's `workspaceOfProject` makes: an unpinned row's routing, or a pinned row's own slot or a failed listing; review 3087 F1)
+ *  or its team owner (`teamOwnerUnmeasured`, the pick the card's owner line reads: a pinned row outranked by an unpinned holder
+ *  whose routing cannot be read). A row with no team key has none to measure. The caller only supplies the rows and the routing. */
+export function hierarchyStateOfRow<M extends MigrationFacts & { id: number; workspaceId: string; teamKey: string }>(
+  row: { teamKey: string | null; workspaceId: string | null }, rows: readonly HierarchyProjectFacts[], migrations: readonly M[], routing: TeamRoutes | null,
+): { state: HierarchyState; at: number | null; itemId: number | null } {
+  if (row.teamKey !== null && (measuredProjectTeam(routing, { teamKey: row.teamKey, workspaceId: row.workspaceId }).kind === 'unmeasured'
+    || teamOwnerUnmeasured(row, rows, routing))) return { state: 'unmeasured', at: null, itemId: null };
+  return hierarchyStateOf(migrationOfProject(row, migrations, routing?.slots ?? null));
 }
 
 /** Put back is offered until the team's next migration starts (§10.4): a later row for the same team refuses it. */

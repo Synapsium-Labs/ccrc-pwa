@@ -113,7 +113,7 @@ import { TESTBOX_PARITY_REQUIRED_SENTENCE, type PeerRetry } from '../../../share
 import { isMailClientKey, MAIL_CLIENT_KEY_MAX } from '../../../shared/api.js';
 import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
 import { knownFleetIdentity } from '../accounts/audit.js';
-import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
+import { parityRefusedByCcd, switchActorOf, switchOnGate, toolsSyncCallerOf, writeSwitchRow } from '../testboxAdmin.js';
 import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
 import { landingAdvanceOf } from './landingEntry.js';
 import { landingEjectionAsk } from './landingLine.js';
@@ -2472,7 +2472,7 @@ export function registerCoordRoutes(
     if (body !== undefined && body !== null && !(typeof body === 'object' && Object.keys(body).length === 0)) {
       return refuseRoute(reply, 'bad-request');
     }
-    const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync();
+    const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync(toolsSyncCallerOf(req, sessionAuth(req)));
     if (!r.ok) {
       const refusal = TESTBOX_SYNC_REFUSAL[r.reason];
       return refuseRoute(reply, refusal.error, { detail: refusal.detail });

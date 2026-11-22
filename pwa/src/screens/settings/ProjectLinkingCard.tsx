@@ -26,11 +26,11 @@ import {
   HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyOutcomeUnknown, hierarchyWriteText, inboundWords, migrateOutcomeUnknown, migrateWriteText, reshapeConsequence, reshapeOffered, reshapeTitle, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
-import { upkeepPath, waitingPath } from '../../lib/routes';
+import { upkeepPath } from '../../lib/routes';
 import { loadProjects } from '../../fleet/useProjectRows';
 import {
-  OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, keyWriteText,
-  linkingRowsOf, pickerWorkspacesOf, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+  PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, keyWriteText,
+  linkingRowsOf, overlordCallLink, pickerWorkspacesOf, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
 } from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
 
@@ -216,6 +216,7 @@ function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, ans
     write({ teamKey: c.key, override: linking.override, ...(tap.workspace === undefined ? {} : { workspace: tap.workspace }) });
   };
   const linkLine = teamLinkLine(linking);
+  const callLink = overlordCallLink(linking.teamLink);
   const candidates = candidatesShown(linking);
   const openTemplate = (): void => {
     setBusy(true);
@@ -260,8 +261,8 @@ function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, ans
           </div>
         )}
         {linkLine !== null && <p className="settings-note linking-auto" data-linking-auto="">{linkLine}</p>}
-        {linking.teamLink?.source === 'overlord' && (
-          <TextLink href={waitingPath()} onClick={inAppClick(waitingPath())}>{OVERLORD_LINK_WORDS.call}</TextLink>
+        {callLink !== null && (
+          <TextLink href={callLink.href} onClick={inAppClick(callLink.href)}>{callLink.words}</TextLink>
         )}
         {candidates.length > 0 && (
           <div className="linking-candidates" role="group" aria-label={LINKING_TEXT.candidates}>

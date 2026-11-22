@@ -16,7 +16,7 @@ import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -73,14 +73,14 @@ const noticeLine = (id: string, at: number): string => line({
 });
 
 let lastDeps: Deps;
-const open = (bus: Bus = new Bus()): { stream: SessionStream; frames: SessionStreamMsg[] } => {
+const open = (bus: Bus = new Bus(), io: FleetIO = localIO): { stream: SessionStream; frames: SessionStreamMsg[] } => {
   const cfg = loadConfig({ CCRC_HOME: home });
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
     return { ran: true, code: 0, stdout: '', stderr: '' };
   };
-  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
   lastDeps = deps;
   const frames: SessionStreamMsg[] = [];
   return { stream: new SessionStream(deps, bus, ID, (m) => frames.push(m), undefined, NO_TICK), frames };
@@ -349,6 +349,27 @@ describe('the start scan: a reload and a reconnect draw the same rows within its
       expect(got.rows).toEqual(want);
       expect(got.scan?.startScan?.cost).toMatchObject({ stop: 'start', bytes: resumeAt });
     } finally { reconnect.stop(); }
+  });
+
+  it('(HF1, review 3067 F5) a stream whose backlog window could not be read still scans, from the file\'s size, where its tailer starts', async () => {
+    writeFileSync(tfile, launch('a1', now - 300_000) + fill(now - 200_000, 1.5 * MIB));
+    const end = statSync(tfile).size;
+    hook([{ id: 'a1', name: 'Explore', startedAt: now - 299_000 }]);
+    seedHelper(S, 'a1');
+    // Only the backlog's window read fails: the transcript's last 1 MiB, read from its size less 1 MiB.
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, from) => (p === tfile && from === end - MIB
+        ? { ok: false, reason: 'unreadable' } : localIO.readFileFromMeasured(p, from)),
+    };
+    const { stream, frames } = open(new Bus(), io);
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ events: [], offset: end, missing: false, fileMeasured: false });
+      const got = await settle(stream, frames);
+      expect(got.scan?.startScan?.cost).toMatchObject({ stop: 'start', bytes: end });
+      expect(got.rows).toEqual([{ id: 'a1', state: 'running', startedAt: now - 300_000, endedAt: null, summary: null, hasReport: false }]);
+    } finally { stream.stop(); }
   });
 
   it('a helper whose launch lies beyond HELPER_SCAN_BYTES draws from the roster and its meta alone; one inside it from its launch', async () => {

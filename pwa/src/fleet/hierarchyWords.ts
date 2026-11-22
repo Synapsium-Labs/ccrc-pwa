@@ -129,6 +129,7 @@ export function stateWords(row: Pick<HierarchyProjectRow, 'state' | 'stateAt'>):
     case 'migrating': return 'Migrating';
     case 'migrated': return `Migrated${day(row.stateAt)}`;
     case 'put-back': return `Put back${day(row.stateAt)}`;
+    case 'unmeasured': return 'Not measured';
   }
 }
 

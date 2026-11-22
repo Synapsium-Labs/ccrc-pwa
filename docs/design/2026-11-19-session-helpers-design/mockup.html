@@ -8,6 +8,9 @@
   A static mockup for docs/superpowers/specs/2026-11-19-session-helpers-design.md.
   Every name, number and text in it is invented. Pick the view with ?view=desk, ?view=states, ?view=phone,
   ?view=phone-open or ?view=archive. Colours are the Refined skin's dark tokens (ui/src/styles/tokens.css).
+  The glyph rule (H2, D-8872; review 2900 F16): only a running row draws the filled diamond in the running ink; a state
+  that is left out, launched, no longer listed or session ended draws the hollow diamond in a neutral ink. The stale
+  roster's two rows were redrawn to that rule.
 -->
 <style>
   :root {
@@ -172,9 +175,9 @@
     <div class="cap">A stale roster</div>
     <section class="helpers" aria-label="Helpers">
       <div class="hhead"><span class="lbl">Helpers</span><span class="nk">2 helpers · live state not known: no news from the session for 41m</span><span class="chev">▾</span></div>
-      <div class="hrow"><span class="ic">◆</span><span class="what">Index the test fixtures</span><span class="right mono">46m</span>
+      <div class="hrow"><span class="ic done">◇</span><span class="what">Index the test fixtures</span><span class="right mono">46m</span>
         <div class="meta">subagent · Explore · Haiku · <span class="q">quiet 41m</span> · ↓ 12k</div></div>
-      <div class="hrow"><span class="ic">◆</span><span class="what">Draft the release note</span><span class="right mono">51m</span>
+      <div class="hrow"><span class="ic done">◇</span><span class="what">Draft the release note</span><span class="right mono">51m</span>
         <div class="meta">subagent · general-purpose · Sonnet · high · <span class="q">quiet 43m</span> · ↓ 30k</div></div>
     </section>
   </div>

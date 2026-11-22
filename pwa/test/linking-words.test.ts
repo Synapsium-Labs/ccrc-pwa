@@ -17,9 +17,10 @@ describe('evidenceWords', () => {
 // D-8808 (wave 8, Task 8.6): the workspace picker's and the candidate rows' words.
 import {
   candidateAriaLabel, candidateKeyOf, candidateTap, candidateWorkspaceLine, keyWriteText, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
-  KEY_WRITE_WORDS, OVERLORD_LINK_WORDS, PICKER_WORDS,
+  KEY_WRITE_WORDS, OVERLORD_LINK_WORDS, PICKER_WORDS, overlordCallLink,
 } from '../src/fleet/linkingWords';
 import { ApiError } from '../src/lib/apiError';
+import { callPath, waitingPath } from '../src/lib/routes';
 import { readLinearWorkspaces } from '../src/lib/api';
 import { pickerWorkspacesOf } from '../src/fleet/linkingWords';
 import type { LinearLegacyRow } from '../../shared/linear';
@@ -76,10 +77,10 @@ describe("a refused key write's words (review 2971 F4)", () => {
     expect(keyWriteText(refused('team-ambiguous'), 0)).toBe(PICKER_WORDS.ambiguousUnlisted);
     expect(PICKER_WORDS.ambiguous).toContain(PICKER_WORDS.label);
   });
-  it('unavailable says the Linear keys could not be read and nothing was changed, whatever the holders (review 2997 A3)', () => {
+  it('unavailable says the Linear keys or a workspace could not be read, nothing was changed, and to try later, whatever the holders (review 2997 A3, review 3286 F4)', () => {
     const down = new ApiError(503, { ok: false, error: 'unavailable' });
     for (const n of [0, 1, 2]) expect(keyWriteText(down, n)).toBe(KEY_WRITE_WORDS.unavailable);
-    expect(KEY_WRITE_WORDS.unavailable).toMatch(/Linear keys .*could not be read, so nothing was changed/);
+    expect(KEY_WRITE_WORDS.unavailable).toMatch(/Linear keys, or a Linear workspace, could not be read, so nothing was changed\. Try again later\./);
   });
   it('every other refusal is the write\'s own sentence', () => {
     expect(keyWriteText(refused('team-unknown'), 2)).toBe(LINKING_REFUSAL_TEXT['team-unknown']);
@@ -96,6 +97,18 @@ describe('an Overlord link', () => {
   it('reads as a call made for the operator, and says how to overturn it', () => {
     expect(teamLinkLine(l)).toBe(`Linked by the Overlord for you to Alpha: 9 of 10 ticket ids in its branches, pull requests and commits use AAA. ${OVERLORD_LINK_WORDS.overturn}`);
     expect(OVERLORD_LINK_WORDS.call).toBe('See it in Calls made for you');
+    expect(OVERLORD_LINK_WORDS.openCall).toBe('Open this call in Calls made for you');
+  });
+  it('overlordCallLink opens the call by its id, or the list when the id is unreadable, and is null for any other link', () => {
+    expect(overlordCallLink(l.teamLink)).toEqual({ href: callPath(7), words: OVERLORD_LINK_WORDS.openCall });
+    const noId = { ...l.teamLink, callId: undefined } as unknown as ProjectLinkingWire['teamLink'];
+    expect(overlordCallLink(noId)).toEqual({ href: waitingPath(), words: OVERLORD_LINK_WORDS.call });
+    for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(overlordCallLink({ ...l.teamLink, callId: bad } as unknown as ProjectLinkingWire['teamLink'])).toEqual({ href: waitingPath(), words: OVERLORD_LINK_WORDS.call });
+    }
+    expect(overlordCallLink(null)).toBeNull();
+    expect(overlordCallLink(undefined)).toBeNull();
+    expect(overlordCallLink({ source: 'key' } as unknown as ProjectLinkingWire['teamLink'])).toBeNull();
   });
 });
 
@@ -144,5 +157,15 @@ describe("the legacy workspace on the wire and in the picker (review 2971 A1)", 
     expect(pickerWorkspacesOf([ws(ID_L, 'ws-l', ['AAA'])], row())).toHaveLength(1);
     expect(pickerWorkspacesOf([slot], null)).toEqual([slot]);
     expect(pickerWorkspacesOf(null, row())).toBeNull();
+  });
+});
+
+// F1 (D-8186, D-8808): a row whose team routing cannot be measured says so, and offers no Reshape.
+import { reshapeOffered, stateWords } from '../src/fleet/hierarchyWords';
+describe('the unmeasured hierarchy state', () => {
+  it('reads Not measured, and Reshape is not offered for it', () => {
+    expect(stateWords({ state: 'unmeasured', stateAt: null })).toBe('Not measured');
+    expect(reshapeOffered({ state: 'unmeasured', teamKey: 'AAA' })).toBe(false);
+    expect(reshapeOffered({ state: 'not-migrated', teamKey: 'AAA' })).toBe(true);
   });
 });

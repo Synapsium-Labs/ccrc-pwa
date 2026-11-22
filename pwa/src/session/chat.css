@@ -97,15 +97,6 @@
 }
 .chat-facts .sess-meta { display: contents; }
 .chat-facts .sess-meta > *::before { content: none; }
-/* D-7785 (review 1424 F3; review 1431 F1): the header's two disclosure toggles, the subagent one and the
-   delegated-entries one. The rule above removes `.sess-subagents::before`, the card's tap overlay, with the middots, so
-   in the header the toggle's own box is its hit area. On a touch screen it takes the tap floor. The floor is gated on
-   `(pointer: coarse)` rather than reset under `(pointer: fine)`: this rule is unlayered, so a reset of equal specificity
-   above it never applied (the door's own floor is a layered utility, which any unlayered rule beats), and a desk with
-   a mouse keeps the toggles' base size and the header its base height (the operator's ruling of 2026-10-15, below). */
-@media (pointer: coarse) {
-  .chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
-}
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
 /* D-8834 (C51; C50's D-8817 drew the badge in the details row): a coordinator's role badge sits on the TITLE line, right after the
    session's name (`HeaderTitleText`), in both skins. It is an inline box in the title's own line, so it shares the name's line
@@ -118,16 +109,29 @@
 .chat-title-glue { white-space: nowrap; }
 .chat-title-role { vertical-align: -0.125em; margin-inline-start: var(--sp-1); }
 .chat-title-role svg { width: 1em; height: 1em; }
-.chat-facts .sess-subagent-list { flex-basis: 100%; }
-/* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its
-   min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long
-   row would push the header past the screen's edge; with it, the row keeps the list's width, its free-text part ends in
-   an ellipsis and its other words wrap whole (`.proj-work-part`, fleet.css; D-7783). */
-.chat-facts .sess-entries { flex-basis: 100%; min-width: 0; }
-/* D-8782 (review 2864 F6): the session's worktrees, the entries list's twin in the same row: a full-width flex item with a
-   minimum of 0, for the same reason. Its rows carry chips, controls and an alert sentence, and without these one long path
-   or word would push the header past the screen's edge, or the section would shrink to nothing in a nowrap rail. */
+/* D-8782 (review 2864 F6): the session's worktrees, a full-width flex item of .chat-facts, whose automatic minimum would be
+   its min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long row
+   would push the header past the screen's edge, or the section would shrink to nothing in a nowrap rail; with it, the row
+   keeps the section's width and its other words wrap whole (`.proj-work-part`, fleet.css; D-7783). Its rows carry chips,
+   controls and an alert sentence too. */
 .chat-facts .sess-worktrees { flex-basis: 100%; min-width: 0; padding: var(--sp-1); }
+/* H3 (D-8875): a row's free-text part is its path, which is long and often one unbroken run. Cut to one line, its text still
+   sized Instrument's phone header to the whole path (measured: 42 and 72 px of sideways scroll at 360 and 390); here it wraps,
+   so the path is drawn whole on every width and no header grows past the screen. HF2 (D-8877; review 3123 F3): each of its
+   pieces (`pathBreaks`: cut after each `/`) is an inline box, which a line breaks after, so the path breaks after a `/` and
+   inside a piece only when the piece is wider than the line, where `anywhere` breaks it (and lets the path's min-content
+   shrink to a character, so it never sizes the header). Plain text broke at a hyphen inside a piece first. */
+.chat-facts .sess-worktrees .proj-work-name-text { white-space: normal; overflow-wrap: anywhere; }
+.chat-facts .sess-worktrees .proj-work-seg { display: inline-block; max-width: 100%; }
+/* HF2 (D-8877; review 3123 F3): below the desk the path takes a line of its own, the row's full width, drawn after the row's
+   short words (what made it, `via` and the disposition), which share the first line. Before, it sat in a narrow middle column
+   between them and broke inside its segments. At a desk it stays in the line. */
+@media (max-width: 899px) {
+  .chat-facts .sess-worktrees .proj-work-name { flex: 1 1 100%; max-width: none; order: 1; }
+}
+/* HF2 (review 3123 F6): a raw worktree's two chips, `inferred` and the `Bash call …` that made it, are one box, so the row
+   wraps them together: D-6999 has them side by side wherever the row is drawn. */
+.chat-facts .sess-worktrees .proj-work-chips { display: inline-flex; flex: none; gap: var(--sp-1); }
 /* The padding is the focus ring's room: the controls' box draws a ring 4px outside itself (2px outline, 2px offset), and
    Refined's phone rail scrolls sideways, so it clips whatever it holds at its own edge: a ring on a box flush with that edge
    was cut (measured in a real Chrome at 360 and 390, review 2864 F4). */
@@ -1971,12 +1975,31 @@ button.metachip:active {
  *  and the key hints.                                                 *
  * ------------------------------------------------------------------ */
 /* The mail, workflow and task strips in ONE container under the transcript,
-   in both skins, until S8 and S12 place them by width. Layout only. */
+   in both skins, until S8 and S12 place them by width. Layout only.
+   HF2 (D-8877; review 3123 F5 and F7): the strips give way before the
+   composer does. With the header's details and the Helpers section both open,
+   the header, the open section (at most half the viewport, H2) and the
+   composer were taller than the pane, the transcript already at nothing: at a
+   desk the chat's `overflow: hidden` cut the composer's key-hint row at the
+   pane's foot, under Instrument's status bar (measured: 22 and 24 px at 1280
+   and 1600), and on a phone the composer fell below the window (48 to 83 px
+   at 360 and 390).
+   The container may shrink, and the Helpers section in it, whose rows are a
+   scroll body, never below its head; every other strip keeps its height. On
+   a screen too short even for that, the container scrolls, so a strip never
+   lies over the composer (measured at 360 x 520). */
 .chat-strips {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+.chat-strips .helpers-strip {
+  flex-shrink: 1;
+  min-height: calc(var(--tap-min) + 2px);
 }
 /* THE READING COLUMN. From 900 the transcript's rows, the strips and the
    composer sit in one column of the skin's measure (`--measure-chat`: 1200 in

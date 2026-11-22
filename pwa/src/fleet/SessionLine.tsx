@@ -172,43 +172,30 @@ function SessionLineView({
         <StatusDot status={session.bucket} asleep={asleep} />
       </span>
 
-      {/* The two-line block. A plain <div>, NOT the row's button: the subagent
-          disclosure below is a real <button>, and a control inside a control
-          is both invalid and unusable. Invalid because a <button>'s content
-          model forbids ANY descendant with a tabindex attribute, interactive
-          element or not — a `role="button"` span with `tabIndex={0}` (what fix
-          round 1 shipped here) is exactly that. Unusable because the `button`
-          role is Children-Presentational: Safari/VoiceOver exposes the whole
-          subtree as ONE element, so the inner control is never a swipe stop,
-          its `aria-expanded` is never announced, and a double-tap activates
-          the ANCESTOR — i.e. this feature was unreachable on iOS, while RTL's
-          `getByRole` (which does not model presentational children) reported
-          a healthy button.
+      {/* The two-line block. A plain <div>, NOT the row's button: it holds real controls of its own (the label button
+          `.sess-open` and the hold, a <button> when there is a run to open), and a control inside a control is both
+          invalid and unusable. Invalid because a <button>'s content
+          model forbids ANY descendant with a tabindex attribute, interactive element or not. Unusable because the `button`
+          role is Children-Presentational: Safari/VoiceOver exposes the whole subtree as ONE element, so an inner control is
+          never a swipe stop and a double-tap activates the ANCESTOR, while RTL's `getByRole` (which does not model
+          presentational children) reports a healthy button. (The subagent disclosure that first forced this split left the
+          row with D-8771, and the session panel with H3, D-8875.)
 
-          The row keeps its full-block tap surface anyway. This div's onClick
-          is a CONVENIENCE forwarder for the dead space between cells (the
-          meta line's gaps, the ask line) and it stands down for two things:
-          any real control that was hit (`closest('button')` — one place, it
-          covers every control this row ever grows, and it covers keyboard
-          activation for free, since Enter/Space on a <button> dispatches a
-          click that bubbles here exactly as a tap does, so the toggle needs
-          no `stopPropagation` and no hand-rolled key handler of its own), and
-          the expanded subagent list, which is content rather than dead space.
-          See the handler for why the second one is not optional. */}
+          The row keeps its full-block tap surface anyway. This div's onClick is a CONVENIENCE forwarder for the dead space
+          between cells (the meta line's gaps) and it stands down for one thing: any real control that was hit
+          (`closest('button')` — one place, it covers every control this row ever grows, and it covers keyboard activation
+          for free, since Enter/Space on a <button> dispatches a click that bubbles here exactly as a tap does). */}
       <div
         className="sess-body"
         onClick={(e) => {
           const el = e.target as HTMLElement;
-          // Two stand-downs. Any real control on the row (`closest('button')`
+          // One stand-down: any real control on the row (`closest('button')`
           // covers every one this row ever grows, keyboard activation
           // included — Enter/Space on a <button> dispatches a click that
-          // bubbles here). And the expanded subagent list, which is CONTENT,
-          // not dead space: it renders inside this block, so a tap on a
-          // subagent's name used to navigate away from the disclosure the
-          // operator had just opened, and a truncated name could not even be
-          // selected to read.
+          // bubbles here). The row draws no subagent list any more (D-8771,
+          // and the session panel none since H3, D-8875), so the second
+          // stand-down for one went with it.
           if (el.closest('button') !== null) return;
-          if (el.closest('.sess-subagent-list') !== null) return;
           open();
         }}
       >
@@ -253,8 +240,9 @@ function SessionLineView({
               same-slug rows' accessible names apart. */}
         </button>
         <SessionMeta facts={facts} mode="card" onOpenRun={onOpenRun} />
-        {/* D-5545: the waiting question's summary (it was a third line, clipped to an ellipsis) and the subagent
-            disclosure are the session header's now — the row says `needs you`, the header says what. */}
+        {/* D-5545: the waiting question's summary (it was a third line, clipped to an ellipsis) is the session header's
+            now — the row says `needs you`, the header says what. The helpers are the session panel's Helpers section
+            (session helpers H2 and H3), never the row's or the header's. */}
       </div>
 
       <button

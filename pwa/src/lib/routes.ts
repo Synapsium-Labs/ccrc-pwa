@@ -179,6 +179,23 @@ export function waitingPath(programme: string | null = null): string {
   return programme === null ? path : `${path}?${new URLSearchParams({ [PROGRAMME_FILTER_QUERY]: programme })}`;
 }
 
+/** The Waiting on you list's other query, a call (`?call=<id>`, D-8808, D-8809): a call made for the operator has no page of its
+ *  own, it is a place in the list, so its address rides the list's route the way the side rail's filter does. It rides the URL, so
+ *  a reload and a cold start keep it. */
+export const CALL_QUERY = 'call';
+
+/** The one builder of a call's address: the list's path (`waitingPath`, never spelled again here) with `?call=<id>`. */
+export function callPath(id: number): string {
+  return `${waitingPath()}?${new URLSearchParams({ [CALL_QUERY]: String(id) })}`;
+}
+
+/** The call a `location.search`-shaped string names, or `null`: plain decimal digits, no leading zero, a positive safe integer
+ *  (`isRunId`'s grammar, the one grammar of a positive row id). Anything else names no call. */
+export function callParamOf(search: string): number | null {
+  const v = new URLSearchParams(search).get(CALL_QUERY);
+  return v !== null && isRunId(v) ? Number(v) : null;
+}
+
 /** Whether a string is a programme slug the server accepts: `shapeProgramSlug`'s grammar and length, the one owner of both,
  *  and the slug as it stands (the owner trims, a path segment must not change under it). This is what the programme row's
  *  `accepts` asks, and what the chip asks before it offers a door (`programmeIsOpenable`). */

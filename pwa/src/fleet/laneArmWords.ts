@@ -2,7 +2,7 @@
 // for the card's view and the 409 confirm, the radio a row checks, and each row's lines. The words themselves are L0's
 // (`LANE_ARM_TEXT`, `shared/lane-arm.ts`); nothing here retypes one.
 import {
-  LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane, laneArmGate, laneArmLive,
+  LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane, isQuizTickOutcome, laneArmGate, laneArmLive,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmQuizPending, type LaneArmQuizView, type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm';
 import { isOneOf, isRecord } from '../lib/wire';
@@ -47,12 +47,31 @@ function asQuizPending(raw: unknown): LaneArmQuizPending | null {
   return { id, recordedAt, reportShaPrefix, recordedBy, measuredAt, score, lo, hi, questions, families, answered, runFailed, absent };
 }
 
+/** The unattended run's last tick (run 3212), whole, or undefined when it is absent or malformed: the card then shows no tick
+ *  line, and the rest of the block stands. */
+function asQuizTick(raw: unknown): LaneArmQuizView['unattended'] {
+  if (!isRecord(raw)) return undefined;
+  if (raw.state === 'none') return { state: 'none' };
+  if (raw.state === 'unreadable') return typeof raw.detail === 'string' ? { state: 'unreadable', detail: raw.detail } : undefined;
+  if (raw.state !== 'reported') return undefined;
+  const { week, act, outcome, word, detail, account, at } = raw;
+  if (!strOrNull(week) || typeof act !== 'string' || !isQuizTickOutcome(outcome) || !strOrNull(word) || !strOrNull(detail)
+    || !strOrNull(account) || !isFiniteNum(at)) return undefined;
+  return { state: 'reported', week, act, outcome, word, detail, account, at };
+}
+
 /** The quiz block, whole, or null (a malformed one is dropped: the card then shows no block, never a throw). */
 function asQuizView(raw: unknown): LaneArmQuizView | null {
+  const view = asQuizBlock(raw);
+  if (view === null || !isRecord(raw)) return view;
+  const unattended = asQuizTick(raw.unattended);
+  return unattended === undefined ? view : { ...view, unattended };
+}
+function asQuizBlock(raw: unknown): LaneArmQuizView | null {
   if (!isRecord(raw) || !isRecord(raw.baseline) || !isRecord(raw.pending)) return null;
   const b = raw.baseline;
   let baseline: LaneArmQuizView['baseline'];
-  if (b.state === 'recorded' && isFiniteNum(b.at)) baseline = { state: 'recorded', at: b.at };
+  if (b.state === 'recorded' && isFiniteNum(b.at)) baseline = { state: 'recorded', at: b.at, ...(isFiniteNum(b.id) ? { id: b.id } : {}) };
   else if (b.state === 'not-yet') baseline = { state: 'not-yet' };
   else if (b.state === 'unreadable' && typeof b.detail === 'string') baseline = { state: 'unreadable', detail: b.detail };
   else return null;

@@ -569,7 +569,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
     && { [ ! -f ~/.local/libexec/ccrc/shared/redact.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs; } && { [ ! -f ~/.local/libexec/ccrc/shared/redact-cli.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs; } && { [ ! -f ~/.local/libexec/ccrc/door-process.mjs ] || cp -a ~/.local/libexec/ccrc/door-process.mjs ~/ccrc-backups/$TS/ccd-door-process.mjs; } \
-    && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/train-proof.sh ] || cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/delegation-lease.sh ] || cp -a ~/.local/libexec/ccrc/lib/delegation-lease.sh ~/ccrc-backups/$TS/ccd-lib-delegation-lease.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/pool-set.sh ] || cp -a ~/.local/libexec/ccrc/lib/pool-set.sh ~/ccrc-backups/$TS/ccd-lib-pool-set.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/long-lived.sh ] || cp -a ~/.local/libexec/ccrc/lib/long-lived.sh ~/ccrc-backups/$TS/ccd-lib-long-lived.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/door.sh ] || cp -a ~/.local/libexec/ccrc/lib/door.sh ~/ccrc-backups/$TS/ccd-lib-door.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
+    && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/train-proof.sh ] || cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/delegation-lease.sh ] || cp -a ~/.local/libexec/ccrc/lib/delegation-lease.sh ~/ccrc-backups/$TS/ccd-lib-delegation-lease.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/pool-set.sh ] || cp -a ~/.local/libexec/ccrc/lib/pool-set.sh ~/ccrc-backups/$TS/ccd-lib-pool-set.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/long-lived.sh ] || cp -a ~/.local/libexec/ccrc/lib/long-lived.sh ~/ccrc-backups/$TS/ccd-lib-long-lived.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/door.sh ] || cp -a ~/.local/libexec/ccrc/lib/door.sh ~/ccrc-backups/$TS/ccd-lib-door.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/model-aliases.sh ] || cp -a ~/.local/libexec/ccrc/lib/model-aliases.sh ~/ccrc-backups/$TS/ccd-lib-model-aliases.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/lib/launch-profiles.json ] || cp -a ~/.cc-sessions/lib/launch-profiles.json ~/ccrc-backups/$TS/launch-profiles.json; } \
     && { [ ! -f ~/.cc-sessions/lib/overlord-constitution.md ] || cp -a ~/.cc-sessions/lib/overlord-constitution.md ~/ccrc-backups/$TS/overlord-constitution.md; } \
@@ -894,6 +894,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.timer ~/.config/systemd/user/ccd-limit-watchdog.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.service ~/.config/systemd/user/ccd-land-probe.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.timer ~/.config/systemd/user/ccd-land-probe.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.service ~/.config/systemd/user/ccd-quiz-weekly.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.timer ~/.config/systemd/user/ccd-quiz-weekly.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.service ~/.config/systemd/user/ccd-testbox-times.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.timer ~/.config/systemd/user/ccd-testbox-times.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-carry-dedupe.service ~/.config/systemd/user/ccd-carry-dedupe.service \
@@ -1073,6 +1075,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-scope-sweep.timer \
     && systemctl --user enable --now ccd-limit-watchdog.timer \
     && systemctl --user enable --now ccd-land-probe.timer \
+    && systemctl --user enable --now ccd-quiz-weekly.timer \
     && systemctl --user enable --now ccd-testbox-times.timer \
     && systemctl --user enable --now ccd-carry-dedupe.timer \
     && systemctl --user restart ccrc-agent.service \

@@ -762,6 +762,7 @@ describe('the model files, and who reads each one', () => {
       'ccd/ccrc',                 // cmd_models and its helpers — the verbs
       'ccd/ccrc-doctor-checks',   // Part C's freshness check — a READER only, see below
       'ccd/ccrc-models-probe',    // the catalogue's writer
+      'ccd/lib/model-aliases.sh', // ccd's cached reader of a lane's model files (Anthropic arm, Task A3.1) — a READER only, see below
     ]);
   });
 
@@ -818,7 +819,7 @@ describe('the model files, and who reads each one', () => {
     }
   });
 
-  it('the REGISTRY file is named by exactly four files, and edited by one of them', () => {
+  it('the REGISTRY file is named by exactly five files, and edited by one of them', () => {
     // `<id>.classes.json` is the operator's own file (§4.1), edited only
     // through the verbs — so the verbs' node half is the one program that
     // writes it, and every write passes the validator. `shared/models.ts`
@@ -837,8 +838,13 @@ describe('the model files, and who reads each one', () => {
     // exactly what the assertion just below this one now forbids by name, so
     // admitting a reader here does not reopen the door the comment was
     // guarding.
+    //
+    // `ccd/lib/model-aliases.sh` is a fifth holder, added by the Anthropic
+    // arm's Task A3.1: on a Codex lane it reads the registry and the
+    // catalogue (one jq call, cached on their bytes) for a class's effort
+    // levels. A READER too, pinned below as never writing it.
     expect(spell('classes.json')).toEqual([
-      'ccd/ccrc-doctor-checks', 'deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts',
+      'ccd/ccrc-doctor-checks', 'ccd/lib/model-aliases.sh', 'deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts',
     ]);
   });
 
@@ -896,6 +902,13 @@ describe('the model files, and who reads each one', () => {
     // "$dir/$id.classes.json" ]`) and the empty-population SKIP message that
     // names the path in its own text.
     expect(code.filter((l) => REGISTRY_FILENAME.test(l)).length).toBe(2);
+    // The same two pins on ccd's reader (Task A3.1): no write, and exactly one
+    // line that touches the path, the one that hands it and the catalogue to
+    // the cached jq reader.
+    const lib = codeLines(path.join(ccrcRoot, 'ccd', 'lib', 'model-aliases.sh'));
+    expect(lib.filter(writesRegistryDirectly),
+      'ccd/lib/model-aliases.sh writes a registry directly instead of only reading it').toEqual([]);
+    expect(lib.filter((l) => REGISTRY_FILENAME.test(l)).length).toBe(1);
   });
 
   it('no bash code line spells the retired box-global LiteLLM config path or its override (Plan 4)', () => {

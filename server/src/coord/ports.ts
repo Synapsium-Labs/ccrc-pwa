@@ -90,7 +90,7 @@ export type WatcherCoordMember =
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordSoftRenewal' | 'recordStallObservation'
   | 'recordTeamCandidates'
   | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releaseReviewItemRaised' | 'releases'
-  | 'renewCallsOf' | 'renewClaimRow' | 'renewRequestsAfter' | 'renewalModeSetting' | 'requestNode' | 'resolveNode' | 'responseBootsInWindow' | 'responseReceipts' | 'responseReplacedOn' | 'responseRetention' | 'restampAsk' | 'retireGeneration' | 'reviewChildReleased' | 'reviveParkedDeliveries' | 'rollSettings' | 'rulingRowsOf' | 'run'
+  | 'renewCallsOf' | 'renewClaimRow' | 'renewRequestsAfter' | 'renewalModeSetting' | 'requestNode' | 'requeueClaudeBuild' | 'resolveNode' | 'responseBootsInWindow' | 'responseReceipts' | 'responseReplacedOn' | 'responseRetention' | 'restampAsk' | 'retireGeneration' | 'reviewChildReleased' | 'reviveParkedDeliveries' | 'rollSettings' | 'rulingRowsOf' | 'run'
   | 'runCloseAnchors' | 'runCloseChoice' | 'runCloseRuns' | 'runCloseWarning' | 'runCloseWarningProgrammes' | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
   | 'sealResponse' | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGenerationDue' | 'setGoneSince' | 'setHoldOff' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'snapshotFacts' | 'softRenewalsOf' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds' | 'standingPairs'

@@ -16,7 +16,9 @@ import {
   type SessionStreamMsg,
   type TaskItem,
 } from '../../../shared/api';
-import type { AgentHelperView, HelperFrameMembers, HelpersUnmeasured, WorkflowView } from '../../../shared/workflows';
+import type {
+  AgentHelperView, HelperFrameMembers, HelperReportAnswer, HelperReportRequest, HelpersUnmeasured, WorkflowView,
+} from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
@@ -160,6 +162,12 @@ export interface SessionState {
   agents: AgentHelperView[];
   agentsUnmeasured: HelpersUnmeasured | null;
   readEvery: NonNullable<HelperFrameMembers['readEvery']> | null;
+  /** H2 (D-8872): the server's answers to `helper-report` requests, by agent id, as stated (`report: null` is an answer that
+   *  it holds none). An id with no entry has had no answer: an older server never gives one. Each answer is kept with the
+   *  end its row had when it came (`end`), and only while the frame still draws that row with `hasReport` at that same end:
+   *  a helper continued and ended again never shows its earlier report (review 3072 F2). Every reset site clears them
+   *  with the rows. */
+  reports: Readonly<Record<string, HelperReport>>;
   /** Outstanding mail for THIS session — queued or delivered, never acked or
    *  rejected (the server filters, `sessionws.ts`'s `checkMail`). Replaced
    *  wholesale like `tasks`, because the frame is a statement about the
@@ -218,7 +226,15 @@ export interface SessionState {
    *  attachments and their preview URLs survive. */
   resolve(key: string, text: string, opts: { replaceDraft: boolean }): void;
   discard(key: string): void;
+  /** H2 (D-8872): ask the server for one finished helper's report over the session socket. The store owns the ask: it
+   *  sends once per id and end on one stream, records no ask that did not go (the socket was not open), and forgets every
+   *  ask at each stream's first `workflows` frame (the server answers nothing before its first reading), so a row that
+   *  still has no answer asks again (review 3072 F4). The answer arrives as a `helper-report` frame. */
+  requestHelperReport(id: string): void;
 }
+
+/** One answer to a `helper-report` request, as the store keeps it, with the end of the row it answered for. */
+export type HelperReport = Pick<HelperReportAnswer, 'report' | 'cut'> & { readonly end: number | null };
 
 export type SessionSnapshot = Pick<
   SessionState,
@@ -241,6 +257,8 @@ export type SessionSnapshot = Pick<
   agents?: AgentHelperView[];
   agentsUnmeasured?: HelpersUnmeasured | null;
   readEvery?: NonNullable<HelperFrameMembers['readEvery']> | null;
+  /** H2. Optional HERE only, as `agents`: `snapshotOf` always carries it, and a snapshot built without it reads as none. */
+  reports?: Readonly<Record<string, HelperReport>>;
   missingFile: string | null;
   strandedAccount: string | null;
   searchComplete: boolean;
@@ -282,8 +300,23 @@ function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[]
 const sameTranscript = (was: string | null | undefined, now: string | null | undefined): boolean =>
   typeof was === 'string' && was !== '' && was === now;
 
+/** D-5560: the helper rows belong to the session dir (the transcript path minus `.jsonl`), so a backlog onto ANOTHER transcript
+ *  resets them; a reconnect, or a rotation in place, onto the same one keeps them. One decision, read by the reducer (the rows)
+ *  and by the store (the asks with them), so the two cannot disagree (session helpers HF2, D-8877; review 3123 F14). */
+const resetsHelpers = (file: string | null | undefined, msg: SessionStreamMsg): boolean =>
+  msg.type === 'backlog' && !sameTranscript(file, msg.file);
+
 /** H1b (D-8862): the helper members as none, fresh each time, where every reset site clears them with the workflow rows. */
-const noHelpers = (): Pick<SessionState, 'agents' | 'agentsUnmeasured' | 'readEvery'> => ({ agents: [], agentsUnmeasured: null, readEvery: null });
+const noHelpers = (): Pick<SessionState, 'agents' | 'agentsUnmeasured' | 'readEvery' | 'reports'> =>
+  ({ agents: [], agentsUnmeasured: null, readEvery: null, reports: {} });
+
+/** H2: the answers kept for the rows a frame still draws with a report at the end each answer came for; a row that left,
+ *  lost its report or moved to another end takes its answer with it (review 3072 F2). */
+const reportsFor = (reports: SessionSnapshot['reports'], agents: readonly AgentHelperView[]): Record<string, HelperReport> =>
+  Object.fromEntries(agents.flatMap((a) => {
+    const r = reports?.[a.id];
+    return r !== undefined && a.hasReport && r.end === a.endedAt ? [[a.id, r]] : [];
+  }));
 
 /** Pure reducer over the session stream — one message in, next snapshot out. */
 export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): SessionSnapshot {
@@ -306,7 +339,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         // until the server's restated frame replaces them: clearing there
         // unmounted the strip, collapsed it and jumped the conversation on
         // every foregrounding of the PWA.
-        ...(sameTranscript(s.file, msg.file) ? {} : { workflows: [], workflowsUnreadable: false, ...noHelpers() }),
+        ...(resetsHelpers(s.file, msg) ? { workflows: [], workflowsUnreadable: false, ...noHelpers() } : {}),
         missingFile: msg.missing ? msg.file : null,
         // Unconditional, where `missingFile` above is gated: the file is the
         // address this `offset` is measured in, and a reconnect has to echo
@@ -345,7 +378,15 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       return {
         ...s, workflows: msg.workflows, workflowsUnreadable: msg.unreadable === true,
         agents: msg.agents ?? [], agentsUnmeasured: msg.agentsUnmeasured ?? null, readEvery: msg.readEvery ?? null,
+        reports: reportsFor(s.reports, msg.agents ?? []),
       };
+    // H2 (D-8872): the answer to one `helper-report` request, applied as stated, by id, for the row's end now; an answer
+    // for a row the frame does not draw with a report is for no row and is not kept (review 3072 F2).
+    case 'helper-report': {
+      const row = (s.agents ?? []).find((a) => a.id === msg.id && a.hasReport);
+      if (row === undefined) return s;
+      return { ...s, reports: { ...s.reports, [msg.id]: { report: msg.report, cut: msg.cut, end: row.endedAt } } };
+    }
     // Build 7 Task 6: the session's own outstanding mail, one row above the
     // plan (`@ccrc/ui` mail-strip.tsx). Same replace-wholesale rule as `tasks`
     // just above.
@@ -429,6 +470,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   agents: s.agents,
   agentsUnmeasured: s.agentsUnmeasured,
   readEvery: s.readEvery,
+  reports: s.reports,
   mail: s.mail,
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
@@ -726,6 +768,11 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   const confirmTimeoutMs = deps.confirmTimeoutMs ?? 5_000;
   const queuedTimeoutMs = deps.queuedTimeoutMs ?? 10 * 60_000;
   let socket: ReconnectingSocket | null = null;
+  /** H2 (review 3072 F4): the report asks this stream sent, by id, with the row's end each was for. Forgotten at each
+   *  stream's first `workflows` frame (`framed` falls when the socket is anything but open): the server answers nothing
+   *  before its first reading, so an ask made before that frame is made again after it. */
+  const asked = new Map<string, number | null>();
+  let framed = false;
   /** The presence heartbeat's timer — see `beat` below. */
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   // The page clock's stops for this connection's subscriptions (D-7191): visible, hidden and online.
@@ -870,6 +917,12 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       },
 
       apply(msg) {
+        if (msg.type === 'workflows' && !framed) { framed = true; asked.clear(); }
+        // `asked` is an ask with no answer yet (review 3099 F1): an answer, kept or dropped, ends it, and a reset of the
+        // helper rows (a backlog onto another transcript) forgets every ask with them. The other reset, `disconnect()`,
+        // needs no clear of its own: it drops `framed`, so the next stream's first frame forgets them (above).
+        if (msg.type === 'helper-report') asked.delete(msg.id);
+        if (resetsHelpers(get().file, msg)) asked.clear();
         set((s) => {
           const confirmed = clearConfirmed(s.pending, msg);
           for (const key of confirmed.cleared) {
@@ -930,7 +983,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           // arrived, and offered live. The sheet's hold keeps its own copy. A connect whose first pane read fails shows no
           // menu until the next tick frames one.
           // D-7184: the pairing falls with the dialog it was for; the new stream's first frames send their own.
-          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null, pairing: null }),
+          onState: (conn) => {
+            if (conn !== 'open') framed = false;
+            set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null, pairing: null });
+          },
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
@@ -944,6 +1000,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       },
 
       disconnect() {
+        framed = false;
         for (const stop of stopPageClock) stop();
         stopPageClock = [];
         if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
@@ -1066,6 +1123,12 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           revoke(s.pending.find((x) => x.key === key));
           return { pending: s.pending.filter((x) => x.key !== key) };
         });
+      },
+
+      requestHelperReport(id) {
+        const end = get().agents.find((a) => a.id === id)?.endedAt ?? null;
+        if (asked.has(id) && asked.get(id) === end) return;
+        if (socket?.send({ type: 'helper-report', id } satisfies HelperReportRequest) === true) asked.set(id, end);
       },
     };
   });

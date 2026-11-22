@@ -40,7 +40,7 @@ import {
   diffPhases, diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPhaseRef, parsePlanPut, parsePlanTake, parsePlanTicketAdd,
   parsePlanTicketDone, parsePlanTicketMove, parsePlanTriage, dropEpicInto, linearOwnerOfTeam, phaseNumbers, phaseRefVerdict,
   planCallerVerdict, teamOwnerProject, teamOwnerDiagnostic, ticketDoneVerdict, ticketIsHeld, landedFactOf, triageVerdict, handedRowOf,
-  type TicketDoneFacts,
+  triageLookup, triageChoice, teamHolders, type TicketDoneFacts,
   followUpTicketMail,
 } from './planPolicy.js';
 import { inboundRetirable } from '../linear/inboundRetire.js';
@@ -216,7 +216,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** Each project's workspace id, from its team key and the Linear store: null where either is unknown. */
   const workspaces = async (projects: ReadonlySet<string>): Promise<{ ws: Map<string, string | null>; routes: TeamRoutes | null }> => {
     const out = new Map<string, string | null>();
-    if (opts.coord === undefined || projects.size === 0) return { ws: out, routes: null };
+    // The store is read whenever a coord store stands, even for no project: a readable store never answers `unreachable` (F10).
+    if (opts.coord === undefined) return { ws: out, routes: null };
     const { routes } = await readTeamSnapshot();
     for (const p of projects) {
       const l = opts.coord.linkingOf(p);
@@ -378,33 +379,14 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     // rows are handed but the home does not decide: nothing is chosen, and the Upkeep lookup is not reached (review 2524 A1)
     return { row, undecided: rows.length > 0 && row === null, homeWorkspace };
   };
-  /** `plan triage` (D-8808): look up the row in each holder's resolved workspace and in workspaces the partial listing
-   *  could not measure. A stored pin can also name an unmeasured legacy workspace. Only when there is no workspace
-   *  candidate do we look for an identifier unique across workspaces. The owner decision always uses the row's own
-   *  workspace; the key-only diagnostic for a missing row cannot authorize a read or write. */
+  /** `plan triage` (D-8808): reads and acts only. The lookup (which workspaces to read) and the choice (which row, whose owner)
+   *  are the policy's: `planPolicy.ts#triageLookup`, `planPolicy.ts#triageChoice`. */
   const triageOf = (plan: PlanStorePort, team: string, issue: string, caller: string, ws: ReadonlyMap<string, string | null>, routes: TeamRoutes | null):
   { row: InboundRow | null; owner: ReturnType<typeof linearOwnerOfTeam> } => {
     const rows = plan.hierarchyProjectsOf();
-    const holders = teamHolders(team, rows);
-    const unpinnedUnmeasured = holders.some((r) => r.workspaceId == null)
-      && measuredProjectTeam(routes, { teamKey: team, workspaceId: null }).kind === 'unmeasured';
-    const where = [...new Set([
-      ...holders.map((r) => ws.get(r.project)).filter((w): w is string => w != null),
-      ...(routes?.unreadableWorkspaces ?? []),
-      ...(unpinnedUnmeasured ? (routes?.slots ?? []).filter((s) => s.teamKeys.includes(team)).map((s) => s.workspaceId) : []),
-      ...holders.flatMap((r) => r.workspaceId != null && routes !== null
-        && measuredProjectTeam(routes, { teamKey: team, workspaceId: r.workspaceId }).kind === 'unmeasured' ? [r.workspaceId] : []),
-    ])];
-    const found = (where.length === 0 ? [plan.inboundByIdentifier(null, issue)] : where.map((w) => plan.inboundByIdentifier(w, issue)))
-      .filter((r): r is InboundRow => r !== null && r.teamKey.toUpperCase() === team);
-    const each = found.map((row) => ({ row, owner: linearOwnerOfTeam(team, rows, ownerFacts(plan), row.workspaceId, routes) }));
-    return each.find((x) => x.owner.kind === 'owner' && x.owner.id === caller)
-      ?? each.find((x) => x.owner.kind === 'unmeasured' && x.owner.possibleIds.includes(caller))
-      ?? each[0] ?? { row: null, owner: teamOwnerDiagnostic(team, rows, ownerFacts(plan)) };
+    const found = triageLookup(team, rows, ws, routes).map((w) => plan.inboundByIdentifier(w, issue)).filter((r): r is InboundRow => r !== null);
+    return triageChoice(team, caller, found, rows, ownerFacts(plan), routes);
   };
-  /** The projects that hold a team key (compared upper-case): the projects whose workspaces `plan triage` reads. */
-  const teamHolders = (team: string, rows: ReturnType<PlanStorePort['hierarchyProjectsOf']>) =>
-    rows.filter((r) => r.teamKey?.toUpperCase() === team);
 
   /** A plan write's handler, after the route's own `onRequest` has checked the box token: the slug, the identity pair from the
    *  query, attribution, then the work inside `serial`. Each route is registered with its path spelled out (the gate's and the
@@ -861,7 +843,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const snapshot = await readTeamSnapshot();
     const { routes } = snapshot;
     const rows = who.plan.hierarchyProjectsOf();
-    const holders = [...new Set(rows.filter((r) => r.teamKey?.toUpperCase() === team).map((r) => r.workspaceId ?? null))];
+    const holders = [...new Set(teamHolders(team, rows).map((r) => r.workspaceId ?? null))];
     const facts = ownerFacts(who.plan);
     const verdict = mapProposerVerdict(who.id, migration.waitingWorkspaces(team), holders,
       (ws) => ws === null ? teamOwnerDiagnostic(team, rows, facts) : linearOwnerOfTeam(team, rows, facts, ws, routes));
