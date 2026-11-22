@@ -1,5 +1,5 @@
 // Single-definition scanners, one area of the guard that used to be one file (see ./helpers.ts for the doctrine and the shared walkers).
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -9,6 +9,7 @@ import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK
 import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
 import { callsIn, parsedFile, symbolOf } from '../scan/symbols.js';
+import { identifierReferences, stringExpressions } from '../scan/parse.js';
 import { ALL, ALL_MJS, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
 
 
@@ -1663,16 +1664,56 @@ describe('the agent id rule is defined once, and so is the guard over it', () =>
 describe('the isolation word: one report reader, one host measurer', () => {
   const ISO_ROOTS = ['shared/', 'server/src/', 'agent/src/'];
   const inRoots = (f: string): boolean => ISO_ROOTS.some((r) => rel(f).startsWith(r));
-  const codeOf = (f: string): string => readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  /** Every call of `name` across the source roots, as `file#symbol`: the innermost named unit holding the call, or
+   *  `<module>` for one at a file's top level. Parsed, so a comment or a string naming it is not a call. */
+  const callersOf = (name: string): string[] => ALL.flatMap((f) => {
+    const parsed = parsedFile(f);
+    return parsed.calls.filter((c) => c.name === name).map((c) => {
+      const holders = parsed.symbols.filter((sy) => sy.start <= c.start && c.end <= sy.end).sort((a, b) => (a.end - a.start) - (b.end - b.start));
+      return `${rel(f)}#${holders[0]?.name ?? '<module>'}`;
+    });
+  }).sort();
+  // Every pin below reads every source root parsed; the parse is cached per file, so it is paid once, here, on its own budget.
+  beforeAll(() => { for (const f of ALL) parsedFile(f); }, 180_000);
 
   it('readHostReport is defined only in shared/isolation.ts', () => {
     const holders = ALL.filter((f) => parsedFile(f).symbols.some((s) => s.name === 'readHostReport' && s.kind === 'function')).map(rel);
     expect(holders).toEqual(['shared/isolation.ts']);
   });
 
+  // The plan's call-site pins (Global Constraints), review F2: each name has the one caller the plan gives it.
+  it("readHostReport is called once, by the client's ready handler", () => {
+    expect(callersOf('readHostReport')).toEqual(['server/src/remote/client.ts#FleetClient.onReady']);
+  });
+
+  it("measurePeer is called once, by the client's ready handler", () => {
+    expect(callersOf('measurePeer')).toEqual(['server/src/remote/client.ts#FleetClient.onReady']);
+  });
+
+  it('measureServerFacts is called once, at boot, by the composition root', () => {
+    expect(callersOf('measureServerFacts')).toEqual(['server/src/index.ts#<module>']);
+  });
+
+  it('isolationWord, the one decider of the fleet word, is called only by the reader', () => {
+    expect(callersOf('isolationWord').map((c) => c.split('#')[0])).toEqual(['server/src/isolationFacts.ts']);
+    expect(callersOf('isolationWord').every((c) => c.split('#')[1]!.startsWith('makeIsolationReader'))).toBe(true);
+  });
+
+  it('IsolationWordLog, the one holder of the last logged reading, is made once, by wireIsolation, which index.ts calls once', () => {
+    const made = ALL.flatMap((f) => identifierReferences(parsedFile(f).text, f, new Set(['IsolationWordLog']))
+      .filter((r) => r.context.startsWith('new IsolationWordLog(')).map(() => rel(f)));
+    expect(made).toEqual(['server/src/isolationLog.ts']);
+    expect(callersOf('wireIsolation')).toEqual(['server/src/index.ts#<module>']);
+  });
+
+  it("the live host's peer reads (realPeerSeams) are handed out only by the composition root (review F7)", () => {
+    expect(callersOf('realPeerSeams')).toEqual(['server/src/index.ts#<module>']);
+  });
+
   for (const needle of ['machine-id', 'random/boot_id']) {
     it(`the ${needle} path is spelled only in shared/host-identity.mjs`, () => {
-      const holders = [...ALL, ...ALL_MJS].filter(inRoots).filter((f) => codeOf(f).includes(needle)).map(rel).sort();
+      const holders = [...ALL, ...ALL_MJS].filter(inRoots)
+        .filter((f) => stringExpressions(parsedFile(f).text, f).some((e) => e.text.includes(needle))).map(rel).sort();
       expect(holders).toEqual(['shared/host-identity.mjs']);
     });
   }
