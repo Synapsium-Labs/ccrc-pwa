@@ -38,7 +38,7 @@ import {
 // Auto-advance plan W3 Task 14: advance-health's bounded runs, in a process group of their own.
 import { spawnSyncGroup } from './spawnGroup.js';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
-import { contextWindowFor, modelEnvBlock } from '../../shared/modelenv.mjs';
+import { contextWindowFor, effortFile, modelEnvBlock } from '../../shared/modelenv.mjs';
 import { laneClassModels, parseCatalogue, parseWindows } from '../../shared/models.js';
 import { readLaneModels } from '../src/laneModels.js';
 import type { FleetIO } from '../src/io.js';
@@ -6919,6 +6919,83 @@ describe('programme wave 3 through the ops', () => {
     writeCatalogue('lane-a', DROPPED_CAT);
     expect(effortOnDisk()).toBe('high');
     expect(opusDropped()).toBe(ORDINARY);
+  });
+
+  // The rule's terms, one case each (follow-up to review 3015 F1): the detail names the effort file only when the file
+  // matches the fallback's rendering (`changed?.effort === false`) AND measurably differs from the stored registry's
+  // (`changed?.effort === true`). Each case plants the file's bytes itself, rendered here by the lane's own renderer, so
+  // the case states which renderings it matches instead of reaching them through a write path.
+  const NAMED = `${ORDINARY}; the lane's effort file already carries the fallback's levels, not the stored registry's`;
+  const renderings = (reg: typeof STEP_REGISTRY): { fallback: string; stored: string } => {
+    const cat = parseCatalogue(DROPPED_CAT);
+    const text = (r: typeof STEP_REGISTRY): string => `${JSON.stringify(effortFile(r, cat))}\n`;
+    return { fallback: text({ ...reg, effort: { ...reg.effort, opus: 'xhigh' } }), stored: text(reg) };
+  };
+  /** advance-health's opus detail, with the nth read of the lane's effort file failing (an EIO) when `failRead` names
+   *  one; `failed` says whether the preload refused a read at all, so a case shows it reached the arm it pins. */
+  const droppedWithRead = (failRead: number | null): { detail: string; failed: boolean } => {
+    const pre = path.join(home, 'fail-read.mjs');
+    const mark = path.join(home, 'fail-read.fired');
+    fs.writeFileSync(pre, [
+      "import fs from 'node:fs';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      'const { FAIL_READ_PATH: target, FAIL_READ_NTH: nth, FAIL_READ_MARK: mark } = process.env; let seen = 0;',
+      'const read = fs.readFileSync;',
+      'fs.readFileSync = (p, ...rest) => {',
+      '  if (String(p) === target && ++seen === Number(nth)) {',
+      "    fs.writeFileSync(mark, 'fired');",
+      "    throw Object.assign(new Error('injected read failure'), { code: 'EIO' });",
+      '  }',
+      '  return read(p, ...rest);',
+      '};',
+      'syncBuiltinESMExports();',
+    ].join('\n'));
+    fs.rmSync(mark, { force: true });
+    const env = failRead === null ? { CCRC_MODELS_NOW: T0 }
+      : { CCRC_MODELS_NOW: T0, NODE_OPTIONS: `--import=${pre}`, FAIL_READ_PATH: EFFORT(), FAIL_READ_NTH: String(failRead),
+        FAIL_READ_MARK: mark };
+    const h = opEnv(env, 'advance-health', '--file', rosterPath(), '--reg', path.join(home, '.cc-sessions'),
+      '--lock-template', path.join(home, 'lk', 'models-{id}.lock'));
+    const lane = (h.body['lanes'] as Record<string, unknown>[]).find((l) => l['id'] === 'lane-a')!;
+    const row = (lane['blocked'] as Record<string, unknown>[]).find((b) => b['class'] === 'opus')!;
+    expect(row['cause'], h.stdout + h.stderr).toBe('effort-dropped');
+    return { detail: String(row['detail']), failed: fs.existsSync(mark) };
+  };
+
+  it('the rule, term by term: the file matches the fallback\'s rendering and not the stored one, so the detail names it', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const r = renderings(STEP_REGISTRY);
+    expect(r.fallback, 'the two renderings differ on this lane').not.toBe(r.stored);
+    fs.writeFileSync(EFFORT(), r.fallback);
+    expect(droppedWithRead(null).detail).toBe(NAMED);
+  });
+
+  it('the rule, term by term: the file matches neither rendering, so the detail is the ordinary one', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const r = renderings(STEP_REGISTRY);
+    const onDisk = fs.readFileSync(EFFORT(), 'utf8');
+    expect(JSON.parse(onDisk)['byModel']['model-5.6-gamma'], 'the file the lane had before the level was dropped').toBe('max');
+    expect([onDisk === r.fallback, onDisk === r.stored]).toEqual([false, false]);
+    expect(droppedWithRead(null).detail).toBe(ORDINARY);
+  });
+
+  it('the rule, term by term: the file matches both renderings, so the detail is the ordinary one', () => {
+    plantStep({ registry: SHARED_REG });
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const r = renderings(SHARED_REG);
+    expect(r.fallback, 'two classes on one model render alike').toBe(r.stored);
+    fs.writeFileSync(EFFORT(), r.fallback);
+    expect(droppedWithRead(null).detail).toBe(ORDINARY);
+  });
+
+  it('the rule, term by term: the stored comparison cannot be measured, so the detail is the ordinary one, never named', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    fs.writeFileSync(EFFORT(), renderings(STEP_REGISTRY).fallback);
+    // The first read is the fallback's comparison, which matches; the second, the stored one's, fails.
+    expect(droppedWithRead(2)).toEqual({ detail: ORDINARY, failed: true });
   });
 
   it('a write-back that fails leaves the fallback applied: answered, and recorded like any other', () => {
