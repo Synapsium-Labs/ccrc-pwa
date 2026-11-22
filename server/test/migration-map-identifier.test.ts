@@ -22,7 +22,7 @@ const byIdentifier = (identifier: string, tgt: MapEntry['target'] = target) => (
 const legacy = (n: number, tgt: MapEntry['target'] = target) => ({ issue: U(100 + n), identifier: `AAA-${n}`, class: 'leaf', target: tgt });
 
 /** A rig with the migration started and the real route over it. */
-async function routed(setup: (r: MigRig) => void | Promise<void> = (r) => { r.addIssue(1); r.addIssue(2); }) {
+async function routed(setup: (r: MigRig) => unknown = (r) => { r.addIssue(1); r.addIssue(2); }) {
   const r = await migRig();
   await setup(r);
   const started = r.mig.start('project-a', await r.mig.workspaceOfProject('project-a'));
@@ -82,7 +82,7 @@ describe('plan map-propose by visible identifier (D-8186)', () => {
   });
 
   describe('refused at the route: no item, the migration still proposing with no map, and no write', () => {
-    const refused = async (setup: ((r: MigRig) => void | Promise<void>) | undefined, body: unknown, want: { status: number; error: string; detail: string }) => {
+    const refused = async (setup: ((r: MigRig) => unknown) | undefined, body: unknown, want: { status: number; error: string; detail: string }) => {
       const { r, post } = await routed(setup);
       const res = await post(body);
       expect(res.status).toBe(want.status);
