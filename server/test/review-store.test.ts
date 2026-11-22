@@ -15,6 +15,7 @@ import {
   type ReviewSource,
 } from '../../shared/docsReview.js';
 import { matchesShape } from '../src/accounts/shapes.js';
+import { localIO } from '../src/io.js';
 import { projectList } from '../src/review/policy.js';
 import {
   nodeReviewFs, openReviewStore, type ReviewFs, type ReviewStore,
@@ -44,7 +45,7 @@ function src(n = 0): ReviewSource {
 /** The fixture store directory: it does not exist yet, so `open` creates it. */
 const freshDir = (): string => path.join(mkTmp('ccrc-review-store-'), 'review-shares');
 
-type Op = 'mkdir' | 'open' | 'write' | 'fsync' | 'rename' | 'unlink' | 'readdir' | 'readFile' | 'stat';
+type Op = 'mkdir' | 'open' | 'write' | 'fsync' | 'rename' | 'unlink' | 'readdirMeasured' | 'readFile' | 'stat';
 
 /** A `ReviewFs` over the real one that records every call as `<op> <label>` and fails or pauses the ones a test says
  *  (`fail` and `gate` receive that same `<op> <label>` string).
@@ -90,7 +91,10 @@ class FaultFs implements ReviewFs {
   async fsync(h: FileHandle): Promise<void> { await this.hit('fsync', this.label(this.paths.get(h) ?? '?')); return nodeReviewFs.fsync(h); }
   async rename(from: string, to: string): Promise<void> { await this.hit('rename', `${this.label(from)} -> ${this.label(to)}`); return nodeReviewFs.rename(from, to); }
   async unlink(p: string): Promise<void> { await this.hit('unlink', this.label(p)); return nodeReviewFs.unlink(p); }
-  async readdir(dir: string): Promise<string[]> { await this.hit('readdir', this.label(dir)); return nodeReviewFs.readdir(dir); }
+  async readdirMeasured(dir: string): ReturnType<ReviewFs['readdirMeasured']> {
+    try { await this.hit('readdirMeasured', this.label(dir)); } catch { return { ok: false, reason: 'unreadable' }; }
+    return nodeReviewFs.readdirMeasured(dir);
+  }
   async readFile(p: string): Promise<Uint8Array> { await this.hit('readFile', this.label(p)); return nodeReviewFs.readFile(p); }
   async stat(p: string): ReturnType<ReviewFs['stat']> { await this.hit('stat', this.label(p)); return nodeReviewFs.stat(p); }
 }
@@ -592,17 +596,19 @@ describe('remove', () => {
     ]);
   });
 
-  it('the tombstone holds no token and no bytes', async () => {
+  it('persists only the fixed-width share id in the tombstone name, with no token or bytes in its contents', async () => {
     const dir = freshDir();
     const store = await openStore(dir);
     const s = await share(store);
     await store.remove(s.h, s.rev, 'revoked', T0 + 1);
-    const [tomb] = tombFiles(dir);
-    const text = readFileSync(path.join(dir, tomb!), 'utf8');
+    expect(s.entry.id).toMatch(/^[0-9a-f]{32}$/);
+    const tomb = `${s.entry.id}.removed.json`;
+    expect(files(dir)).toEqual([tomb]);
+    const text = readFileSync(path.join(dir, tomb), 'utf8');
     expect(text).not.toContain(s.token);
     expect(text).not.toContain(s.h);
     expect(jsonStrings(JSON.parse(text)).filter((v) => isReviewToken(v))).toEqual([]);
-    expect(JSON.parse(text)).toMatchObject({ removed: { why: 'revoked', at: T0 + 1 } });
+    expect(JSON.parse(text)).toMatchObject({ id: s.entry.id, removed: { why: 'revoked', at: T0 + 1 } });
   });
 
   it('openBytes streams from a descriptor opened while live: a send in flight finishes with the old bytes after a revoke, and a later open is null', async () => {
@@ -1237,6 +1243,18 @@ describe('boot', () => {
     try {
       expect(await openReviewStore(dir)).toEqual({ ok: false, why: 'store-unreadable' });
     } finally { chmodSync(dir, 0o700); }
+  });
+
+  it.each(['absent', 'unreadable'] as const)('refuses to recover from a listing measured as %s after the write probe', async (reason) => {
+    const dir = freshDir();
+    const store = await openStore(dir);
+    const s = await share(store);
+    const list = vi.spyOn(localIO, 'readdirMeasured').mockResolvedValueOnce({ ok: false, reason });
+
+    const opened = await openReviewStore(dir);
+    expect.soft(opened.ok ? 'opened' : opened.why).toBe('store-unreadable');
+    expect(list).toHaveBeenCalledExactlyOnceWith(dir);
+    expect(files(dir)).toEqual([`${s.h}.json`, `${s.h}.v1.html`]);
   });
 
   it('a ReviewFs that fails only the probe write opens store-unreadable', async () => {

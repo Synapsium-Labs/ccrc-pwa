@@ -12,13 +12,14 @@
 // entry. All file work goes through `ReviewFs`, so a test can record its order or fail any one call.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, open as fsOpen, readdir, readFile, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { mkdir, open as fsOpen, readFile, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
 import type { DocSectionSlug } from '../../../shared/docs.js';
 import {
   isReviewSource, isReviewToken, REVIEW_REMOVALS, REVIEW_TOMBSTONE_MS, type ReviewRemoval, type ReviewSource,
 } from '../../../shared/docsReview.js';
 import { matchesShape } from '../accounts/shapes.js';
+import { localIO, type MeasuredDirectoryRead } from '../io.js';
 import { admitCreate, expiryOf, viewDue, type ReviewEntry, type ReviewTombstone } from './policy.js';
 
 // ---- The file port -----------------------------------------------------------------------------------------------
@@ -26,8 +27,8 @@ import { admitCreate, expiryOf, viewDue, type ReviewEntry, type ReviewTombstone 
 export interface ReviewStat { size: number; mtimeMs: number }
 
 /** The small set of file operations the store uses, so a test can record their order or fail one. A directory is
- *  `fsync`ed by opening it read-only and `fsync`ing that handle. Every call throws on failure; an adapter that wraps
- *  these keeps the error it receives (a missing file is an error with `code: 'ENOENT'`). */
+ *  `fsync`ed by opening it read-only and `fsync`ing that handle. The directory listing keeps the existing measured
+ *  failure contract. Other calls throw on failure and keep the error (a missing file has `code: 'ENOENT'`). */
 export interface ReviewFs {
   /** Creates the directory (and any missing parent) with this mode; succeeds when it already exists. */
   mkdir(dir: string, mode: number): Promise<void>;
@@ -37,7 +38,7 @@ export interface ReviewFs {
   fsync(h: FileHandle): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   unlink(path: string): Promise<void>;
-  readdir(dir: string): Promise<string[]>;
+  readdirMeasured(dir: string): Promise<MeasuredDirectoryRead>;
   readFile(path: string): Promise<Uint8Array>;
   stat(path: string): Promise<ReviewStat>;
 }
@@ -50,7 +51,7 @@ export const nodeReviewFs: ReviewFs = {
   fsync: (h) => h.sync(),
   rename: (from, to) => rename(from, to),
   unlink: (path) => unlink(path),
-  readdir: (dir) => readdir(dir),
+  readdirMeasured: (dir) => localIO.readdirMeasured(dir),
   readFile: (path) => readFile(path),
   stat: async (path) => { const s = await stat(path); return { size: s.size, mtimeMs: s.mtimeMs }; },
 };
@@ -648,7 +649,7 @@ class FsReviewStore implements ReviewStore {
   /** False when the directory cannot be proved writable or read. A boot that cannot tell what is on disk fails closed:
    *  every link answers 404 and create refuses `store-unreadable`. */
   async boot(now: number): Promise<boolean> {
-    let names: string[];
+    let names: readonly string[];
     try {
       await this.io.mkdir(this.dir, 0o700);
       // Writable, proved: a probe file written, synced and unlinked. A directory that cannot be written must not serve
@@ -661,7 +662,10 @@ class FsReviewStore implements ReviewStore {
       } finally { await h.close().catch(() => undefined); }
       await this.io.unlink(this.p(probe));
       await this.syncDir();
-      names = await this.io.readdir(this.dir);
+      const listing = await this.io.readdirMeasured(this.dir);
+      // If it disappeared after the probe or cannot be listed, neither is a measured empty store.
+      if (!listing.ok) return false;
+      names = listing.entries;
     } catch { return false; }
 
     const indexes: Array<{ hash: string; text: string }> = [];

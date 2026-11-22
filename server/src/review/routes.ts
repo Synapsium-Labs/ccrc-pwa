@@ -4,16 +4,18 @@ import {
   isReviewToken, REVIEW_IDLE_MS, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
   REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE, REVIEW_SEND_IDLE_MS,
 } from '../../../shared/docsReview.js';
+import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 import { expiryOf, type ReviewEntry } from './policy.js';
 import type { ReviewRemoval } from '../../../shared/docsReview.js';
 import type { ReviewStore } from './store.js';
 
-export function registerReviewOpenRoute(app: FastifyInstance, store: ReviewStore | null, wall: () => number): void {
+type ReviewAccess = { store: ReviewStore; wall: () => number };
+
+export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAccess | null): void {
   let active = 0;
   const shares = new Map<string, number>();
   const cleaning = new Set<string>();
-  const cleanup = (entry: ReviewEntry, why: ReviewRemoval, now: number): void => {
-    if (store === null) return;
+  const cleanup = (store: ReviewStore, entry: ReviewEntry, why: ReviewRemoval, now: number): void => {
     const key = `${entry.tokenHash}:${entry.rev}`;
     if (cleaning.has(key)) return;
     cleaning.add(key);
@@ -34,9 +36,10 @@ export function registerReviewOpenRoute(app: FastifyInstance, store: ReviewStore
       reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
         .header('x-content-type-options', 'nosniff').header('content-disposition', 'attachment');
     };
-    const failure = (reply: FastifyReply, status: number, error: string) => {
+    const failure = (reply: FastifyReply, error: 'not-found' | 'too-large' | 'busy') => {
       headers(reply);
-      return reply.code(status).send({ ok: false, error });
+      // The review wire says `busy` for send capacity, not the generic 409 conflict with that word.
+      return reply.code(REFUSAL_STATUS[error === 'busy' ? 'rate-limited' : error]).send({ ok: false, error });
     };
     scope.setErrorHandler((error, _req, reply) => {
       if (reply.raw.headersSent || reply.raw.destroyed || reply.raw.writableEnded) return;
@@ -46,12 +49,12 @@ export function registerReviewOpenRoute(app: FastifyInstance, store: ReviewStore
       }
       const tooLarge = typeof error === 'object' && error !== null &&
         'code' in error && error.code === 'FST_ERR_CTP_BODY_TOO_LARGE';
-      failure(reply, tooLarge ? 413 : 404, tooLarge ? 'too-large' : 'not-found');
+      failure(reply, tooLarge ? 'too-large' : 'not-found');
     });
     scope.post('/api/review/open', {
       bodyLimit: REVIEW_OPEN_BODY_BYTES,
       onRequest: async (req, reply) => {
-        if (req.headers[REVIEW_MARKER_HEADER] !== REVIEW_MARKER_VALUE) return failure(reply, 404, 'not-found');
+        if (req.headers[REVIEW_MARKER_HEADER] !== REVIEW_MARKER_VALUE) return failure(reply, 'not-found');
         // Invalid metadata must reach the bounded fallback, never the JSON parser.
         if (req.headers['content-type'] !== undefined && req.mediaType === undefined) {
           req.headers = { 'content-type': undefined };
@@ -60,17 +63,18 @@ export function registerReviewOpenRoute(app: FastifyInstance, store: ReviewStore
     }, async (req, reply) => {
       const body = req.body as { token?: unknown } | null;
       const token = body?.token;
-      if (typeof token !== 'string' || !isReviewToken(token) || store === null) return failure(reply, 404, 'not-found');
+      if (typeof token !== 'string' || !isReviewToken(token) || access === null) return failure(reply, 'not-found');
+      const { store, wall } = access;
       const entry = store.byToken(token);
-      if (entry === null) return failure(reply, 404, 'not-found');
+      if (entry === null) return failure(reply, 'not-found');
       const now = wall();
       const expiry = expiryOf(entry, now);
       if (!expiry.live) {
-        cleanup(entry, expiry.why, now);
-        return failure(reply, 404, 'not-found');
+        cleanup(store, entry, expiry.why, now);
+        return failure(reply, 'not-found');
       }
       const count = shares.get(entry.tokenHash) ?? 0;
-      if (count >= REVIEW_OPEN_STREAMS_PER_SHARE || active >= REVIEW_OPEN_STREAMS) return failure(reply, 429, 'busy');
+      if (count >= REVIEW_OPEN_STREAMS_PER_SHARE || active >= REVIEW_OPEN_STREAMS) return failure(reply, 'busy');
       active++;
       shares.set(entry.tokenHash, count + 1);
       let closed = false;
@@ -95,18 +99,18 @@ export function registerReviewOpenRoute(app: FastifyInstance, store: ReviewStore
       reset();
       try { source = await store.openBytes(entry.tokenHash, entry.version); } catch { source = null; }
       if (closed) { source?.stream.destroy(); return reply; }
-      if (source === null) { release(); return failure(reply, 404, 'not-found'); }
+      if (source === null) { release(); return failure(reply, 'not-found'); }
       const current = store.byToken(token);
       const checkedAt = wall();
       if (current === null || current.version !== entry.version) {
         release();
-        return failure(reply, 404, 'not-found');
+        return failure(reply, 'not-found');
       }
       const currentExpiry = expiryOf(current, checkedAt);
       if (!currentExpiry.live) {
         release();
-        cleanup(current, currentExpiry.why, checkedAt);
-        return failure(reply, 404, 'not-found');
+        cleanup(store, current, currentExpiry.why, checkedAt);
+        return failure(reply, 'not-found');
       }
       // A successful write callback marks bytes handed to the socket, not a source read or a peer acknowledgement.
       const write = reply.raw.write.bind(reply.raw);

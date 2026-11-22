@@ -33,7 +33,7 @@ async function fixture(armed = false, unreadable = false) {
   const home = mkTmp('review-route-');
   const fs = { ...nodeReviewFs };
   const calls = [vi.spyOn(fs, 'mkdir'), vi.spyOn(fs, 'open'), vi.spyOn(fs, 'write'), vi.spyOn(fs, 'fsync'),
-    vi.spyOn(fs, 'rename'), vi.spyOn(fs, 'unlink'), vi.spyOn(fs, 'readdir'), vi.spyOn(fs, 'readFile'), vi.spyOn(fs, 'stat')];
+    vi.spyOn(fs, 'rename'), vi.spyOn(fs, 'unlink'), vi.spyOn(fs, 'readdirMeasured'), vi.spyOn(fs, 'readFile'), vi.spyOn(fs, 'stat')];
   const opened = await openReviewStore(path.join(home, 'store'), fs);
   if (!opened.ok) throw new Error(opened.why);
   const { store } = opened;

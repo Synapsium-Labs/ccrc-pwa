@@ -1,7 +1,10 @@
 import path from 'node:path';
 import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { REVIEW_RETENTION_MS, REVIEW_SWEEP_MS, REVIEW_PENDING_RETRY_MS, type ReviewSource } from '../../shared/docsReview.js';
+import {
+  REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_RETENTION_MS, REVIEW_SWEEP_MS, REVIEW_PENDING_RETRY_MS,
+  type ReviewSource,
+} from '../../shared/docsReview.js';
 import type { DocsTreeOk } from '../../shared/docs.js';
 import { nodeReviewFs, openReviewStore, type ReviewStore } from '../src/review/store.js';
 import { startReviewSweep } from '../src/review/sweep.js';
@@ -414,6 +417,26 @@ describe('buildServer review sweep', () => {
       const retry = vi.spyOn(store, 'retryPending');
       await sweep!.runOnce();
       expect(retry).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps review unavailable without opening a store when a manually assembled server has no time port', async () => {
+    const { time: _time, ...base } = testDeps();
+    const mkdir = vi.fn(nodeReviewFs.mkdir);
+    // Ordinary narrow route fixtures predate the required time port and pass only the deps they use.
+    const app = await buildServer({ ...base, review: { fs: { ...nodeReviewFs, mkdir } } } as Deps);
+    try {
+      expect.soft(mkdir).not.toHaveBeenCalled();
+      expect.soft(app.reviewSweep).toBeNull();
+      expect((await app.inject('/health')).statusCode).toBe(200);
+      const answer = await app.inject({
+        method: 'POST', url: '/api/review/open', headers: { [REVIEW_MARKER_HEADER]: REVIEW_MARKER_VALUE },
+        payload: { token: 'a'.repeat(43) },
+      });
+      expect(answer.statusCode).toBe(404);
+      expect(answer.json()).toEqual({ ok: false, error: 'not-found' });
     } finally {
       await app.close();
     }

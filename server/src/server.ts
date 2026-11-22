@@ -4568,13 +4568,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `serverCapsNow` never rejects, so this never fails a close.
   if (watcher) app.addHook('onClose', async () => { watcher.stop(); await watcher.serverCapsSettled(); });
 
-  const review = deps.review?.store === undefined
-    ? await openReviewStore(deps.cfg.reviewStoreDir, deps.review?.fs)
-    : { ok: true as const, store: deps.review.store };
-  registerReviewOpenRoute(app, review.ok ? review.store : null, () => deps.time.clock.wall());
+  // A manually assembled server without the injected clock has no review lane. Keep the route registered, but do
+  // not open a store or start work it cannot safely age. Both production assemblies supply the process clock.
+  const reviewClock = deps.time?.clock;
+  const review = reviewClock === undefined
+    ? { ok: false as const, why: 'clock-unwired' as const }
+    : deps.review?.store === undefined
+      ? await openReviewStore(deps.cfg.reviewStoreDir, deps.review?.fs)
+      : { ok: true as const, store: deps.review.store };
+  const reviewAccess = review.ok && reviewClock !== undefined
+    ? { store: review.store, wall: () => reviewClock.wall() }
+    : null;
+  registerReviewOpenRoute(app, reviewAccess);
   const reviewAbort = new AbortController();
   const node = docs.readers.primary;
-  const reviewSweep = review.ok ? startReviewSweep(review.store, {
+  const reviewSweep = reviewAccess === null ? null : startReviewSweep(reviewAccess.store, {
     tree: async (project, servedRef) => {
       try {
         // The Docs plugin already verified both primary entries. Use its flight, lane and caches.
@@ -4585,10 +4593,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         return { ok: false };
       }
     },
-  }, () => deps.time.clock.wall()) : null;
+  }, reviewAccess.wall);
   app.decorate('reviewSweep', reviewSweep);
-  if (reviewSweep === null) console.warn('ccrc-server: draft review store unavailable');
-  else app.addHook('onClose', async () => {
+  if (!review.ok) console.warn(`ccrc-server: draft review unavailable (${review.why})`);
+  if (reviewSweep !== null) app.addHook('onClose', async () => {
     reviewAbort.abort();
     await reviewSweep.stop();
   });
