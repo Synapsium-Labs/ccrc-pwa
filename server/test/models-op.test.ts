@@ -6998,6 +6998,14 @@ describe('programme wave 3 through the ops', () => {
     expect(droppedWithRead(2)).toEqual({ detail: ORDINARY, failed: true });
   });
 
+  it('the rule, term by term: the fallback comparison cannot be measured, so the detail is the ordinary one, never named', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    fs.writeFileSync(EFFORT(), renderings(STEP_REGISTRY).fallback);
+    // The first read, the fallback's comparison, fails; the second, the stored one's, measures a difference.
+    expect(droppedWithRead(1)).toEqual({ detail: ORDINARY, failed: true });
+  });
+
   it('a write-back that fails leaves the fallback applied: answered, and recorded like any other', () => {
     plantStep();
     writeCatalogue('lane-a', DROPPED_CAT);
