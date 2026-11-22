@@ -186,6 +186,37 @@ describe('T11 review 4-2: a replace rides the same view transition as a push', (
     expect(vt).toHaveBeenCalledTimes(1);
     expect(history.length).toBe(before + 1);
   });
+
+  // Review 3319 F1 (Overlord W1 home): `from` names the address a move leaves. The history call runs inside the transition,
+  // which a browser runs a frame later; a move whose page has changed meanwhile does nothing, at the call or at the run.
+  it('a replace with `from` lands while the page is still there, and does nothing once a later navigation has moved it', () => {
+    navigate('/');
+    const held: Array<() => void> = [];
+    doc.startViewTransition = vi.fn((cb: () => void) => { held.push(cb); return { finished: Promise.resolve() }; });
+    const before = history.length;
+    navigate('/fleet', { replace: true, from: '/' });
+    expect(held).toHaveLength(1);
+    history.pushState(null, '', '/runs');            // a tap, landed while the replace waited
+    held.shift()!();
+    expect(location.pathname).toBe('/runs');
+    expect(history.length).toBe(before + 1);
+    // The control: with the page still at `from`, the same replace lands.
+    navigate('/');
+    held.shift()!();
+    const at = history.length;
+    navigate('/fleet', { replace: true, from: '/' });
+    held.shift()!();
+    expect(location.pathname).toBe('/fleet');
+    expect(history.length).toBe(at);
+  });
+
+  it('a move with `from` asked when the page is already elsewhere does nothing, not even start a transition', () => {
+    navigate('/runs');
+    const vt = stub();
+    navigate('/fleet', { replace: true, from: '/' });
+    expect(vt).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/runs');
+  });
 });
 
 describe('T11 review 4-3: usePath subscribes through useLocation', () => {

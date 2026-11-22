@@ -13,7 +13,7 @@ import { OverlordRoute } from '../src/overlord/OverlordRoute';
 import type { ReadState } from '../src/overlord/readState';
 import { matchRoute, shellViewOf, topRouteOf, FLEET_PATH } from '../src/lib/routes';
 import { useOverlordStore } from '../src/stores/overlord';
-import { useLocation } from '../src/lib/router';
+import { navigate, useLocation } from '../src/lib/router';
 
 afterEach(() => { cleanup(); });
 
@@ -83,19 +83,47 @@ describe('HomeRoute, `/`', () => {
     await flush();
     expect(location.pathname).toBe('/fleet');
   });
-  it('while the reads load, says so and stays on /; then lands where the answer says', async () => {
+  // Review 3319 F3: each wait is checked AFTER the deferred replace has had its chance to run (`flush`), so a missing wait
+  // fails here rather than passing before the microtask; and the eventual answer's destination and history are pinned.
+  it('while the reads load, says so and stays on /, after the deferred work has run; then lands where the answer says', async () => {
+    const before = history.length;
     setReads({});
     render(<HomeRoute />);
     await flush();
     expect(screen.getByRole('status').textContent).toBe('Loading…');
     expect(location.pathname).toBe('/');
     act(() => { useOverlordStore.setState({ caps: WORD }); });
-    expect(location.pathname).toBe('/');
+    await flush();
+    expect(location.pathname, 'the word, the designation still loading').toBe('/');
     act(() => { useOverlordStore.setState({ designation: { state: 'answered', value: ROW, at: AT } }); });
-    expect(location.pathname).toBe('/');
+    await flush();
+    expect(location.pathname, 'a bound Overlord, its ladder still loading').toBe('/');
     act(() => { useOverlordStore.setState({ ladder: ladder('chat') }); });
     await flush();
     expect(location.pathname).toBe('/overlord');
+    expect(history.length, 'replaced, so no / entry').toBe(before);
+  });
+  it('with the word, waits for the designation: a loading designation never lands on /fleet early', async () => {
+    const before = history.length;
+    setReads({ caps: WORD });
+    render(<HomeRoute />);
+    await flush();
+    expect(location.pathname).toBe('/');
+    act(() => { useOverlordStore.setState({ designation: { state: 'answered', value: ROW, at: AT }, ladder: ladder('chat') }); });
+    await flush();
+    expect(location.pathname).toBe('/overlord');
+    expect(history.length).toBe(before);
+  });
+  it('a designated Overlord waits for its ladder: an unread ladder never lands on /overlord early, and the rung off lands on /fleet', async () => {
+    const before = history.length;
+    setReads({ caps: WORD, designation: { state: 'answered', value: ROW, at: AT } });
+    render(<HomeRoute />);
+    await flush();
+    expect(location.pathname).toBe('/');
+    act(() => { useOverlordStore.setState({ ladder: ladder('off') }); });
+    await flush();
+    expect(location.pathname).toBe('/fleet');
+    expect(history.length).toBe(before);
   });
   it('after a 503 on the caps read, lands on /fleet', async () => {
     setReads({ caps: { state: 'unmeasured', error: 'HTTP 503' } });
@@ -131,6 +159,51 @@ describe('the replace reaches a shell that subscribes in its own effect', () => 
     expect(location.pathname).toBe('/fleet');
     expect(screen.getByTestId('at').textContent).toBe('/fleet');
   });
+
+  // Review 3319 F1: `navigate` runs its history call inside a view transition where the platform has one, a frame later. The
+  // home's replace, held there, must not land over a navigation made in between. The stub holds the first transition's
+  // update and runs every later one at once, as a browser that has started a new transition would.
+  describe('a replace held by a view transition', () => {
+    const doc = document as { startViewTransition?: unknown };
+    let held: Array<() => void> = [];
+    let holdNext = true;
+    beforeEach(() => {
+      held = [];
+      holdNext = true;
+      doc.startViewTransition = (update: () => void) => {
+        if (holdNext) { holdNext = false; held.push(update); } else update();
+        return { finished: Promise.resolve() };
+      };
+    });
+    afterEach(() => { delete doc.startViewTransition; });
+
+    it('never lands over a navigation made while it waited: the page stays where the tap took it', async () => {
+      setReads({ caps: caps([]) });
+      render(<Shell />);
+      await flush();
+      expect(held, 'the replace waits in its transition').toHaveLength(1);
+      expect(location.pathname).toBe('/');
+      const before = history.length;
+      act(() => { navigate('/runs'); });
+      expect(location.pathname).toBe('/runs');
+      act(() => { held.shift()!(); });
+      expect(location.pathname, 'the late replace did nothing').toBe('/runs');
+      expect(history.length).toBe(before + 1);
+      expect(screen.getByTestId('at').textContent).toBe('/runs');
+    });
+
+    it('with no navigation meanwhile, lands when its transition runs, and leaves no / in history', async () => {
+      const before = history.length;
+      setReads({ caps: caps([]) });
+      render(<Shell />);
+      await flush();
+      expect(location.pathname).toBe('/');
+      act(() => { held.shift()!(); });
+      expect(location.pathname).toBe('/fleet');
+      expect(history.length).toBe(before);
+      expect(screen.getByTestId('at').textContent).toBe('/fleet');
+    });
+  });
 });
 
 describe('OverlordRoute, `/overlord`', () => {
@@ -155,5 +228,15 @@ describe('OverlordRoute, `/overlord`', () => {
     expect(location.pathname).toBe('/overlord');
     expect(screen.getByRole('heading', { name: 'Overlord' })).toBeTruthy();
     expect(screen.getByText('The Overlord is running.')).toBeTruthy();
+  });
+  // Review 3319 A3: a read in flight is not a failure.
+  it('while the designation loads it says Loading…, and only a failed read says it could not be read', async () => {
+    setReads({ caps: WORD });
+    render(<OverlordRoute />);
+    await flush();
+    expect(screen.getByRole('status').textContent).toBe('Loading…');
+    expect(screen.queryByText('The designation could not be read.')).toBeNull();
+    act(() => { useOverlordStore.setState({ designation: { state: 'unmeasured', error: 'HTTP 503' } }); });
+    expect(screen.getByRole('status').textContent).toBe('The designation could not be read.');
   });
 });
