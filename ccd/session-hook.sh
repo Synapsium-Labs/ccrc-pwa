@@ -5319,8 +5319,9 @@ fi
 # rename turns that suite red rather than silently disarming this deny.
 # ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
 # `paid` are already in memory, so a non-Skill event, and the main thread's
-# Skill call, pay no fork at all, and only a subagent's Skill call pays the one
-# jq for the skill's name.
+# Skill call, pay no fork in this arm, and only a subagent's Skill call pays its
+# one jq for the skill's name. A session under a launch profile pays one more jq
+# on every PreToolUse, in the surface arm below, which reads the name too.
 # A deny already set is never replaced (the merge deny's own guard, copied
 # whole). Today it cannot be set on a Skill call, because every other deny here
 # fires on another tool, and the guard is written for the day one does.

@@ -35,18 +35,24 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-/** One PreToolUse event through the hook; the deny reason, or null. Exit 0 and a silent stderr on every call. */
-function fire(tool: string, input: Record<string, unknown>, env: Record<string, string> = { CCRC_LAUNCH_PROFILE: PROFILE, ...PIN },
-  opts: { hook?: string; extra?: Record<string, unknown> } = {}): string | null {
-  const r = spawnSync('bash', [opts.hook ?? HOOK], {
-    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: home, ...opts.extra }),
+/** One event of any kind through the hook; its stdout, trimmed. Exit 0 and a silent stderr on every call. */
+function fireEvent(payload: Record<string, unknown>, env: Record<string, string> = { CCRC_LAUNCH_PROFILE: PROFILE, ...PIN },
+  hook: string = HOOK): string {
+  const r = spawnSync('bash', [hook], {
+    input: JSON.stringify({ cwd: home, ...payload }),
     encoding: 'utf8',
     env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
       CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env },
   });
   expect(r.status, 'the hook contract: exit 0').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
-  const line = r.stdout.trim();
+  return r.stdout.trim();
+}
+
+/** One PreToolUse event through the hook; the deny reason, or null. */
+function fire(tool: string, input: Record<string, unknown>, env: Record<string, string> = { CCRC_LAUNCH_PROFILE: PROFILE, ...PIN },
+  opts: { hook?: string; extra?: Record<string, unknown> } = {}): string | null {
+  const line = fireEvent({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, ...opts.extra }, env, opts.hook);
   if (line === '') return null;
   const o = JSON.parse(line) as { hookSpecificOutput: { permissionDecision?: string; permissionDecisionReason?: string } };
   return o.hookSpecificOutput.permissionDecision === 'deny' ? String(o.hookSpecificOutput.permissionDecisionReason) : null;
@@ -83,7 +89,7 @@ describe('the surface arm (W1 sandbox B, Task 8)', () => {
   it('denies an Agent or Task call whose subagent_type is not a declared reader type, or names none', () => {
     for (const tool of ['Agent', 'Task']) {
       expect(fire(tool, { subagent_type: 'general-purpose', prompt: 'p' }), tool).toContain('general-purpose');
-      expect(fire(tool, { prompt: 'p' }), tool).not.toBeNull();
+      expect(fire(tool, { prompt: 'p' }), tool).toContain('the agent type `(none)`');
     }
     expect(fire('Task', { subagent_type: 'overlord-reader', prompt: 'p' })).toBeNull();
   });
@@ -91,8 +97,42 @@ describe('the surface arm (W1 sandbox B, Task 8)', () => {
   it('denies a Skill not in the row, a prefixed name included, read the role-skill arm\'s way', () => {
     expect(fire('Skill', { skill: 'dataviz' })).toContain('dataviz');
     expect(fire('Skill', { skill: 'x:ccrc-overlord' })).toContain('x:ccrc-overlord');
-    expect(fire('Skill', { skill: 'ccrc-overlord-x' })).not.toBeNull();
+    expect(fire('Skill', { skill: 'ccrc-overlord-x' })).toContain('the skill `ccrc-overlord-x`');
     expect(fire('Skill', { skill: ' /ccrc-overlord\t' })).toBeNull();
+  });
+
+  it('acts on PreToolUse only: no other event carries its deny, the variable set (review 3351 F1)', () => {
+    // The positive control: the same tool, as a PreToolUse, is refused.
+    expect(fire('Bash', { command: 'true' })).toContain('launch profile');
+    for (const ev of [
+      { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, tool_response: { stdout: '' } },
+      { hook_event_name: 'UserPromptSubmit', prompt: 'hello' },
+      { hook_event_name: 'Stop' },
+    ]) {
+      expect(fireEvent(ev), ev.hook_event_name).toBe('');
+    }
+  });
+
+  it('reads the home registry\'s lib/ only when none sits beside the hook, and refuses with neither (review 3351 F3)', () => {
+    const dir = path.join(home, 'bare');
+    fs.mkdirSync(dir, { recursive: true });
+    const bare = path.join(dir, 'session-hook.sh');
+    fs.copyFileSync(HOOK, bare);
+    // The disabled control: no lib/ beside the hook and none under the home registry.
+    expect(fire('mcp__door__read', {}, undefined, { hook: bare })).toContain('could not be read');
+    // The fallback: the home registry's row, which here also lists Read.
+    const lib = path.join(home, '.cc-sessions', 'lib');
+    fs.cpSync(path.join(CCD, 'lib'), lib, { recursive: true });
+    const f = path.join(lib, 'launch-profiles.json');
+    const rows = JSON.parse(fs.readFileSync(f, 'utf8')) as Record<string, Record<string, unknown>>;
+    const flags = rows['overlord']!['flags'] as string[];
+    flags[flags.indexOf('--tools') + 1] = 'Agent,Skill,Read';
+    fs.writeFileSync(f, JSON.stringify(rows));
+    expect(fire('mcp__door__read', {}, undefined, { hook: bare })).toBeNull();
+    expect(fire('Read', { file_path: '/x' }, undefined, { hook: bare })).toBeNull();
+    expect(fire('Bash', { command: 'true' }, undefined, { hook: bare })).toContain('launch profile');
+    // The lib/ beside the hook wins over the home registry's: Read stays refused there.
+    expect(fire('Read', { file_path: '/x' })).toContain('the tool `Read`');
   });
 
   it('does nothing without CCRC_LAUNCH_PROFILE', () => {
