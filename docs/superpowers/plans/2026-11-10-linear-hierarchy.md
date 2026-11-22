@@ -466,9 +466,12 @@ number from `POST /api/ledger/deviations`.
   `shared/linking.ts` first, as a move commit with characterization pins; `shared/api.ts` gains one type-only import line
   for `ProjectLinkingWire` (the L0 import pins move with it). The row's workspace is `project_linking.teamWorkspace`, in the
   wave's one migration with `teamSuggestions` and `teamCallId`. The operator's write body's `workspace` is optional:
-  a named one must hold the key (`team-unknown`). With none named (absent or null), a key reads the Linear store: the one
-  connected workspace that holds it is stored, two holders are refused `team-ambiguous`, an unreadable store is
-  `unavailable`, and a key no connected workspace holds is stored with none. A cleared key reads no store. Saving the
+  a named one must hold the key (`team-unknown`), and a named one whose slot cannot be read is `unavailable`. With none named
+  (absent or null), a key reads the Linear store: the one connected workspace that holds it is stored, two holders are
+  refused `team-ambiguous`, an unreadable store, or any connected workspace that cannot be read while two readable ones do
+  not already hold the key, is `unavailable` (since run 3279), and a key no connected workspace holds, every one read, or a
+  key with no workspace connected, is stored with none. The unchanged key sent back naming a workspace that holds it keeps a
+  stored none, even while another workspace cannot be read (review 3286 F1). A cleared key reads no store. Saving the
   unchanged key with the workspace absent keeps the stored workspace, a row written before this wave's migration keeping its
   none, without reading the store: nothing new is stored, and a later use resolves the key and refuses `team-ambiguous`
   if two workspaces hold it. An explicit `workspace: null` with the unchanged key reads the store like any other write with
@@ -540,14 +543,15 @@ number from `POST /api/ledger/deviations`.
   Return alike (review 3073 F5, F6). Migration completion waits rather than dropping an unnamed declared
   programme whose membership cannot be measured. Ambiguous inbound with no owner waits, counts in the console and, since run
   3187, raises the shared-key item above. Follow-ups this wave leaves:
-  `w8-attached-wire` and `w8-confirm-unmeasured` (the confirm route answers `unavailable` when the pair is unmeasured);
+  `w8-attached-wire`;
   `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
   `w8-triage-l1` by run 3155, `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
   coordinator's call, since it only adds an item, `w8-call-anchor` by run 3209, `w8-folded-pin` by run 3230 (#3172),
   and `w8-skill-section` (Task 8.6's skill step, which the review judge's rules-mixed rule moved to a PR of its own) by
-  run 3238, `w8-overlord-skill` by run 3251, and `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
-  suggest and confirm doors and the call record) by run 3264. Record: the
-  wave 8 note.
+  run 3238, `w8-overlord-skill` by run 3251, `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
+  suggest and confirm doors and the call record) by run 3264, and `w8-confirm-unmeasured` (the team doors answer
+  `unavailable` when a workspace the pair depends on cannot be read, and the suggest and confirm doors `not-configured` when
+  none is connected) by run 3279. Record: the wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
   with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`

@@ -306,7 +306,8 @@ describe('the Move sessions sheet offline, one cell per skin at 360 and 1280, da
         await ctx.addInitScript((snap) => { localStorage.setItem('ccrc.fleet-snapshot.v1', snap); }, JSON.stringify(snapshot));
         app.cut();
         await page.goto(server!.origin + '/fleet');
-        await page.getByText('4 sessions', { exact: true }).first().waitFor({ timeout: 30_000 });
+        // three, not four: the count is of running sessions, and one of the four is hibernated
+        await page.getByText('3 sessions', { exact: true }).first().waitFor({ timeout: 30_000 });
         await goTo(page, '/accounts');
         await page.locator('[data-page-body]').waitFor({ timeout: 30_000 });
         await page.waitForTimeout(1_500);

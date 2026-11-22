@@ -47,7 +47,7 @@ describe("classRungEffortReset — §3's \"a class rung resets effort to the new
     const src = ccdSource();
     // The GUARD line, not the paragraph above it that explains the guard —
     // anchored on the `die` so a comment can never satisfy this pin.
-    const guard = src.split('\n').find((l) => l.includes('die "class haiku takes no effort level'));
+    const guard = src.split('\n').find((l) => l.includes('die "$subj takes no effort level'));
     expect(guard, "ccd/ccd's haiku/effort pair check is gone").toBeDefined();
     expect(guard).toContain(`"$eff" != ${classRungEffortReset('haiku')}`);
   });

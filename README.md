@@ -7830,7 +7830,8 @@ you need to reason about one.*
   `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
   route fields `poolset` and `acctorder`) and `lib/long-lived.sh` (the Overlord's ccd arms: the
   `keep-awake` verb's region) and `lib/door.sh` (the Overlord's door process: its registry directory's purge and its
-  program's pin check); `ccrc`, the box
+  program's pin check) and `lib/model-aliases.sh` (the model-class Anthropic arm: a lane's aliases and holds, the launch
+  marker and the model id the routing record carries); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -8599,6 +8600,7 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ~/.local/libexec/ccrc/lib/long-lived.sh   # its fifth library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-door.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-door.sh ~/.local/libexec/ccrc/lib/door.sh   # its sixth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ~/.local/libexec/ccrc/lib/model-aliases.sh   # its seventh library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-door-process.mjs ] || restore ~/ccrc-backups/<ts>/ccd-door-process.mjs ~/.local/libexec/ccrc/door-process.mjs   # the door program, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
@@ -8976,10 +8978,10 @@ These conventions carry more weight here than style:
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
   `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
-  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth, and `ccd/lib/door.sh` (the Overlord's door process) the sixth;
+  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth, and `ccd/lib/door.sh` (the Overlord's door process) the sixth, and `ccd/lib/model-aliases.sh` (the model-class Anthropic arm) the seventh;
   each is treated the same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install`,
   `__CCD_LIB_LEASE_SHA256=stamp-at-install`, `__CCD_LIB_POOLSET_SHA256=stamp-at-install` and
-  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` and `__CCD_LIB_DOOR_SHA256=stamp-at-install`; the body reads and checks all six before it evaluates any.
+  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` and `__CCD_LIB_DOOR_SHA256=stamp-at-install` and `__CCD_LIB_ALIASES_SHA256=stamp-at-install`; the body reads and checks all seven before it evaluates any.
   `ccd/door-process.mjs` (the Overlord's door program, a Node program: not a library, not a launcher) is installed beside the body at
   `~/.local/libexec/ccrc/door-process.mjs` (mode 644, not on `PATH`) and pinned the same way (`__CCD_DOOR_SHA256=stamp-at-install`, rendered from the
   installed bytes in the same run, like the redactor's two files); the updater's backup carries it as `ccd-door-process.mjs`.
