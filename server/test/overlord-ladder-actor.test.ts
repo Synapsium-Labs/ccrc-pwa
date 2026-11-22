@@ -42,7 +42,7 @@ describe('console brakes at the route', () => {
       coord: r.store, facts: {}, serial: async (f: () => unknown) => f(), identity,
       gate: () => { throw Error('brake asked the gate'); },
       consoleFacts: () => ({ armed, device }),
-      ladder: { coord: r.store, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
+      ladder: { coord: r.store, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'load-past-95': () => 'lifted' }, serverCaps: [] },
       journal: r.journal, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
     } as unknown as OverlordRouteDeps);
     const response = await app.inject({ method: 'POST', url: `/api/overlord/${door}`, ...(door === 'rung' ? { payload: { rung: 'off' } } : {}) });
@@ -60,7 +60,7 @@ describe('actor refusal at the route', () => {
       setRung: () => ({ ok: false as const, reason: 'actor' as const }), clearLatch: r.store.clearLatch.bind(r.store) };
     registerOverlordRoutes(app, { identity, coord: r.store, facts: { authority: () => ({ kind: 'unmeasured', why: 'private-text' }) },
       serial: async (f: () => unknown) => f(), gate: () => ({ pass: true, actor: gateActorOf('private-actor', '') }),
-      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
+      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'load-past-95': () => 'lifted' }, serverCaps: [] },
       journal: r.journal, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'chat' } });
