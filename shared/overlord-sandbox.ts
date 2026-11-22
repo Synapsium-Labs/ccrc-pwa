@@ -80,20 +80,17 @@ export interface StartLoadsBody {
  *  were measured on (question 4, slug `claude-code-own-lists-are-keyed-by-build`). The check allows exactly the profile's
  *  names plus the report build's lists; a build with no entry reads `skills` and `agents` `unmeasured`, naming the build.
  *
- *  A RIG LOWER BOUND (ruled 2026-11-15, slug `own-lists-are-a-rig-lower-bound`): measured in the W0 rig (Task 1, M5:
- *  `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sandbox/load-path.md`) under the Overlord's pinned launch against the
- *  mock API, from the `agent_listing_delta` attachment's `builtInTypes` and the `skill_listing` names less the profile's
- *  own. A live account lists more bundled skills than the mock does, so nothing in PR A judges against these lists, and a
- *  live read is a Needs-first of PR B. */
+ *  MEASURED LIVE (W1 sandbox PR B, slug `own-lists-measured-live`, replacing the rig lower bound of 2026-11-15): the union, over
+ *  every account's recent sessions on the build, of the `agent_listing_delta` attachment's `builtInTypes` and of the
+ *  `skill_listing` names that carry no plugin prefix and are not that account's own skills. Built-in agent types and bundled
+ *  skills differ by account (an account's features gate some), so one account's list is not enough, and a union never blames
+ *  a name Claude Code itself listed. The rig's lists for 2.1.323 and 2.1.325 were lower bounds that a live account exceeds
+ *  (load-path.md, M5), so those builds are not listed and read `unmeasured`. */
 export const CLAUDE_CODE_OWN_LISTS: Readonly<Record<string, { readonly agents: readonly string[]; readonly skills: readonly string[] }>> = {
-  '2.1.323': {
-    agents: ['Explore', 'Plan', 'general-purpose'],
-    skills: ['claude-api', 'code-review', 'dataviz', 'fewer-permission-prompts', 'init', 'keybindings-help', 'loop',
-      'plugin-authoring', 'run', 'security-review', 'simplify', 'update-config'],
-  },
-  '2.1.325': {
-    agents: ['Explore', 'Plan', 'general-purpose'],
-    skills: ['claude-api', 'code-review', 'dataviz', 'fewer-permission-prompts', 'init', 'keybindings-help', 'loop',
-      'plugin-authoring', 'run', 'security-review', 'simplify', 'update-config'],
+  '2.1.330': {
+    agents: ['Explore', 'Plan', 'claude', 'claude-code-guide', 'general-purpose', 'statusline-setup', 'web-fetch'],
+    skills: ['artifact-capabilities', 'artifact-design', 'artifact-diagramming', 'claude-api', 'code-review', 'dataviz',
+      'fewer-permission-prompts', 'init', 'keybindings-help', 'loop', 'plugin-authoring', 'run', 'schedule', 'security-review',
+      'simplify', 'update-config', 'workflow-authoring'],
   },
 };
