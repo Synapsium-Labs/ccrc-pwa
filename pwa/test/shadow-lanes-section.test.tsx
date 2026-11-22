@@ -10,7 +10,7 @@ import { ShadowLanesSection } from '../src/fleet/ShadowLanesSection';
 import { asLaneArmConfirm, asLaneArmView, laneArmLines, laneArmQuizDate } from '../src/fleet/laneArmWords';
 import { ApiError, api } from '../src/lib/api';
 import { clearScreenCache } from '../src/lib/screenCache';
-import { UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
+import { SETTINGS_AMBER_NOTE, UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
 
 afterEach(() => {
   cleanup();
@@ -298,6 +298,83 @@ describe('the replay quiz block (Overlord W1a, quiz record)', () => {
     mount();
     await screen.findByText(pendingLine(runs[0]!));
     expect([...document.querySelectorAll('[data-quiz-run]')].map((e) => e.getAttribute('data-quiz-run'))).toEqual(['8', '9', '10']);
+  });
+
+  // Run 3212: the weekly unattended run's last tick, under the quiz block.
+  const tick = { state: 'reported' as const, week: '2026-W48', act: 'arms', outcome: 'refused' as const, word: 'pilot-failed',
+    detail: 'step 0b: the skill is missing', account: 'acct-a', at: AT };
+  it('shows the unattended run\'s last tick: amber with its word and detail on a stop, plain on a wait, and its two other states', async () => {
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ unattended: tick })));
+    const { unmount } = mount();
+    const line = T.quizTick.reported(laneArmQuizDate(AT), tick);
+    expect(line).toContain('2026-W48: arms, refused (pilot-failed)');
+    expect(line).toContain('account acct-a');
+    expect(await screen.findByText(line)).toBeInTheDocument();
+    expect(screen.getByText(line).className).toBe(SETTINGS_AMBER_NOTE);
+    expect(screen.getByText(tick.detail)).toBeInTheDocument();
+    expect(document.querySelector('[data-quiz-tick]')?.getAttribute('data-quiz-tick')).toBe('refused');
+    unmount();
+    vi.restoreAllMocks();
+    for (const [unattended, text, attr] of [
+      [{ state: 'none' }, T.quizTick.none, 'none'],
+      [{ state: 'unreadable', detail: 'db locked' }, T.quizTick.unreadable, 'unreadable'],
+      [{ ...tick, outcome: 'waiting', word: 'no-room', detail: null }, T.quizTick.reported(laneArmQuizDate(AT), { ...tick, outcome: 'waiting', word: 'no-room', detail: null }), 'waiting'],
+    ] as [LaneArmQuizView['unattended'], string, string][]) {
+      vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ unattended })));
+      const m = mount();
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      expect(document.querySelector('[data-quiz-tick]')?.getAttribute('data-quiz-tick')).toBe(attr);
+      expect(screen.getByText(text).className === SETTINGS_AMBER_NOTE, `${attr} is amber only when unreadable`).toBe(attr === 'unreadable');
+      m.unmount();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('the parser keeps a well-formed tick, drops a malformed one alone, and a block without one shows no tick line', async () => {
+    const raw = (unattended: unknown) => ({ lanes: [], quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] }, unattended } });
+    expect(asLaneArmView(raw(tick))?.quizBaseline?.unattended).toEqual(tick);
+    expect(asLaneArmView(raw({ state: 'none' }))?.quizBaseline?.unattended).toEqual({ state: 'none' });
+    for (const bad of [{ ...tick, outcome: 'done' }, { ...tick, at: 'x' }, { state: 'other' }, { state: 'unreadable' }]) {
+      const v = asLaneArmView(raw(bad));
+      expect(v?.quizBaseline).toEqual({ baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] } });
+    }
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz()));
+    mount();
+    await screen.findByText(T.quizBaseline.notYet);
+    expect(document.querySelector('[data-quiz-tick]')).toBeNull();
+  });
+
+  // Review 3232 F1e: the operator's undo of a wrong baseline, by its run id, with no step-up.
+  it('a recorded baseline with its run id offers Withdraw, which withdraws that run and re-reads; without the id it is not offered', async () => {
+    const read = vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ baseline: { state: 'recorded', at: AT, id: 4 } })));
+    const withdraw = vi.spyOn(api, 'withdrawQuizBaseline').mockResolvedValue({ ok: true, id: 4, state: 'withdrawn', baseline: false } as never);
+    const rule = vi.spyOn(api, 'ruleQuizRun');
+    mount();
+    expect(await screen.findByText(T.quizWithdrawNote)).toBeInTheDocument();
+    expect(document.querySelector('[data-quiz-withdraw]')?.getAttribute('data-quiz-withdraw')).toBe('4');
+    const calls = read.mock.calls.length;
+    // Review 3254 F4: the first tap opens the confirm, and Cancel withdraws nothing.
+    fireEvent.click(screen.getByRole('button', { name: T.quizWithdraw }));
+    expect(await screen.findByText(T.quizWithdrawTitle)).toBeInTheDocument();
+    for (const line of T.quizWithdrawLines) expect(screen.getByText(line)).toBeInTheDocument();
+    expect(withdraw).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText(T.quizWithdrawTitle)).toBeNull());
+    expect(withdraw).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: T.quizWithdraw }));
+    fireEvent.click(await screen.findByRole('button', { name: T.quizWithdrawLabel }));
+    await waitFor(() => expect(withdraw).toHaveBeenCalledWith(4));
+    expect(withdraw).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(calls));
+    expect(rule).not.toHaveBeenCalled();
+    cleanup();
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ baseline: { state: 'recorded', at: AT } })));
+    mount();
+    await screen.findByText(T.quizBaseline.recorded(laneArmQuizDate(AT)));
+    expect(screen.queryByRole('button', { name: T.quizWithdraw })).toBeNull();
+    expect(asLaneArmView({ lanes: [], quizBaseline: { baseline: { state: 'recorded', at: AT, id: 4 }, pending: { ok: true, runs: [] } } })?.quizBaseline?.baseline)
+      .toEqual({ state: 'recorded', at: AT, id: 4 });
   });
 
   it('a view without the field shows no block', async () => {

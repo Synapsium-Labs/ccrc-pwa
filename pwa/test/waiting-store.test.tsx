@@ -212,7 +212,7 @@ describe('the Waiting on you api calls', () => {
     expect(init?.method ?? 'GET').toBe('GET');
   });
 
-  it('a tick carries the answer only when there is one, and a do item sends no body at all', async () => {
+  it('a tick carries the answer only when there is one, and a do item ticked with no note sends no body at all', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => ok({ ok: true, item: itemView() }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await api.tickItem(7, 'Library first');

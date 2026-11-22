@@ -13,7 +13,7 @@
 import {
   TESTBOX_ACT_MAP, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRED_BOX_KEYS, TESTBOX_SHAPE_CLASS,
   TESTBOX_SHAPE_SENTENCE, isBoxAddress, isPrivateNetworkAddress,
-  type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus, type TestboxAdminSub,
+  type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus, type TestboxAdminSub, type TestboxBusyHolder,
   type TestboxLedgerPresence, type TestboxLedgerValue, type TestboxSettingChange,
 } from '../../../shared/testbox-admin';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type NodeWire } from '../../../shared/api';
@@ -338,6 +338,15 @@ export const TESTBOX_FAMILY_FOLD = 'settings-release-fold testbox-family';
 /** A ledger time to the minute, UTC. */
 export const utcMinuteAt = (at: number): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
+/** A latest time to the minute, UTC, rounded UP: the minute named is never before the time (D-8899). */
+export const utcMinuteUpAt = (at: number): string => utcMinuteAt(Math.ceil(at / 60_000) * 60_000);
+
+/** The act that holds the admin lock, as a `busy` refusal names it, in one line: the act in the card's words, when it began
+ *  and the latest time it can end. It names no other value (D-8899). */
+export function busyHolderSentence(h: TestboxBusyHolder): string {
+  return `${actWord(h.sub)} is running: it began at ${utcMinuteAt(h.startedAt)} and ends by ${utcMinuteUpAt(h.deadlineAt)} at the latest.`;
+}
+
 /** One ledger row as one line: its minute, the act in words, its outcome, and a closed code's sentence. No address, no secret:
  *  a row carries none (spec §2.10). */
 export function ledgerLine(e: TestboxEventRow): string {
@@ -412,6 +421,8 @@ export const TESTBOX_MANAGE_TEXT = {
   runsNote: 'Runs are in progress on the box. A change to the box waits until none is.',
   applyWhenIdle: 'Apply when idle',
   waiting: 'Waiting until the box is idle.',
+  // the running act's latest end, as the status records it and `utcMinuteUpAt` words it (D-8899)
+  endsBy: (when: string) => `It ends by ${when} at the latest.`,
   cancel: 'Cancel',
   cancelled: 'Cancelled.',
   cancelTooLate: 'Too late to cancel. The change is already being applied to the box.',

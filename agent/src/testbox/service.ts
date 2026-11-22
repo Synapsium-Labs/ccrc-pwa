@@ -354,9 +354,13 @@ export class TestboxService {
     run.sink.send(summary);
   }
 
-  /** Every run started so far has ended (tests and the takeover wait on it). */
+  /** Every run and every capture started so far has ended (tests and the takeover wait on it). A tool sync's takeover
+   *  replaces the release the capture's recorder runs from, so it waits for captures too (review 3226 F8). */
   async idle(): Promise<void> {
-    while (this.driving.size > 0) await Promise.all([...this.driving]);
+    do {
+      while (this.driving.size > 0) await Promise.all([...this.driving]);
+      await this.d.captures?.settled();
+    } while (this.driving.size > 0);
   }
 
   /** The service's sweep: every held run user whose units are inactive is cleaned again (spec §2.2), then the queue is

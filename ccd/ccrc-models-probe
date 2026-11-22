@@ -196,12 +196,14 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # ONE FILE FOR THE BOX, in `~/.ccrc`, named by the auth library's
 # `CLIENT_RELEASE_NAME` (0600, temp and rename in its own directory): `version` and `readAt`, the last good release and
 # when it was read; `triedAt`, the last try, good or not; `lastError`, the last
-# failure's reason, gone after a success. This program is its one WRITER; its
-# READING, here and in the usage poll, is the auth library's
-# (`read_client_release`, handed as the program's third argument, with the
-# version's grammar, `CLIENT_VERSION_RE`; usage-user-agent). A cache file that
-# cannot be read or parsed (a deeply nested one included) is ABSENT, so the next
-# lookup rewrites it. A lookup runs only when `triedAt` is an hour old, absent or unreadable, or
+# failure's reason, and `failingSince`, the first try of the failures since the
+# last success (doctor's `model-release-lookup` check), both gone after a
+# success. This program is its one WRITER; its READING, here and in the usage
+# poll, is the auth library's (`read_client_release`, handed as the program's
+# third argument, with the version's grammar, `CLIENT_VERSION_RE`;
+# usage-user-agent). A cache file that cannot be read or parsed (a deeply
+# nested one included) is ABSENT, so the next lookup rewrites it. A lookup
+# runs only when `triedAt` is an hour old, absent or unreadable, or
 # stamped more than SKEW seconds ahead of this box's clock; a stamp up to SKEW
 # ahead is trusted as clock skew between writers (review A6). So lanes
 # refreshed one after another share one lookup an hour, and a failing npm is
@@ -372,6 +374,9 @@ def failed(c, why):
     """A failed try: the last good release kept, the try and its reason recorded when the file can be written."""
     new = {k: c[k] for k in ("version", "readAt") if k in c and (plain(c[k]) if k == "version" else stamp(c[k]))}
     new["triedAt"] = int(time.time())
+    # When this run of failures began: kept from the try before, else now; a success writes none (doctor's
+    # model-release-lookup check reads it, programme wave 3).
+    new["failingSince"] = c["failingSince"] if stamp(c.get("failingSince")) else new["triedAt"]
     new["lastError"] = why[:200]
     try:
         write(new)
@@ -752,7 +757,7 @@ _normalise() {
   local client_version=""
   [ -f "$TMPD/client-version" ] && client_version="$(cat "$TMPD/client-version")"
   python3 /dev/fd/3 "$PROBE_KIND" "$client_version" < "$RAW" > "$NORM" 3<<'PY'
-import json, re, sys, time
+import calendar, json, os, re, sys, time
 
 probe = sys.argv[1]
 client_version = sys.argv[2]
@@ -908,9 +913,19 @@ ARMS = {
 if probe not in ARMS:
     fail("no normaliser arm for probe kind %r in this build" % probe)
 
+def observed_at():
+    # The catalogue's observation time, whole epoch seconds. `CCRC_MODELS_NOW` (an ISO time YYYY-MM-DDTHH:MM:SSZ)
+    # replaces the clock, the same seam deploy/models-op.mjs's `now()` reads, for tests only: the retired grace counts
+    # runs of these times (programme wave 3, D-8838), so a fixture HOME drives hours of them in one test. Any other
+    # form is ignored and the clock is read.
+    v = os.environ.get("CCRC_MODELS_NOW", "")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", v):
+        return calendar.timegm(time.strptime(v, "%Y-%m-%dT%H:%M:%SZ"))
+    return int(time.time())
+
 catalogue = {
     "probe": probe,
-    "fetchedAt": int(time.time()),
+    "fetchedAt": observed_at(),
     "stale": False,
 }
 # D-8743: the client version a Codex catalogue was fetched as, a plain X.Y.Z, when the arm asked as one; absent

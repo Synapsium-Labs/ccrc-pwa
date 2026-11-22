@@ -249,7 +249,7 @@ function badHold(c: CoordStore): number {
 
 describe('decideDispatch, the admit step', () => {
   const caps = (over: Partial<CapsReading> = {}): CapsReading => ({
-    caps: { maxConcurrentWorkers: 3 }, usage: { running: 0 },
+    limit: 3, usage: { running: 0 },
     overConcurrency: null, ...over,
   });
   const admit = (names: readonly string[] | null, reading: CapsReading, reads: { n: number }): AdmitFacts =>
