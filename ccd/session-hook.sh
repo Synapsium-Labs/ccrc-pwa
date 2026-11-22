@@ -5454,6 +5454,17 @@ fi
 # It NEVER refuses a swap path (the operator's Q8 ruling of 2026-10-19): no `ccd` verb but `account-pane`, no bare
 # `ccrc account`, no registry path (`PATHF` is not reused), no `/api/` pattern; `must-allow.json` holds it. An accident
 # guard: `bash -c` with an assembled string, another interpreter or a script file runs past it.
+# THE QUIZ ROW ON EVERY SESSION (review 3232 F1; the operator's ruling of 2026-11-22). `qzmatch` answers the category
+# `quiz`, in `deny` (a child) and `account` (every other session) only, never in `class` (so the classifier needs no twin
+# row): the box client `ccrc-api` (bare, path-qualified, quoted or a `$VAR` program, as written and as `norm` reads it)
+# followed by `quiz` and then `record`, `confirm`, `status` or an act in a variable; and the shell verb that posts them,
+# `ccrc quiz-record` and its script `ccrc-quiz-record` (bare, quoted, `$VAR`, after `env` and its `-u` prefixes, and by
+# path where it is run, so a `cat` or `git add` of the script's path passes; review 3254 F1). Those are the weekly
+# timer's acts, never a session's. `quiz live`, the Overlord coordinator's door, stays OPEN (the server's ownership check
+# guards it). Text that only names one is refused too, as the account arm's is. An accident guard, not a wall: `bash -c`
+# with an assembled string, another interpreter or a script file runs past it. The prefilter of both branches reads
+# `quiz` followed by a blank, a stripped tab or newline (`t`, `n`) or a backslash, or `quiz-record`, never `quiz` alone,
+# so a session whose working directory or transcript path names `quiz` forks no jq on every call.
 # THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
 # `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
 # those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category
@@ -5617,6 +5628,16 @@ def xmatch:
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface"),
   (ACCTV as $v | select(test(WB + "ccrc" + NW) and test(EXPV + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(WB + "ccd" + NW) and test(EXPV + "account-pane" + NW)) | "account\tccd account-pane");
+def QZV: "record", "confirm", "status";
+def QZP: "(?:" + WB + "ccrc-api[" + $q + "\"]?" + SP + "+" + FLAGS + "|" + EXPV + ")quiz" + SP + "+" + FLAGS;
+def QZR: "quiz-record(?![A-Za-z0-9_.-])";
+def QZH: "ccrc-quiz-record(?![A-Za-z0-9_.-])";
+def QZCMD: "(?:^|[\n;&|(`]|\\$\\()" + SP + "*(?:env(?:" + SP + "+(?:-" + NS + "+(?:" + SP + "+[A-Za-z_][A-Za-z0-9_]*)?|[A-Za-z_][A-Za-z0-9_]*=" + NS + "*))*" + SP + "+)?(?:(?:bash|sh)" + SP + "+" + FLAGS + ")?[" + $q + "\"]?";
+def qzmatch:
+  (QZV as $v | select(test(QZP + $v + NW)) | "quiz\tccrc-api quiz \($v)"),
+  (select(test(QZP + EXP)) | "quiz\tccrc-api quiz with its act in a variable"),
+  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + QZR) or (test(WB + "ccrc" + NW) and test(EXPV + QZR))) | "quiz\tccrc quiz-record"),
+  (select(test("(?:^|[" + WS + ";&|()`" + $q + "\"=]|/\\.local/bin/)" + QZH) or test(QZCMD + "[^" + WS + ";&|()`" + $q + "\"]*/" + QZH)) | "quiz\tccrc-quiz-record");
 ([($ARGS.named.deny // "") | try (fromjson | .permissions.deny | arrays | .[] | strings) catch empty]) as $dl
 | ([$dl[] | capture("^Bash\\((?<p>[a-z][a-z0-9-]{0,31}) install:\\*\\)$") | .p | select(. != "claude")
     | . as $p | select(any($dl[]; . == "Bash(" + $p + " update:*)"))] | unique) as $ups
@@ -5760,12 +5781,12 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // first((., norm) | bmatch) // "" else "" end)
      elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
      else "" end)
   elif $mode == "account" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // "" else "" end)
      else acctpath($t; $i) // "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch, pmatch) // "" else "" end)
   elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch, pmatch) != null) then "other\tan MCP call naming a forbidden act"
@@ -5792,14 +5813,14 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
        || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
        || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *account-op* || "$apf" == *accounts.json* \
-       || "$apf" == *accounts.sh* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *accounts.sh* || "$apf" == *quiz[[:space:]tn\\]* || "$apf" == *quiz-record* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   else
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
        || "$apf" == *operator-model.db* || "$apf" == *privacy-journal* || "$apf" == *.ccrc* || "$apf" == *.door* \
-       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *quiz[[:space:]tn\\]* || "$apf" == *quiz-record* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
@@ -5837,6 +5858,8 @@ if [[ -n "$apf" ]]; then
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
         account$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202). Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell. Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
+        quiz$'\t'*)
+          areason="ccrc: this call runs \`${afw#*$'\t'}\`: the replay quiz's record, confirmation and status are the weekly timer's acts (\`ccd-quiz-weekly.timer\`), never a session's, in any form (the operator's ruling of 2026-11-22; review 3232 F1). A session reads the quiz on the Shadow lanes card; the Overlord coordinator's Live (\`ccrc-api quiz live\`) stays open. Text that only names it is refused too; reword it or write it through a file (\`git commit -F <file>\`)." ;;
         prune$'\t'*)
           areason="ccrc: this call runs \`git worktree prune\`, which deletes git's records of every gone worktree of the repository at once, and ccd's cleanup reads those records: one prune holds the cleanup of every lane on this box (the cleanup un-wedge spec, section 5)."
           areason+=" To remove one stale record, use \`git -C <main> worktree remove <path>\`; a dry run (\`-n\`) is allowed."

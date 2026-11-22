@@ -4255,6 +4255,49 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE claude_builds ADD COLUMN fails INTEGER NOT NULL DEFAULT 0;
   UPDATE claude_builds SET fails = 1 WHERE capture = 'fail';
   `,
+
+  // ── 120: user_version 119 -> 120 ──────────────────────────────────────────
+  // The weekly unattended replay quiz's last word (run 3212; the operator's ruling of 2026-11-22: the quiz runs, records and
+  // confirms itself): `continuity_quiz_status`, ONE row (`id` 1), what `deploy/history-quiz-unattended.mjs`'s last tick on
+  // the fleet box reported through `POST /api/continuity/quiz-status`. ONE writer, `continuity/quizStore.ts#writeQuizStatus`;
+  // `mailedKey` is the week and word the coordinator was last mailed for, so a stop word is mailed once a week. The Shadow
+  // lanes card reads it. The coordinator allotted slot 120 to this entry beside run 3213's 119, which landed first (#3170);
+  // it is the next free one by position on `main`.
+  //
+  // Review 3232 (fix round 1) adds the confirmation's binding to the record and the operator's withdraw to the runs table:
+  // `confirmKeyHash` is the sha256 of the single-use key the record door answered an unattended record (NULL for a hand
+  // record; a ruled run's hash is never read, because the ruler reads the key only while the run is pending), so only the caller that recorded a run can have the server confirm it; `withdrawnAt` and
+  // `withdrawnBy` are the operator's withdraw of a wrong baseline (state `withdrawn`); `wokeAt` is when the coordinator was
+  // mailed that this run became the baseline, keyed on the run so a lost wake is sent again on a later tick. The status row
+  // gains the runner's trace and the waiting streak that mails `setup-account-gone` once.
+  //
+  // A NEW TABLE and nullable columns on one existing table: an older build opening a file at this entry's version takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the new table, inserts runs by named columns (each new
+  // one NULL) and reads an unknown state as no state. Every earlier entry is frozen. RE-MEASURE the slot
+  // before merge (it must print 119 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_status (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    week        TEXT,                  -- the ISO week (UTC) the tick worked, or NULL before any week
+    act         TEXT NOT NULL,         -- the act the tick reached
+    outcome     TEXT NOT NULL,         -- ok | waiting | refused | failed
+    word        TEXT,                  -- the stop's word, or NULL
+    detail      TEXT,                  -- one line, or NULL
+    account     TEXT,                  -- the setup's account id, or NULL before setup
+    at          INTEGER NOT NULL,      -- wall ms of the tick (the runner's)
+    receivedAt  INTEGER NOT NULL,      -- wall ms the server stored it
+    mailedKey   TEXT,                  -- '<week> <word>' the coordinator was last mailed for, or NULL
+    reportedBy  TEXT,                  -- the runner's trace ('quiz-unattended <user> <role> <time>')
+    waitingSince TEXT,                 -- the ISO week the current run of waiting ticks began, or NULL
+    goneMailedKey TEXT                 -- the waitingSince week setup-account-gone was mailed for, or NULL
+  );
+  ALTER TABLE continuity_quiz_runs ADD COLUMN confirmKeyHash TEXT;  -- sha256 of the unattended record's single-use key
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnAt INTEGER;  -- wall ms of the operator's withdraw
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
+  ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

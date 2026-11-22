@@ -700,6 +700,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The fleet limit watchdog's pair (D-8123), shipped the same way; it runs `ccd limit-watchdog`, so no bin of its own.
       'systemd/ccd-limit-watchdog.service',
       'systemd/ccd-limit-watchdog.timer',
+      // The weekly replay quiz's pair (Overlord W1a), shipped the same way; it runs a file of the tree through node, so no bin.
+      'systemd/ccd-quiz-weekly.service',
+      'systemd/ccd-quiz-weekly.timer',
       // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins.
       'systemd/tmux-spawn-.scope.d/50-oom-continue.conf',
       'systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf',
@@ -810,6 +813,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The fleet limit watchdog's pair (D-8123), installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.service ~/.config/systemd/user/ccd-limit-watchdog.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.timer ~/.config/systemd/user/ccd-limit-watchdog.timer',
+      // The weekly replay quiz's pair (Overlord W1a), installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.service ~/.config/systemd/user/ccd-quiz-weekly.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.timer ~/.config/systemd/user/ccd-quiz-weekly.timer',
       // D-5241: the two scope drop-ins, the pane one in systemd's PREFIX form (trailing hyphen).
       'mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d',
       '_unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf',
@@ -887,6 +893,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const limitWatchdogAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-limit-watchdog.timer'));
     expect(limitWatchdogAt, 'the limit watchdog timer is never enabled').toBeGreaterThan(reloadAt);
     expect(limitWatchdogAt, 'the limit watchdog timer is enabled after the agent restart')
+      .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
+    // The weekly replay quiz's timer (Overlord W1a), on the same daemon-reload and before the agent restart.
+    const quizWeeklyAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-quiz-weekly.timer'));
+    expect(quizWeeklyAt, 'the weekly quiz timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(quizWeeklyAt, 'the weekly quiz timer is enabled after the agent restart')
       .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the

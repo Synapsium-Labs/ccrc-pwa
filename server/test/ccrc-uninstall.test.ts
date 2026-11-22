@@ -293,6 +293,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     'ccd-limit-watchdog.service', 'ccd-limit-watchdog.timer',
     // landing order wave 3b: the conflict radar's pair, on the same role-gated terms.
     'ccd-land-probe.service', 'ccd-land-probe.timer',
+    // Overlord W1a: the weekly replay quiz's pair, on the same role-gated terms.
+    'ccd-quiz-weekly.service', 'ccd-quiz-weekly.timer',
     // test box TB11 (D-7413): the durations timer's pair, on the same role-gated terms.
     'ccd-testbox-times.service', 'ccd-testbox-times.timer',
     // D-7857: the carry dedupe sweep's pair, on the same role-gated terms.
@@ -625,6 +627,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // landing order wave 3b: the radar's timer AND service are disabled, and both unit files go (the unit-file census above).
     expect(calls).toContain('--user disable --now ccd-land-probe.timer');
     expect(calls).toContain('--user disable --now ccd-land-probe.service');
+    // Overlord W1a: the weekly replay quiz's timer AND service are disabled, and both unit files go (the census above).
+    expect(calls).toContain('--user disable --now ccd-quiz-weekly.timer');
+    expect(calls).toContain('--user disable --now ccd-quiz-weekly.service');
     expect(calls).toContain('--user disable --now ccd-testbox-times.timer');
     expect(calls).toContain('--user disable --now ccd-testbox-times.service');
     expect(calls).toContain('--user disable --now ccd-carry-dedupe.timer');

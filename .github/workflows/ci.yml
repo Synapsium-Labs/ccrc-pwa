@@ -1613,6 +1613,7 @@ jobs:
           test/history-fts-fold.test.ts
           test/history-quiz-single-characterization.test.ts
           test/history-quiz-single.test.ts
+          test/history-quiz-unattended.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 

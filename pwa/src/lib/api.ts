@@ -1140,6 +1140,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ action }),
       })).json() as Promise<QuizRuleAnswer>,
+    /** `POST /api/continuity/quiz-runs/:id/withdraw` (review 3232 F1e): the operator withdraws the confirmed baseline. Session-gated
+     *  when armed, no step-up (it only narrows); dark it answers `auth-off`. A refusal rejects with an `ApiError`. */
+    withdrawQuizBaseline: async (id: number): Promise<QuizRuleAnswer> =>
+      (await request(`/api/continuity/quiz-runs/${id}/withdraw`, {
+        method: 'POST', headers: { accept: 'application/json' },
+      })).json() as Promise<QuizRuleAnswer>,
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */

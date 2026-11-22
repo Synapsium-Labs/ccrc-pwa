@@ -76,6 +76,7 @@ import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorM
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
+import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -161,7 +162,7 @@ import {
   type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, ASK_OPERATOR_PRINCIPAL, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import { noticeBanner, noticeSink, notifyPushOnly, questionOutboxOf } from './notice.js';
@@ -2277,8 +2278,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     notice,
     masker: deps.masker,
   });
-  // The replay quiz's record door (box token, the operator's shell) and its rule door (session and step-up), from their own file.
-  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate });
+  // The replay quiz's record door (box token, the operator's shell and the weekly timer) and its rule door (session and step-up),
+  // from their own file. Run 3212 adds the unattended confirm door, which confirms only a run whose record's single-use key and sha
+  // it is handed (review 3232 F1), the tick report, the coordinator's Live door (attributed on `fromUuid`, with a record-only feed
+  // row) and the operator's withdraw (session-gated). Their mail rides `queueSystemMail` as the operator's sender, as the
+  // watcher's notices do: the baseline's wake (keyed on its run, retried each tick) and the stop and waiting-streak mails.
+  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'), notice, entropy: { hex: (n) => deps.time.entropy.hex(n) },
+    mail: (m) => (deps.coord === undefined ? false : queueSystemMail(deps.coord, null, { fromId: ASK_OPERATOR_PRINCIPAL, runId: null, kind: 'status', ...m }).queued) });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a

@@ -152,23 +152,42 @@ function LaneRow({ row, poll }: { row: LaneArmRowView; poll: LaneArmPoll }): Rea
   );
 }
 
+/** The weekly unattended run's last tick (run 3212): a plain line when it advanced or waits for its next tick, an amber one
+ *  when its word waits for attention or it failed, or when the server could not read it. */
+function QuizTickLine({ tick }: { tick: NonNullable<LaneArmQuizView['unattended']> }): ReactNode {
+  if (tick.state === 'none') return <p className={SETTINGS_NOW_CLASS.note} data-quiz-tick="none">{T.quizTick.none}</p>;
+  if (tick.state === 'unreadable') return <p className={SETTINGS_AMBER_NOTE} data-quiz-tick="unreadable">{T.quizTick.unreadable}</p>;
+  const amber = tick.outcome === 'refused' || tick.outcome === 'failed';
+  return (
+    <div data-quiz-tick={tick.outcome}>
+      <p className={amber ? SETTINGS_AMBER_NOTE : SETTINGS_NOW_CLASS.note}>{T.quizTick.reported(laneArmQuizDate(tick.at), tick)}</p>
+      {tick.detail !== null && <p className={SETTINGS_NOW_CLASS.note}>{tick.detail}</p>}
+    </div>
+  );
+}
+
 /** The replay quiz's block (Overlord W1a, plan 2026-11-17 §6): each pending run, in the order recorded, with Confirm and Discard
  *  through the step-up (`useStepUp`'s `runAct`, the secret door's flow), then the baseline line. A ruling that lands re-reads
  *  the card; a refusal is said as the rows say theirs and re-reads too (the run may already be ruled). */
 function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload: () => void; stepUpDeps: StepUpDeps }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [withdrawing, setWithdrawing] = useState<number | null>(null);
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const rule = async (id: number, action: QuizRuleAction): Promise<void> => {
+  const rule = async (id: number, action: QuizRuleAction | 'withdraw'): Promise<void> => {
     if (busy) return;
     setBusy(true);
     setRefusal(null);
     try {
       let ruled = false;
-      const outcome = await stepUp.runAct(async () => { await api.ruleQuizRun(id, action); ruled = true; });
-      if (outcome === 'step-up' || !ruled) return;
+      // A withdraw only narrows, so it takes no step-up (review 3232 F1e); a ruling counts a run, so it does.
+      if (action === 'withdraw') {
+        await api.withdrawQuizBaseline(id);
+        ruled = true;
+      } else if (await stepUp.runAct(async () => { await api.ruleQuizRun(id, action); ruled = true; }) === 'step-up') return;
+      if (!ruled) return;
       reload();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return;
@@ -200,10 +219,32 @@ function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload
         </>
       )}
       {runs.length > 0 && <p className={SETTINGS_NOW_CLASS.note}>{T.quizRuleNote}</p>}
+      {quiz.unattended !== undefined && <QuizTickLine tick={quiz.unattended} />}
       <ConfirmItsYou stepUp={stepUp} subject="a replay quiz run" />
       {refusal !== null && <p className={SETTINGS_AMBER_NOTE} role="alert">{refusal}</p>}
       <p className={b.state === 'unreadable' ? SETTINGS_AMBER_NOTE : SETTINGS_NOW_CLASS.note}>{baselineLine}</p>
       {b.state === 'unreadable' && <p className={SETTINGS_NOW_CLASS.note}>{b.detail}</p>}
+      {b.state === 'recorded' && b.id !== undefined && (
+        <div data-quiz-withdraw={b.id}>
+          <p className={SETTINGS_NOW_CLASS.note}>{T.quizWithdrawNote}</p>
+          <Button variant="ghost" size="fit" disabled={busy} onClick={() => setWithdrawing(b.id as number)}>{T.quizWithdraw}</Button>
+        </div>
+      )}
+      {/* Review 3254 F4: a withdraw cannot be undone, so it takes a second tap. */}
+      <QuickConfirm
+        open={withdrawing !== null}
+        title={T.quizWithdrawTitle}
+        consequence={[...T.quizWithdrawLines]}
+        confirmLabel={T.quizWithdrawLabel}
+        tone="danger"
+        defaultFocus="cancel"
+        onConfirm={() => {
+          const id = withdrawing;
+          setWithdrawing(null);
+          if (id !== null) void rule(id, 'withdraw');
+        }}
+        onClose={() => setWithdrawing(null)}
+      />
     </div>
   );
 }

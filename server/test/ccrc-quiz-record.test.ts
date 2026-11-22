@@ -205,6 +205,96 @@ describe('ccrc quiz-record: the post and the answers', () => {
   });
 });
 
+/** The client, stubbed for `--confirm`: the record row answers `client-body`, the confirm row `client-confirm` and its exit. */
+function plantConfirm(confirmBody: string, rc = 0): void {
+  const bin = path.join(home, '.local', 'bin');
+  fs.writeFileSync(path.join(bin, 'ccrc-api'),
+    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/client-argv"\ncat >> "$HOME/client-stdin"\necho "http 200" >&2\n'
+    + 'if [ "$2" = confirm ]; then cat "$HOME/client-confirm"; exit "$(cat "$HOME/client-confirm-rc")"; fi\n'
+    + 'cat "$HOME/client-body"\nexit "$(cat "$HOME/client-rc")"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(home, 'client-confirm'), `${confirmBody}\n`);
+  fs.writeFileSync(path.join(home, 'client-confirm-rc'), `${rc}\n`);
+}
+
+describe('ccrc quiz-record --confirm: the unattended run\'s confirmation (run 3212)', () => {
+  it('records unattended, then confirms the run the record answered with its confirm key, the same sha and the timer\'s trace', async () => {
+    const KEY = 'c'.repeat(64);
+    plantClient(`{"ok":true,"id":7,"fresh":true,"state":"pending","confirmKey":"${KEY}"}`);
+    plantConfirm('{"ok":true,"id":7,"state":"confirmed","baseline":true,"changed":true}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`confirmed run 7, report sha ${SHA.slice(0, 12)} (the baseline)\n`);
+    expect(clientCalls()).toEqual(['quiz record --json -', 'quiz confirm 7 --json -']);
+    const parts = clientStdin().split('}{');
+    expect(parts.length).toBe(2);
+    const recordBody = JSON.parse(`${parts[0]!}}`) as Record<string, unknown>;
+    expect(recordBody['unattended']).toBe(true);
+    const confirmBody = JSON.parse(`{${parts[1]!}`) as Record<string, unknown>;
+    expect(Object.keys(confirmBody).sort()).toEqual(['by', 'confirmKey', 'sha256']);
+    expect(confirmBody['confirmKey']).toBe(KEY);
+    expect(confirmBody['sha256']).toBe(SHA);
+    expect(String(confirmBody['by'])).toMatch(/^quiz-unattended /);
+  });
+  it('a record answered with no key (a run already ruled) confirms with no key, so the server answers its state', async () => {
+    plantClient('{"ok":true,"id":7,"fresh":false,"state":"confirmed"}');
+    plantConfirm('{"ok":true,"id":7,"state":"confirmed","baseline":false,"changed":false}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code, r.stderr).toBe(0);
+    const confirmBody = JSON.parse(`{${clientStdin().split('}{')[1]!}`) as Record<string, unknown>;
+    expect(Object.keys(confirmBody).sort()).toEqual(['by', 'sha256']);
+  });
+  it('a withdrawn run exits 1 and says so', async () => {
+    plantConfirm('{"ok":true,"id":7,"state":"withdrawn","baseline":false,"changed":false}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/withdrawn: the operator withdrew run 7/);
+    expect(r.stdout).toBe('');
+  });
+  it('prints no baseline tail for a run that is not the baseline', async () => {
+    plantConfirm('{"ok":true,"id":7,"state":"confirmed","baseline":false,"changed":false}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(`confirmed run 7, report sha ${SHA.slice(0, 12)}\n`);
+  });
+  it('a discarded run exits 1 and says so', async () => {
+    plantConfirm('{"ok":true,"id":7,"state":"discarded","baseline":false,"changed":true}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/discarded: run 7/);
+    expect(r.stdout).toBe('');
+  });
+  it('a refused confirmation prints its word and exits 1; no answer exits 1 too', async () => {
+    plantConfirm('{"ok":false,"error":"bad-request","detail":"already confirmed"}');
+    const refused = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/bad-request: already confirmed/);
+    plantConfirm('', 3);
+    const none = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(none.code).toBe(1);
+    expect(none.stderr).toMatch(/no answer to the confirmation/);
+  });
+  it('a refused record never reaches the confirmation', async () => {
+    plantClient('{"ok":false,"error":"bad-request","field":"sha256","detail":"no"}');
+    plantConfirm('{"ok":true,"id":7,"state":"confirmed","baseline":true,"changed":true}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code).toBe(1);
+    expect(clientCalls()).toEqual(['quiz record --json -']);
+  });
+  it('still refuses in-session and in-pane first, the client never called', async () => {
+    for (const extra of [{ CLAUDECODE: '' }, { TMUX_PANE: '%3' }]) {
+      const r = await run(['--report', report(), '--sha', SHA, '--confirm'], extra);
+      expect(r.code).toBe(2);
+    }
+    expect(clientCalls()).toEqual([]);
+  });
+  it('without --confirm the trace stays the record\'s and nothing is confirmed', async () => {
+    const r = await run(['--report', report(), '--sha', SHA]);
+    expect(r.code).toBe(0);
+    expect(clientCalls()).toEqual(['quiz record --json -']);
+    expect(String((JSON.parse(clientStdin()) as Record<string, unknown>)['recordedBy'])).toMatch(/^quiz-record /);
+  });
+});
+
 describe('ccrc quiz-record: the file itself', () => {
   const text = fs.readFileSync(VERB, 'utf8');
   const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
