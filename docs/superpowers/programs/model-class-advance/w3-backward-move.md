@@ -201,3 +201,5 @@ The adapter's focused mutations were each measured against the release-lookup fi
 | No bytecode writes on import | 1 |
 | Exactly one returned record | 1 |
 | Require a successful reader exit even with otherwise valid output | 1 |
+
+The box-token test's two source scans are bounded to the box-token section, and the release lookup's isolated `python3 -I -c` call is pinned separately, by an assertion of its own.

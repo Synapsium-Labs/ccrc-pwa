@@ -1325,4 +1325,30 @@ describe('model-release-lookup (programme wave 3, release-lookup-warn)', () => {
     const h = releaseBox();
     expect(at(h, { version: '0.171.0', readAt: T - 5 * 86400, triedAt: T - 2 * 86400 }).code).toBe(0);
   });
+
+  // The read goes through the library (D-8781, D-8843). Every case above installs the real library, which reads the
+  // file planted on disk, so a check that read that file itself would pass them all. Here a stand-in library on the
+  // check's import path answers its own record, which disagrees with the file on disk, and the verdict must follow it.
+  const standIn = (h: string, rec: object): void => {
+    fs.writeFileSync(join(h, '.local', 'bin', 'ccgpt-auth.py'), 'import json\n\n\ndef read_client_release(path=None):\n'
+      + `    return json.loads(${JSON.stringify(JSON.stringify(rec))})\n`);
+  };
+  it("follows the library's record, not the file on disk: a stale record in the library WARNs over a fresh file", () => {
+    const h = releaseBox();
+    standIn(h, { version: '0.170.0', readAt: T - 2 * 86400, triedAt: T - 600, failingSince: T - 2 * 86400 + 3600,
+      lastError: 'from the library' });
+    const r = at(h, { version: '0.171.0', readAt: T - 3600, triedAt: T - 3600 });
+    expect(r.code).toBe(2);
+    expect(r.out).toBe('WARN model-release-lookup: the last good read of the Codex release lookup (0.170.0) was 48 h ago, '
+      + 'and it has failed for 47 h; its last try, 0 h ago, failed (from the library)\n' + REMEDY);
+  });
+
+  it("follows the library's record, not the file on disk: a fresh record in the library PASSes over a stale file", () => {
+    const h = releaseBox();
+    standIn(h, { version: '0.172.0', readAt: T - 3600, triedAt: T - 3600 });
+    const r = at(h, { version: '0.171.0', readAt: T - 2 * 86400, triedAt: T - 600, failingSince: T - 2 * 86400 + 3600,
+      lastError: 'from the file' });
+    expect(r.code).toBe(0);
+    expect(r.out).toBe('PASS model-release-lookup: the Codex release lookup read 0.172.0 1 h ago\n');
+  });
 });
