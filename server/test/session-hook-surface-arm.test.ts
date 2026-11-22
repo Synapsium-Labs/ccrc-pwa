@@ -110,6 +110,29 @@ describe('the surface arm (W1 sandbox B, Task 8)', () => {
     expect(fire('mcp__door__read', {}, undefined, { hook: noFlags })).toContain('could not be read');
   });
 
+  /** The row's flags less one flag and its value. */
+  const without = (flag: string) => installed((rows) => {
+    const flags = rows['overlord']!['flags'] as string[];
+    const i = flags.indexOf(flag);
+    expect(i, `the fixture row carries ${flag}`).toBeGreaterThanOrEqual(0);
+    flags.splice(i, 2);
+  });
+
+  it('denies every call when the row\'s flags lack --tools: malformed, never a usable surface (review 3325 F5)', () => {
+    const hook = without('--tools');
+    for (const [t, input] of [['mcp__door__read', {}], ['Agent', { subagent_type: 'overlord-reader', prompt: 'p' }],
+      ['Skill', { skill: 'ccrc-overlord' }]] as const) {
+      expect(fire(t, input, undefined, { hook }), t).toContain('could not be read');
+    }
+  });
+
+  it('denies every call when the row\'s flags lack --agents (review 3325 F5)', () => {
+    const hook = without('--agents');
+    for (const [t, input] of [['mcp__door__read', {}], ['Skill', { skill: 'ccrc-overlord' }]] as const) {
+      expect(fire(t, input, undefined, { hook }), t).toContain('could not be read');
+    }
+  });
+
   it('enforces the installed row, whatever digest the session carries', () => {
     const hook = installed((rows) => {
       const flags = rows['overlord']!['flags'] as string[];

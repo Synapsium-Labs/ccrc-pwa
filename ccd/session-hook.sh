@@ -5363,11 +5363,13 @@ fi
 # so `x:ccrc-overlord` is refused. It judges no digest: a mismatch is the server's (question 5), and under skew the running
 # session's argv is the row it was spawned with, so this can only be stricter.
 # FAIL-CLOSED, AGAINST THIS FILE'S HEADER, for a recorded reason: the variable says the session runs under a surface, so a row
-# that cannot be read (an absent role, a malformed variable, a file that is not JSON, a row without its flags) denies. Before
-# its arms the hook still fails open (an unreadable id, registry or jq exits 0 first), and a timeout lets the call run: this
-# is defence in depth, and the enforcement is Claude Code's own (`--tools` and the deny rules).
+# that cannot be read (an absent role, a malformed variable, a file that is not JSON, a row without its flags, or flags that
+# lack `--tools` or `--agents`: malformed, never a usable surface) denies. Before its arms the hook still fails open (an
+# unreadable id, registry or jq exits 0 first), and a timeout lets the call run: this is defence in depth, and the
+# enforcement is Claude Code's own (`--tools` and the deny rules).
 SURFACE_ARM_JQ='($rows[0][$r] // null) as $row | (.tool_name // "" | tostring) as $t | (.tool_input.subagent_type? // "" | tostring) as $at | skillname as $sk
   | ($row.flags | index("--tools")) as $ti | ($row.flags | index("--agents")) as $ai
+  | if $ti == null or $ai == null then error("row") else . end
   | ($row.flags[$ti + 1] | split(",")) as $tools | ($row.flags[$ai + 1] | fromjson) as $ag
   | if ($row.stagedSkills | type) != "object" or ($ag | type) != "object" then error("row") else . end
   | ([$ag[].tools[]? | strings | select(startswith("mcp__")) | "mcp__" + split("__")[1] + "__"] | unique) as $srv
