@@ -4425,10 +4425,15 @@ what it cannot.
    `409 heir-is-a-worker` (below).
 5. **The caps dial.** Beside the pause banner, `CapsControl` reads
    `GET /api/coord/caps` and shows the concurrency cap beside its current use,
-   the running workers. A save (`POST /api/coord/caps`) sends the dial only when
-   you moved it, and afterwards the dial shows what the server stored, not what
-   you typed. There is no daily dial: the daily dispatch brake is retired
-   (operator ruling 2026-10-26).
+   the running workers. The cap is automatic: the server derives it from the
+   fleet host's memory and cores, and the control says so (`Automatic: 16 (from
+   64 GB and 16 cores)`), so nobody has to set a number. When the host has not
+   been measured it says why, and which number is used meanwhile. The number
+   box is your override: a save (`POST /api/coord/caps`) sends the number you
+   typed (while the cap is automatic, the number on screen included), afterwards
+   the dial shows what the server answered, not what you typed, and
+   `use automatic` clears the override. There is no daily dial: the daily
+   dispatch brake is retired (operator ruling 2026-10-26).
 6. **What a run warns about.** Under an open run's row, one line names trouble
    the server measured: mail to the run that gave up retrying (`N parked`), a
    delivery replayed many times (`replayed N×`), a dispatch that queued no brief
@@ -5555,8 +5560,28 @@ never neither, and naming both is refused `400 bad-request`. `GET /api/feed?prog
 the full event archive, with no outstanding/history split. Both join through the
 run row; an event with no run behind it is programless and shows only unfiltered.
 
-**Caps and pause.** The single-row `coordinator_state` table holds
-`maxConcurrentWorkers` (default 3 — runs currently dispatched and in an
+**Caps and pause.** The run cap is DERIVED from the machine the fleet runs on
+(the operator's ruling of 2026-11-22; `server/src/coord/caps.ts#deriveCap`): the
+smallest of what the fleet host's memory allows (its memory less 8 GiB kept for
+everything that is not a run, at 3 GiB a run), what the sessions' own memory
+limit allows when they have one (the limit at 3 GiB a run), and its core count,
+never below 1 or above 64. A host with 64 GiB and 16 cores derives 16; the same
+host with its sessions limited to 24 GiB (the session slice's shipped default)
+derives 8, and the control shows both figures. The agent measures these facts
+on its `pressure` op (in local mode the server measures its own box) and
+decides nothing about them, and the pressure beat holds the last reading. The
+operator may set a number in its place, an override that stands until they
+choose automatic again (`POST /api/coord/caps` with
+`{"maxConcurrentWorkers": n}`, or `{"mode": "automatic"}`). The single-row
+`coordinator_state` table holds that number, `maxConcurrentWorkers`, and what it
+is, `capMode`: under `automatic` the stored number is used only while the host
+is unmeasured, and the caps view says which reason applies (nothing has
+answered yet, the fleet agent is too old to say, or its read failed). An
+upgrade moves no cap somebody set: a number an operator had set stays the cap,
+as an override, and only a box still on the untouched default (3) becomes
+automatic. An automatic cap that differs from the stored number is recorded in
+the feed once (`caps changed`, `workers 3 → automatic (16)`). What the
+cap counts is unchanged (runs currently dispatched and in an
 ACTIVE state, `dispatched`, `working` or `unknown` (and any state token this build
 cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
 `merging` or `closing` is idle by contract and holds no slot — design
@@ -5567,11 +5592,12 @@ anything else is touched. It is the only cap. The daily dispatch brake,
 dispatch alike, reviews and warm resumes included, refused a coordinator with
 nothing to wake it, and never measured memory. Its column stays in the row,
 unread, and a caps write that still carries the field is accepted and the field
-ignored. The cap is an operator control: `GET`/`POST /api/coord/caps` reads it
-beside its current usage and writes it, bounds-checked, and the `/runs` board
-renders the dial. (For a stretch of this build's history there was no route at all and
-an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
-caller in the server for as long as it did.) Like every other same-origin PWA
+ignored. `GET`/`POST /api/coord/caps` reads the cap in force (`capNow`: its mode,
+the derived cap and what it was derived from) beside its current usage and
+writes the override, bounds-checked, and Runs > Advanced renders the dial. (For
+a stretch of this build's history there was no route at all and an operator
+edited the row with `sqlite3` — hence `CoordStore.setCaps` having no caller in
+the server for as long as it did.) Like every other same-origin PWA
 write the caps route carries **no box token**; unlike the operator doors named
 above (`/api/coord/pause`, `/api/runs/:id/abandon`, `/api/claims/:id/break`,
 `/api/runs/:id/reclaim`) it is not a release valve, so nothing may rely on it to

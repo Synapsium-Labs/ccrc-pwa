@@ -22,7 +22,8 @@ import { mailKeyVerdict, type MailKeyVerdict } from './mailKey.js';
 import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
-import { decideCaps } from './caps.js';
+import { CAPS_FEED_TITLE, capAutomaticNotice, capNowWord, decideCaps } from './caps.js';
+import type { CoordCapNow } from '../../../shared/runCap.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { landingViewOf } from './landingLine.js';
@@ -62,7 +63,7 @@ import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } fro
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { bindRunInPlace, type InPlaceOutcome } from './dispatch.js';   // D-6096: the in-place bind
 import { inPlaceRequest } from './dispatchDecide.js';   // D-6096: the in-place body, shaped in L1 (review 2993 F8)
-import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
+import { capCountsWorkingArmed, capNow, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
@@ -698,9 +699,12 @@ export function registerCoordRoutes(
   // D-8792: the dispatch cap's two ports, ONE pair for the dispatch door, the send-back door and the caps view, so the
   // three agree on one reading: a run worker's measured facts, and the freed-slot window, the watcher's own list
   // (`FleetWatcher.admitFreedSlot`), never the shared wake list. Shadow until the `cap-counts-working` row is armed.
+  // D-8920: and the fleet host's size the automatic cap is derived from, the watcher's own reading
+  // (`FleetWatcher.hostMachine`); with no watcher there is none, and the cap is the stored number.
   const capPorts: CapPorts = {
     workerFacts: (sessionId: string) => workerFactsFor(turnReads, sessionId),
     ...(watcher?.admitFreedSlot === undefined ? {} : { admitFreedSlot: () => watcher.admitFreedSlot() }),
+    ...(watcher?.hostMachine === undefined ? {} : { hostMachine: () => watcher.hostMachine() }),
   };
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
@@ -2554,8 +2558,11 @@ export function registerCoordRoutes(
    *  write answers. Typed as `CoordCapsView` so the two cannot drift silently —
    *  an inline object literal in either half would satisfy the compiler while
    *  saying something the other does not. */
-  const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
-    ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
+  /** D-8920: `capNow` is the cap in force and where it comes from, from the one reader the dispatch door
+   *  asks (`dispatch.ts#capNow`), over the doors' own host port. `caps` stays the STORED number, as an older console
+   *  reads it. */
+  const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView & { capNow: CoordCapNow } =>
+    ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt(), capNow: capNow(store, capPorts.hostMachine) });
   /** D-8792: `view` (by default `capsView`) with the cap reader's two additive fields, `usage.waiting` (how many of
    *  `running`'s runs have a worker measured waiting or gone, over the same worker port the two doors use) and
    *  `usage.workingOnly` (whether the armed `cap-counts-working` row leaves them out). The readings are bounded by
@@ -2564,7 +2571,7 @@ export function registerCoordRoutes(
   const capsViewMeasured = async (store: NonNullable<Deps['coord']>, view = capsView(store)): Promise<CoordCapsView> => {
     const readings = await workerReadings(store, capPorts.workerFacts);
     if (readings === null) return view;
-    const { waiting, workingOnly } = capsMeasured(store, readings, capCountsWorkingArmed(store)).usage;
+    const { waiting, workingOnly } = capsMeasured(store, capPorts.hostMachine, readings, capCountsWorkingArmed(store)).usage;
     return waiting === undefined ? view : { ...view, usage: { ...view.usage, waiting, workingOnly: workingOnly === true } };
   };
 
@@ -2656,8 +2663,11 @@ export function registerCoordRoutes(
       }
       // D-1169: the moment is L4's to supply — read INSIDE the mutex, so the
       // timestamp belongs to the write that actually won the lock.
-      coord.setCaps(merged.next, Date.now());
-      return { before: current, view: capsView(coord) };
+      // D-8920: the cap in force before the write, read under the lock for `before`'s reason, and the
+      // mode the body asked for written in the same statement as the number (`setCaps`, the one writer of both).
+      const was = capNow(coord, capPorts.hostMachine);
+      coord.setCaps(merged.next, Date.now(), merged.mode);
+      return { before: was, view: capsView(coord) };
     });
     // D-8792 (review 2875 F1): the worker readings are taken after the lock is released, never inside it.
     const measured = await capsViewMeasured(coord, view);
@@ -2670,12 +2680,18 @@ export function registerCoordRoutes(
     // `NotifyLog` degrades the RECORD and never the write; the archive's synchronous throw (`node:sqlite`) is caught
     // inside `notify`, and the seq `record()` minted is flushed whatever the archive does (D-1213). Refusing an
     // operator's write because the feed archive is unavailable would be the collapse, not the safety.
+    // D-8920: a move to the derived cap carries the automatic cap's own once-only key
+    // (`capAutomaticNotice`), so the pressure beat's record of that same cap (`FleetWatcher.noteAutomaticCap`) is not
+    // written a second time. Any other move has no key: it is recorded every time.
+    const automatic = capAutomaticNotice(view.caps, view.updatedAt ?? null, view.capNow);
     notice({
       kind: 'coord', sessionId: '',
-      title: 'caps changed',
-      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}`,
+      title: CAPS_FEED_TITLE,
+      // D-8920: the cap in force on each side, in `capNowWord`'s words, so a move to or from the derived
+      // cap reads as one (`workers automatic (16) → 12`), and an override changed reads as it always did (`3 → 5`).
+      body: `workers ${capNowWord(before)} → ${capNowWord(view.capNow)}`,
       runId: null,
-    }, 'record-only', { degraded: 'caps written, feed archive degraded' });
+    }, 'record-only', { degraded: 'caps written, feed archive degraded', ...(automatic === null ? {} : { dedupeKey: automatic.dedupeKey }) });
     return reply.code(200).send({ ok: true, ...measured });
   });
 

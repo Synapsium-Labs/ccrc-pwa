@@ -6,7 +6,7 @@ import {
 } from '../../../shared/agent-protocol.js';
 import { buildTestboxAdminArgv, testboxAdminIsLong } from '../../../shared/testbox-admin.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
-import { readHeadroomBytes, readHostPsi } from '../../../shared/pressure.js';
+import { readHeadroomBytes, readHostMachine, readHostPsi } from '../../../shared/pressure.js';
 import { readBackupRead } from '../../../shared/backup.js';
 import type { FleetIO, MeasuredDirectoryRead, ReadFailure } from '../io.js';
 import type { ModelClass } from '../../../shared/models.js';
@@ -286,16 +286,26 @@ export function createIo(client: FleetClient): FleetIO {
 
     /** The agent's `pressure` op (#1170). An agent whose `ready.ops` does not name it is never sent it: `unsupported`,
      *  never a stall. Anything the link or the agent failed, or a reply in no shape `readHostPsi` knows, is
-     *  `unanswered`: the evidence the decider classifies a stall by. */
+     *  `unanswered`: the evidence the decider classifies a stall by.
+     *
+     *  D-8920: the machine's size rides the same reply, read by its one reader and kept on the member
+     *  with no PSI too. WHY there is no size is kept apart, because the remedies differ (an adapter keeps every
+     *  distinction it receives): no ready frame yet, or a request the link or the agent failed, is `no-reading` (it
+     *  clears by itself); a ready frame whose ops do not name the op, or a reply with no `machine` key, is
+     *  `agent-older` (update the agent); a `machine` that is `null` or no size is `read-failed`. */
     async pressureMeasured() {
-      if (!(client.state.agentOps ?? []).includes(PRESSURE_OP)) return { ok: false, reason: 'unsupported' };
+      const ops = client.state.agentOps;
+      if (!(ops ?? []).includes(PRESSURE_OP)) {
+        return { ok: false, reason: 'unsupported', machine: { kind: 'unmeasured', why: ops === undefined ? 'no-reading' : 'agent-older' } };
+      }
       try {
         const reply = await client.request({ t: 'req', op: PRESSURE_OP });
         const psi = readHostPsi(reply);
         // D-8122: the slice's headroom rides beside the PSI; an older agent's reply has none, which reads as null.
-        return psi === null ? { ok: false, reason: 'unanswered' } : { ok: true, psi, headroomBytes: readHeadroomBytes(reply) };
+        const machine = readHostMachine(reply);
+        return psi === null ? { ok: false, reason: 'unanswered', machine } : { ok: true, psi, headroomBytes: readHeadroomBytes(reply), machine };
       } catch {
-        return { ok: false, reason: 'unanswered' };
+        return { ok: false, reason: 'unanswered', machine: { kind: 'unmeasured', why: 'no-reading' } };
       }
     },
 

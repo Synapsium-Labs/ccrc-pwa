@@ -106,7 +106,7 @@ import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
 import { BuildCaptureLane } from './buildCaptureLane.js';
 import { PoolSetLossLane } from './poolSetLossLane.js';
-import type { HostPressureHealth } from '../../shared/pressure.js';
+import type { HostMachineReading, HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-durability.js';
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
@@ -2126,6 +2126,10 @@ export class FleetWatcher {
 
   /** `FleetHealth.psi` (#1170), with the link as the route reads it; `null` before the first ask (absence is UNKNOWN). */
   pressure(linkUp: boolean): HostPressureHealth | null { return this.pressureLane.block(linkUp); }
+  /** D-8920: the fleet host's size as the pressure beat last measured it, which the automatic run cap is
+   *  derived from (`coord/dispatch.ts#capNow`). ONE reading for the dispatch door, the send-back door, the caps view and
+   *  the admission wake. Issues no read. */
+  hostMachine(): HostMachineReading { return this.pressureLane.machineReading(); }
   /** The host-pressure beat (#1170). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
   async sweepPressure(): Promise<void> { await this.pressureLane.sweep(); }
   /** `FleetHealth.backup` (D-7858); `null` before the first read landed (absence is UNKNOWN). */
@@ -2577,7 +2581,8 @@ export class FleetWatcher {
     if (!this.primed || !coord) return;
     const turnReads = turnReadDeps(this.deps, this);
     await this.runLane('admissionWake', () => admissionWakePass({ coord, names, serial: this.stopDoneSerial,
-      workerFacts: (sid) => workerFactsFor(turnReads, sid), freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
+      workerFacts: (sid) => workerFactsFor(turnReads, sid), hostMachine: () => this.hostMachine(),
+      freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
       push: (n) => this.pushOne(n, this.activeProjects), warn: (line) => console.warn(line) }));
   }
 
