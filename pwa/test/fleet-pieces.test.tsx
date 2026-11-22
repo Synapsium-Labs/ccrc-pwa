@@ -206,8 +206,15 @@ describe('fleetSummary', () => {
     // `dead`, and it is not waiting on anyone.
     const sessions = [session('attention', true), session('dead', true), session('working', false)];
     const s = fleetSummary(sessions, [run('working'), run('done'), run('dispatched')]);
-    expect(s).toMatchObject({ sessions: 3, waiting: 1, runs: 2 });
-    expect(s.readout).toBe('3 sessions · 1 waiting · 2 runs');
+    expect(s).toMatchObject({ sessions: 2, waiting: 1, runs: 2 });
+    expect(s.readout).toBe('2 sessions · 1 waiting · 2 runs');
+  });
+
+  it('counts running sessions only: an exited, archived or cleanup session is in the list and not in the count', () => {
+    const all = ['attention', 'working', 'done', 'idle', 'dead', 'dead', 'archived', 'cleanup'].map((b, i) =>
+      ({ id: `s${String(i)}`, bucket: b, dialogPending: false }) as unknown as FleetSession);
+    expect(fleetSummary(all, null)).toMatchObject({ sessions: 4, readout: '4 sessions · 1 waiting' });
+    expect(fleetSummary(all.filter((x) => x.bucket === 'dead'), null).readout).toBe('0 sessions');
   });
 
   it('says only what it knows: no waiting part at zero, no runs part when the runs are unknown', () => {
