@@ -22,20 +22,20 @@ const acct = (seven: ReturnType<typeof w>[], five: ReturnType<typeof w>[] | 'no-
 
 function runwayCases(m: RunwayModule): Record<string, SuiteCase> {
   return {
-    'a sample at the line is at it': () => { expect(m.windowCrossing(85, [w(60, 85)], 7_200, NOW)).toEqual({ kind: 'at', atS: NOW - 60 }); },
+    'a sample at the line is at it': () => { expect(m.windowCrossing(85, [w(60, 85)], 'five', NOW)).toEqual({ kind: 'at', atS: NOW - 60 }); },
     'a fresh sample is within LOAD_FRESH_S, inclusive': () => {
-      expect(m.windowCrossing(85, rising(80, LOAD_FRESH_S), 7_200, NOW).kind).toBe('at');
-      expect(m.windowCrossing(85, rising(80, LOAD_FRESH_S + 1), 7_200, NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
+      expect(m.windowCrossing(85, rising(80, LOAD_FRESH_S), 'five', NOW).kind).toBe('at');
+      expect(m.windowCrossing(85, rising(80, LOAD_FRESH_S + 1), 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
     },
     'a sample outside the fit span is not fitted': () => {
-      expect(m.windowCrossing(85, [w(60 + 7_201, 10), w(60, 80)], 7_200, NOW)).toEqual({ kind: 'unmeasured', why: 'thin' });
+      expect(m.windowCrossing(85, [w(60 + 7_201, 10), w(60, 80)], 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'thin' });
     },
-    'one sample is thin': () => { expect(m.windowCrossing(85, [w(60, 80)], 7_200, NOW)).toEqual({ kind: 'unmeasured', why: 'thin' }); },
+    'one sample is thin': () => { expect(m.windowCrossing(85, [w(60, 80)], 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'thin' }); },
     'a flat rate does not cross before the reset': () => {
-      expect(m.windowCrossing(85, [w(3_660, 80), w(60, 80)], 7_200, NOW)).toEqual({ kind: 'not-before-reset', resetS: RESET });
+      expect(m.windowCrossing(85, [w(3_660, 80), w(60, 80)], 'five', NOW)).toEqual({ kind: 'not-before-reset', resetS: RESET });
     },
     'a projection landing on the reset does not cross': () => {
-      expect(m.windowCrossing(85, rising(80, 60, NOW - 60 + 1_800), 7_200, NOW)).toEqual({ kind: 'not-before-reset', resetS: NOW - 60 + 1_800 });
+      expect(m.windowCrossing(85, rising(80, 60, NOW - 60 + 1_800), 'five', NOW)).toEqual({ kind: 'not-before-reset', resetS: NOW - 60 + 1_800 });
     },
     'an unmeasured window voids a future crossing': () => {
       expect(m.accountCrossing(85, acct(rising(80), []), NOW)).toEqual({ kind: 'unmeasured', why: 'no-sample' });
@@ -56,6 +56,32 @@ function runwayCases(m: RunwayModule): Record<string, SuiteCase> {
     'a stale account under the ceiling holds the pool unmeasured': () => {
       expect(m.earliestReset([acct([w(60, 99)]), acct([w(LOAD_FRESH_S + 1, 50)])], NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
     },
+    // Review 3330 (F1, F2, F4, F5): the reset is decided at read time, the first reset ends the proof, an `at` exactly now
+    // is past, an undecidable pool is in none.
+    'a stored sample whose window reset is rolled, at the reset itself and a second before it not': () => {
+      expect(m.windowCrossing(85, [w(60, 90, { resetAt: NOW - 3_600 })], 'seven', NOW)).toEqual({ kind: 'unmeasured', why: 'rolled' });
+      expect(m.windowCrossing(85, [w(60, 90, { resetAt: NOW })], 'seven', NOW)).toEqual({ kind: 'unmeasured', why: 'rolled' });
+      expect(m.windowCrossing(85, [w(60, 90, { resetAt: NOW + 1 })], 'seven', NOW)).toEqual({ kind: 'at', atS: NOW - 60 });
+    },
+    'a reading with no reset time older than its window is rolled': () => {
+      expect(m.windowCrossing(85, [w(18_001, 90, { resetAt: null })], 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'rolled' });
+    },
+    'an exhausted window that reset is rolled, never no-sample and never a past reset': () => {
+      expect(m.earliestReset([acct([w(60, 99, { resetAt: NOW - 1 })])], NOW)).toEqual({ kind: 'unmeasured', why: 'rolled' });
+    },
+    'the first reset ends the proof': () => {
+      const flat = (resetAt: number) => [w(3_660, 50, { resetAt }), w(60, 50, { resetAt })];
+      expect(m.accountCrossing(85, acct(flat(RESET + 500), flat(RESET)), NOW)).toEqual({ kind: 'not-before-reset', resetS: RESET });
+      expect(m.accountCrossing(85, acct(rising(80), flat(NOW + 600)), NOW)).toEqual({ kind: 'not-before-reset', resetS: NOW + 600 });
+      expect(m.accountCrossing(85, acct(rising(80), flat(NOW - 60 + 1_800)), NOW)).toEqual({ kind: 'at', atS: NOW - 60 + 1_800 });
+    },
+    'an at exactly now stands beside an unmeasured window': () => {
+      expect(m.accountCrossing(85, acct([w(0, 90)], []), NOW)).toEqual({ kind: 'at', atS: NOW });
+    },
+    'an undecidable pool is in none, never null': () => {
+      expect(m.runwayPoolKeys({ state: 'untagged', origin: 'declared' })).toEqual([null]);
+      for (const state of ['malformed', 'unreadable', 'stale'] as const) expect(m.runwayPoolKeys({ state })).toEqual([]);
+    },
   };
 }
 
@@ -75,6 +101,15 @@ const RUNWAY_SET: MutantSet<RunwayModule> = {
     { id: 'R10 exhausted above the ceiling', old: 'if (newest.pct >= SEVEN_DAY_CEILING_PCT)', new: 'if (newest.pct > SEVEN_DAY_CEILING_PCT)' },
     { id: 'R11 none-exhausted arm', old: ": { kind: 'none-exhausted' };", new: ": { kind: 'unmeasured', why: 'no-sample' };" },
     { id: 'R12 an unknown account ignored', old: "if (unknown !== undefined) return { kind: 'unmeasured', why: unknown.why };", new: '' },
+    { id: 'R13 a reset time in the past still proves', old: ' || (s.resetAt !== null && s.resetAt <= nowS)', new: '' },
+    { id: 'R14 the reset second still proves', old: 's.resetAt <= nowS', new: 's.resetAt < nowS' },
+    { id: 'R15 no age fallback', old: ' || nowS - s.ts > WINDOW_S[window]', new: '' },
+    { id: 'R16 the later reset', old: 'const firstReset = Math.min(', new: 'const firstReset = Math.max(' },
+    { id: 'R17 an at after a reset stands', old: 'return firstAt <= firstReset ?', new: 'return firstAt < Infinity ?' },
+    { id: 'R18 an at on the reset second yields', old: 'return firstAt <= firstReset ?', new: 'return firstAt < firstReset ?' },
+    { id: 'R19 an at exactly now is future', old: 'ats.filter((t) => t <= nowS)', new: 'ats.filter((t) => t < nowS)' },
+    { id: 'R20 an undecidable pool under null', old: "case 'malformed': case 'unreadable': case 'stale': return [];", new: "case 'malformed': case 'unreadable': case 'stale': return [null];" },
+    { id: 'R21 a reset window read as no sample', old: "unknown ??= 'rolled';", new: "unknown ??= 'no-sample';" },
   ],
   suite: runwayCases,
 };
@@ -129,6 +164,18 @@ function loadCases(m: LoadModule): Record<string, SuiteCase> {
       expect(m.accountLoadMoveReading(cand('c', lim(86)), [cand('o', lim(10, LOAD_FRESH_S + 1))], NOW).kind).toBe('unmeasured');
       expect(m.accountLoadMoveReading(cand('c', lim(86)), [cand('o', lim(null))], NOW).kind).toBe('unmeasured');
     },
+    // The 95% row's reading (Task 7, ruled F3), as an in-tree set rather than hand mutations (review 3330 F7).
+    'the line as a ladder reading: past stands, under lifts, an unmeasured line caps': () => {
+      const f = (a: AccountLimits, b: AccountLimits) => ({ lanes: { a: lane(50), b: lane(50) }, limits: { a, b }, nowS: NOW });
+      expect(m.loadLineReading(designated, () => ['a', 'b'], f(lim(96), lim(97)), 'chat')).toBe('standing');
+      expect(m.loadLineReading(designated, () => ['a', 'b'], f(lim(96), lim(10)), 'chat')).toBe('lifted');
+      expect(m.loadLineReading(designated, () => ['a', 'b'], f(lim(96), lim(10, LOAD_FRESH_S + 1)), 'chat')).toBe('unmeasured');
+    },
+    'the line as a ladder reading: nobody designated lifts; an unreadable designation or no facts caps': () => {
+      expect(m.loadLineReading({ kind: 'not-designated', row: null } as never, () => [], null, 'chat')).toBe('lifted');
+      expect(m.loadLineReading({ kind: 'unmeasured', why: 'x' } as never, () => [], null, 'chat')).toBe('unmeasured');
+      expect(m.loadLineReading(designated, () => ['a'], null, 'chat')).toBe('unmeasured');
+    },
   };
 }
 
@@ -148,6 +195,11 @@ const LOAD_SET: MutantSet<LoadModule> = {
     { id: 'A11 every other counted', old: "const counted = others.filter((o) => o.serves === 'yes');", new: 'const counted = others;' },
     { id: 'A12 hard inclusive', old: 'if (cur !== null && cur < LOAD_LINE_PCT.hard)', new: 'if (cur !== null && cur <= LOAD_LINE_PCT.hard)' },
     { id: 'A13 an unmeasured other read as past', old: 'return v !== null && v >= LOAD_LINE_PCT.soft;', new: 'return v === null || v >= LOAD_LINE_PCT.soft;' },
+    { id: 'A14 an unreadable designation lifts', old: "if (read.kind === 'unmeasured') return 'unmeasured';", new: "if (read.kind === 'unmeasured') return 'lifted';" },
+    { id: 'A15 nobody designated caps', old: "if (read.kind === 'not-designated') return 'lifted';", new: "if (read.kind === 'not-designated') return 'unmeasured';" },
+    { id: 'A16 no facts lifts', old: "if (f === null) return 'unmeasured';", new: "if (f === null) return 'lifted';" },
+    { id: 'A17 past lifts', old: "return s.kind === 'past' ? 'standing'", new: "return s.kind === 'past' ? 'lifted'" },
+    { id: 'A18 an unmeasured line lifts', old: "s.kind === 'under' ? 'lifted' : 'unmeasured';", new: "s.kind === 'under' ? 'lifted' : 'lifted';" },
   ],
   suite: loadCases,
 };

@@ -34,13 +34,13 @@ const designated: DesignationRead = { kind: 'designated', sessionId: 'overlord-a
   row: { model: 'opus', accountPools: { pools: ['pool-a'], untagged: false } } as unknown as DesignationView };
 const facts = (a: number, b: number, agoB = 60): AccountFacts => loadFactsOf(roster, { 'lane-a': lim(a), 'lane-b': lim(b, agoB) }, new Map(), NOW);
 
-function ladder(read: DesignationRead, f: AccountFacts | null) {
+function ladderWith(designationRead: () => DesignationRead, facts: () => AccountFacts | null) {
   const db = new DatabaseSync(':memory:');
   db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
   db.exec("INSERT INTO overlord_ladder VALUES (1, 'full', 'actor', 1, 7, NULL, 1)");
   const coord = new CoordStore(db);
-  const accountFacts = vi.fn(() => f);
-  const inputs = ladderConditionInputs({ coord: { designationRead: () => read } as never, serverCaps: ALL_WORDS, accountFacts });
+  const accountFacts = vi.fn(facts);
+  const inputs = ladderConditionInputs({ coord: { designationRead } as never, serverCaps: ALL_WORDS, accountFacts });
   const only = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const,
     'load-past-95': inputs['load-past-95'] };
   const r = ladderRead(coord, only, NO_WITNESS_YET, ALL_WORDS);
@@ -48,6 +48,7 @@ function ladder(read: DesignationRead, f: AccountFacts | null) {
   if (r.kind !== 'measured') throw new Error(r.why);
   return { rung: r.effective.rung, reading: r.conditions.find((c) => c.cause === 'load-past-95')!.reading, binding: r.effective.binding, accountFacts };
 }
+const ladder = (read: DesignationRead, f: AccountFacts | null) => ladderWith(() => read, () => f);
 
 describe('the 95% row (Table 7.5a)', () => {
   it('is a condition that caps at chat with no push', () => {
@@ -79,6 +80,10 @@ describe('the 95% row (Table 7.5a)', () => {
   });
   it('no reading this tick (no facts) is unmeasured, never under', () => {
     expect(ladder(designated, null)).toMatchObject({ rung: 'chat', reading: 'unmeasured' });
+  });
+  it('a facts read that throws, or a designation read that throws, is unmeasured and capped, never lifted (review 3330 F3)', () => {
+    expect(ladderWith(() => designated, () => { throw new Error('limits gone'); })).toMatchObject({ rung: 'chat', reading: 'unmeasured' });
+    expect(ladderWith(() => { throw new Error('coord gone'); }, () => facts(10, 10))).toMatchObject({ rung: 'chat', reading: 'unmeasured' });
   });
   it('the input reads its facts once per evaluation', () => {
     expect(ladder(designated, facts(96, 97)).accountFacts).toHaveBeenCalledTimes(1);

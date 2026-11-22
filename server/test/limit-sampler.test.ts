@@ -24,6 +24,7 @@ const roster = parseRoster({ version: 1, accounts: [
   { id: 'lane-b', label: 'lane-b', configDirSuffix: '.lane-b', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
   { id: 'lane-c', label: 'lane-c', configDirSuffix: '.lane-c', exec: { kind: 'generated' }, homeAble: false, hue: 'blue', telemetry: 'codex' },
   { id: 'lane-d', label: 'lane-d', configDirSuffix: '.lane-d', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
+  { id: 'lane-e', label: 'lane-e', configDirSuffix: '.lane-e', exec: { kind: 'generated' }, homeAble: false, hue: 'amber', telemetry: 'codex' },
 ] });
 const lim = (five: number | null, seven: number | null, ts: number | null, over: Partial<AccountLimits> = {}): AccountLimits => ({
   five, seven, ts, fiveResetAt: NOW + 9_000, sevenResetAt: NOW + 300_000, fiveRolledOver: false, sevenRolledOver: false,
@@ -50,13 +51,16 @@ describe('limitSamplePass (F14)', () => {
     ]);
     expect(store.prunes).toEqual([NOW - LIMIT_SAMPLES_KEEP_S]);
   });
-  it('a codex lane\'s file and an exclusion row write nothing; a reading with no time writes nothing', () => {
-    const limits = {
-      'lane-c': lim(30, 30, NOW - 60),
-      'lane-x': { five: 100, seven: 0, ts: NOW - 60, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false },
-      'lane-d': lim(null, null, null),
-    };
+  it('a codex lane\'s file and ccd\'s exclusion row on a rostered codex lane write nothing; nor do an unrostered file or a reading with no time', () => {
+    const exclusion: AccountLimits = { five: 100, seven: 0, ts: NOW - 60, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false,
+      sevenRolledOver: false, disabled: false, authDead: false };
+    const limits = { 'lane-c': lim(30, 30, NOW - 60), 'lane-e': exclusion, 'lane-x': lim(30, 30, NOW - 60), 'lane-d': lim(null, null, null) };
     expect(limitSampleRows(limits, roster)).toEqual([]);
+    // the exclusion row alone, on the rostered codex lane, is left out by the telemetry test and nothing else
+    expect(limitSampleRows({ 'lane-e': exclusion }, roster)).toEqual([]);
+    expect(limitSampleRows({ 'lane-e': exclusion }, parseRoster({ version: 1, accounts: [
+      { id: 'lane-e', label: 'lane-e', configDirSuffix: '.lane-e', exec: { kind: 'upstream' }, homeAble: true, hue: 'amber', telemetry: 'anthropic' },
+    ] }))).toHaveLength(1);
   });
 });
 

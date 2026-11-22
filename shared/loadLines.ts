@@ -26,24 +26,27 @@ export const RUNWAY_MIN_SPAN_S = 900;
 const CROSSING_UNMEASURED_MAP = {
   'no-sample': 'no sample of the current window',
   stale: 'the newest sample is older than LOAD_FRESH_S and under the line',
-  rolled: 'the newest sample\'s window has reset',
+  rolled: 'the newest sample\'s window has reset: flagged when sampled, its reset time at or before now, or older than its window',
   thin: 'fewer than two samples, or less than RUNWAY_MIN_SPAN_S between them',
   'no-reset': 'the window carries no reset time',
 } as const;
 export type CrossingUnmeasured = keyof typeof CROSSING_UNMEASURED_MAP;
 export const CROSSING_UNMEASURED = Object.keys(CROSSING_UNMEASURED_MAP) as CrossingUnmeasured[];
 
-/** When a line is crossed: `at` (at or before now: already past), not before the window's reset, or unmeasured. */
+/** When a line is crossed. `at` a time: at or before now, already past; after now, the endpoint slope's projection,
+ *  before the window's reset. `not-before-reset`: not before that reset, which is in the future and ends the proof (a
+ *  window may cross after it). Or unmeasured. */
 export type Crossing =
   | { readonly kind: 'at'; readonly atS: number }
   | { readonly kind: 'not-before-reset'; readonly resetS: number }
   | { readonly kind: 'unmeasured'; readonly why: CrossingUnmeasured };
 
-/** When an exhausted account regains headroom (ruled, F2): never a bare null. */
+/** When an exhausted account regains headroom (ruled, F2): never a bare null, and `at` is always a reset still to come.
+ *  `unmeasured` keeps a missing sample (`no-sample`) apart from a window that has reset since (`rolled`). */
 export type EarliestReset =
   | { readonly kind: 'none-exhausted' }
   | { readonly kind: 'at'; readonly atS: number }
-  | { readonly kind: 'unmeasured'; readonly why: 'no-sample' | 'stale' | 'no-reset' };
+  | { readonly kind: 'unmeasured'; readonly why: 'no-sample' | 'rolled' | 'stale' | 'no-reset' };
 
 export interface PoolRunwayAnswer {
   /** Crossing `SEVEN_DAY_CEILING_PCT`: the pool runs out. */

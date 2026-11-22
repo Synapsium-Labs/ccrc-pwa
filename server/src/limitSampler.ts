@@ -5,8 +5,9 @@
 //
 // Only `telemetry: 'anthropic'` accounts are sampled (F14, slug `samples-are-anthropic-readings`): the statusline is the
 // only writer of such a file that writes a reading, so the codex lanes' publisher and ccd's synthetic exclusion row never
-// become samples. A reading with no `ts` writes nothing. A rolled-over window is stored with its flag, so the runway
-// leaves it out.
+// become samples. A reading with no `ts` writes nothing. A rolled-over window is stored with its flag; an idle account
+// offers the same reading beat after beat, and its row keeps the first beat's flags, so whether a window has reset since is
+// decided when the runway reads it (`poolRunway.ts#sampleRolled`), never by updating the row.
 import { LIMIT_SAMPLES_KEEP_S } from '../../shared/loadLines.js';
 import type { Roster } from '../../shared/roster.js';
 import type { AccountLimits } from './limits.js';

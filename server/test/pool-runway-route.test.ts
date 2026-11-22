@@ -4,7 +4,7 @@ import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import type { PoolRunwayWire } from '../../shared/loadLines.js';
 import { parseRoster } from '../../shared/roster.js';
-import { registerPoolRunwayRoute, type PoolRunwayRouteDeps } from '../src/poolRunwayRoute.js';
+import { registerPoolRunwayRoute, RUNWAY_READ_FAILED, type PoolRunwayRouteDeps } from '../src/poolRunwayRoute.js';
 import type { LimitSample } from '../src/poolRunway.js';
 
 const NOW = 2_000_000_000;
@@ -50,9 +50,18 @@ describe('GET /api/pools/runway', () => {
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ ok: false, error: 'not-configured' });
   });
-  it('a read that throws is a 503, never an empty list', async () => {
-    const { res } = await get({ coord: { accountPoolEdges: () => new Map(), limitSamplesSince: () => { throw new Error('disk gone'); } } });
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+  it('a read that throws is a 503, never an empty list, naming the read in a fixed word and never the thrown text (review 3330 F6)', async () => {
+    const gone = (): never => { throw new Error('disk gone: /tmp/fixture/.ccrc/coord.db lane-a'); };
+    const cases: [Partial<PoolRunwayRouteDeps>, string][] = [
+      [{ limits: async () => gone() }, RUNWAY_READ_FAILED.limits],
+      [{ coord: { accountPoolEdges: gone, limitSamplesSince: () => [] } }, RUNWAY_READ_FAILED.edges],
+      [{ coord: { accountPoolEdges: () => new Map(), limitSamplesSince: gone } }, RUNWAY_READ_FAILED.samples],
+    ];
+    for (const [deps, detail] of cases) {
+      const { res } = await get(deps);
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ ok: false, error: 'unavailable', detail });
+      expect(res.body).not.toMatch(/disk gone|fixture|lane-/);
+    }
   });
 });

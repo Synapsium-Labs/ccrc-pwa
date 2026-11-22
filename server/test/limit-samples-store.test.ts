@@ -1,7 +1,7 @@
 // `limit_samples` and its store (Overlord W1 serviceability PR B, plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-serviceability.md` Task 5): one row per account reading, read back by
 // account oldest first, pruned strictly before a bound; over a fixture coord.db.
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -62,5 +62,38 @@ describe('limit_samples (C57)', () => {
 
   it('an empty insert writes nothing', () => {
     expect(coord.insertLimitSamples([], NOW)).toBe(0);
+  });
+});
+
+describe('the migration (the plan\'s F15)', () => {
+  const versionOf = (db: { prepare(sql: string): { get(): unknown } }): number => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  it('a file at the version before this one is migrated, never opened empty, and gains the table and its index', () => {
+    const file = path.join(mkTmp('ccrc-limit-samples-up-'), '.ccrc', 'coord.db');
+    const first = openCoordDb(file);
+    first.exec("CREATE TABLE kept_fixture (x TEXT); INSERT INTO kept_fixture VALUES ('kept')");
+    first.exec('DROP TABLE limit_samples');
+    first.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION - 1}`);
+    first.close();
+    const db = openCoordDb(file);
+    expect(versionOf(db)).toBe(COORD_SCHEMA_VERSION);
+    expect((db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'limit_samples%' ORDER BY name").all() as { name: string }[]).map((n) => n.name))
+      .toEqual(['limit_samples', 'limit_samples_ts']);
+    expect(db.prepare('SELECT x FROM kept_fixture').all()).toEqual([{ x: 'kept' }]);
+    db.close();
+  });
+  it('a file at a higher version than this build opens as it is, with the build\'s warning, and its samples read', () => {
+    const file = path.join(mkTmp('ccrc-limit-samples-hi-'), '.ccrc', 'coord.db');
+    const first = new CoordStore(openCoordDb(file));
+    first.insertLimitSamples([s('lane-a', NOW - 60)], NOW);
+    first.db.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 1}`);
+    first.db.close();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const again = new CoordStore(openCoordDb(file));
+      expect(versionOf(again.db)).toBe(COORD_SCHEMA_VERSION + 1);
+      expect(again.limitSamplesSince(['lane-a'], 0)).toEqual([s('lane-a', NOW - 60)]);
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes(`is at schema ${COORD_SCHEMA_VERSION + 1}, this build knows ${COORD_SCHEMA_VERSION}`))).toBe(true);
+      again.db.close();
+    } finally { warn.mockRestore(); }
   });
 });

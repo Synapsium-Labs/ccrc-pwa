@@ -17,7 +17,8 @@ interface Row {
 const COLUMNS = 'account, ts, five, seven, five_reset_at, seven_reset_at, five_rolled, seven_rolled, five_window_minutes';
 
 /** One row per account reading: `INSERT OR IGNORE` on `(account, ts)`, so one reading is one row however many beats see
- *  it, and the first beat's flags stand. Answers how many rows were new. */
+ *  it, and the first beat's flags stand: a row is never updated, and whether its window has reset since is decided at
+ *  read time (`poolRunway.ts#sampleRolled`). Answers how many rows were new. */
 export function insertLimitSamples(db: DatabaseSync, rows: readonly LimitSample[], sampledAt: number): number {
   if (rows.length === 0) return 0;
   const ins = db.prepare(`INSERT OR IGNORE INTO limit_samples (${COLUMNS}, sampled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
