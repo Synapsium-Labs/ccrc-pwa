@@ -126,7 +126,6 @@ const WITNESS_READING_MAP = { held: true, 'not-yet': true, unmeasured: true } as
 /** The server's own lanes that raise a latch (Table 7.5a's "raised by", for a row a lane raises; renewal readings PR C, slug
  *  lane-raises-the-latch-as-a-lane). The store mints the raiser (`overlordLadderStore.ts#laneRaiser`); the names are here. */
 export const LANE_RAISER_MAP = { 'renewal-lane': 'the renewal readings, for probes-failed-twice' } as const;
-export type LaneRaiserName = keyof typeof LANE_RAISER_MAP;
 
 /** The ladder's local and shared vocabulary, for the coordination kebab census. */
 export const isLadderKebab = (word: string): boolean =>
