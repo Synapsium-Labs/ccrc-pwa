@@ -174,11 +174,13 @@ describe('parseCatalogueCache: one bad row or target among good ones (cache-row-
     expect(r.skipped).toEqual([{ at: 'provider_alias_targets.sonnet.default', why: 'is not a model id' }]);
   });
 
-  it('a skipped row does not shadow a later good row of the same id', () => {
-    const r = edited((c) => { c.models.unshift({ id: 'claude-opus-9-2', min_claude_code_version: 'next' }); });
+  it.each([0, 6])('a skipped row at index %i holds its id against a readable duplicate', (index) => {
+    const r = edited((c) => { c.models.splice(index, 0, { id: 'claude-opus-9-2[1m]', min_claude_code_version: 'next' }); });
     if (r.format !== 'current') throw new Error(JSON.stringify(r));
-    expect(r.rows).toEqual(clean.rows);
-    expect(r.skipped).toEqual([{ at: 'models[0].min_claude_code_version', why: 'is not a version', rowId: 'claude-opus-9-2' }]);
+    const expected = new Map(clean.rows);
+    expected.delete('claude-opus-9-2');
+    expect(r.rows).toEqual(expected);
+    expect(r.skipped).toEqual([{ at: `models[${index}].min_claude_code_version`, why: 'is not a version', rowId: 'claude-opus-9-2' }]);
   });
 });
 

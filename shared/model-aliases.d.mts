@@ -19,8 +19,8 @@ export interface AliasRow {
 export interface CacheSkip {
   at: string;
   why: string;
-  /** The normalized id of a skipped row, `null` if the id was unreadable. Omitted for skips that cannot hide a row
-   *  for any valid target (malformed target or invalid string id). */
+  /** The normalized id of a skipped row (no row for that id survives in this file), `null` if the id was unreadable.
+   *  Omitted for skips that cannot hide a row for any valid target (malformed target or invalid string id). */
   rowId?: string | null;
 }
 

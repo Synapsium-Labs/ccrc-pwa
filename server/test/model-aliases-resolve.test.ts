@@ -212,10 +212,27 @@ describe('resolveAliases: one bad row or target in the cache (cache-row-skip)', 
 
   it('one beta minimum on a target row removes only that class’s cache candidate', () => {
     const r = catalogue(beta);
+    expect(r.format === 'current' && r.skipped)
+      .toEqual([{ at: 'models[4].min_claude_code_version', why: 'is not a version', rowId: F1 }]);
     const a = resolve({ own: [r] });
     expect(a.classes.fable).toMatchObject(blocked);
     for (const c of others('fable')) expect(a.classes[c]).toEqual(clean.classes[c]);
     expect(a.cache).toEqual(clean.cache);
+  });
+
+  it('a duplicate without a minimum cannot advance a class past a skipped beta minimum', () => {
+    const laneVersion = '2.1.100';
+    const prior = resolve({ own: [cache(T1, { opus: X1 })], laneVersion, nowMs: Date.parse(T2) });
+    const own = parseCatalogueCache({
+      fetchedAt: T4,
+      catalog: { config: {
+        provider_alias_targets: { opus: { default: X2 } },
+        models: [{ id: X2, min_claude_code_version: '2.1.300-beta' }, { id: X2 }],
+      } },
+    });
+    expect(resolve({ own: [own], prior, laneVersion }).classes.opus).toMatchObject({
+      id: X1, source: 'cache', evidenceAt: T1, idSince: prior.classes.opus.idSince, cacheTarget: null,
+    });
   });
 
   it('a skipped own target row preserves prior or launch evidence, even when a box row is readable', () => {

@@ -85,8 +85,8 @@ function readRow(m, f) {
  *  the file is never a source), and `{format:'invalid', why}` for anything that is not a cache file or breaks a field
  *  of the FILE: not an object, no `catalog.config` object, a `fetchedAt` that is not a time, `models` not a list.
  *  A field of ONE row or ONE class's target is read row by row (cache-row-skip): a row that breaks a field is left out
- *  of `rows`, a class whose target is not a model id has a null target, and each has an entry in `skipped` (targets
- *  first). The resolver uses the skips to distinguish a target whose row failed to parse from one with no row. */
+ *  of `rows` along with any duplicate of its known id. A class whose target is not a model id has a null target.
+ *  Each bad row or target has an entry in `skipped` (targets first), so the resolver can tell a skip from absence. */
 export function parseCatalogueCache(json) {
   if (!isObj(json)) return { format: 'invalid', why: 'a catalogue cache is a JSON object' };
   if (!isObj(json.catalog) || !isObj(json.catalog.config)) {
@@ -116,6 +116,8 @@ export function parseCatalogueCache(json) {
     if (read.skip !== undefined) skipped.push(read.skip);
     else if (!rows.has(read.row.id)) rows.set(read.row.id, read.row);
   });
+  // A duplicate cannot prove a minimum absent when another row for the same id could have hidden it.
+  for (const skip of skipped) if (typeof skip.rowId === 'string') rows.delete(skip.rowId);
   return { format: 'current', fetchedAt, aliasTargets, rows, skipped };
 }
 
