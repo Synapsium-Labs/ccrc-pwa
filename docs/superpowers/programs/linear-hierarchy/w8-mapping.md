@@ -85,6 +85,9 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
   by the packet the README's holding run approved; the ticket can close with the PR.
 - `w8-overlord-skill`: built by run 3251 (below). The Overlord skill's door table gains `link team`, and says what it does below `full`.
+- `w8-confirm-unmeasured`: the Overlord's confirm route answers `unavailable`, not `team-unknown`, when the pair cannot be
+  measured (a slot it cannot read, or no connected workspace), by the unmeasured-aware resolver `measuredProjectTeam` the
+  operator's write already uses. Found by review 3253 F1 on run 3251.
 - `w8-call-anchor`: built by run 3209 (below).
 - `w8-triage-l1`: built by run 3155 (below). It moved the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`)
   into `planPolicy.ts` beside `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It had stayed in the route because
@@ -294,3 +297,15 @@ ratchet (ARCH-06) refused it in CI. Fix round 1 (review 3253, as the coordinator
 - A3: the carve-out's `toThrow` expects the no-row message.
 
 The remedies are not pinned word for word, as before.
+
+Fix round 2 (review 3260, as the coordinator ruled):
+
+- F1: the carve-out's guard now fires when the spec gains the door under its kebab spelling. `waveOf` tries `link-team` for
+  `link team` before it throws. Measured: a `link-team` row added to Table 11.1e turns the guard red; the spec as it stands
+  is green.
+- A1: `team-unknown` is split by its two causes, which the refusal's detail names. A pair that is not a current candidate
+  leaves nothing to confirm, so the Overlord drops it. A pair not held in a workspace the door could read keeps the earlier
+  remedy.
+- A2: the rung pin is exact on the words' side too: no sentence that says the Overlord may confirm names a refused rung.
+  Measured: appending "At `chat` or `advise` you may confirm too." turns it red.
+- A3: `w8-confirm-unmeasured` is carried above and in D-8808's follow-up list, as open.

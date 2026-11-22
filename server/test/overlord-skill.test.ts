@@ -215,6 +215,8 @@ function waveOf(door: string): string {
   const first = door.split(' ')[0]!;
   let found = rows.filter((r) => hasWord(r[0]!, first));
   if (found.length === 0 && first.includes('-')) found = rows.filter((r) => hasWord(r[0]!, first.split('-')[0]!));
+  // A spaced door under the kebab spelling the table gives multi-word doors (`link team` as `link-team`; review 3260 F1).
+  if (found.length === 0 && door.includes(' ')) found = rows.filter((r) => hasWord(r[0]!, door.replace(/ /g, '-')));
   if (found.length === 0) throw new Error(`Table 11.1e has no row for the door ${door}`);
   // Several rows can mention a word; a row whose first cell begins with it names that door.
   const lead = (c: string): string => c.replace(/^the\s+/i, '').replace(/^`/, '');
@@ -394,7 +396,8 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
   it("follows the gate's rung cells", () => {
     const p = paragraph();
     const first = p.slice(0, p.indexOf('. ') + 1);
-    // Exact both ways (review 3253 F2): the paragraph says `full` may confirm and every rung below it is refused.
+    // Exact on the gate's side (review 3253 F2): `full` alone allows. On the words' side, no sentence that says the
+    // Overlord may confirm names a refused rung (review 3260 A2).
     expect(Object.keys(cellsOf).filter((r) => cellsOf[r] === 'allow'), 'the gate allows link-team at a rung other than full alone')
       .toEqual(['full']);
     for (const [rung, cell] of Object.entries(cellsOf)) {
@@ -402,6 +405,11 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
       if (cell === 'refuse') {
         expect(p, `the paragraph omits \`${rung}\``).toContain(`\`${rung}\``);
         expect(first, `the first sentence names the refused rung \`${rung}\``).not.toContain(`\`${rung}\``);
+      }
+    }
+    for (const s of p.split(/(?<=\.) /).filter((x) => /\bmay confirm\b/.test(x))) {
+      for (const [rung, cell] of Object.entries(cellsOf)) {
+        if (cell === 'refuse') expect(s, `a sentence says the refused rung \`${rung}\` may confirm`).not.toContain(`\`${rung}\``);
       }
     }
     for (const w of ['`rung-below`', 'Project linking card', 'decision brief', 'never by another route']) expect(p).toContain(w);

@@ -64,9 +64,10 @@ W1a with no word, and they answer while a generation finishes starting, so they 
 `link team`; the operator sees it among the calls made for them and can overturn it. Below `full`, at `chat` or `advise`,
 the door answers `rung-below`: leave the candidate for the operator's tap on the Project linking card in Settings, and name
 it in your decision brief, never by another route. After the gate, the door's own refusals are these. `team-set`: the
-project has a key or the operator decided it, so drop the candidate. `team-unknown`: the pair is not a current candidate,
-or not held in a workspace the door could read now; the candidate stays on the card, so leave it for the operator, name it
-in your brief, and do not retry it in a loop. `team-ambiguous`: two workspaces hold the key, so leave it for the operator.
+project has a key or the operator decided it, so drop the candidate. `team-unknown`: its detail says which of two causes.
+Either the pair is not a current candidate, so there is nothing to confirm and you drop it; or it is not held in a
+workspace the door could read now, and the candidate stays on the card, so leave it for the operator, name it in your
+brief, and do not retry it in a loop. `team-ambiguous`: two workspaces hold the key, so leave it for the operator.
 `no-project`: the server has no such project, so drop it. `unavailable`: the Linear store could not be read, so try again
 on a later turn. `write-failed`: the store write failed, so bring it to the operator.
 
