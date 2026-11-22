@@ -342,24 +342,23 @@ describe('the Models act is offered by the lane kind (wave 9, Task A4.3)', () =>
   });
 });
 
-describe('an Anthropic lane: no Hold, a Revert that names no Release, refusals that state facts (wave 9 review)', () => {
+describe('an Anthropic lane: no class actions, refusals that state facts', () => {
   const ok = (opus: Partial<LaneClassAdvance>): Parameters<typeof classActs>[0] => ({
     state: 'ok', detail: null, pending: null,
     classes: Object.fromEntries((['fable', 'opus', 'sonnet', 'haiku'] as const).map((c) => [c, {
       family: c, hold: null, previous: null, revertable: false, lastMove: null, ...(c === 'opus' ? opus : {}),
     }])) as never,
   });
-  it('classActs offers no Hold or Release on an Anthropic lane, and keeps Revert', () => {
+  it('classActs and the current-read recheck offer no Anthropic actions', () => {
     expect(classActs(ok({}), 'opus', true)).toMatchObject({ hold: null, held: false, revert: false });
     expect(classActs(ok({ hold: { at: 'x', by: 'hand' } }), 'opus', true)).toMatchObject({ hold: null, held: true });
-    expect(classActs(ok({ revertable: true, previous: { model: 'm-before', effort: null } }), 'opus', true)).toMatchObject({ hold: null, revert: true });
+    const advance = ok({ revertable: true, previous: { model: 'm-before', effort: null } });
+    expect(classActs(advance, 'opus', true)).toMatchObject({ hold: null, revert: false });
+    const current = { kind: 'read', classes: {}, advance } as never;
+    expect(revertStillOffered(current, 'opus', true)).toBe(false);
+    expect(revertStillOffered(current, 'opus', false)).toBe(true);
     expect(classActs({ state: 'absent', detail: null, pending: null, classes: null }, 'opus', true)).toMatchObject({ hold: null });
     expect(classActs(ok({}), 'opus')).toMatchObject({ hold: 'hold' });
-  });
-  it('an Anthropic Revert names no Release', () => {
-    const prev = { model: 'm-before', effort: null };
-    expect(revertConsequence('lane-a', 'opus', 'm-now', prev, true)[0]).not.toMatch(/release/i);
-    expect(revertConsequence('lane-a', 'opus', 'm-now', prev)[0]).toMatch(/until you release it/);
   });
   it('the Anthropic hold refusals ask no hand act', () => {
     for (const code of ['alias-source-absent', 'aliases-file-unreadable', 'aliases-file-invalid', 'settings-overrides-hold'] as const) {

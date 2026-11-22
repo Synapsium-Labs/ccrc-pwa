@@ -12744,7 +12744,10 @@ _models_push() {   # <message> -> rc 0
   local hook="$_SVC_REG/notify.sh"
   [ -x "$hook" ] || return 0
   if [ -n "${MODELS_AUTO_DEADLINE:-}" ]; then
-    _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )) || return 0
+    if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )); then
+      [ "${2:-}" != grouped ] || printf 'ccrc: models push skipped (deadline): %s\n' "$1" >&2
+      return 0
+    fi
     _plat_timeout_strict "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
   else
     _plat_timeout "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
@@ -13247,11 +13250,16 @@ _models_aliases_push() {   # <deadline-secs> <row>... -> rc 0
   [ -n "$lines" ] || return 0
   # The strict hook call needs the capability THIS shell proved: the lanes' own runs proved it in their subshells, so it is
   # proved here, admitted first, and a box without it sends nothing, as a lane without it ran nothing.
-  _models_advance_admit "$MODELS_AUTO_DEADLINE" 2 || return 0
+  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then
+    while IFS= read -r line; do
+      [ -z "$line" ] || printf 'ccrc: models push skipped (deadline): %s\n' "$line" >&2
+    done <<<"$lines"
+    return 0
+  fi
   _plat_timeout_capability >/dev/null
   [ "$CCD_TIMEOUT_CAPABILITY" = strong ] || return 0
   while IFS= read -r line; do
-    [ -n "$line" ] && _models_push "$line"
+    [ -n "$line" ] && _models_push "$line" grouped
   done <<<"$lines"
   return 0
 }

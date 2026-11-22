@@ -125,7 +125,7 @@ export function anthropicLabels(aliases, advance) {
     let row = null;
     if (held) {
       model = hold.model;
-      row = k.heldRow;
+      row = k.heldRow?.id === hold.model ? k.heldRow : null;
     } else if (k.id !== null && k.unlaunchable === null) {
       model = k.id;
       row = k.row;

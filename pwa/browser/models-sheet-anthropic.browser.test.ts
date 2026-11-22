@@ -3,8 +3,8 @@
 // `telemetry: 'anthropic'`) at 360x740, 1280x800 and 1920x1080, with a read that has every Anthropic line drawn (a class held
 // on one id while its alias moved to another, a catalogue and a launch that disagree, an orphaned saved level, a class
 // with no id, and one the lane's build cannot launch). At each size nothing scrolls sideways, nothing a card holds leaves
-// the card, the one control (Revert, since an Anthropic lane offers no Hold or Release) is inside the sheet and at least 44px
-// tall. When `CCRC_BROWSER_SHOTS` names a directory the open sheet is saved there as `models-anthropic-<width>.png`.
+// the card, and no class action is offered. When `CCRC_BROWSER_SHOTS` names a directory the open sheet is saved there as
+// `models-anthropic-<width>.png`.
 //
 // Run: `( cd pwa && CCRC_BROWSER_SHOTS=<dir> CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/models-sheet-anthropic.browser.test.ts )`.
 import path from 'node:path';
@@ -85,8 +85,6 @@ afterAll(async () => {
 interface Geometry {
   pageOverflow: number;
   sheetOverflow: number;
-  /** Controls of the sheet that are hidden, outside the panel, or under 44px tall. */
-  badControls: string[];
   controls: string[];
   classes: number;
   /** Text boxes that leave their card (or, with no cards, the panel). */
@@ -100,19 +98,6 @@ function measure(): Geometry {
   const panel = document.querySelector<HTMLElement>('.sheet-panel')!;
   const box = panel.getBoundingClientRect();
   const controls = [...panel.querySelectorAll<HTMLElement>('button')].filter((b) => b.closest('[data-frame="models"]') !== null);
-  const bad: string[] = [];
-  for (const b of controls) {
-    const r = b.getBoundingClientRect();
-    const style = getComputedStyle(b);
-    const name = b.getAttribute('aria-label') ?? b.textContent ?? '';
-    if (r.width === 0 || r.height === 0 || style.visibility === 'hidden' || style.display === 'none') bad.push(`${name}: not visible`);
-    else {
-      if (r.height < 43.5) bad.push(`${name}: ${r.height}px tall`);
-      // A card beside a taller one in its row must not stretch its button (seen at 1280: an 85px Release).
-      if (r.height > 64) bad.push(`${name}: stretched to ${r.height}px`);
-      if (r.left < box.left - 0.5 || r.right > box.right + 0.5) bad.push(`${name}: outside the sheet`);
-    }
-  }
   const escapes: string[] = [];
   const inside = (el: HTMLElement, c: DOMRect, label: string): void => {
     const e = el.getBoundingClientRect();
@@ -127,7 +112,6 @@ function measure(): Geometry {
   return {
     pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     sheetOverflow: panel.scrollWidth - panel.clientWidth,
-    badControls: bad,
     controls: controls.map((b) => b.getAttribute('aria-label') ?? b.textContent ?? ''),
     classes: panel.querySelectorAll('.acct-models-class').length,
     escapes,
@@ -164,9 +148,7 @@ describe('the Models sheet on an Anthropic lane at a phone, a laptop and a wide 
         expect(m.pageOverflow, `${at}: no horizontal page scroll`).toBeLessThanOrEqual(0);
         expect(m.sheetOverflow, `${at}: nothing scrolls sideways in the sheet`).toBeLessThanOrEqual(1);
         expect(m.escapes, `${at}: nothing leaves its card`).toEqual([]);
-        // An Anthropic lane offers no Hold and no Release: Revert on the held class is the one control.
-        expect(m.controls, at).toEqual(['Revert the opus class']);
-        expect(m.badControls, `${at}: the control is visible, inside the sheet and 44px to 64px tall`).toEqual([]);
+        expect(m.controls, `${at}: no class actions`).toEqual([]);
         const shots = process.env['CCRC_BROWSER_SHOTS'];
         if (shots !== undefined && shots !== '') await page.screenshot({ path: path.join(shots, `models-anthropic-${size.width}.png`) });
         // On a phone the four cards are taller than the sheet: the lower half is saved too, scrolled to its end.

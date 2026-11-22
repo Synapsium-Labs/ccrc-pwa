@@ -713,12 +713,20 @@ describe('ModelsSheet: an Anthropic lane', () => {
     expect(fact('opus', 'alias')).toBeNull();
   });
 
-  it('Revert shows on a revertable Anthropic class and asks first, as on any lane', async () => {
+  it('a revertable held Anthropic class has no controls but retains its hold facts', async () => {
     mount(aread({}, aadvance({ opus: aclass('opus', { hold: HELD, revertable: true, previous: { model: 'claude-opus-9-0', effort: null } }) })), { anthropic: true });
     await ready();
-    expect(screen.getAllByRole('button', { name: /^Revert the/ }).map((b) => b.getAttribute('aria-label'))).toEqual(['Revert the opus class']);
-    fireEvent.click(screen.getByRole('button', { name: 'Revert the opus class' }));
-    expect(await screen.findByRole('dialog', { name: /Revert the opus class\?/ })).toBeTruthy();
+    expect(screen.queryAllByRole('button', { name: /^(Hold|Release|Revert) the/ })).toHaveLength(0);
+    expect(fact('opus', 'held')).toBe('Held at claude-opus-9-1.');
+    expect(fact('opus', 'supervisor')).toBe(SUPERVISOR_RESIDUAL_WORDS);
+    expect(rowOf('opus').textContent).not.toMatch(/a revert would put back/i);
+  });
+
+  it('an unreported advance record does not direct an Anthropic lane to unavailable controls', async () => {
+    mount(aread({}, { state: 'unreported', detail: null, pending: null, classes: null }), { anthropic: true });
+    await ready();
+    expect(screen.getByTestId('models-advance').textContent).toMatch(/holds are not known/i);
+    expect(screen.getByTestId('models-advance').textContent).not.toMatch(/hold or revert from here/i);
   });
 
   it('the orphaned saved level is one line', async () => {
@@ -773,7 +781,7 @@ describe('ModelsSheet: an Anthropic lane', () => {
   });
 
   it('an Anthropic lane offers no Hold or Release', async () => {
-    // every class: unheld, held, with no id, and unlaunchable; only Revert may be on offer
+    // Every class: unheld, held, with no id, and unlaunchable.
     mount(aread({
       sonnet: { model: null, label: null, efforts: null, unobserved: true },
       fable: { model: null, label: null, efforts: null, unobserved: true, unlaunchable: { needs: '9.1.0', laneVersion: '9.0.1' } },

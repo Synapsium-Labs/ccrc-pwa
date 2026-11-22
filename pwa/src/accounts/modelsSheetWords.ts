@@ -6,8 +6,7 @@
 //
 // AN ANTHROPIC LANE (wave 9, Task A4.3; D-8744, D-8746, D-8820): its classes are the client's aliases, so each card also says
 // where its id came from, the held id beside the alias's own, and the lines that explain a class with no id; `anthropicFacts`
-// decides every one of them, and the sheet draws what it returns. The sheet offers no Hold or Release there (the coordinator's
-// ruling, slug no-hold-release-controls); a Revert is still offered when the box says it can.
+// decides every one of them, and the sheet draws what it returns. The sheet offers no class actions on that lane.
 //
 // THE TWO READERS. `asLaneModelsActAnswer` reads `POST /api/models/:lane`'s 200, its `models` through `asLaneModelsRead`
 // (the ONE reader of that wire, `lib/models.ts`); `modelsActFailure` reads a refused POST into a typed failure, whose
@@ -303,7 +302,7 @@ const reasonOf = (detail: string | null): string => {
 
 /** Each way the advance file can read, and the one where the answer carried no advance key at all (an agent without the
  *  op: the advance file was not read, which is not "unreported"). */
-export function advanceStateWords(a: LaneAdvanceRead | undefined): { readonly state: LaneAdvanceRead['state'] | 'not-read'; readonly text: string } {
+export function advanceStateWords(a: LaneAdvanceRead | undefined, anthropic = false): { readonly state: LaneAdvanceRead['state'] | 'not-read'; readonly text: string } {
   if (a === undefined) {
     return { state: 'not-read', text: 'The advance record was not read: holds and the last move are not known, so none is offered.' };
   }
@@ -312,7 +311,9 @@ export function advanceStateWords(a: LaneAdvanceRead | undefined): { readonly st
     case 'absent': return { state: 'absent', text: 'No automatic advance is on record for this lane yet.' };
     case 'unreadable': return { state: 'unreadable', text: `The advance record cannot be read${reasonOf(a.detail)}.` };
     case 'invalid': return { state: 'invalid', text: `The advance record is not one this build reads${reasonOf(a.detail)}.` };
-    case 'unreported': return { state: 'unreported', text: 'The fleet box\'s ccrc predates the advance record, so holds are not known. Update it to hold or revert from here.' };
+    case 'unreported': return { state: 'unreported', text: anthropic
+      ? 'The fleet box\'s ccrc predates the advance record, so holds are not known.'
+      : 'The fleet box\'s ccrc predates the advance record, so holds are not known. Update it to hold or revert from here.' };
   }
 }
 
@@ -336,15 +337,13 @@ export interface ClassActs {
 export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass, anthropic = false): ClassActs {
   const adv: LaneClassAdvance | null = advance?.state === 'ok' ? advance.classes?.[cls] ?? null : null;
   const held = adv?.hold != null;
-  // An Anthropic lane offers no Hold or Release (the coordinator's ruling of 2026-11-22, slug no-hold-release-controls): its
-  // classes always advance, and a Revert is the one act that holds one.
   const holdKnown = !anthropic && (adv !== null || advance?.state === 'absent');
-  return { adv, held, hold: !holdKnown ? null : held ? 'release' : 'hold', revert: adv?.revertable === true && adv.previous !== null };
+  return { adv, held, hold: !holdKnown ? null : held ? 'release' : 'hold', revert: !anthropic && adv?.revertable === true && adv.previous !== null };
 }
 /** Whether a Revert of `cls` is still on offer on the CURRENT read: the confirm asks it when it opens, while it stands and
  *  again when it is confirmed, and sends nothing when it is no longer so. */
-export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass): boolean =>
-  read?.kind === 'read' && classActs(read.advance, cls).revert;
+export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass, anthropic = false): boolean =>
+  read?.kind === 'read' && classActs(read.advance, cls, anthropic).revert;
 /** Said when a Revert that was asked about is withdrawn because the lane's current read no longer offers it: the class
  *  has no earlier model on record now, or the read no longer shows the advance record at all (it is unreadable, invalid,
  *  unreported, absent or was not read, or the lane itself could not be read). */
@@ -357,12 +356,10 @@ export const revertAriaLabel = (cls: ModelClass): string => `Revert the ${cls} c
 export const revertTitle = (cls: ModelClass): string => `Revert the ${cls} class?`;
 /** `previous` is the one on record: a revert whose class has none is not offered, so there is no sentence for it (F13). */
 export function revertConsequence(
-  lane: string, cls: ModelClass, current: string | null, previous: Previous, anthropic = false,
+  lane: string, cls: ModelClass, current: string | null, previous: Previous,
 ): string[] {
-  // An Anthropic lane's sheet has no Release, so its sentence names none.
-  const until = anthropic ? '' : ' until you release it';
   return [
-    `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}, so no automatic advance moves it${until}.`,
+    `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}, so no automatic advance moves it until you release it.`,
     `As last read, that replaces ${current ?? 'an empty class'}.`,
     MODELS_CONFIRM_SESSIONS,
   ];

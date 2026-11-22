@@ -632,6 +632,14 @@ describe('an Anthropic lane through the real show (model-class Anthropic arm A4.
     expect(got.classes[C3]).toMatchObject({ model: null });
   });
 
+  it('a stale held row does not lend its label or efforts to a different held id', async () => {
+    const got = await readOf(plant(aliasesJson({
+      [C0]: kept(X2, { heldRow: catRow(X2, { label: 'Wrong model', efforts: [] }) }),
+    }), { [C0]: X1 }));
+    expect(got.classes[C0]).toMatchObject({ model: X1, label: X1, efforts: null, aliasId: X2 });
+    expect(got.classes[C0]).not.toHaveProperty('takesNoEffort');
+  });
+
   it('a held class does not carry its alias id\'s build need', async () => {
     // The alias moved to an id this lane's build cannot launch, while the class is held on a launchable one: the class's
     // sessions launch on the held id, so the wire says nothing of the alias's build need, and the alias's id rides `aliasId`.

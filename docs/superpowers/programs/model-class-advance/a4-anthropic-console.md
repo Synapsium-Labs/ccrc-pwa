@@ -3,8 +3,8 @@
 A task note for the programme ledger (model-class-advance, programme wave 9; Tasks A4.1 to A4.3 of
 [the Anthropic arm plan](../../plans/2026-11-18-model-class-advance-anthropic-arm.md), section "Wave A4"), with the
 two findings of review 2886 this wave carried (F10, F15). The coordinator folds what it needs into
-[the ledger](../model-class-advance.md); this file is not the ledger. Departures are named by slug; the coordinator
-allocates any number.
+[the ledger](../model-class-advance.md); this file is not the ledger. The plan's “Deviations found” defines the
+coordinator-issued D-8921 through D-8930.
 
 ## What landed
 
@@ -12,9 +12,11 @@ allocates any number.
   - **The op's `show`.** It gives an Anthropic lane its class labels from the lane's aliases file:
     `anthropicLabels` in `deploy/models-anthropic.mjs`, called from `describe`. `deploy/models-op.mjs` is at 2999
     lines.
-  - **Held class.** While a hold stands, a class's `model` is the held id (`hold.model`) with its `heldRow`'s label and
-    levels, and `aliasId` carries the alias's own id when it differs.
-  - **No id, or unlaunchable.** Such a class is a row of nulls.
+  - **Held class.** While a hold stands, a class's `model` is the held id (`hold.model`). The label and levels come
+    from `heldRow` only if its id matches; otherwise the label is the held id and the levels are null. `aliasId`
+    carries the alias's own id when it differs; the alias's build requirement does not describe the held id (D-8929).
+  - **No usable id.** The class stays on the wire with null model, label and levels. The row can still name why an
+    alias cannot launch.
   - **New optional fields.** `LaneClassModel` (`shared/models.ts`) gains `takesNoEffort`, `source`, `cacheTarget`,
     `seenId`, `unobserved`, `unlaunchable`, `aliasId` and `orphanedEffort`.
   - **One reader per runtime.** On the server it is `classRow` (`server/src/laneModels.ts`); in the PWA it is
@@ -67,16 +69,22 @@ allocates any number.
 - **The coordinator's ruling of 2026-11-22 (call 297, the settings audit).**
   - **A4.2 (slug `no-effort-picker-narrowing`).** It builds the labels only. `effortOptions`, `effortIsKnown` and
     `laneClassEfforts` are as on main: no per-class narrowing, no takes-none Auto row, and no new Ultracode placement.
-  - **A4.3 (slug `no-hold-release-controls`).** The sheet adds no Hold and no Release on an Anthropic lane. Revert is
-    offered when the box says it can, and Codex lanes keep Hold and Release as they are.
+  - **A4.3 (slug `no-hold-release-controls`).** The sheet adds no Hold and no Release on an Anthropic lane. Codex
+    lanes keep both controls as they are.
+- **Review 3378 (slug `revert-withheld-anthropic`, D-8930).** The Anthropic sheet also withholds Revert, which would
+  create a hold the refresh skips and the sheet cannot release. It still shows a standing hold. The
+  `revert-holds-until-newer` follow-up gives both arms a Revert whose hold ends when a newer model appears.
 - **Departure, slug `models-sheet-file`.** The plan names `pwa/src/accounts/AccountSheet.tsx` for the sheet. The sheet R4
   built is `pwa/src/accounts/ModelsSheet.tsx` with its words in `modelsSheetWords.ts`, and its act is offered from
   `pwa/src/screens/AccountsScreen.tsx`, so those three files carry the task.
-- **Departure, slug `no-a11y-file`.** The plan names `pwa/test/a11y-*` for the sheet, and none exists. The sheet's
-  controls are measured in a real browser instead, by the new browser test below: named, at least 44px tall and inside
-  the sheet at every width.
+- **Departure, slug `no-a11y-file`.** The plan names `pwa/test/a11y-*` for the sheet, and none exists. The browser
+  fixture checks horizontal containment at three widths. Before Revert was withheld it also measured the height of
+  that button. It did not measure vertical reach. The sheet now offers no class controls on an Anthropic lane.
 - **Departure, slug `push-line-multi-lane`.** F15 widens the push line's grammar in `shared/models.mjs` and
   `shared/models.d.mts`, which the wave's file list does not name.
+- **Departure, slug `labels-in-arm-module`.** The op's `describe` calls the projector in the Anthropic arm instead
+  of growing an inline block past the op's limit.
+- **Departure, slug `held-drops-unlaunchable`.** The alias's build requirement is not a fact about the held id.
 
 ## Screenshots
 
@@ -90,7 +98,8 @@ disagreeing.
 - Laptop, 1280x800: [models-anthropic-1280.png](../../../design/2026-10-13-model-class-auto-advance-design/models-anthropic-1280.png)
 - Wide, 1920x1080: [models-anthropic-1920.png](../../../design/2026-10-13-model-class-auto-advance-design/models-anthropic-1920.png)
 
-At each width nothing scrolls sideways, nothing a card holds leaves it, and the one control, Revert, is inside the sheet.
+At each width the fixture checks that the sheet and its cards do not overflow horizontally and that there are no
+Hold, Release or Revert buttons. It does not measure vertical reach.
 
 ## Inert at merge
 
@@ -101,9 +110,11 @@ At each width nothing scrolls sideways, nothing a card holds leaves it, and the 
 - **New server, op older than this wave.** An older op prints the parsed aliases file beside `labels: null`; the server
   reads that lane `absent` as before, never `unreadable`, so a server rolled out first changes nothing ("an older op
   that sends the aliases file but no labels reads the lane absent, as before").
-- **Older PWA, new server, until the page reloads.** The older PWA ignores the new fields and its sheet opens on Codex
-  lanes only. Its picker now gets an Anthropic lane as `read`, keys those rows on ids and drops a class with no id, so
-  the active row is not lit until the console reloads the PWA the server now serves. This pair is untested.
+- **Older PWA, new server, until the page reloads (untested).** The older PWA ignores the new fields and still opens
+  Models only on Codex lanes. When it sees the new Anthropic `read` response, it keys picker rows on model IDs
+  rather than family words: the active row is not lit and classes without an ID drop out. On a session with a
+  recorded class route, the queued badge can also stay on even after the session is running that class. These
+  differences last until the console reloads the PWA the server now serves.
 - **Older server, new fleet box (F15).** A line naming several lanes is read as not a model line, so that move gets its
   banner and one log line but no phone push until the server box is updated. A single-lane move is unchanged.
 
@@ -117,9 +128,12 @@ test red first or proved by a mutation that turned it red:
   launches on the held id, and `aliasId` names the alias's id.
 - **No Hold or Release, decided in L1.** `classActs` decides it from the lane kind, so a missing flag can no longer
   draw them.
-- **Revert's confirm.** On an Anthropic lane it names no Release.
 - **The four Anthropic hold refusals** (D-8819's sentences) now state facts and ask no hand act.
 - **The supervisor sentence** is conditional ("If a session supervisor … still runs the previous ccd build …").
+
+The held-out review (3378) led to three further fixes: `classActs` withholds Revert on Anthropic lanes and the unused
+confirmation text is gone; `anthropicLabels` refuses to borrow metadata from a mismatching held row; and the refresh
+logs each group it skips at its deadline.
 
 ## Residuals (no ask; the coordinator's to place)
 
@@ -132,13 +146,10 @@ test red first or proved by a mutation that turned it red:
   moved line naming many lanes can pass the cap now too. `server/src/server.ts` was edited under another worker's
   consent for the two F10 hunks only, so that third wording waits.
 - **Push budget.** The grouped push runs after the last Anthropic lane, on that lane's tail reserve: about 44 s, and 13 s
-  per push. A refresh with four or more different moves can skip the later pushes, though their banners still go out.
-- **Stale plan prose.** D-8751 and Task A2.4 in the plan still describe one push line per lane per move. F15 changes
-  that, and the plan is the coordinator's to edit.
-
-- **Revert's confirm and the absent Release.** Revert's confirm still says the class is held "until you release it",
-  and an Anthropic lane's sheet has no Release. The ticket `revert-holds-until-newer` changes Revert's hold for both
-  arms.
+  per push. Past about three groups the refresh can run out of time. A group skipped before the hook gets neither a
+  banner nor a phone push; the refresh logs the skipped group and its per-lane advance records still stand.
+- **Historical plan prose.** D-8751 and Task A2.4 describe the earlier one-push-line-per-lane behavior. D-8927 records
+  F15's grouped shape.
 - **Over-cap push lines.** A moved line naming many lanes with long ids can pass `MODELS_PUSH_MAX` (300), and is then
   refused the phone push as `over-cap`, though the banner still goes out. The line is not split under the cap.
 - **The server's test-file typecheck did not run here.** The test slice's memory cap killed it on every attempt while

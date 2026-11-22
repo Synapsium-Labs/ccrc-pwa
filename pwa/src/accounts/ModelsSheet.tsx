@@ -2,8 +2,8 @@
 // as re-planned, D-8686, D-8690): one lane's four classes as the lane's own files say them, with the advance record
 // beside them, and Hold, Release and Revert for each class on a Codex lane. An ANTHROPIC lane (wave 9, Task A4.3; the
 // `anthropic` prop, which the screen sets from the roster's telemetry) draws the same cards with the lines
-// `anthropicFacts` returns (where the id came from, the held id, a class with no id, the supervisor note) and offers no Hold
-// and no Release at all (the coordinator's ruling, slug no-hold-release-controls); its Revert is the same Revert. Drawn in `AccountSheet`'s shell, as the re-auth and switch sheets
+// `anthropicFacts` returns (where the id came from, the held id, a class with no id, the supervisor note) and offers no class
+// actions. Drawn in `AccountSheet`'s shell, as the re-auth and switch sheets
 // are: its live region announces each answer (ONE announcement per failure: the card's own note is text, not a second alert),
 // its offline line sits above the body.
 //
@@ -47,7 +47,7 @@ export type ModelsActFn = (lane: string, body: { action: ModelsAction; class: Mo
 export interface ModelsSheetProps {
   /** The lane whose classes the sheet shows (a Codex or an Anthropic lane's roster id). */
   lane: string;
-  /** The lane is an Anthropic one (the roster's `telemetry`), so its cards carry the Anthropic lines and no Hold or Release.
+  /** The lane is an Anthropic one (the roster's `telemetry`), so its cards carry the Anthropic lines and no class actions.
    *  Told by the screen, never guessed from a read: a Codex read carries none of those fields, and an Anthropic class may
    *  carry none either. */
   anthropic?: boolean;
@@ -175,20 +175,20 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
   };
 
   const advance = shown?.kind === 'read' ? shown.advance : undefined;
-  const words = advanceStateWords(advance);
+  const words = advanceStateWords(advance, anthropic);
 
   // The Revert confirm stands only while the CURRENT read still offers the revert: otherwise it closes, and says so (F13).
   useEffect(() => {
-    if (confirming === null || revertStillOffered(shown, confirming)) return;
+    if (confirming === null || revertStillOffered(shown, confirming, anthropic)) return;
     const cls = confirming;
     setConfirming(null);
     setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) });
-  }, [confirming, shown]);
-  const confirmRead = confirming !== null && shown?.kind === 'read' && revertStillOffered(shown, confirming) ? shown : null;
+  }, [confirming, shown, anthropic]);
+  const confirmRead = confirming !== null && shown?.kind === 'read' && revertStillOffered(shown, confirming, anthropic) ? shown : null;
   const confirmPrevious = confirmRead !== null && confirming !== null ? confirmRead.advance?.classes?.[confirming]?.previous ?? null : null;
   /** The confirm's yes: re-checked on the read as it is NOW, and never sent for a class that no longer offers it. */
   const confirmRevert = (cls: ModelClass): void => {
-    if (!revertStillOffered(shownNow.current, cls)) { setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) }); return; }
+    if (!revertStillOffered(shownNow.current, cls, anthropic)) { setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) }); return; }
     void run('revert', cls);
   };
 
@@ -241,7 +241,7 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
                       <p>{familyWords(adv.family)}</p>
                       <p>{holdWords(adv.hold)}</p>
                       <p>{lastMoveWords(adv.lastMove)}</p>
-                      {previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
+                      {!anthropic && previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
                     </div>
                   )}
                   {(hold !== null || revert) && (
@@ -272,7 +272,7 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
           open
           onClose={() => setConfirming(null)}
           title={revertTitle(confirming)}
-          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious, anthropic)}
+          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious)}
           confirmLabel={MODELS_REVERT_CONFIRM}
           onConfirm={() => confirmRevert(confirming)}
         />
