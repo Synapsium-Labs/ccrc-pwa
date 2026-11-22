@@ -1656,3 +1656,24 @@ describe('the agent id rule is defined once, and so is the guard over it', () =>
     expect(holders).toEqual(['shared/continuity-reports.ts']);
   });
 });
+
+// — Overlord W1, the isolation word (plan `w1-isolation.md` Task 1, question 13): the host report's one reader and the one
+// host measurer. ccd's history library (`ccd/history/lib.mjs`) reads the boot id too, to stamp its op markers across a
+// reboot: another package, run by ccd, with another job, and outside this scan's roots on purpose. —
+describe('the isolation word: one report reader, one host measurer', () => {
+  const ISO_ROOTS = ['shared/', 'server/src/', 'agent/src/'];
+  const inRoots = (f: string): boolean => ISO_ROOTS.some((r) => rel(f).startsWith(r));
+  const codeOf = (f: string): string => readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+  it('readHostReport is defined only in shared/isolation.ts', () => {
+    const holders = ALL.filter((f) => parsedFile(f).symbols.some((s) => s.name === 'readHostReport' && s.kind === 'function')).map(rel);
+    expect(holders).toEqual(['shared/isolation.ts']);
+  });
+
+  for (const needle of ['machine-id', 'random/boot_id']) {
+    it(`the ${needle} path is spelled only in shared/host-identity.mjs`, () => {
+      const holders = [...ALL, ...ALL_MJS].filter(inRoots).filter((f) => codeOf(f).includes(needle)).map(rel).sort();
+      expect(holders).toEqual(['shared/host-identity.mjs']);
+    });
+  }
+});
