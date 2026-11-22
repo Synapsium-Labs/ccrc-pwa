@@ -173,7 +173,8 @@ stop and tell the operator: it may need a fix in Linear, or a new Linear key) an
 
 When the operator starts a team's migration (its project row's "Reshape in Linear"), the team's Linear owner gets a mail
 `linear migration <n>: propose the map for team <TEAM>`. Read the team's open issues (`"$API" linear search`, or the
-issue reads), then place every open issue once, with its Linear id and identifier and one class: `leaf` (a ticket in a
+issue reads), then place every open issue once, by its identifier (`AAA-12`, as those reads show it) and one class:
+`leaf` (a ticket in a
 programme's epic: `target` names `programme` and `epic`, and optionally `checkpoint`, `ticketKey` and `kind`), `upkeep`
 (a ticket in the project's Upkeep epic), `programme`, `epic` or `checkpoint` (an issue that stood for that level: it is
 closed, related to the first ticket placed under it), `finished` (closed as done with its evidence: `target.pr` names the
@@ -183,9 +184,14 @@ merged pull request as `<owner>/<repo>#<number>`, or, when there is none, `targe
 
 ```bash
 "$API" plan map-propose <TEAM> --json - <<JSON
-{"entries":[{"issue":"<issue id>","identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"},{"issue":"<issue id>","identifier":"AAA-14","class":"finished","target":{"pr":"<owner>/<repo>#<number>"}}]}
+{"entries":[{"identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"identifier":"AAA-13","class":"upkeep"},{"identifier":"AAA-14","class":"finished","target":{"pr":"<owner>/<repo>#<number>"}}]}
 JSON
 ```
+
+ccrc matches each identifier, in any letter case, against the team's open issues it reads for this map, and stores the
+issue's Linear id and the identifier as Linear spells it; it never guesses, so a link or any other text is no identifier.
+The older form, an entry that also carries the issue's Linear id as `issue`, is still accepted, as in
+`{"entries":[{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"}]}`: its `issue` must be that identifier's own issue.
 
 A live programme declares its own plan first (its coordinator is mailed to `plan put` it); the map places issues onto
 those keys and never rewrites a plan. Only for a programme with no plan and no run that is not finished may the map
@@ -196,10 +202,13 @@ Linear before that. Issues the apply skipped because they changed reach you agai
 taken through inbound is held, and stays off it: while that follow-up map is still awaited, listing it is
 `map-incomplete`, and once the tick has shed it as the only skipped issue, no map is awaited and a map is refused
 `plan-bad-body`. Refusals:
-`not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing, listed twice, or not
-open), `map-rewrites-plan` (structure for a programme that has a plan or a live run), `plan-bad-body` (a target
-that does not exist, a successor that does not exist, a finished issue with no evidence, a leaf whose epic is in another
-team, a ticket key already used, or no migration waiting for a map), `team-ambiguous` (a migration of the team waits for
+`not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing; one listed twice, also
+once by its id and once by its identifier; an identifier that is not one of the open issues this map may place, because it
+is closed, in another team or workspace, already held by ccrc's plan, or not on a follow-up's list; or an identifier more
+than one of the issues read answers to), `map-rewrites-plan` (structure for a programme that has a plan or a live run),
+`plan-bad-body` (an `issue` id that is not its identifier's issue, a target that does not exist, a successor that does not
+exist, a finished issue with no evidence, a leaf whose epic is in another team, a ticket key already used, or no
+migration waiting for a map), `team-ambiguous` (a migration of the team waits for
 a map in more than one workspace whose owner you are, so ccrc cannot tell which this map is for: stop and tell the
 operator), and `unreachable` (ccrc could not measure something the map needs: the team's Linear owner, in a workspace whose owner you
 could be; a Linear key that serves the team; the team's open issues, read from Linear, all of them within the pages one
