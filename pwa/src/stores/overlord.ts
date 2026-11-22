@@ -3,8 +3,10 @@
 // `ReadState`. The bars, the home route, the place and the Settings rows all read this store; none fetches on its own.
 //
 // WHEN IT READS. At start, when the page comes back to the front, every `OVERLORD_POLL_MS` while the page is visible, and at
-// once after any of the Overlord's doors answers (`refreshOverlord`). The capability words are read at start and on the page
-// coming back to the front only. A hidden page does not poll.
+// once after any of the Overlord's doors answers (`refreshOverlord`). Each visible tick reads the designation and the ladder
+// (with the word); the capability words are read at start, on the page coming back to the front, and on a tick while their
+// last read failed (`readFailed`), so a failed first read recovers with no reload and no second timer. An answer without the
+// word is an answer, not a failure: it is read again only when the page comes back. A hidden page does not poll.
 //
 // NO OVERLORD READ WITHOUT THE WORD (plan question 9). While the server does not advertise `overlord-v1`, only the caps are
 // read, so a server without the word sees none of the Overlord's reads.
@@ -21,7 +23,7 @@ import {
   capReadOf, designationStateOf, homePlace, homeSettled, overlordShown, rungReadOf,
   type DesignationState, type HomeAnswer, type RungRead,
 } from '../overlord/homePlace';
-import { nextReadState, type ReadOutcome } from '../overlord/readOutcome';
+import { nextReadState, readFailed, type ReadOutcome } from '../overlord/readOutcome';
 import type { ReadState } from '../overlord/readState';
 
 /** How often a visible page re-reads the designation and the ladder. */
@@ -123,7 +125,8 @@ export function createOverlordStore(deps: OverlordStoreDeps = {}): OverlordStore
         if (starters === 1) {
           void readAll();
           timer = setInterval(() => {
-            if (document.visibilityState !== 'hidden') void refresh();
+            if (document.visibilityState === 'hidden') return;
+            void (readFailed(get().caps) ? readAll() : refresh());
           }, OVERLORD_POLL_MS);
           stopVisible = onPageVisible(() => { void readAll(); });
         }

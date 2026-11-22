@@ -19,7 +19,9 @@ import { CHARACTER_CHOICES } from '../fleet/characterWords';
 const CHORDS: Readonly<Record<string, string>> = { overlord: 'o', fleet: 'f', inbox: 'i', runs: 'r', accounts: 'a', settings: 's' };
 
 /** A "Go to" command offered only in some contexts: the Overlord's place only while the server advertises `overlord-v1`
- *  (plan question 9), so the palette offers no "Go to Overlord" without the word, and `g o` is bound to nothing then. */
+ *  (plan question 9), so the palette offers no "Go to Overlord" without the word. `useShortcuts` binds a chord whatever its
+ *  `when`, so the run asks the same question and does nothing where the command is not offered: `g o` without the word moves
+ *  nothing (review 3319 A1), as the inspector's `i` does with no rail placed. */
 const GO_TO_WHEN: Readonly<Record<string, (ctx: CommandContext) => boolean>> = {
   'go-overlord': (ctx) => ctx.overlordShown,
 };
@@ -103,7 +105,7 @@ export function baseCommands(): Command[] {
       group: 'Go to',
       keys: g.chord === undefined ? undefined : ['g', g.chord],
       when: GO_TO_WHEN[g.id],
-      run: (ctx) => ctx.navigate(g.path),
+      run: (ctx) => { if (GO_TO_WHEN[g.id]?.(ctx) !== false) ctx.navigate(g.path); },
     })),
     {
       // The wordmark's command (Overlord W1 home, Task 3): the place `homePlace` answers, the Overlord's or the Fleet's.

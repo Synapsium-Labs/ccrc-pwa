@@ -345,3 +345,50 @@ describe("Instrument's desk doors read the one list", () => {
     expect(ids).toEqual(['waiting', 'inbox', 'runs', 'accounts', 'archive', 'docs']);
   });
 });
+
+// Review 3319 A5 and A7 (Overlord W1 home, plan question 14 and slug `refined-crowded-bar-sheds-words`): with the Overlord's
+// and the Fleet's tabs drawn, Refined's Fleet tab is current on `/fleet` and on a session, as Instrument's door is; below 1200 px
+// (`REF_ROOMY_QUERY`) the seven-tab bar names Waiting by its short word and draws New session as its "+" alone, and at 1200 and
+// above, or with five tabs, the full words come back. jsdom lays nothing out, so the widths are the media queries' answers.
+describe("Refined's desk tabs with the Overlord's and the Fleet's", () => {
+  beforeEach(() => { setSkin(REFINED); });
+  afterEach(() => { setSkin(REFINED); });
+  const tabs = (): HTMLElement => document.querySelector<HTMLElement>('header .ref-tabs')!;
+  const current = (): string[] => [...document.querySelectorAll('header [aria-current="page"]')].map((d) => d.getAttribute('data-command')!);
+
+  it('the Fleet tab is current on /fleet and on a session, in both skins, and on no other place', () => {
+    for (const skin of [REFINED, INSTRUMENT]) {
+      setSkin(skin);
+      for (const [where, want] of [['/fleet', ['go-fleet']], [`/s/${SESSION.id}`, ['go-fleet']], ['/waiting', ['go-waiting']]] as const) {
+        atWidth(1280);
+        withOverlord();
+        mount(where);
+        expect(current(), `${skin} ${where}`).toEqual([...want]);
+        cleanup();
+      }
+    }
+  });
+
+  it('below 1200 px the seven tabs shed words (Waiting, a "+" New session); from 1200, or with five tabs, the full words', () => {
+    const shown = (): { waiting: string; newText: string; newName: string | null } => {
+      const fresh = document.querySelector<HTMLElement>('header .ref-bar-new')!;
+      return {
+        waiting: within(tabs()).getByRole('button', { name: /^Waiting/ }).textContent!.replace(/\s+/g, ' ').trim(),
+        newText: fresh.textContent!.trim(),
+        newName: fresh.getAttribute('aria-label') ?? fresh.textContent,
+      };
+    };
+    for (const [width, words, crowded] of [[1100, ['overlord-v1'], true], [1199, ['overlord-v1'], true], [1200, ['overlord-v1'], false], [1100, [], false]] as const) {
+      atWidth(width);
+      withOverlord(words);
+      mount('/fleet');
+      const m = shown();
+      const label = `${width} ${words.length > 0 ? 'seven tabs' : 'five tabs'}`;
+      expect(m.waiting.startsWith(crowded ? 'Waiting' : 'Waiting on you'), `${label}: ${m.waiting}`).toBe(true);
+      expect(m.waiting.startsWith('Waiting on you'), `${label}: ${m.waiting}`).toBe(!crowded);
+      expect(m.newText, label).toBe(crowded ? '+' : '+New session');
+      expect(m.newName, label).toMatch(/New session$/);
+      cleanup();
+    }
+  });
+});

@@ -170,10 +170,11 @@ describe('the bar fits on one line with every badge at 99+', () => {
 // Overlord W1 home, Task 3 (ruled F5, plan question 14): with the Overlord designated, the bar gains the Overlord's door and
 // the Fleet's, still one line with nothing cut and no sideways scroll; `/fleet` marks the Fleet door alone, and the wordmark
 // nowhere.
+// The plan's matrix asks a light and a dark palette (review 3319 A6): Phosphor, the dark, at every width, and Daylight at 1280.
 describe("the bar with the Overlord's and the Fleet's doors", () => {
-  for (const width of [900, 1100, 1280, 1920]) {
-    it(`${PHOSPHOR}, ${width}px: one line, every control inside it, and /fleet marks the Fleet door alone`, async () => {
-      const opened = await openApp(browser!, { skin: INSTRUMENT, theme: PHOSPHOR, width }, FIXTURE_OVERLORD);
+  for (const [theme, width] of [[PHOSPHOR, 900], [PHOSPHOR, 1100], [PHOSPHOR, 1280], [PHOSPHOR, 1920], ['light', 1280]] as const) {
+    it(`${theme}, ${width}px: one line, every control inside it, and /fleet marks the Fleet door alone`, async () => {
+      const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width }, FIXTURE_OVERLORD);
       await seedStripExpanded(opened.ctx);
       const { ctx, page, errors } = opened;
       try {

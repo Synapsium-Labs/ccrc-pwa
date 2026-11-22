@@ -17,9 +17,9 @@ import { FaceMark } from '../../face/FaceMark';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
-import { deskPlacesFor, type Place } from '../../lib/places';
+import { deskPlacesFor, FLEET_PLACE, type Place } from '../../lib/places';
 import { useLocation } from '../../lib/router';
-import { matchRoute, ROUTES } from '../../lib/routes';
+import { matchRoute, ROUTES, topRouteOf } from '../../lib/routes';
 import { useMediaQuery } from '../../lib/useMediaQuery';
 import { useDesignationState, useHome, useOverlordShown } from '../../stores/overlord';
 
@@ -52,7 +52,10 @@ function Tab({ place, here, count, word, crowded }: { place: Place; here: boolea
 
 export function AppBar(): ReactNode {
   const { path } = useLocation();
-  const here = matchRoute(path)?.route.id ?? null;
+  // A session sits under the Fleet (`topRouteOf`, the route table's rule, which Instrument's doors read too), so the Fleet
+  // tab, where it is drawn, is current on `/fleet` and on a session (plan question 14, review 3319 A5). Every other tab is
+  // current on its own route, as before.
+  const here = topRouteOf(path)?.id === FLEET_PLACE ? FLEET_PLACE : (matchRoute(path)?.route.id ?? null);
   const badges = useNavBadges();
   const places = deskPlacesFor(useOverlordShown(), useDesignationState(), useHome());
   const roomy = useMediaQuery(REF_ROOMY_QUERY);

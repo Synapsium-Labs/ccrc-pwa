@@ -4,9 +4,10 @@
 // CSS-hidden, like every width-gated part.
 //
 // ITS DOORS ARE THE CONSOLE'S PLACES (`placesFor`, `lib/places.ts`, the one derivation both desk bars read too): the
-// Overlord's first while its door is drawn, then the fleet, and then the Search door. As many places as fit at the tap
-// minimum beside Search are drawn (`phoneDoorsFit`, over the bar's own measured width), dropped from the end of the list;
-// a dropped place stays reachable through Search (Overlord W1 home, plan question 13). Each place is the registry's "Go to" command (`commandDoor('go-<id>')`), named by the word it
+// Overlord's first while its door is drawn, then the fleet, and then the Search door. As many places as fit beside Search
+// at `PHONE_DOOR_FIT_PX` each (50 px: the tap minimum raised to the width "Accounts" needs, slug
+// `phone-door-floor-is-the-word`) are drawn (`phoneDoorsFit`, over the bar's own measured width), dropped from the end of the
+// list, never the Overlord's or the Fleet's; a dropped place stays reachable through Search (Overlord W1 home, plan question 13). Each place is the registry's "Go to" command (`commandDoor('go-<id>')`), named by the word it
 // shows (its route's title, or the place's `short` word where it has one: "Waiting", review 1722) and, while it counts
 // something, by its count too ("Inbox, 2 waiting for you", "Waiting, 3 waiting on you", `placeBadge`); the place the page is on
 // or under carries `aria-current="page"` (`topRouteOf`, the reader of Instrument's top bar doors too). Search is

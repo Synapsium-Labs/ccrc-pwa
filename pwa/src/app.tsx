@@ -1,5 +1,7 @@
-// Router shell. The routes are `lib/routes.ts`'s table (D-5466): `/` is the
-// fleet, and every other route fills the detail pane. On phones this is a
+// Router shell. The routes are `lib/routes.ts`'s table (D-5466): `/fleet` is
+// the fleet, `/` is the home (Overlord W1 home: it replaces itself with the
+// place `homePlace` answers, the Fleet's or the Overlord's, `HomeRoute`), and
+// every other route fills the detail pane. On phones this is a
 // full-screen swap (one pane at a time); on desktop it's a two-pane
 // master–detail — the fleet as a persistent sidebar beside the active detail
 // pane (styles/shell.css does the responsive layout, the same DOM serves

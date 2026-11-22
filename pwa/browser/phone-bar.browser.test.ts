@@ -19,7 +19,7 @@
 import { appendFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
 import { withRunBinding } from '../test/runBindingFixture';
@@ -140,8 +140,8 @@ interface Insets { readonly top?: number; readonly bottom?: number }
 /** A notched phone: a 47 px status bar and a 34 px home indicator. */
 const NOTCHED: Insets = { top: 47, bottom: 34 };
 
-async function open(skin: string, width: number, path: string, ready: string, insets?: Insets, fixture: AppFixture = FIXTURE) {
-  const opened = await openApp(browser!, { skin, theme: 'light', width }, fixture);
+async function open(skin: string, width: number, path: string, ready: string, insets?: Insets, fixture: AppFixture = FIXTURE, theme = 'light') {
+  const opened = await openApp(browser!, { skin, theme, width }, fixture);
   if (insets !== undefined) {
     const cdp = await opened.ctx.newCDPSession(opened.page);
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
@@ -174,15 +174,18 @@ const measureBar = (page: Page) => page.evaluate(() => {
 
 // Overlord W1 home, Task 3 (plan question 13, slug `phone-bar-sheds-doors-to-search`): with the Overlord's door the bar has
 // eight doors. A door keeps the width its word needs (50 px, `PHONE_DOOR_FIT_PX`, measured here: "Accounts" needs 49 px), so
-// from 400 px all eight fit, at 360 to 399 Docs is reached through Search, and at 320 Accounts too.
+// from 400 px all eight fit, at 360 to 399 Docs is reached through Search, and at 320 Accounts too. The plan's matrix (320,
+// 360, 390 and 899, both skins, a light and a dark palette; review 3319 A6), and 412, the first common width with all eight.
+const THEMES = ['light', PHOSPHOR] as const;
 describe.each(SKINS)('the phone bar with the Overlord in %s', (skin) => {
   const EIGHT = ['go-overlord', ...PHONE_DOORS];
   const cases = [
-    [320, EIGHT.filter((d) => d !== 'go-docs' && d !== 'go-accounts')], [360, EIGHT.filter((d) => d !== 'go-docs')], [390, EIGHT.filter((d) => d !== 'go-docs')], [412, EIGHT],
+    [320, EIGHT.filter((d) => d !== 'go-docs' && d !== 'go-accounts')], [360, EIGHT.filter((d) => d !== 'go-docs')],
+    [390, EIGHT.filter((d) => d !== 'go-docs')], [412, EIGHT], [899, EIGHT],
   ] as const;
-  for (const [width, doors] of cases) {
-    it(`at ${width}: the Overlord's door is first, ${doors.length} doors, each at least 44 x 44 inside the viewport, words whole`, async () => {
-      const { ctx, page, errors } = await open(skin, width, '/fleet', '[data-command="go-overlord"]', undefined, FIXTURE_OVERLORD);
+  for (const theme of THEMES) for (const [width, doors] of cases) {
+    it(`${theme}, at ${width}: the Overlord's door is first, ${doors.length} doors, each at least 44 x 44 inside the viewport, words whole`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/fleet', '[data-command="go-overlord"]', undefined, FIXTURE_OVERLORD, theme);
       try {
         const bar = await measureBar(page);
         expect(bar, 'the bar').not.toBeNull();

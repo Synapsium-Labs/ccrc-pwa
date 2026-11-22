@@ -86,9 +86,9 @@ describe('App /archive route', () => {
   });
 });
 
-// Overlord W1 home, Task 2 (the characterization): the Fleet moved from `/` to `/fleet`, and draws there exactly what `/` drew
-// before the home: the fleet column, the placeholder in the pane, `data-view="fleet"`. `/` now lands there itself while no
-// Overlord is designated, with the same column, and leaves no `/` in history.
+// Overlord W1 home, Task 2: the Fleet moved from `/` to `/fleet`, and `/` now lands there itself while no Overlord is designated,
+// with the same column, and leaves no `/` in history. This case compares two paths of ONE build; the characterization against
+// what `/` drew on the base, before the home, is `fleet-characterization.test.tsx` (review 3319 F4).
 describe('the Fleet keeps a path of its own (Overlord W1 home)', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 

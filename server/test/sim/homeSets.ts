@@ -28,10 +28,24 @@ interface Row {
 type Read =
   | { state: 'loading' } | { state: 'answered'; value: Row | null; at: number }
   | { state: 'stale'; value: Row | null; at: number; error: string } | { state: 'unmeasured'; error: string } | { state: 'absent' };
+type AnyRead<T> =
+  | { state: 'loading' } | { state: 'answered'; value: T; at: number }
+  | { state: 'stale'; value: T; at: number; error: string } | { state: 'unmeasured'; error: string } | { state: 'absent' };
 interface HomeModule {
   OVERLORD_CAP: string;
   designationStateOf(read: Read): DesignationState;
   homePlace(caps: CapRead, d: DesignationState, rung: RungRead): HomeAnswer;
+  homeSettled(caps: AnyRead<readonly string[]>, designation: Read, ladder: AnyRead<unknown>): boolean;
+  capReadOf(read: AnyRead<readonly string[]>): CapRead;
+  rungReadOf(read: AnyRead<{ operatorRung: string }>): RungRead;
+  designationWordOf(read: Read): string;
+  DESIGNATION_WORDS: Readonly<Record<string, string>>;
+  DESIGNATION_LOADING_WORD: string;
+}
+type Outcome<T> = { kind: 'value'; value: T } | { kind: 'absent' } | { kind: 'failed'; error: string };
+interface ReadOutcomeModule {
+  nextReadState<T>(prev: AnyRead<T>, outcome: Outcome<T>, at: number): AnyRead<T>;
+  readFailed(read: AnyRead<unknown>): boolean;
 }
 interface Place { id: string }
 interface PlacesModule {
@@ -113,6 +127,112 @@ export function homeCases(m: HomeModule): Record<string, SuiteCase> {
   };
 }
 
+// Review 3319 F3: `homeSettled` says when `/` may replace itself. Each wait is a guard: without the caps wait the home lands
+// before the word is known, without the designation wait it lands on the Fleet before the designation answers, and without
+// the ladder wait a designated Overlord's home lands on the place before an `off` rung would send it to the Fleet.
+export function settledCases(m: HomeModule): Record<string, SuiteCase> {
+  const word = { state: 'answered', value: [m.OVERLORD_CAP], at: AT } as const;
+  const bound = answered(row({ bound: { sessionId: 'lane-a-overlord', generation: 'g1' } }));
+  const pending = answered(row({ pending: { sessionId: 'lane-a-overlord' } }));
+  const loading = { state: 'loading' } as const;
+  const chat = { state: 'answered', value: { operatorRung: 'chat' }, at: AT } as const;
+  return {
+    'the caps still loading: not settled, whatever else has answered': () => {
+      expect(m.homeSettled(loading, bound, chat)).toBe(false);
+      expect(m.homeSettled(loading, answered(null), chat)).toBe(false);
+    },
+    'no word (answered without it, or a failed caps read): settled at once': () => {
+      expect(m.homeSettled({ state: 'answered', value: [], at: AT }, loading, loading)).toBe(true);
+      expect(m.homeSettled({ state: 'unmeasured', error: 'HTTP 503' }, loading, loading)).toBe(true);
+    },
+    'with the word, the designation still loading: not settled': () => {
+      expect(m.homeSettled(word, loading, loading)).toBe(false);
+      expect(m.homeSettled(word, loading, chat)).toBe(false);
+    },
+    'a designated Overlord with its ladder still loading: not settled; answered or failed, settled': () => {
+      for (const d of [bound, pending]) {
+        expect(m.homeSettled(word, d, loading)).toBe(false);
+        expect(m.homeSettled(word, d, chat)).toBe(true);
+        expect(m.homeSettled(word, d, { state: 'unmeasured', error: 'timeout' })).toBe(true);
+      }
+    },
+    'no Overlord, or a failed designation read: settled with the ladder still loading': () => {
+      expect(m.homeSettled(word, answered(null), loading)).toBe(true);
+      expect(m.homeSettled(word, { state: 'unmeasured', error: 'HTTP 503' }, loading)).toBe(true);
+      expect(m.homeSettled(word, { state: 'absent' }, loading)).toBe(true);
+    },
+  };
+}
+
+// The read-to-input deciders (review 3319 F3 and A10): a stale caps read keeps its words, and an unread or absent ladder is
+// an unmeasured rung, never `off` (which would send the home to the Fleet and hide the brake).
+export function capReadCases(m: HomeModule): Record<string, SuiteCase> {
+  return {
+    'an answer and a stale read are their words; anything else is unmeasured': () => {
+      expect(m.capReadOf({ state: 'answered', value: ['overlord-v1'], at: AT })).toEqual({ kind: 'caps', caps: ['overlord-v1'] });
+      expect(m.capReadOf({ state: 'stale', value: ['overlord-v1'], at: AT, error: 'x' })).toEqual({ kind: 'caps', caps: ['overlord-v1'] });
+      for (const r of [{ state: 'loading' }, { state: 'unmeasured', error: 'x' }, { state: 'absent' }] as const) {
+        expect(m.capReadOf(r)).toEqual({ kind: 'unmeasured' });
+      }
+    },
+  };
+}
+export function rungReadCases(m: HomeModule): Record<string, SuiteCase> {
+  return {
+    'an answer and a stale read are the rung; loading, a failure and an older server (absent) are unmeasured': () => {
+      expect(m.rungReadOf({ state: 'answered', value: { operatorRung: 'off' }, at: AT })).toEqual({ kind: 'rung', rung: 'off' });
+      expect(m.rungReadOf({ state: 'stale', value: { operatorRung: 'chat' }, at: AT, error: 'x' })).toEqual({ kind: 'rung', rung: 'chat' });
+      for (const r of [{ state: 'loading' }, { state: 'unmeasured', error: 'x' }, { state: 'absent' }] as const) {
+        expect(m.rungReadOf(r)).toEqual({ kind: 'unmeasured' });
+      }
+    },
+  };
+}
+export function placeWordCases(m: HomeModule): Record<string, SuiteCase> {
+  return {
+    'a read in flight says it is loading, never that it could not be read': () => {
+      expect(m.designationWordOf({ state: 'loading' })).toBe(m.DESIGNATION_LOADING_WORD);
+      expect(m.designationWordOf({ state: 'loading' })).not.toBe(m.DESIGNATION_WORDS.unmeasured);
+    },
+    'a failed read could not be read; an answer takes its kind\'s word': () => {
+      expect(m.designationWordOf({ state: 'unmeasured', error: 'HTTP 503' })).toBe(m.DESIGNATION_WORDS.unmeasured);
+      expect(m.designationWordOf(answered(row({ bound: { sessionId: 'lane-a-overlord', generation: 'g1' } })))).toBe(m.DESIGNATION_WORDS.bound);
+      expect(m.designationWordOf({ state: 'absent' })).toBe(m.DESIGNATION_WORDS.none);
+    },
+  };
+}
+
+// The failure contract (ruled F11) and the poll's retry (review 3319 F2), `readOutcome.ts`.
+export function nextReadCases(m: ReadOutcomeModule): Record<string, SuiteCase> {
+  const prior = { state: 'answered', value: 1, at: AT } as const;
+  return {
+    'a value is answered; the read\'s own 404 is absent, never unmeasured': () => {
+      expect(m.nextReadState({ state: 'loading' }, { kind: 'value', value: 2 }, AT + 1)).toEqual({ state: 'answered', value: 2, at: AT + 1 });
+      expect(m.nextReadState(prior, { kind: 'absent' }, AT + 1)).toEqual({ state: 'absent' });
+      expect(m.nextReadState({ state: 'loading' }, { kind: 'absent' }, AT + 1)).toEqual({ state: 'absent' });
+    },
+    'a failure after an answer is stale with its last value; before one, unmeasured': () => {
+      expect(m.nextReadState(prior, { kind: 'failed', error: 'timeout' }, AT + 5)).toEqual({ state: 'stale', value: 1, at: AT, error: 'timeout' });
+      expect(m.nextReadState({ state: 'stale', value: 1, at: AT, error: 'a' }, { kind: 'failed', error: 'b' }, AT + 5))
+        .toEqual({ state: 'stale', value: 1, at: AT, error: 'b' });
+      expect(m.nextReadState({ state: 'loading' }, { kind: 'failed', error: 'HTTP 503' }, AT)).toEqual({ state: 'unmeasured', error: 'HTTP 503' });
+    },
+  };
+}
+export function readFailedCases(m: ReadOutcomeModule): Record<string, SuiteCase> {
+  return {
+    'unmeasured and stale are failures the poll reads again': () => {
+      expect(m.readFailed({ state: 'unmeasured', error: 'HTTP 503' })).toBe(true);
+      expect(m.readFailed({ state: 'stale', value: [], at: AT, error: 'timeout' })).toBe(true);
+    },
+    'an answer, an absence and a read in flight are not': () => {
+      expect(m.readFailed({ state: 'answered', value: [], at: AT })).toBe(false);
+      expect(m.readFailed({ state: 'absent' })).toBe(false);
+      expect(m.readFailed({ state: 'loading' })).toBe(false);
+    },
+  };
+}
+
 export function placesCases(m: PlacesModule): Record<string, SuiteCase> {
   return {
     "today's places with no door": () => {
@@ -163,6 +283,7 @@ export function phoneCases(m: PlacesModule): Record<string, SuiteCase> {
 }
 
 const HOME = path.join(ROOT, 'pwa/src/overlord/homePlace.ts');
+const READ_OUTCOME = path.join(ROOT, 'pwa/src/overlord/readOutcome.ts');
 const PLACES = path.join(ROOT, 'pwa/src/lib/places.ts');
 
 const DESIGNATION_SET: MutantSet<HomeModule> = {
@@ -180,6 +301,50 @@ const HOME_SET: MutantSet<HomeModule> = {
     { id: 'H2', old: 'if (!overlordShown(caps)) return NOT_ADVERTISED;', new: '' },
   ],
   suite: homeCases,
+};
+const SETTLED_SET: MutantSet<HomeModule> = {
+  modulePath: HOME,
+  mutants: [
+    { id: 'H9', old: "  if (designation.state === 'loading') return false;\n", new: '' },
+    { id: 'H10', old: "return !((d.kind === 'bound' || d.kind === 'pending') && ladder.state === 'loading');", new: 'return true;' },
+    { id: 'H11', old: "  if (caps.state === 'loading') return false;\n", new: '' },
+  ],
+  suite: settledCases,
+};
+const CAP_READ_SET: MutantSet<HomeModule> = {
+  modulePath: HOME,
+  mutants: [{
+    id: 'H12',
+    old: "read.state === 'answered' || read.state === 'stale' ? { kind: 'caps', caps: read.value }",
+    new: "read.state === 'answered' ? { kind: 'caps', caps: read.value }",
+  }],
+  suite: capReadCases,
+};
+const RUNG_READ_SET: MutantSet<HomeModule> = {
+  modulePath: HOME,
+  mutants: [{ id: 'H13', old: "rung: read.value.operatorRung } : { kind: 'unmeasured' }", new: "rung: read.value.operatorRung } : { kind: 'rung', rung: 'off' }" }],
+  suite: rungReadCases,
+};
+const PLACE_WORD_SET: MutantSet<HomeModule> = {
+  modulePath: HOME,
+  mutants: [{ id: 'H14', old: "read.state === 'loading' ? DESIGNATION_LOADING_WORD : ", new: '' }],
+  suite: placeWordCases,
+};
+const NEXT_READ_SET: MutantSet<ReadOutcomeModule> = {
+  modulePath: READ_OUTCOME,
+  mutants: [
+    { id: 'H15', old: "if (outcome.kind === 'absent') return { state: 'absent' };", new: "if (outcome.kind === 'absent') return { state: 'unmeasured', error: 'absent' };" },
+    { id: 'H16', old: "if (prev.state === 'answered' || prev.state === 'stale') return", new: 'if (false) return' },
+  ],
+  suite: nextReadCases,
+};
+const READ_FAILED_SET: MutantSet<ReadOutcomeModule> = {
+  modulePath: READ_OUTCOME,
+  mutants: [
+    { id: 'H17', old: "return read.state === 'unmeasured' || read.state === 'stale';", new: "return read.state === 'stale';" },
+    { id: 'H18', old: "return read.state === 'unmeasured' || read.state === 'stale';", new: "return read.state === 'unmeasured';" },
+  ],
+  suite: readFailedCases,
 };
 const PLACES_SET: MutantSet<PlacesModule> = {
   modulePath: PLACES,
@@ -204,6 +369,12 @@ const PHONE_SET: MutantSet<PlacesModule> = {
 export const HOME_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'pwa/src/overlord/homePlace.ts#designationStateOf': DESIGNATION_SET as MutantSet<never>,
   'pwa/src/overlord/homePlace.ts#homePlace': HOME_SET as MutantSet<never>,
+  'pwa/src/overlord/homePlace.ts#homeSettled': SETTLED_SET as MutantSet<never>,
+  'pwa/src/overlord/homePlace.ts#capReadOf': CAP_READ_SET as MutantSet<never>,
+  'pwa/src/overlord/homePlace.ts#rungReadOf': RUNG_READ_SET as MutantSet<never>,
+  'pwa/src/overlord/homePlace.ts#designationWordOf': PLACE_WORD_SET as MutantSet<never>,
+  'pwa/src/overlord/readOutcome.ts#nextReadState': NEXT_READ_SET as MutantSet<never>,
+  'pwa/src/overlord/readOutcome.ts#readFailed': READ_FAILED_SET as MutantSet<never>,
   'pwa/src/lib/places.ts#placesFor': PLACES_SET as MutantSet<never>,
   'pwa/src/lib/places.ts#deskPlacesFor': DESK_SET as MutantSet<never>,
   'pwa/src/lib/places.ts#phoneDoorsFit': PHONE_SET as MutantSet<never>,

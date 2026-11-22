@@ -288,6 +288,11 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     byId('go-home').run(ctx(true, { place: 'fleet', why: 'rung-off' }));
     byId('go-fleet').run(ctx(false, { place: 'fleet', why: 'none' }));
     expect(nav).toEqual(['/overlord', '/fleet', '/fleet']);
+    // Review 3319 A1: a chord runs its command whatever its `when`, so Go to Overlord's run refuses without the word.
+    byId('go-overlord').run(ctx(false, { place: 'fleet', why: 'not-advertised' }));
+    expect(nav, 'without the word, Go to Overlord moves nothing').toEqual(['/overlord', '/fleet', '/fleet']);
+    byId('go-overlord').run(ctx(true, { place: 'overlord', why: 'designated' }));
+    expect(nav.at(-1)).toBe('/overlord');
     expect(rankCommands('home', baseCommands()).map((c) => c.id)[0]).toBe('go-home');
     expect(rankCommands('overlord', baseCommands()).map((c) => c.id)).toEqual(['go-overlord']);
   });

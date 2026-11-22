@@ -176,10 +176,16 @@ const FIXTURE_OVERLORD: AppFixture = {
   },
 };
 
+// The plan's matrix asks a light and a dark palette (review 3319 A6): Daylight at every width, Phosphor (the dark) on both sides
+// of the roomy line and at 1280.
+const OVERLORD_VIEWS = [
+  ...[900, 1000, 1100, 1199, 1200, 1280, 1920].map((width) => ['light', width] as const),
+  [PHOSPHOR, 1100], [PHOSPHOR, 1280],
+] as const;
 describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
-  for (const width of [900, 1000, 1100, 1199, 1200, 1280, 1920]) {
-    it(`light, ${width}px: the tabs, nothing cut, no sideways scroll, and /fleet marks the Fleet tab alone`, async () => {
-      const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme: 'light', width }, FIXTURE_OVERLORD);
+  for (const [theme, width] of OVERLORD_VIEWS) {
+    it(`${theme}, ${width}px: the tabs, nothing cut, no sideways scroll, and /fleet marks the Fleet tab alone`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme, width }, FIXTURE_OVERLORD);
       try {
         await seedStripExpanded(ctx);
         await page.goto(server!.origin + '/fleet');
@@ -197,6 +203,7 @@ describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
             current: [...document.querySelectorAll('header.shell-accounts [aria-current="page"]')].map((c) => c.getAttribute('data-command')),
             cut, sideways: document.documentElement.scrollWidth - window.innerWidth,
             newName: document.querySelector('.ref-bar-new')!.getAttribute('aria-label') ?? document.querySelector('.ref-bar-new')!.textContent,
+            newText: document.querySelector('.ref-bar-new')!.textContent,
             waiting: document.querySelector('.ref-tabs [data-command="go-waiting"]')!.textContent,
           };
         });
@@ -205,8 +212,11 @@ describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
         expect(m.cut, 'nothing in the bar is cut').toEqual([]);
         expect(m.sideways, 'the page does not scroll sideways').toBeLessThanOrEqual(0);
         // Under 1200 the crowded bar sheds words (`REF_ROOMY_QUERY`): New session is its "+", named, and Waiting its short word.
+        // The pins tell the two apart (review 3319 A7): "Waiting on you 99+" also starts with "Waiting ".
+        const crowded = width < 1200;
         expect(m.newName).toMatch(/New session/);
-        expect(m.waiting!.startsWith(width < 1200 ? 'Waiting ' : 'Waiting on you'), m.waiting!).toBe(true);
+        expect(m.newText, 'the "+" alone when crowded, the words when roomy').toBe(crowded ? '+' : '+New session');
+        expect(m.waiting!, 'the short word when crowded, the full title when roomy').toMatch(crowded ? /^Waiting (?!on you)/ : /^Waiting on you /);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesignationView } from '../../shared/overlord-designation';
 import type { LadderWire } from '../../shared/overlord-ladder';
 import { ApiError, ApiTimeout } from '../src/lib/api';
-import { nextReadState } from '../src/overlord/readOutcome';
+import { nextReadState, readFailed } from '../src/overlord/readOutcome';
 import type { ReadState } from '../src/overlord/readState';
 import { createOverlordStore, OVERLORD_POLL_MS, type OverlordReads } from '../src/stores/overlord';
 
@@ -55,6 +55,16 @@ describe('nextReadState (the failure contract, ruled F11)', () => {
   });
 });
 
+describe('readFailed (the poll reads a failed read again, review 3319 F2)', () => {
+  it('unmeasured and stale are failures; an answer, an absence and a read in flight are not', () => {
+    expect(readFailed({ state: 'unmeasured', error: 'HTTP 503' })).toBe(true);
+    expect(readFailed({ state: 'stale', value: ['overlord-v1'], at: AT, error: 'timeout' })).toBe(true);
+    expect(readFailed({ state: 'answered', value: [], at: AT })).toBe(false);
+    expect(readFailed({ state: 'absent' })).toBe(false);
+    expect(readFailed({ state: 'loading' })).toBe(false);
+  });
+});
+
 describe('the Overlord store', () => {
   it('reads the caps, then the designation and the ladder, at start', async () => {
     const { reads, calls } = fakeReads();
@@ -100,6 +110,62 @@ describe('the Overlord store', () => {
     visibility = 'hidden';
     await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS * 2);
     expect(calls).toEqual({ caps: 1, designation: 2, ladder: 2 });
+    stop();
+  });
+
+  // Review 3319 F2: one failed read of the caps at start hid the Overlord until a reload or a refocus. The visible tick reads
+  // the caps again while their last read failed (`readFailed`), on the same timer; an answer without the word is not a failure.
+  it('a failed first read of the caps is read again on the next visible tick, and the Overlord reads follow, with no reload or refocus', async () => {
+    let capsCalls = 0;
+    const { reads, calls } = fakeReads({
+      caps: async () => { capsCalls += 1; if (capsCalls === 1) throw new ApiError(503, { error: 'unavailable' }); return { caps: ['overlord-v1'] }; },
+    });
+    const store = createOverlordStore({ reads, now: () => AT });
+    const stop = store.getState().start();
+    await settle();
+    expect(store.getState().caps).toEqual({ state: 'unmeasured', error: 'HTTP 503' });
+    expect(calls).toEqual({ caps: 1, designation: 0, ladder: 0 });
+    expect(vi.getTimerCount(), 'one timer: the poll').toBe(1);
+    await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS);
+    await settle();
+    expect(store.getState().caps).toEqual({ state: 'answered', value: ['overlord-v1'], at: AT });
+    expect(calls).toEqual({ caps: 2, designation: 1, ladder: 1 });
+    expect(store.getState().designation).toEqual({ state: 'answered', value: ROW, at: AT });
+    // Answered, the caps leave the tick: it reads the designation and the ladder only.
+    await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS);
+    expect(calls).toEqual({ caps: 2, designation: 2, ladder: 2 });
+    expect(vi.getTimerCount(), 'still one timer').toBe(1);
+    stop();
+  });
+
+  it('a caps read that keeps failing is read again on every visible tick, never while hidden', async () => {
+    const { reads, calls } = fakeReads({ caps: async () => { throw new ApiTimeout('/health', 20_000); } });
+    const store = createOverlordStore({ reads });
+    const stop = store.getState().start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS * 2);
+    expect(calls).toEqual({ caps: 3, designation: 0, ladder: 0 });
+    expect(store.getState().caps).toEqual({ state: 'unmeasured', error: 'timeout' });
+    visibility = 'hidden';
+    await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS * 3);
+    expect(calls.caps, 'a hidden page does not poll').toBe(3);
+    stop();
+  });
+
+  it('a caps read that failed after an answer (stale) keeps its words and is read again on the next tick', async () => {
+    let fail = false;
+    const { reads, calls } = fakeReads({ caps: async () => { if (fail) throw new ApiError(502, {}); return { caps: ['overlord-v1'] }; } });
+    const store = createOverlordStore({ reads, now: () => AT });
+    const stop = store.getState().start();
+    await settle();
+    fail = true;
+    await store.getState().readAll();
+    expect(store.getState().caps).toEqual({ state: 'stale', value: ['overlord-v1'], at: AT, error: 'HTTP 502' });
+    fail = false;
+    await vi.advanceTimersByTimeAsync(OVERLORD_POLL_MS);
+    await settle();
+    expect(calls.caps).toBe(3);
+    expect(store.getState().caps).toEqual({ state: 'answered', value: ['overlord-v1'], at: AT });
     stop();
   });
 

@@ -132,3 +132,12 @@ export const DESIGNATION_WORDS: Readonly<Record<DesignationState['kind'], string
   none: 'No Overlord is designated.',
   unmeasured: 'The designation could not be read.',
 };
+
+/** What the place says while the designation read is still in flight. */
+export const DESIGNATION_LOADING_WORD = 'Loading…';
+
+/** The place's state word for the designation read itself (review 3319 A3): a read still in flight says so, and only a read
+ *  that failed says it could not be read. Every answered or stale read takes its kind's word (`DESIGNATION_WORDS`). */
+export function designationWordOf(read: ReadState<DesignationView | null>): string {
+  return read.state === 'loading' ? DESIGNATION_LOADING_WORD : DESIGNATION_WORDS[designationStateOf(read).kind];
+}
