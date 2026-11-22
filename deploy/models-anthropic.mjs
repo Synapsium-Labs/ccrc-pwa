@@ -99,6 +99,55 @@ function noModelWhy(aliases, k) {
     + `${k.unlaunchable.laneVersion ?? 'a build that cannot be read'}`;
 }
 
+/** An Anthropic lane's `show` `labels` (model-class Anthropic arm A4, Task A4.1): per class the model the lane's sessions
+ *  launch on, its catalogue label and its effort levels, read from the aliases file's own rows (`aliases`, as `aliasesReport`
+ *  gives it) and the lane's advance report (`advance`, as `advanceReport` gives it). Pure: no file is read here.
+ *  While a hold stands on a class with a `hold.model`, that id is the model (the class's sessions launch on it, not on the
+ *  alias) and its row is the aliases' `heldRow`; the alias's own id rides along as `aliasId` only when it differs, so the
+ *  sheet can show both. Otherwise the class's `id` and `row`. A class with no id, or one whose kept id the lane's build
+ *  cannot launch (`unlaunchable`), is a row of nulls, never a bare null (the reader would read the whole lane
+ *  `unreadable`). The aliases file's own readings (`source`, `cacheTarget`, `seenId`, `unobserved`, `unlaunchable`, the
+ *  home's `orphaned` level) ride along as the optional fields of `LaneClassModel`: `source`, `cacheTarget`, `seenId`
+ *  and `orphanedEffort` always (null when none), `unobserved` only when true, and `unlaunchable` only when set on a class
+ *  that is not held (a held class launches on its held id, so the alias's build need says nothing about it; `aliasId` names
+ *  the alias's id there).
+ *  `takesNoEffort` is the row saying the model takes no level (`efforts: []`, D-8750); `efforts` stays the row's own list.
+ *  Null when the aliases report is not a parsed file (`absent`, `unreadable`, `invalid`): those are `show`'s `aliases`
+ *  states, which the server reads as three answers, so `labels` carries none of them. */
+export function anthropicLabels(aliases, advance) {
+  if (aliases === null || typeof aliases !== 'object' || aliases.state !== undefined || aliases.classes === undefined) return null;
+  const labels = {};
+  for (const c of CLASSES) {
+    const k = aliases.classes[c];
+    const hold = advance !== null && advance !== undefined && advance.state === 'ok' ? advance.classes[c].hold : null;
+    const held = hold !== null && hold !== undefined && typeof hold.model === 'string';
+    let model = null;
+    let row = null;
+    if (held) {
+      model = hold.model;
+      row = k.heldRow?.id === hold.model ? k.heldRow : null;
+    } else if (k.id !== null && k.unlaunchable === null) {
+      model = k.id;
+      row = k.row;
+    }
+    const efforts = row === null || row.efforts === null ? null : [...row.efforts];
+    labels[c] = {
+      model,
+      label: model === null ? null : row !== null && row.label !== null ? row.label : model,
+      efforts: model === null ? null : efforts,
+      ...(model !== null && efforts !== null && efforts.length === 0 ? { takesNoEffort: true } : {}),
+      source: k.source,
+      cacheTarget: k.cacheTarget,
+      seenId: k.seenId,
+      ...(k.unobserved === true ? { unobserved: true } : {}),
+      ...(!held && k.unlaunchable !== null ? { unlaunchable: { needs: k.unlaunchable.needs, laneVersion: k.unlaunchable.laneVersion } } : {}),
+      ...(held && k.id !== null && k.id !== hold.model ? { aliasId: k.id } : {}),
+      orphanedEffort: k.orphaned === null ? null : { id: k.orphaned.id, level: k.orphaned.level },
+    };
+  }
+  return labels;
+}
+
 /** The arm, bound to the helpers of `models-op.mjs` it shares (`io`, built once there): the output and refusal
  *  envelope (`out`, `refuse`), the clock and home (`now`, `HOME`), the models directory, the advance file's reader and
  *  writer and its refusal (`readAdvance`, `writeAdvance`, `refuseAdvance`), the atomic JSON write and its sentence

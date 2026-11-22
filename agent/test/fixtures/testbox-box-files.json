@@ -1,0 +1,20 @@
+{
+  "about": "The small files the test box's updater (root's shell) and the test service exchange, stated once for both sides. agent/src/testbox/boxFiles.ts is pinned to this text by agent/test/testbox-managed-node.test.ts; the updater's shell is pinned to the same text by its own suite.",
+  "maxBytes": 4096,
+  "actId": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+  "paths": {
+    "request": "/run/ccrc-testbox-drain/request",
+    "answer": "/run/ccrc-testbox/drain",
+    "ready": "/run/ccrc-testbox/ready",
+    "nodeId": "node-state/node-id",
+    "toolsJson": "node-state/tools.json"
+  },
+  "request": { "text": "act\tact-1\ndeadline\t1795000000\n", "act": "act-1", "deadline": 1795000000 },
+  "answerDraining": { "text": "act\tact-1\nstate\tdraining\nrunning\t2\n", "act": "act-1", "running": 2 },
+  "answerIdle": { "text": "act\tact-1\nstate\tidle\nqueued\t3\n", "act": "act-1", "queued": 3 },
+  "ready": { "text": "release\tv0.0.2\npid\t4242\n", "release": "v0.0.2", "pid": 4242 },
+  "toolsJson": {
+    "text": "{\"node\":\"22.2.0\",\"npm\":\"10.9.1\",\"tmux\":\"3.5\",\"git\":\"2.44.0\",\"python3\":\"3.12.4\",\"chrome\":null,\"measuredAt\":1795000000}\n",
+    "read": { "node": "22.2.0", "npm": "10.9.1", "tmux": "3.5", "git": "2.44.0", "python3": "3.12.4", "chrome": null }
+  }
+}
