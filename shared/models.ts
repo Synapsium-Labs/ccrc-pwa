@@ -273,7 +273,10 @@ type ModelsArgvRefusal = import('./agent-protocol.js').ModelsArgvRefusal;
  *    asks again.
  *  A reader shows class names for every arm but `read`, and never a model name this tree spells. */
 export type LaneModelsRead =
-  | { readonly kind: 'read'; readonly classes: LaneClassModels; readonly advance?: LaneAdvanceRead }
+  | { readonly kind: 'read'; readonly classes: LaneClassModels; readonly advance?: LaneAdvanceRead;
+      /** revert-ends-itself: the fleet box's models op ends a revert's hold by itself once a newer model comes (a
+       *  constant of that op, never a setting). Absent from an older op, which is read as "does not". */
+      readonly revertHoldEnds?: true }
   | { readonly kind: 'absent'; readonly laneKind?: LaneAbsentKind }
   | { readonly kind: 'unreadable'; readonly code?: LaneUnreadableCode }
   | { readonly kind: 'unsupported' }

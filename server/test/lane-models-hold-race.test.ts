@@ -190,7 +190,9 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     expect(hold!.at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
   }, 60_000);
 
-  it.skipIf(!HAVE_FLOCK)('the commit that follows the hold abandons held and moves nothing: the Hold wins', async () => {
+  // revert-ends-itself: a hand hold waits only to be passed by a model newer than its own, and the commit's candidate is
+  // one, so the commit that follows it moves the class and clears the hold in the same write.
+  it.skipIf(!HAVE_FLOCK)('the commit that follows a hand hold moves past it: a hold ends at the next newer model', async () => {
     const b = box();
     const app = await serverOver(b);
     const res = await app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } });
@@ -198,9 +200,9 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     expect(readHold(b.home)).toMatchObject({ by: 'hand' });
     const registryBefore = fs.readFileSync(join(b.home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8');
     const answer = commit(b);
-    expect(answer).toMatchObject({ ok: true, op: 'advance-commit', class: CLS, outcome: 'abandoned', why: 'held' });
-    expect(fs.readFileSync(join(b.home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8'), 'the held class moved').toBe(registryBefore);
-    expect(readHold(b.home), 'the commit dropped the hold').toMatchObject({ by: 'hand' });
+    expect(answer).toMatchObject({ ok: true, op: 'advance-commit', class: CLS, outcome: 'moved' });
+    expect(fs.readFileSync(join(b.home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8'), 'the class moved').not.toBe(registryBefore);
+    expect(readHold(b.home), 'the commit cleared the hold it ended').toBeNull();
   }, 60_000);
 
   /** The step's own locked commit: `_models_node_locked` from the real `ccd/ccrc`, a bash process that waits on the lane's

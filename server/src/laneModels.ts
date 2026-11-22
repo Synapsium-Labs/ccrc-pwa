@@ -125,7 +125,7 @@ function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsR
   }
   const advance = readAdvanceReport(raw.advance);
   if (advance === null) return { kind: 'unreadable' };
-  return { kind: 'read', classes, advance };
+  return { kind: 'read', classes, advance, ...revertHoldEndsOf(raw) };
 }
 
 /** An Anthropic lane's `show` (no registry; model-class Anthropic arm A4.1): three answers for its aliases file, never one.
@@ -153,8 +153,13 @@ function readAnthropicShow(raw: Record<string, unknown>): LaneModelsRead {
   }
   const advance = readAdvanceReport(raw.advance);
   if (advance === null) return { kind: 'unreadable' };
-  return { kind: 'read', classes, advance };
+  return { kind: 'read', classes, advance, ...revertHoldEndsOf(raw) };
 }
+
+/** revert-ends-itself: `show`'s constant that its op ends a revert's hold by itself, carried only when it is exactly `true`;
+ *  an older op omits it, and anything else is read as absent, "does not", never as a reason to refuse the read. */
+const revertHoldEndsOf = (raw: Record<string, unknown>): { revertHoldEnds?: true } =>
+  (raw.revertHoldEnds === true ? { revertHoldEnds: true } : {});
 
 /** One class's row, built from the fields `LaneClassModel` declares, in this one place (R1's `efforts`: a string
  *  array copied, or null, an absent key read as null). `null` is a row off the grammar. The optional fields an Anthropic

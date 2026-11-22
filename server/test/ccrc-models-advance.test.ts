@@ -405,6 +405,18 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step in the hourly refre
     expect(notifyCalls()).toEqual([]);
   }, T);
 
+  /** revert-ends-itself: a hand hold ends at the next newer model, and the lane's candidate is one, so these cases hold
+   *  the class with a hold that does NOT end on it: the verb's hold, rewritten as a revert's that waits for a model newer
+   *  than the candidate. */
+  const holdWaiting = (): void => {
+    const held = sourced('cmd_models lane-a hold opus');
+    expect(held.code, held.stdout + held.stderr).toBe(0);
+    const p = models('lane-a.advance.json');
+    const a = JSON.parse(fs.readFileSync(p, 'utf8')) as { classes: Record<string, { hold: unknown }> };
+    a.classes['opus']!.hold = { at: '2026-10-22T08:00:00Z', by: 'revert', from: 'model-6.1-gamma' };
+    fs.writeFileSync(p, `${JSON.stringify(a, null, 2)}\n`);
+  };
+
   it('a Hold tapped while the canary is parked leaves the class unmoved', async () => {
     // Review Focus (races and locks): the canary runs outside the lane-files lock, so the hold verb takes the lock at
     // once; the commit's re-check then finds it.
@@ -413,8 +425,7 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step in the hourly refre
     laneProxyMode(proxy, 'park');
     const run = refreshAsync();
     await eventually(() => laneProxyParked(proxy) >= 1, 'the parked canary', 30_000);
-    const held = sourced('cmd_models lane-a hold opus');
-    expect(held.code, held.stdout + held.stderr).toBe(0);
+    holdWaiting();
     laneProxyRelease(proxy);
     const r = await run;
     expect(r.code, r.stdout + r.stderr).toBe(0);
@@ -448,7 +459,7 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step in the hourly refre
     // Spec §2.7: turning Hold off lets the next hour advance, canary first.
     await setup();
     tier(0);
-    expect(sourced('cmd_models lane-a hold opus').code).toBe(0);
+    holdWaiting();
     expect(rowOf(refresh())).toEqual(QUIET_ROW);
     expect(laneProxyRequests(proxy)).toEqual([]);
     expect(laneCalls(), 'no unheld candidate, so the tier is never asked').toEqual([]);

@@ -10,7 +10,7 @@
 // input). It SPELLS NO CLASS WORD and no model id, in code or prose: the classes come from `CLASSES`, the family of an
 // id from `familyClassOf`, and every id from data.
 import { CLASSES, MODEL_ID_RE, familyClassOf } from './models.mjs';
-import { BEHIND_AFTER_MS, compareVersions, isAt, isoSeconds } from './model-advance.mjs';
+import { BEHIND_AFTER_MS, compareVersions, heldUnobserved, isAt, isoSeconds } from './model-advance.mjs';
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string' && v.length > 0;
@@ -143,14 +143,10 @@ export const ALIASES_VERSION = 1;
  *  the cache's `staleAt`, which lapses within the hour while Claude Code keeps launching over it. */
 export const CACHE_STALE_AFTER_MS = 604_800_000;
 
-/** `(evidenceAt, hold) => boolean`: whether a held class's id is UNOBSERVED against the hold standing now: a hold stands,
- *  and the id rests on no evidence or on evidence older than the hold. Such an id says nothing about where the alias
- *  went after the hold, so no reader names the class behind on it. The one rule: the resolver sets `unobserved` with
- *  it, and the health reading (`deploy/models-anthropic.mjs`) asks it again of the hold that stands at its read, since a
- *  `revert` writes a new hold without rewriting the aliases file. */
-export function heldUnobserved(evidenceAt, hold) {
-  return hold !== undefined && hold !== null && (evidenceAt === null || evidenceAt < hold.at);
-}
+/** The UNOBSERVED rule (`heldUnobserved`) lives in `./model-advance.mjs` since the revert-ends-itself follow-up, beside
+ *  the decider that ends a hold, which asks it too; it is re-exported here for every reader that imports it from this
+ *  module. */
+export { heldUnobserved };
 
 /** `(version) => number[] | null`: a dotted version as integers; null for anything else (an unreadable build). */
 function versionParts(v) {

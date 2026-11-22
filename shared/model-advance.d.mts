@@ -82,8 +82,10 @@ export declare class AdvanceInvalid extends Error {
   constructor(field: string, message: string);
 }
 
-/** `model` is the id an Anthropic lane's hold holds (Task A2.3); absent on a Codex lane's. */
-export interface Hold { at: string; by: HoldBy; model?: string }
+/** `model` is the id an Anthropic lane's hold holds (Task A2.3); absent on a Codex lane's. `from` is the id a Revert moved
+ *  the class away from (revert-ends-itself): the hold ends once something newer than it comes (`holdEnds`); absent on a
+ *  hand hold and on a revert hold an older build wrote, which `holdFrom` derives. */
+export interface Hold { at: string; by: HoldBy; model?: string; from?: string }
 export interface Previous { model: string | null; effort: string | null }
 export interface HistoryEntry {
   at: string;
@@ -130,6 +132,8 @@ export interface AdvancePending {
   at: string;
   /** The candidate's reason, carried onto the history entry the intent becomes (D-8384). */
   cause?: CandidateReason;
+  /** The move ends the class's hold (revert-ends-itself): `reconcilePending` clears it with the move it records. */
+  endsHold?: true;
 }
 /** A hand `set-class`'s intent: the class it named, that class's pin before and after (`null` for none), the other
  *  classes one model, one class empties (each pinned `to` before), and the act's time. */
@@ -162,6 +166,45 @@ export declare function recordFailure(
 ): { advance: Advance; isNew: boolean };
 export declare function reconcilePending(adv: Advance, registry: Registry): { advance: Advance; recovered: boolean };
 export declare function heldBackOf(c: ClassAdvance, candidate: string | null): HistoryEntry | null;
+
+// ── the end of a hold (revert-ends-itself) ──
+/** Whether a held class's id is unobserved against the hold standing now: a hold stands, and the id rests on no evidence
+ *  or on evidence older than the hold (the resolver's `unobserved` rule, asked again by `holdEnds` and the health reading). */
+export declare function heldUnobserved(evidenceAt: string | null, hold: { at: string } | null | undefined): boolean;
+/** The id a class's standing hold waits to be passed (its `from`, else the newest revert entry to the held id, else the
+ *  held id), or null with no hold. The one reader of a hold's `from`. */
+export declare function holdFrom(c: ClassAdvance, heldId: string | null): string | null;
+/** Why a hold ended: a model newer than `from`, the held pin retired by the grace, or a third alias id. */
+export type HoldEndWhy = 'newer' | 'retired' | 'alias-moved';
+export interface HoldEnd { ends: boolean; why: HoldEndWhy | null; from: string | null }
+/** The one row of an aliases file `holdEnds` reads. */
+export interface HoldEndAliasRow { id: string | null; evidenceAt: string | null; unlaunchable: unknown; unobserved?: boolean }
+/** Whether a class's standing hold ends now (revert-ends-itself), on a Codex lane from its candidate this hour, on an
+ *  Anthropic lane from its alias row. */
+export declare function holdEnds(input:
+  | { arm: 'codex'; c: ClassAdvance; pin: string | null; choice: Choice }
+  | { arm: 'alias'; c: ClassAdvance; row: HoldEndAliasRow | null }): HoldEnd;
+/** The longest a hold whose end has come may stand before the health reading reports it: `RETIRE_GAP_MS`. */
+export declare const HOLD_END_WAIT_MS: 5400000;
+/** Whether a hold whose end came at `sinceAt` has stood past `HOLD_END_WAIT_MS` by `nowMs`. */
+export declare function holdEndDue(sinceAt: string | null, nowMs: number): boolean;
+/** The hold a Codex revert writes, naming what it moved the class away from. */
+export declare function revertHold(c: ClassAdvance, from: string | null, to: string | null, at: string): Hold;
+/** `advance-commit`'s hold question: null with no hold, else `holdEnds`' answer, ending only on the planned candidate. */
+export declare function holdEndFor(a: { c: ClassAdvance; pin: string | null; choice: Choice; to: string }): HoldEnd | null;
+/** The `reason` a move that ended a hold records on its history entry (`{}` for any other move). */
+export declare function holdEndEntry(end: HoldEnd | null, pin: string | null, to: string): { reason?: string };
+export interface HoldWaitingRow { class: ModelClass; pin: string | null; hold: { at: string; by: HoldBy }; from: string | null }
+export interface HeldBehindRow {
+  class: ModelClass; pin: string | null; newer: string | null; reason: CandidateReason | null; hold: { at: string; by: HoldBy };
+  from: string | null; since: string | null; due: boolean;
+}
+/** One held Codex class's `advance-health` row: waiting, or behind (its end has come). */
+export declare function holdReading(a: { c: ClassAdvance; cls: ModelClass; pin: string | null; choice: Choice;
+  sinceAt: string | null; nowMs: number }): { waiting: HoldWaitingRow; behind?: undefined } | { behind: HeldBehindRow; waiting?: undefined };
+/** The class's hold cleared (a copy), as the writer that moves it records the move; an Anthropic lane's (`alias`) records
+ *  `releasedAt` and drops `releasedHold`. */
+export declare function endHold(adv: Advance, cls: ModelClass, at: string, o?: { alias?: boolean }): Advance;
 export declare function recordEffortFallbacks(adv: Advance, fallbacks: readonly EffortFallback[], at: string): Advance;
 export declare function effortFallbackOf(
   c: ClassAdvance | null, registry: Registry, cls: ModelClass, catalogue: Catalogue | null,
