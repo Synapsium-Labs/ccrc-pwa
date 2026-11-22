@@ -78,7 +78,8 @@ export interface AccountLimits {
 }
 
 const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
-const SEVEN_WINDOW = 604800;
+/** The weekly window: a seven-day reading older than this has rolled over. Exported for the runway read's span (`poolRunway.ts`). */
+export const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 

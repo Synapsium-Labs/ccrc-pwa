@@ -11,12 +11,12 @@ import {
 } from '../../shared/loadLines.js';
 import { SEVEN_DAY_CEILING_PCT } from '../../shared/serviceability.js';
 import type { Roster } from '../../shared/roster.js';
-import type { AccountLimits } from './limits.js';
+import { SEVEN_WINDOW, type AccountLimits } from './limits.js';
 import { resolvedAccountPool } from './poolrule.js';
 
 /** How far back a runway read asks for samples: the weekly window, past which every reading has rolled over
  *  (`limits.ts#readLimits`), so an older sample can prove nothing. */
-export const RUNWAY_READ_S = 604_800;
+export const RUNWAY_READ_S = SEVEN_WINDOW;
 
 /** One stored reading of one account, as `limit_samples` keeps it (`coord/limitSamplesStore.ts`). Times in seconds. */
 export interface LimitSample {

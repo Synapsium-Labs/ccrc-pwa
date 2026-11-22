@@ -112,7 +112,7 @@ function loadCases(m: LoadModule): Record<string, SuiteCase> {
     'an account at the ceiling is a past candidate (F1)': () => {
       const got = m.overlordLoadCandidates(designated, ['a', 'b'], { lanes: { a: lane(99), b: lane(99) }, limits: { a: lim(99), b: lim(99) }, nowS: NOW });
       expect(got).toMatchObject({ kind: 'candidates', list: [{ id: 'a', serves: 'at-ceiling' }, { id: 'b', serves: 'at-ceiling' }] });
-      expect(m.loadLines((got as { list: never[] }).list, NOW).chat).toEqual({ kind: 'past', leastPct: 99 });
+      expect(m.loadLines((got as Extract<typeof got, { kind: 'candidates' }>).list, NOW).chat).toEqual({ kind: 'past', leastPct: 99 });
     },
     'an account with no continuity record is left out': () => {
       expect(m.overlordLoadCandidates(designated, ['a'], { lanes: { a: lane(10, 'none') }, limits: { a: lim(10) }, nowS: NOW }))
