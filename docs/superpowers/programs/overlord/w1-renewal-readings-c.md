@@ -14,7 +14,7 @@ No D-number is minted for them; the coordinator folds them into the plan's ledge
   needs. So the ladder store mints its own frozen `LaneRaiser` (`laneRaiser('renewal-lane')`), remembered in a module-private
   `WeakSet` as the attribution adapter remembers its actors. `ladderActor` takes it on the brake side only and records its
   lane name in `raisedBy`; a widening refuses it, and so does a structurally equal literal. The lane names are a const map
-  (`LANE_RAISER_MAP`), one row today.
+  (`overlordLadder.ts#LANE_RAISER_MAP`, the ladder's vocabulary, so `isLadderKebab` declares them), one row today.
 - **`latch-port-carries-no-actor`**: the lane's port is `GenerationsDeps.latch(cause, detail)`, with no `raisedBy`: the wiring
   binds the raiser, so the lane imports nothing of the ladder (its "nothing that sends" pin holds, with
   `./renewalReadings.js` added to the allowed list). It answers `{ ok: true }` or `{ ok: false, why }`, where `why` is the
