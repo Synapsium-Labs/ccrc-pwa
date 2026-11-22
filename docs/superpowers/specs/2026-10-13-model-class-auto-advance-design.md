@@ -1,6 +1,6 @@
 # Model classes follow new releases automatically
 
-**Spec** · 2026-10-13 · Status: Accepted 2026-10-15, amended 2026-11-16 and 2026-11-18 · Owner: ccrc · Linear: none · Related:
+**Spec** · 2026-10-13 · Status: Accepted 2026-10-15, amended 2026-11-16, 2026-11-18 and 2026-11-22 · Owner: ccrc · Linear: none · Related:
 `docs/superpowers/specs/2026-09-08-model-class-registry-design.md` (amended here),
 `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`
 
@@ -9,8 +9,9 @@
 Today a lane's model classes (`haiku`, `sonnet`, `opus`, `fable`) move only when someone runs
 `ccrc models <id> set-class` by hand, so a Codex lane keeps routing a class to an older model long after its
 provider ships a newer one. This spec makes the hourly `ccrc models refresh` move each class to the newest model
-of its own family on its own: it sends one canary request through the lane first, keeps the previous pin, and
-honours a per-class hold. Anthropic lanes already launch on the newest model: a measurement of 2026-11-16 found
+of its own family on its own: it sends one canary request through the lane first and keeps the previous pin.
+Classes always advance: the one brake is Revert, which puts the previous model back and holds the class there until a
+newer model appears, and then the class follows it again (amended 2026-11-22, below). Anthropic lanes already launch on the newest model: a measurement of 2026-11-16 found
 Claude Code's own `opus`, `sonnet` and `haiku` aliases resolving to it on every home (Fable is unmeasured). So ccrc
 never re-pins an Anthropic class. It reads which id each alias resolves to, from Claude Code's catalogue cache or from
 a fresh launch ccd marked, and from that derives labels, effort and holds, and moves running sessions (§2.5, amended
@@ -18,6 +19,18 @@ a fresh launch ccd marked, and from that derives labels, effort and holds, and m
 The operator approved the four design parts in
 conversation (D1 to D10). Writing them down surfaced gaps, answered here as D11 to D22, and the operator accepted
 the written spec with them on 2026-10-15.
+
+> [!IMPORTANT]
+> **Amended 2026-11-22: classes always advance.** The owner's settings audit
+> (`docs/superpowers/specs/2026-11-22-settings-audit.md`) fixed the Models sheet's Hold and Release: "Always advance. A
+> Revert holds until something newer appears. Hold is the standing form of Revert." So the standing per-class hold is
+> no longer a control. A Revert records the model it moved away from, and the hourly refresh ends its hold by itself,
+> in the same write as the move, once a model newer than that one appears: on a Codex lane a newer version of the
+> same family, on an Anthropic lane the alias resolving to a third id after the hold. Doctor stops telling anyone to
+> release a hold. The phone's sheet offers Revert alone, on both kinds of lane, wherever the box reports that it ends
+> holds itself. A hold written before this, with no record of what it reverted from, ends at the next newer model.
+> Where the sections below still describe a Hold switch, a Release, or a hold as a standing brake, this note governs.
+> The programme records it as modification 94 of its definition of done (done-when 5 and 6).
 
 ## 1. Context
 
@@ -451,7 +464,8 @@ A test turns red when a class moves and its label does not.
 
 ### 2.7 Holds, revert, and the Models panel
 
-Each lane's page gets a Models panel. Figure 3 shows the Revert tap; Hold and release take the same path.
+Each lane's page gets a Models panel. Figure 3 shows the Revert tap. Since the amendment of 2026-11-22 it is the
+panel's one act, and its hold ends by itself when a newer model appears.
 
 ```mermaid
 sequenceDiagram
@@ -461,7 +475,7 @@ sequenceDiagram
   participant F as Lane files
   O->>S: Revert lane-b opus (session-gated)
   S->>A: models op: revert lane-b opus
-  A->>F: under the lane lock: pin = previous, hold = on
+  A->>F: under the lane lock: pin = previous, hold = on until newer than the reverted-from model
   F-->>A: materialised
   A-->>S: ok + the class rows
   S-->>O: panel shows the old model, held
@@ -469,10 +483,11 @@ sequenceDiagram
 ```
 *Figure 3. Revert from the PWA, on a Codex lane.*
 
-- **The panel.** Each class shows its model, when it last moved and what it replaced, a **Hold** switch, and a
-  **Revert** button that appears only after an advance.
-- **Revert is one act.** It puts `previous` back and turns Hold on, so the next hour cannot move the class again.
-  Turning Hold off lets the next hour advance, canary first.
+- **The panel.** Each class shows its model, when it last moved and what it replaced, and a **Revert** button that
+  appears only after an advance. (Amended 2026-11-22: the **Hold** switch the approved design drew is gone.)
+- **Revert is one act.** It puts `previous` back and holds the class there, so the next hour cannot move it back to
+  the model it left. The hold ends by itself, in the refresh's own write, once a model newer than the one it left
+  appears, and the class advances to it, canary first. Nobody turns a hold off.
 - **The `models` agent operation.** Hold, release and revert travel as one new agent operation, the way the
   existing `update` operation carries the update tap (`agent/src/server.ts`).
 - **How the panel reads (D14, Agreed).** This changes the approved Section 4, in which the panel reads the class
@@ -503,7 +518,9 @@ sequenceDiagram
   - a `/model` typed with a name saves the account default (sourced: `ccd/ccrc-doctor-checks:7111`).
 - **D12 (Agreed): shell verbs.** The same `ccrc models <id> hold|release|revert <class>` the operation spawns are
   documented for shell use, for a box whose console is down. The verbs exist either way, because the operation
-  needs them; D12 decides only whether the README offers them to the operator.
+  needs them; D12 decides only whether the README offers them to the operator. (Amended 2026-11-22: the console
+  offers Revert alone; whether the shell keeps `hold` and `release` is decided by the run that removes them from the
+  sheet and the door, and nothing tells the operator to run them.)
 
 ### 2.8 What doctor reports
 
@@ -513,7 +530,7 @@ accept them before they ship. The approved design named the first three; D15 (Ag
 | WARN | When it fires | When it clears |
 |---|---|---|
 | `model-advance-held-back` | A canary or a materialise failed. Names the lane, class and candidate. | An advance succeeds |
-| `model-held-behind` | A held class has a newer eligible model in its family. | The hold is released |
+| `model-held-behind` | A held class has a newer eligible model in its family. Since 2026-11-22: only once its hold should have ended by itself and still stands past the next refresh. | The hold ends |
 | `model-sessions-behind` | A session is still on the old model 24 h after a move. Names the session and ccd's reason. | The session moves |
 | `model-advance-blocked` | A lane or class cannot advance: its advance file, registry or catalogue is present but unreadable, its pin breaks the id grammar, or, on an Anthropic lane, the home has no source, its newest cache is stale or in the older format, or its aliases file cannot be read (§2.5.2, §2.5.3). Names which. | The cause is gone |
 
@@ -548,10 +565,10 @@ review the same day.
 |---|---|---|---|---|
 | D1 | Which model a class follows | Same family, newest version; best model overall per class; a rule list written once | Same family, newest version: a tier keeps its meaning | Agreed |
 | D2 | What guards a move | Canary, then switch; switch, auto-revert on errors; switch, no guard | A canary through the lane first, so a broken model never reaches sessions | Agreed |
-| D3 | An escape hatch | Optional hold, off by default; no hold at all; hold per lane, not per class | An optional per-class hold, off by default | Agreed |
+| D3 | An escape hatch | Optional hold, off by default; no hold at all; hold per lane, not per class | An optional per-class hold, off by default. Amended 2026-11-22: Revert is the escape hatch, and its hold ends when a newer model appears | Agreed |
 | D4 | Where advancing lives | A: the hourly refresh; B: the server; C: LiteLLM aliases | A: one owner on the box that holds the catalogue | Agreed |
 | D5 | Running sessions | Next idle point; next relaunch; idle switch but skip coordinators mid-wave | At their next idle point | Agreed |
-| D6 | Pause for an operator window | No window, hold only; obey a window switch | No window: the hold is the only brake | Agreed |
+| D6 | Pause for an operator window | No window, hold only; obey a window switch | No window: the hold is the only brake. Amended 2026-11-22: a Revert's hold, which ends when a newer model appears | Agreed |
 | D7 | The registry part | - (approved as presented) | `family`, `hold`, `previous`, `history` per class | Agreed |
 | D8 | The Codex advance part | - (approved as presented) | Choose, canary, re-pin through the writer, move sessions, push | Agreed |
 | D9 | The Anthropic part | - (approved as presented) | Catalogue cache, canary by real use, no `settings.json` writes | Agreed |
