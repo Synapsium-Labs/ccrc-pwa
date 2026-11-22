@@ -38,9 +38,10 @@ describe('the TARGET fits the fleet agent\'s deadline (review 3226 F8; a target:
     const worst = captureWorstCaseMs(CAPTURE_TIMINGS);
     expect(2 * worst + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
   });
-  it('the target leaves room for one more typed step than the drive has (door B2\'s step): the target only, the real fit is PR 3b\'s gate', () => {
-    const more = [...CAPTURE_STEPS, { type: '/model haiku', waitFor: [] }];
-    expect(2 * captureWorstCaseMs(CAPTURE_TIMINGS, more) + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
+  it('the drive carries door B2\'s typed step, the room this target kept for it, and still fits: the target only, the real fit is PR 3b\'s gate', () => {
+    const typed = CAPTURE_STEPS.filter((s) => s.type === '/model haiku');
+    expect(typed).toHaveLength(1);
+    expect(2 * captureWorstCaseMs(CAPTURE_TIMINGS, CAPTURE_STEPS) + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
   });
   it('every step has a real wait: no timing is zero', () => {
     for (const [k, v] of Object.entries(CAPTURE_TIMINGS)) expect(v, k).toBeGreaterThan(0);

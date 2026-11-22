@@ -117,7 +117,8 @@ fleet (the pull request says so).
   after it counts, comments included; fix round 1 shortened the reader arms' comment there and moved its residuals here.
   `ccd/install-session-hooks.sh` and the capture files are not growth-checked. `shared/api.ts` is untouched.
 - **Hand mutations**, each red, each restored from a saved copy, sha-checked equal: 20 in all, 19 killed (review 3317 F8
-  corrected the first count, 18 with 17 killed, which this note had given as 16 of 17).
+  corrected the first count, 18 with 17 killed, which this note had given as 16 of 17). Fix round 2 adds one more, killed:
+  21 in all, 20 killed.
   - In the hook, all killed:
     - `PostModelSwitch`'s exit dropped;
     - `PreModelSwitch` made to report;
@@ -150,6 +151,13 @@ fleet (the pull request says so).
     any other door tool.
   - `install-session-hooks`' registered-events case lists fourteen events.
   - `sim/launchProfileSets.ts`' pinned hook list gains the two events.
+  - Fix round 2 (the merge queue's `test (agent)`, red on one case): `testbox-capture-deadline`'s case "the target leaves
+    room for one more typed step than the drive has (door B2's step)" came to `main` with capture PR 3a (#3198), after this
+    branch was cut. It adds a `/model haiku` step to the drive; with B2's step already in the drive, that counted B2's step
+    twice (917000 ms against the 900000 ms deadline). The case now says the drive carries B2's step exactly once and still
+    fits: that step is what its room was kept for. It is not loosened: the fit is the same arithmetic over the drive as it now stands. Removing
+    the drive step turns it red (measured, restored from a saved copy, sha-checked). The file had no live claim. I claimed it
+    (6575) and absorbed `origin/HEAD` once, because the queue run was red on a test `main` passes.
 
 ## The review judge's `rules-mixed` (review 3317 F2)
 
