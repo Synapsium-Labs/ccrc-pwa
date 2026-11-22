@@ -275,22 +275,37 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     expect(calls).toStrictEqual([]);
   });
 
-  it('a report for a start that is not the newest settles nothing', async () => {
+  const HELD_OR_FAILED = [['held', {}], ['failed', { launchRc: 'on' }]] as const;
+
+  for (const [which, over] of HELD_OR_FAILED) {
+    it(`a ${which} report for a start older than one with its own stored report settles nothing (review 3346 F2)`, async () => {
+      app = await openOv();
+      await startOv(app, 'r-ov1-abcd');
+      await startOv(app, 'r-ov2-abcd', 'resume');
+      expect((await report(app, loads({}, 'r-ov2-abcd'))).act).toBe('none');
+      pend();
+      expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { start: { id: 2 }, report: { startId: 2 } } });
+      expect(await report(app, loads(over, 'r-ov1-abcd'))).toStrictEqual({ sessionId: OV, startId: 1, act: 'none' });
+      expect(view().kind === 'not-designated' && view().row?.pending?.sessionId).toBe(OV);
+      expect(calls).toStrictEqual([]);
+    });
+
+    it(`another session's ${which} report settles nothing (review 3346 F10)`, async () => {
+      app = await openOv(); pend();
+      await startOv(app);
+      seedRow(home, ID, { uuid: UUID, project: 'overlord' });
+      await startAs(app, ID, UUID, 'r-pa1-abcd');
+      expect(await report(app, { ...loads(over, 'r-pa1-abcd'), fromId: ID, fromUuid: UUID }, ID)).toMatchObject({ sessionId: ID, act: 'none' });
+      expect(view().kind === 'not-designated' && view().row?.pending?.sessionId).toBe(OV);
+      expect(calls).toStrictEqual([]);
+    });
+  }
+
+  it('a report for an older start when the newest has no report yet is no-report, told apart from a stale start', async () => {
     app = await openOv(); pend();
     await startOv(app, 'r-ov1-abcd');
     await startOv(app, 'r-ov2-abcd', 'resume');
-    expect((await report(app, loads({ launchRc: 'on' }, 'r-ov1-abcd'))).act).toBe('none');
-    expect(view().kind === 'not-designated' && view().row?.pending?.sessionId).toBe(OV);
-    expect(calls).toStrictEqual([]);
-  });
-
-  it('another session\'s report settles nothing, held or not', async () => {
-    app = await openOv(); pend();
-    await startOv(app);
-    seedRow(home, ID, { uuid: UUID, project: 'overlord' });
-    await startAs(app, ID, UUID, 'r-pa1-abcd');
-    const other = (over: Record<string, unknown>) => ({ ...loads(over, 'r-pa1-abcd'), fromId: ID, fromUuid: UUID });
-    expect(await report(app, other({}), ID)).toMatchObject({ sessionId: ID, act: 'none' });
+    expect((await report(app, loads({ launchRc: 'on' }, 'r-ov1-abcd'))).act).toBe('no-report');
     expect(view().kind === 'not-designated' && view().row?.pending?.sessionId).toBe(OV);
     expect(calls).toStrictEqual([]);
   });
@@ -329,17 +344,19 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { carry: { kind: 'none' } } });
   });
 
-  // ── A re-run from the stored report (review 3325 F2, ruled in fix round 1). A 202 clears the hook's spool, so nothing resends
-  // an answered report; a settle lost after the answer is re-run by designation B's deadline sweep, which is not in this PR.
-  // These cases call the one settle path directly over the stored evidence, with the store's own writers and a recorded drain,
-  // so recovery is pinned at the function, not end to end.
+  // ── A re-run from the stored report (review 3325 F2, ruled in fix round 1; review 3346 F1-F3, F10, F11, F13). A 202 clears
+  // the hook's spool, so nothing resends an answered report; a settle lost after the answer is re-run by designation B's
+  // deadline sweep, which is not in this tree. These cases call the one settle path directly over the stored evidence, with
+  // the store's own writers or stub ports and a recorded drain, so recovery is pinned at the function, not end to end.
   describe('a re-run of the settle from the stored report (the sweep is designation B\'s)', () => {
-    let drained: string[];
+    let drained: [string, boolean][];
+    let wsAsked: number;
     const portOf = (over: Partial<SandboxSettlePort> = {}): SandboxSettlePort => ({
       serial: (fn) => fn(), expected: () => e, read: () => coord!.designationRead(),
       goLive: (id, g, at) => { const r = coord!.goLive(journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
       failPending: (id, at) => coord!.failPending(id, 'overlord-sandbox-unmet', at, true),
-      drain: async (id) => { drained.push(id); }, workspaceOf: async () => ({ kind: 'measured', project: 'overlord' }), ...over,
+      drain: async (id, unrecorded) => { drained.push([id, unrecorded]); },
+      workspaceOf: async () => { wsAsked += 1; return { kind: 'measured', project: 'overlord' }; }, ...over,
     });
     const rerun = (id = OV, startId = 1, port = portOf()) => settleLoads(port, coord!, id, startId, () => FAKE_T0);
     /** The server with no settle wired: the loads door answers 202 and records, and no settle runs (one lost after the answer). */
@@ -353,13 +370,18 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       await r.app.ready();
       return r.app;
     };
+    /** Stores a loads body through the door: a 202, and nothing settled (review 3346 F11). */
+    const store = async (a: FastifyInstance, body: unknown, id = OV): Promise<void> => {
+      const r = await post(a, body, id);
+      expect(r.statusCode, r.body).toBe(202);
+    };
     const pendingId = () => { const d = view(); return d.kind === 'not-designated' ? d.row?.pending?.sessionId ?? null : null; };
-    beforeEach(() => { drained = []; });
+    beforeEach(() => { drained = []; wsAsked = 0; });
 
     it('an accepted report survives a lost settle without a resend; the re-run goes live once, and a duplicate does nothing', async () => {
       app = await openLost(); pend();
       await startOv(app);
-      expect((await post(app, loads(), OV)).statusCode).toBe(202);
+      await store(app, loads());
       expect(pendingId()).toBe(OV);
       expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { start: { id: 1 }, report: { startId: 1 } } });
       expect(await rerun()).toStrictEqual({ sessionId: OV, startId: 1, act: 'go-live' });
@@ -373,42 +395,45 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     it('a stored failed report takes the same fail-pending and drain on the re-run, once', async () => {
       app = await openLost(); pend();
       await startOv(app);
-      await post(app, loads({ launchRc: 'on' }), OV);
+      await store(app, loads({ launchRc: 'on' }));
       expect(await rerun()).toMatchObject({ act: 'fail-pending' });
       expect(view().kind === 'not-designated' && view().row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
-      expect(drained).toStrictEqual([OV]);
+      expect(drained).toStrictEqual([[OV, false]]);
       expect(await rerun()).toMatchObject({ act: 'none' });
-      expect(drained).toStrictEqual([OV]);
+      expect(drained).toStrictEqual([[OV, false]]);
     });
 
-    it('a stale start, a newest start with no report yet, and another session\'s report decide nothing', async () => {
-      app = await openLost(); pend();
-      await startOv(app, 'r-ov1-abcd');
-      await post(app, loads(), OV);
-      await startOv(app, 'r-ov2-abcd', 'resume');
-      expect(await rerun(OV, 1)).toMatchObject({ act: 'none' });
-      expect(await rerun(OV, 2)).toMatchObject({ act: 'none' });
-      seedRow(home, ID, { uuid: UUID, project: 'overlord' });
-      await startAs(app, ID, UUID, 'r-pa1-abcd');
-      await post(app, { ...loads({}, 'r-pa1-abcd'), fromId: ID, fromUuid: UUID }, ID);
-      expect(await rerun(ID, 3)).toMatchObject({ sessionId: ID, act: 'none' });
-      expect(pendingId()).toBe(OV);
-      expect(drained).toStrictEqual([]);
-    });
+    for (const [which, over] of HELD_OR_FAILED) {
+      it(`a stale start whose newer start has its own ${which} report decides nothing; a newest start with no report is no-report`, async () => {
+        app = await openLost(); pend();
+        await startOv(app, 'r-ov1-abcd');
+        await store(app, loads(over));
+        await startOv(app, 'r-ov2-abcd', 'resume');
+        expect(await rerun(OV, 2)).toMatchObject({ act: 'no-report' });
+        await store(app, loads(over, 'r-ov2-abcd'));
+        expect(await rerun(OV, 1)).toMatchObject({ act: 'none' });
+        expect(pendingId()).toBe(OV);
+        expect(drained).toStrictEqual([]);
+      });
 
-    it('a start of another generation decides nothing, held or not', async () => {
-      app = await openLost(); pend();
-      await startAs(app, OV, OV_UUID, 'r-ov1-abcd', 'startup', '0189abcd-1234-5678-9abc-0123456789ff');
-      await post(app, loads(), OV);
-      expect(await rerun()).toMatchObject({ act: 'none' });
-      expect(pendingId()).toBe(OV);
-      expect(drained).toStrictEqual([]);
-    });
+      it(`another session's ${which} report, and a ${which} report of another generation, decide nothing`, async () => {
+        app = await openLost(); pend();
+        seedRow(home, ID, { uuid: UUID, project: 'overlord' });
+        await startAs(app, ID, UUID, 'r-pa1-abcd');
+        await store(app, { ...loads(over, 'r-pa1-abcd'), fromId: ID, fromUuid: UUID }, ID);
+        expect(await rerun(ID, 1)).toMatchObject({ sessionId: ID, act: 'none' });
+        await startAs(app, OV, OV_UUID, 'r-ov1-abcd', 'startup', '0189abcd-1234-5678-9abc-0123456789ff');
+        await store(app, loads(over));
+        expect(await rerun(OV, 2)).toMatchObject({ act: 'none' });
+        expect(pendingId()).toBe(OV);
+        expect(drained).toStrictEqual([]);
+      });
+    }
 
     it('missing or unmeasured facts never go live: an unreadable read is unread, an unmeasured workspace fails the attempt', async () => {
       app = await openLost(); pend();
       await startOv(app);
-      await post(app, loads(), OV);
+      await store(app, loads());
       expect(await rerun(OV, 1, portOf({ read: () => ({ kind: 'unmeasured', why: 'locked' }) }))).toMatchObject({ act: 'unread' });
       expect(await rerun(OV, 1, portOf({ expected: () => null }))).toMatchObject({ act: 'unread' });
       const noRead = { startLoadsOfNewestStart: () => ({ ok: false, detail: 'locked' }) } as unknown as CoordStore;
@@ -416,7 +441,116 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       expect(pendingId()).toBe(OV);
       expect(await rerun(OV, 1, portOf({ workspaceOf: async () => ({ kind: 'unmeasured', reason: 'registry' }) }))).toMatchObject({ act: 'fail-pending' });
       expect(view().kind).toBe('not-designated');
-      expect(drained).toStrictEqual([OV]);
+      expect(drained).toStrictEqual([[OV, false]]);
+    });
+
+    // ── review 3346 F1: a failed check whose record cannot be written still stops the measured body, unrecorded ──────────
+    describe('a failed check whose record is refused, throws or is a no-op (review 3346 F1)', () => {
+      const failing = async (): Promise<void> => {
+        app = await openLost(); pend();
+        seedRow(home, ID, { uuid: UUID, project: 'overlord' });
+        await startOv(app);
+        await store(app, loads({ launchRc: 'on' }));
+      };
+      let warn: ReturnType<typeof vi.spyOn>;
+      beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+      afterEach(() => { warn.mockRestore(); });
+      const warned = (frag: string) => warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes(frag));
+
+      it('a refused record stops exactly the attempted body through the drain as unrecorded, and says so', async () => {
+        await failing();
+        expect(await rerun(OV, 1, portOf({ failPending: () => ({ ok: false }) }))).toMatchObject({ act: 'fail-refused' });
+        expect(drained).toStrictEqual([[OV, true]]);
+        expect(pendingId()).toBe(OV);
+        expect(warned('could not be recorded; stopping it unrecorded')).toBe(true);
+      });
+
+      it('a record that throws stops exactly the attempted body, unrecorded, and is told apart from a refusal', async () => {
+        await failing();
+        expect(await rerun(OV, 1, portOf({ failPending: () => { throw new Error('database is locked'); } }))).toMatchObject({ act: 'fail-threw' });
+        expect(drained).toStrictEqual([[OV, true]]);
+        expect(warned('database is locked')).toBe(true);
+      });
+
+      it('a no-op record (no longer pending) stops nothing: changed:false alone never authorises a stop', async () => {
+        await failing();
+        expect(await rerun(OV, 1, portOf({ failPending: () => ({ ok: true, changed: false }) }))).toMatchObject({ act: 'fail-noop' });
+        expect(drained).toStrictEqual([]);
+      });
+
+      it('a recorded failure owes its stop and drains it as recorded', async () => {
+        await failing();
+        expect(await rerun()).toMatchObject({ act: 'fail-pending' });
+        expect(drained).toStrictEqual([[OV, false]]);
+      });
+
+      it('a drain that throws after a refused record is logged, and the settle reports it threw', async () => {
+        await failing();
+        const r = await rerun(OV, 1, portOf({ failPending: () => ({ ok: false }), drain: async () => { throw new Error('the drain fell over'); } }));
+        expect(r).toMatchObject({ act: 'threw' });
+        expect(warned('the drain fell over')).toBe(true);
+      });
+
+      it('negative controls: a held report, a stale start, another session and an unreadable designation never reach the write or the drain', async () => {
+        await failing();
+        let wrote = 0;
+        const counting = portOf({ failPending: () => { wrote += 1; return { ok: false }; } });
+        await startAs(app!, ID, UUID, 'r-pa1-abcd');
+        await store(app!, { ...loads({ launchRc: 'on' }, 'r-pa1-abcd'), fromId: ID, fromUuid: UUID }, ID);
+        expect(await rerun(ID, 2, counting)).toMatchObject({ act: 'none' });
+        expect(await rerun(OV, 9, counting)).toMatchObject({ act: 'none' });
+        expect(await rerun(OV, 1, portOf({ failPending: counting.failPending, read: () => ({ kind: 'unmeasured', why: 'x' }) }))).toMatchObject({ act: 'unread' });
+        expect(wrote).toBe(0);
+        expect(drained).toStrictEqual([]);
+      });
+    });
+
+    // ── review 3346 F3: evidence that changes during the registry read is obsolete ──────────────────────────────────────
+    it('a newer start with its report landing during the registry read leaves the obsolete snapshot unsettled', async () => {
+      app = await openLost(); pend();
+      await startOv(app);
+      await store(app, loads({ launchRc: 'on' }));
+      const r = await rerun(OV, 1, portOf({ workspaceOf: async () => {
+        await startOv(app!, 'r-ov2-abcd', 'resume');
+        await store(app!, loads({}, 'r-ov2-abcd'));
+        return { kind: 'measured', project: 'overlord' };
+      } }));
+      expect(r).toMatchObject({ act: 'stale' });
+      expect(pendingId()).toBe(OV);
+      expect(drained).toStrictEqual([]);
+    });
+
+    it('a second, different body for the same start landing during the registry read leaves it unsettled', async () => {
+      app = await openLost(); pend();
+      await startOv(app);
+      await store(app, loads());
+      const r = await rerun(OV, 1, portOf({ workspaceOf: async () => {
+        await store(app!, loads({ launchRc: 'on' }));
+        return { kind: 'measured', project: 'overlord' };
+      } }));
+      expect(r).toMatchObject({ act: 'stale' });
+      expect(pendingId()).toBe(OV);
+      expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { report: { conflicted: true } } });
+    });
+
+    // ── review 3346 F13: the settle runs on the serialiser it is handed ─────────────────────────────────────────────────
+    it('the settle waits on its serialiser: a step already holding it runs first, and the settle reads nothing until it ends', async () => {
+      app = await openLost(); pend();
+      await startOv(app);
+      await store(app, loads());
+      let tail: Promise<unknown> = Promise.resolve();
+      const serial = <T,>(fn: () => Promise<T>): Promise<T> => { const r = tail.then(fn); tail = r.then(() => undefined, () => undefined); return r; };
+      let release!: () => void;
+      const order: string[] = [];
+      void serial(() => new Promise<void>((res) => { release = () => { order.push('holder'); res(); }; }));
+      const p = rerun(OV, 1, portOf({ serial, read: () => { order.push('settle-read'); return coord!.designationRead(); } }));
+      await new Promise((res) => setImmediate(res));
+      expect(order).toStrictEqual([]);
+      expect(wsAsked).toBe(0);
+      release();
+      expect(await p).toMatchObject({ act: 'go-live' });
+      expect(order[0]).toBe('holder');
+      expect(order.slice(1).every((x) => x === 'settle-read')).toBe(true);
     });
   });
 });

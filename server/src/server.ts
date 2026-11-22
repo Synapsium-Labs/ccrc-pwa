@@ -2277,7 +2277,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       expected: () => expectedSurfaceOf('overlord', deps.overlordSandbox?.ownLists), settled: deps.overlordSandbox?.settled,
       goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
       failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
-      drain: async (id) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id]); },
+      drain: async (id, unrecorded) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id], new Set(unrecorded ? [id] : [])); },
       workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } },
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     entropy: { hex: (n) => deps.time.entropy.hex(n) },

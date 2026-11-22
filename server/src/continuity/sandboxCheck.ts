@@ -221,6 +221,19 @@ export function sandboxSettle(designation: DesignationRead, reportStartId: numbe
   return { kind: 'fail-pending', sessionId: p.sessionId, properties: verdict.properties.filter((x) => x.state !== 'held') };
 }
 
+/** What a settle read before its registry await: the designation and the session's newest start with its report and carry. */
+export interface SettleEvidence {
+  readonly designation: DesignationRead;
+  readonly newest: { readonly start: StartRow; readonly report: StartLoadsRow | null; readonly carry: CarryFact } | null;
+}
+
+/** Whether the evidence a settle read still stands after its registry await (review 3346 F3): the same newest start, the same
+ *  stored report and carry, and the same designation. The start and loads doors write outside the coordination serialiser,
+ *  so a newer start or a second body can land during that await; a settle on the obsolete snapshot then decides nothing. */
+export function settleEvidenceStands(before: SettleEvidence, after: SettleEvidence): boolean {
+  return JSON.stringify(before.newest) === JSON.stringify(after.newest) && JSON.stringify(before.designation) === JSON.stringify(after.designation);
+}
+
 /** The facts the skew notice reads: the designated or pending Overlord body, whether it runs, whether its route carries
  *  `profiledigest`, the build agreement and both builds, and the pairs already noticed. */
 export interface SkewFacts {

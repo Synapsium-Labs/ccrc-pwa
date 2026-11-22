@@ -405,6 +405,18 @@ describe('the skew notice in the lane pass (W1 sandbox B)', () => {
     expect(s.raised[0]).toMatchObject({ id: OV, key: `${OV}:v0.9.1:v0.9.2` });
     expect(s.raised[0]!.body).toContain('v0.9.1');
     expect(s.raised[0]!.body).toContain('v0.9.2');
+    expect(s.raised[0]!.body).toContain('can keep it from respawning');
+    expect(s.raised[0]!.body).not.toMatch(/refused|stays down/);
+  });
+  it('a pending attempt is not judged, dead or not: the notice is the designated body\'s alone (the plan; review 3346 F5)', async () => {
+    const pending = { kind: 'not-designated', row: { ...VIEW, bound: null,
+      pending: { sessionId: OV, kind: 'designate', deadlineAt: 9e12, since: 1, actor: 'op', generation: 'g1' } } } as unknown as DesignationRead;
+    const s = skewed({ designation: pending });
+    await profilePass(s.deps, s.rows);
+    expect(s.raised).toEqual([]);
+    const control = skewed();
+    await profilePass(control.deps, control.rows);
+    expect(control.raised).toHaveLength(1);
   });
   it('a running or unmeasured body, agreed builds, no digest and no designation raise none', async () => {
     for (const over of [{ running: true }, { running: 'unmeasured' as const }, { builds: 'agreed' as const }, { digest: false },

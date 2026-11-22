@@ -39,7 +39,7 @@ import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
 import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, READ_LEDGER_WRITTEN, bookOf, gradeAnswers, ledgerFactsOf, maskedQuestion, probePages, type LastRead, type ReadLedgerCount } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
-import { sandboxSettle, sandboxVerdict, type ExpectedSurface, type WorkspaceFact } from './sandboxCheck.js';
+import { sandboxSettle, sandboxVerdict, settleEvidenceStands, type ExpectedSurface, type WorkspaceFact } from './sandboxCheck.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import {
   NOTE_LIST_LIMIT, handoverAsked, handoverVerdict, noteKeyFact, noteListBytes, notesPage, noteVerdict, revisedNoteFact, type NoteInput,
@@ -79,20 +79,26 @@ export interface SandboxSettlePort {
   goLive(sessionId: string, generation: string, at: number): { readonly ok: boolean; readonly detail?: string };
   /** The pending attempt ends `overlord-sandbox-unmet`, its stop owed; `changed` is false when it was no longer pending. */
   failPending(sessionId: string, at: number): { readonly ok: boolean; readonly changed?: boolean };
-  /** Stops the failed body (the drain): never throws. */
-  drain(sessionId: string): Promise<void>;
+  /** Stops the failed body (the designation's one drain): never throws. `unrecorded` when no row owes the stop (the failure
+   *  could not be recorded), so the drain logs it as the residual it is and never claims a stop debt (review 3346 F1). */
+  drain(sessionId: string, unrecorded: boolean): Promise<void>;
   /** The session's registry project, measured or not (`registry.ts#measuredProjectOf`). */
   workspaceOf(sessionId: string): Promise<WorkspaceFact>;
   /** Told what each settle did, once it is done; absent in production. A test's completion signal (review 3325 F6). */
   settled?(outcome: SettleOutcome): void;
 }
 
-/** What one settle did: the act it decided (`none` included, so a negative is seen evaluated), `unread` when the designation
- *  or the newest start could not be read, `refused` when go-live was refused, `threw` when a step threw. */
+/** What one settle did (review 3325 F6, review 3346 F1 and F2): the act it decided, `none` included, so a negative is seen
+ *  evaluated. `none` is the decider's (a stale start, another session or generation, no pending designate); `no-report` a
+ *  newest start with no stored report; `stale` evidence that changed during the registry read; `unread` a designation or
+ *  newest start that could not be read; `refused` a go-live the store refused. A failed check is `fail-pending` (recorded,
+ *  its owed stop drained), `fail-refused` or `fail-threw` (the record was refused or threw: the body is stopped through the
+ *  drain as unrecorded, no stop owed), or `fail-noop` (no longer pending: nothing stopped). `threw` a step that threw. */
 export interface SettleOutcome {
   readonly sessionId: string;
   readonly startId: number;
-  readonly act: 'none' | 'go-live' | 'fail-pending' | 'unread' | 'refused' | 'threw';
+  readonly act: 'none' | 'no-report' | 'stale' | 'go-live' | 'fail-pending' | 'fail-refused' | 'fail-threw' | 'fail-noop' | 'unread'
+    | 'refused' | 'threw';
 }
 
 export interface ContinuityRouteDeps {
@@ -360,8 +366,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     // THE SETTLE STEP (Task 9): after the write, on every accepted body. It runs after the answer, on the serialiser, so the
     // hook's send budget never waits on the stop; it decides nothing here: `sandboxVerdict` and `sandboxSettle` do. A 202
     // clears the hook's spool, so nothing resends an answered report (review 3325 F2): a settle lost after the answer (a
-    // restart, a throw, a refused go-live) leaves the attempt pending until the designation's reconciliation re-runs this
-    // function from the stored report.
+    // restart, a throw, a refused go-live) leaves the attempt pending. Nothing in this tree re-runs it: designation B's deadline
+    // sweep, not built yet, is to re-run `settleLoads` from the stored report (ruled in fix round 1).
     if (deps.settle !== undefined) void settleLoads(deps.settle, coord, id, r.startId, deps.wall);
     return reply.code(202).send({ ok: true, startId: r.startId, fresh: r.fresh });
   });
@@ -1186,8 +1192,12 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
   if (newest.newest === null) return 'none';
   const n = newest.newest;
   // A newest start with no stored report has nothing to settle: a re-run before its report lands decides nothing (review 3325 F2).
-  if (n.report === null) return 'none';
-  const verdict = sandboxVerdict(expected, n.report, await port.workspaceOf(id), n.carry);
+  if (n.report === null) return 'no-report';
+  const workspace = await port.workspaceOf(id);
+  // The start and loads doors write outside the serialiser: evidence that changed during that await is obsolete (review 3346 F3).
+  const after = coord.startLoadsOfNewestStart(id);
+  if (!after.ok || !settleEvidenceStands({ designation: read, newest: n }, { designation: port.read(), newest: after.newest })) return 'stale';
+  const verdict = sandboxVerdict(expected, n.report, workspace, n.carry);
   const act = sandboxSettle(read, startId, n.start, verdict);
   if (act.kind === 'go-live') {
     const g = port.goLive(act.sessionId, act.generation, wall());
@@ -1197,9 +1207,24 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
   }
   if (act.kind === 'fail-pending') {
     console.warn(`ccrc-server: the sandbox check failed for ${act.sessionId} (${act.properties.map((p) => `${p.property}: ${p.detail}`).join('; ')}); stopping it`);
-    const f = port.failPending(act.sessionId, wall());
-    if (f.ok && f.changed !== false) await port.drain(act.sessionId);
-    else if (!f.ok) console.warn(`ccrc-server: the failed attempt of ${act.sessionId} could not be recorded`);
+    // The attempt's identity is the one `sandboxSettle` measured (the pending session, its generation, the newest start). A
+    // record that is refused or throws still stops that body, as the designate door does, through the drain as unrecorded
+    // (review 3346 F1); `changed: false` alone (no longer pending) stops nothing.
+    let f: ReturnType<SandboxSettlePort['failPending']>;
+    try {
+      f = port.failPending(act.sessionId, wall());
+    } catch (e) {
+      console.warn(`ccrc-server: the failed attempt of ${act.sessionId} could not be recorded (it threw: ${e instanceof Error ? e.message : String(e)}); stopping it unrecorded`);
+      await port.drain(act.sessionId, true);
+      return 'fail-threw';
+    }
+    if (!f.ok) {
+      console.warn(`ccrc-server: the failed attempt of ${act.sessionId} could not be recorded; stopping it unrecorded`);
+      await port.drain(act.sessionId, true);
+      return 'fail-refused';
+    }
+    if (f.changed === false) return 'fail-noop';
+    await port.drain(act.sessionId, false);
     return 'fail-pending';
   }
   return 'none';
