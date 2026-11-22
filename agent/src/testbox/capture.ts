@@ -4,7 +4,7 @@
 //
 // - THE PATHS of one capture, all under `<CCRC_TESTBOX_ROOT>/captures/`: the build's bytes in `builds/<version>` (placed by
 //   the admin lane's copy, spec §2.2), and per capture a scratch directory with its home, config directory, tmux
-//   directory, work folder and recording. The build runs from the builds store directly; nothing is placed in the home.
+//   directory, temporary directory, work folder and recording. The build runs from the builds store directly; nothing is placed in the home.
 // - THE SEEDED CONFIG: onboarding done, the work folder trusted, every hook ccrc installs and the statusline pointed at
 //   the recorder.
 // - THE ENVIRONMENT, built from empty (the probe desk's rule): the stand-in model's address and a placeholder token, the
@@ -35,6 +35,8 @@ export interface CapturePaths {
   readonly home: string;
   readonly config: string;
   readonly tmux: string;
+  /** The build's `TMPDIR`: its temporary files stay inside the scratch directory the runner removes. */
+  readonly tmp: string;
   /** The folder the build starts in, trusted in the seeded config. */
   readonly work: string;
   /** `<work>/sub`: a PermissionRequest raised after the drive's `cd` must name it as its `cwd`. */
@@ -43,20 +45,32 @@ export interface CapturePaths {
   readonly recording: string;
 }
 
+/** `<root>/captures`: the builds store and every capture's scratch directory. */
+export const captureDirsRoot = (root: string): string => path.join(root, 'captures');
+
 /** The builds store, `<root>/captures/builds`. */
-export const captureBuildsDir = (root: string): string => path.join(root, 'captures', 'builds');
+export const captureBuildsDir = (root: string): string => path.join(captureDirsRoot(root), 'builds');
 
 export function capturePaths(root: string, captureId: string, build: string): CapturePaths {
-  const dir = path.join(root, 'captures', captureId);
+  const dir = path.join(captureDirsRoot(root), captureId);
   const work = path.join(dir, 'work');
   return {
     buildFile: path.join(captureBuildsDir(root), build), dir, home: path.join(dir, 'home'), config: path.join(dir, 'config'),
-    tmux: path.join(dir, 'tmux'), work, cdDir: path.join(work, CAPTURE_CD_DIR), recording: path.join(dir, 'recording.jsonl'),
+    tmux: path.join(dir, 'tmux'), tmp: path.join(dir, 'tmp'), work, cdDir: path.join(work, CAPTURE_CD_DIR), recording: path.join(dir, 'recording.jsonl'),
   };
 }
 
 /** Every path the runner writes, for the write guard (`probes.ts#writeRefusal`). */
-export const captureWrites = (p: CapturePaths): readonly string[] => [p.dir, p.home, p.config, p.tmux, p.work, p.cdDir, p.recording];
+export const captureWrites = (p: CapturePaths): readonly string[] => [p.dir, p.home, p.config, p.tmux, p.tmp, p.work, p.cdDir, p.recording];
+
+/** The 32 lowercase hex characters of a capture id: the grammar of `shared/claudeBuildCapture.ts#CaptureSubmit`'s
+ *  `captureId`, which the frame reader holds in `shared/testbox.ts` (not exported there). */
+const CAPTURE_ID = /^[0-9a-f]{32}$/;
+
+/** Which entries of `<root>/captures/` are stale capture directories at the service's start: a capture id, never the
+ *  builds store or any other name. The runner removes its own directory at the end, so one found at start is the
+ *  leftover of a service that died mid-capture. The act (the removals) is `main.ts#sweepStaleCaptures`'s. */
+export const staleCaptureDirs = (names: readonly string[]): string[] => names.filter((n) => CAPTURE_ID.test(n));
 
 // ── the seeded config ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -94,7 +108,7 @@ export function captureEnv(p: CapturePaths, standInPort: number, toolsPath: stri
   return [
     ['PATH', toolsPath === null || toolsPath === '' ? SYSTEM_PATH : `${toolsPath}:${SYSTEM_PATH}`],
     ['LANG', 'C.UTF-8'], ['TERM', 'xterm-256color'], ['HOME', p.home], ['CLAUDE_CONFIG_DIR', p.config],
-    ['TMUX_TMPDIR', p.tmux], ['ANTHROPIC_BASE_URL', `http://127.0.0.1:${standInPort}`], ['ANTHROPIC_AUTH_TOKEN', CAPTURE_TOKEN],
+    ['TMUX_TMPDIR', p.tmux], ['TMPDIR', p.tmp], ['ANTHROPIC_BASE_URL', `http://127.0.0.1:${standInPort}`], ['ANTHROPIC_AUTH_TOKEN', CAPTURE_TOKEN],
     ['DISABLE_AUTOUPDATER', '1'], ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '1'], ['CCRC_CAPTURE_RECORDING', p.recording],
   ];
 }

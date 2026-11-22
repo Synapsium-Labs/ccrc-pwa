@@ -48,12 +48,13 @@ export class CaptureDesk {
 
   constructor(private readonly d: CaptureDeskDeps) {}
 
-  /** Why the desk takes no capture of `f` now, in order: the role, the runner, the build's bytes, the write guard. */
+  /** Why the desk takes no capture of `f` now, in order: the role, the build's bytes, the runner, the write guard. The build comes before the runner on purpose: a box with no runner
+   *  yet still answers `build-absent` for a build it does not hold, which is what makes the server copy the build there. */
   private standing(f: CaptureSubmit): CaptureRefusal | null {
     if (this.d.role !== 'test-box') return 'not-test-box';
-    if (this.d.runner === null) return 'no-runner';
     const paths = capturePaths(this.d.root, f.captureId, f.build);
     if (!this.d.buildPresent(paths.buildFile)) return 'build-absent';
+    if (this.d.runner === null) return 'no-runner';
     const fleet = this.d.fleetDirs().map((x) => this.d.realPath(x));
     // Every path the capture writes passes the probe desk's write guard, judged as it leads.
     return captureWrites(paths).map((p) => writeRefusal(this.d.realPath(p), fleet)).some((r) => r !== null) ? 'path-refused' : null;
