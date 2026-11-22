@@ -132,7 +132,8 @@ describe('replayCapture: ONE write carries its cwd, its allow and its completion
     goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === 'PermissionRequest' ? [...prompts, ...extra] : [r]));
   const replace = (event: string, to: readonly CaptureRecord[]): CaptureRecord[] =>
     goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === event ? to : [r]));
-  const CD_ALLOWED: CaptureRecord = { ...hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'cd sub' }, cwd: CD }), answer: 'allow' };
+  /** A prompt for another Bash command, raised in the `cd` directory and answered `allow`. */
+  const CD_ALLOWED = writeAsked({ tool_input: { command: 'cd sub' } });
   const TIED = 'approval: the write that ran cannot be tied to its prompt\'s tool call (tool_use_id)';
 
   it('an allow on an unrelated prompt does not stand for the write\'s missing answer', () => {
