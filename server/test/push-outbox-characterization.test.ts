@@ -57,7 +57,7 @@ import type { LandingAdvance } from '../src/coord/landingEntry.js';
 import { DRIFT_PUSH_LIVE_MARKER } from '../../shared/switches.js';
 import { FLEET_SCOPE, type FleetSession, type NodeRole, type UpdateChannel } from '../../shared/api.js';
 import { PR_STATE_PR_CAP } from '../src/ccdargv.js';
-import type { BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_FAIL_CEILING, captureRetryAfterMs, type BuildCaptureJob } from '../../shared/claudeBuildTrust.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { quietAtTestEnd } from './laneQuiet.js';
@@ -306,7 +306,7 @@ const DISK_WARN: PushPayload = {
   sessionId: '', tag: 'disk',
 };
 
-// ── #20 BuildCaptureLane.raiseFailure ──────────────────────────────────────────────────────────────────────────────
+// ── #20 BuildCaptureLane.raiseGivenUp ──────────────────────────────────────────────────────────────────────────────
 
 const failCapture = (job: BuildCaptureJob): BuildCaptureAnswer =>
   ({ kind: 'answered', result: { build: job.build, pass: false, cwd: true, output: 'replay: 1 failed' } });
@@ -317,14 +317,20 @@ const captureSite = async (e: Env): Promise<Record<string, number>> => {
   await notifyLog.load();
   const transport: BuildCaptureTransport = { capture: async (job) => failCapture(job) };
   const deps = installPush({ coord, notifyLog, viewers: e.viewers, buildCapture: transport, time: testDeps(home).time }, e.seam);
-  const lane = new BuildCaptureLane(() => deps as never, () => 1_000_000_000_000);
-  await lane.sweep(['2.1.321']);
+  // A failure ccrc captures again pushes nothing, so the build fails the ceiling's count of times, each retry at its spacing.
+  let now = 1_000_000_000_000;
+  const lane = new BuildCaptureLane(() => deps as never, () => now);
+  for (let fails = 1; fails <= BUILD_CAPTURE_FAIL_CEILING; fails += 1) {
+    await lane.sweep(['2.1.321']);
+    now += captureRetryAfterMs(fails);
+  }
   return {};
 };
 const CAPTURE: PushPayload = {
-  title: 'Claude Code 2.1.321 failed its capture',
-  body: 'The replay tests failed on the test box, so 2.1.321 stays untrusted and children on it are refused approvals. '
-    + 'Settings › Automation › Test box shows the output (its last 8192 characters) and Capture again.',
+  title: 'Claude Code 2.1.321 failed its capture 3 times',
+  body: 'The replay tests failed on the test box each time, so ccrc has stopped capturing 2.1.321 by itself, and nothing is '
+    + 'allowed through ccrc for a child on it. Settings › Automation › Test box shows the output (its last 8192 characters) '
+    + 'and Capture again.',
   sessionId: '', tag: 'claude-build-capture', url: '/settings',
 };
 
@@ -1063,7 +1069,7 @@ const SITES: Site[] = [
   { n: '19', row: true, name: 'DiskAlarmLane.raiseNotice (coord, push)',
     drive: async (e) => { const r = await diskRig(e, [reading(40), reading(40), reading(86), reading(86)]); for (let i = 0; i < 4; i += 1) await r.sweep(); return {}; },
     sent: () => [DISK_WARN], sentVisible: () => [DISK_WARN] },
-  { n: '20', row: true, name: 'BuildCaptureLane.raiseFailure (coord, push)', drive: captureSite, sent: () => [CAPTURE], sentVisible: () => [CAPTURE] },
+  { n: '20', row: true, name: 'BuildCaptureLane.raiseGivenUp (coord, push)', drive: captureSite, sent: () => [CAPTURE], sentVisible: () => [CAPTURE] },
   { n: '21a', row: true, name: 'pushBlocking from the raise route (neededBy blocking)',
     drive: async (e) => { const r = await ledgerRig(e); e.coord = r.coord; return { item: await itemRaise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA }) }; },
     sent: (i) => [waitingPayload(i['item']!)], sentVisible: (i) => [waitingPayload(i['item']!)] },

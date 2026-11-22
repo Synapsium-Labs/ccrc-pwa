@@ -98,8 +98,9 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
     const { res } = await ask(f);
     expect(res.statusCode).toBe(201);
     const id = (res.json() as { id: number }).id;
-    const row = (): NonNullable<Extract<ReturnType<typeof f.coord.approvalById>, { ok: true }>['row']> => {
-      const r = f!.coord.approvalById(id);
+    const coord = f.coord;
+    const row = (): NonNullable<Extract<ReturnType<typeof coord.approvalById>, { ok: true }>['row']> => {
+      const r = coord.approvalById(id);
       if (!r.ok || r.row === null) throw new Error('the row could not be read');
       return r.row;
     };
