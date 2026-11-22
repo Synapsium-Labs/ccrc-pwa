@@ -276,9 +276,10 @@ function pathWithoutTimeout(home: string, opts: { gtimeout: boolean }): string {
 }
 
 interface UsageRun { out: string; code: number }
-function runUsage(home: string, payload: string, opts: { tmux?: string; tmuxHangs?: boolean; pane?: boolean; cfgDir?: string; basePath?: string } = {}): UsageRun {
+function runUsage(home: string, payload: string, opts: { tmux?: string; tmuxHangs?: boolean; pane?: boolean; cfgDir?: string; basePath?: string; probe?: string } = {}): UsageRun {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
-  delete env['CLAUDE_CONFIG_DIR']; delete env['TMUX_PANE'];
+  delete env['CLAUDE_CONFIG_DIR']; delete env['TMUX_PANE']; delete env['CCRC_KEEPALIVE_PROBE'];
+  if (opts.probe !== undefined) env['CCRC_KEEPALIVE_PROBE'] = opts.probe;   // D-8943: the keepalive's marker
   env['CLAUDE_CONFIG_DIR'] = opts.cfgDir ?? path.join(home, '.zeta');
   if (opts.pane !== false) env['TMUX_PANE'] = '%3';
   const rest = opts.basePath ?? env['PATH'] ?? '';
@@ -935,6 +936,97 @@ describe('statusline-command.sh lets a reading that CHANGED lower the row (an ea
       expect(row).not.toHaveProperty('sevenResetFrom');
       expect(row).not.toHaveProperty('fiveResetFrom');
     });
+  });
+});
+
+// D-8943. AN ACCOUNT WITH NO SESSION ON IT. The proof of change above is a ccd
+// session's own history, and an account at the ceiling is the one every session
+// has left: nothing renders there, so nothing can show a change. The keepalive's
+// one-turn process is the only reader left, and it has no history. What it has
+// instead is that it was started a moment ago and made one API call, so the
+// figures it renders are that call's. It says so with `CCRC_KEEPALIVE_PROBE`,
+// the second it started the turn, and the writer takes that as the proof: only
+// from a render with NO ccd id, and only for ten minutes after that second.
+describe('statusline-command.sh takes a keepalive probe as a new reading (an early reset on an account with no session, D-8943)', () => {
+  const FIVE = 1_800_000_000; const SEVEN = 1_800_600_000;
+  const CEILING = { five: 10, seven: 100, ts: 1, fiveResetAt: FIVE, sevenResetAt: SEVEN };
+  const seedSessions = (prefix: string): string => {
+    const home = seed(prefix); mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); seedRow(home, CEILING);
+    return home;
+  };
+  const probe = (ago = 5): { probe: string } => ({ probe: String(nowS() - ago) });
+
+  it("the probe's lower reading lands, and the row marks the window it replaced", () => {
+    const home = seedSessions('ccrc-statusline-probe-');
+    runUsage(home, limitsPayload(1, 0), probe());
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 1, seven: 0, sevenResetAt: SEVEN, sevenResetFrom: SEVEN });
+  });
+
+  it('without the marker the same render is dropped, as before', () => {
+    const home = seedSessions('ccrc-statusline-probe-none-');
+    runUsage(home, limitsPayload(1, 0));
+    expect(limitsRow(home, 'zeta')).toEqual(CEILING);
+  });
+
+  it('a marker older than ten minutes, one dated ahead of now and one that is no number prove nothing', () => {
+    const home = seedSessions('ccrc-statusline-probe-stale-');
+    for (const p of [String(nowS() - 601), String(nowS() + 120), '1', 'yes', '']) runUsage(home, limitsPayload(1, 0), { probe: p });
+    expect(limitsRow(home, 'zeta')).toEqual(CEILING);
+  });
+
+  // The marker is the keepalive's. A ccd session is judged by its own history
+  // whatever its environment says: an idle session that inherited the variable
+  // would otherwise publish its old snapshot on every render.
+  it('inside a ccd session the marker is nothing: an idle snapshot is still dropped', () => {
+    const home = seedSessions('ccrc-statusline-probe-session-');
+    for (let i = 0; i < 2; i++) runUsage(home, limitsPayload(1, 0), { tmux: 'cc-zeta-proj', ...probe() });
+    expect(limitsRow(home, 'zeta')).toEqual(CEILING);
+  });
+
+  it('a live 5h figure is still not erased by a five-less probe', () => {
+    const row = { five: 97, seven: 63, ts: nowS() - 60, fiveResetAt: nowS() + 3600, sevenResetAt: SEVEN };
+    const home = seedSessions('ccrc-statusline-probe-livefive-'); seedRow(home, row);
+    runUsage(home, weeklyOnlyPayload(5), probe());
+    expect(limitsRow(home, 'zeta')).toEqual(row);
+  });
+});
+
+// D-8944. WHEN THE ROW WAS LOWERED. A limit wait in `ccd` ends early only on a
+// lowering that happened after the session was blocked, and the marks alone do
+// not say when: they ride along on every later publish. So the publish that
+// sets a mark stamps `resetSeen`, and it rides and ends with the marks.
+describe('statusline-command.sh dates the lowering of a row (resetSeen, D-8944)', () => {
+  const FIVE = 1_800_000_000; const SEVEN = 1_800_600_000;
+  const lowered = (prefix: string): string => {
+    const home = seed(prefix); mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    seedRow(home, { five: 10, seven: 100, ts: 1, fiveResetAt: FIVE, sevenResetAt: SEVEN });
+    runUsage(home, limitsPayload(10, 100), { tmux: 'cc-zeta-active' });
+    runUsage(home, limitsPayload(1, 0), { tmux: 'cc-zeta-active' });
+    return home;
+  };
+
+  it('the publish that lowers the row stamps resetSeen with its own second', () => {
+    const before = nowS();
+    const row = limitsRow(lowered('ccrc-statusline-seen-'), 'zeta') as { ts: number; resetSeen: number };
+    expect(row.resetSeen).toBeGreaterThanOrEqual(before);
+    expect(row.resetSeen).toBe(row.ts);
+  });
+
+  it('a later publish carries the stamp unchanged: it dates the lowering, not the row', () => {
+    const home = lowered('ccrc-statusline-seen-rides-');
+    seedRow(home, { ...(limitsRow(home, 'zeta') as Record<string, unknown>), ts: 1, resetSeen: 1_700_000_000 });
+    runUsage(home, limitsPayload(2, 1), { tmux: 'cc-zeta-active' });
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 2, seven: 1, sevenResetFrom: SEVEN, resetSeen: 1_700_000_000 });
+  });
+
+  it('it ends with the marks, and a row that was never lowered carries none', () => {
+    const home = lowered('ccrc-statusline-seen-ends-');
+    runUsage(home, limitsPayload(0, 0, FIVE + 18000, SEVEN + 604800), { tmux: 'cc-zeta-idle' });
+    expect(limitsRow(home, 'zeta')).not.toHaveProperty('resetSeen');
+    const plain = seed('ccrc-statusline-seen-plain-'); seedRow(plain, FRESH_ROW);
+    runUsage(plain, limitsPayload(50, 70));
+    expect(limitsRow(plain, 'zeta')).toMatchObject({ five: 50, seven: 70 });
+    expect(limitsRow(plain, 'zeta')).not.toHaveProperty('resetSeen');
   });
 });
 
