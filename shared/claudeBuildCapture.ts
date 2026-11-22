@@ -226,7 +226,8 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
   let versionSeen = false;
   let cwd = false;
   let writeAsked = false;
-  let allowedAt = -1;
+  // The recording is read in order, so a write's PostToolUse counts only when it comes after the allowed prompt.
+  let allowed = false;
   let writeRan = false;
   rec.records.forEach((r, i) => {
     const where = r.kind === 'hook' ? `#${i + 1} ${r.event}` : `#${i + 1} statusline`;
@@ -241,9 +242,9 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
       if (hookEventIs(r.event, 'PermissionRequest') && isWrite(r.payload)) {
         writeAsked = true;
         if (at(r.payload, 'cwd') === rec.cdDir) cwd = true;
-        if (r.answer === ALLOW && allowedAt < 0) allowedAt = i;
+        if (r.answer === ALLOW) allowed = true;
       }
-      if (hookEventIs(r.event, 'PostToolUse') && isWrite(r.payload) && allowedAt >= 0 && i > allowedAt) writeRan = true;
+      if (hookEventIs(r.event, 'PostToolUse') && isWrite(r.payload) && allowed) writeRan = true;
     } else {
       statuslines++;
       for (const b of ruleBreaks(r.payload, STATUSLINE_RULES)) lines.push(`${where}: ${b}`);
@@ -256,7 +257,7 @@ export function replayCapture(rec: CaptureRecording, build: string): BuildCaptur
   });
   for (const e of CAPTURE_EVENTS) if (!seen.has(e)) lines.push(`event ${e}: never recorded`);
   if (!writeAsked) lines.push('approval: the write raised no permission prompt');
-  else if (allowedAt < 0) lines.push("approval: the hook's allow answer to the write's prompt was not recorded");
+  else if (!allowed) lines.push("approval: the hook's allow answer to the write's prompt was not recorded");
   else if (!writeRan) lines.push('approval: the write never ran after the hook answered allow');
   if (statuslines === 0) lines.push('statusline: never recorded');
   if (statuses === 0) lines.push('status file: never recorded');
