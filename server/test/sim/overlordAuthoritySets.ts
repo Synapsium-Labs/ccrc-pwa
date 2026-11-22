@@ -374,6 +374,8 @@ export const WITNESS_VERDICT_KEY = 'server/src/coord/overlordAuthorityWitness.ts
 export const OFF_VOLUME_HELD_KEY = 'server/src/coord/overlordAuthorityWitness.ts#offVolumeHeld';
 export const WITNESS_KEEP_KEY = 'shared/authorityWitness.ts#witnessKeep';
 export const PARSE_WITNESS_TUPLE_KEY = 'shared/authorityWitness.ts#parseWitnessTuple';
+export const OFF_VOLUME_HOLDERS_KEY = 'server/src/coord/overlordAuthorityWitness.ts#offVolumeHolders';
+export const NARROWEST_TOLD_KEY = 'server/src/coord/overlordAuthorityWitness.ts#narrowestTold';
 
 const HEX = (c: string): string => c.repeat(64);
 const wview = (lastConfirm: WView['lastConfirm'] = null): WView => ({
@@ -567,6 +569,69 @@ export function offVolumeHeldCases(m: Pick<Witness, 'offVolumeHeld'>): Record<st
   };
 }
 
+type WSource = Parameters<Witness['offVolumeHolders']>[0][number];
+const wsource = (host: WSource['host'], verdict: WSource['verdict'], tuple: WTuple | null): WSource => ({ host, verdict, tuple });
+
+export function offVolumeHoldersCases(m: Pick<Witness, 'offVolumeHolders'>): Record<string, SuiteCase> {
+  return {
+    'a consistent source at the server base holds its authority head sequence, with its host and boot': () => {
+      expect(m.offVolumeHolders([wsource('console', 'consistent', wtuple())], 0)).toEqual([{ host: 'console', boot: 'boot-old', epoch: 2 }]);
+      expect(m.offVolumeHolders([wsource('same-host', 'consistent', wtuple({ boot: 'boot-now' }))], 0))
+        .toEqual([{ host: 'same-host', boot: 'boot-now', epoch: 2 }]);
+    },
+    'a source with no authority head holds sequence 0': () => {
+      expect(m.offVolumeHolders([wsource('console', 'consistent', wtuple({ authority: null }))], 0)).toEqual([{ host: 'console', boot: 'boot-old', epoch: 0 }]);
+    },
+    'a source whose last verdict was not consistent, or that holds no tuple, holds nothing': () => {
+      for (const v of ['stale', 'rolled-back', 'no-witness', 'unmeasured'] as const) expect(m.offVolumeHolders([wsource('console', v, wtuple())], 0)).toEqual([]);
+      expect(m.offVolumeHolders([wsource('console', 'consistent', null)], 0)).toEqual([]);
+    },
+    'a source on another base holds nothing': () => {
+      expect(m.offVolumeHolders([wsource('console', 'consistent', wtuple({ base: 3, epoch: 5 }))], 0)).toEqual([]);
+      expect(m.offVolumeHolders([wsource('console', 'consistent', wtuple())], 3)).toEqual([]);
+    },
+    'every qualifying source is kept, in order': () => {
+      const t3 = wtuple({ authority: { sequence: 3, digest: HEX('3') }, terms: { authority: 3, privacy: 'absent', act: 'absent' }, epoch: 3 });
+      expect(m.offVolumeHolders([wsource('console', 'consistent', wtuple()), wsource('other-host', 'stale', t3), wsource('other-host', 'consistent', t3)], 0))
+        .toEqual([{ host: 'console', boot: 'boot-old', epoch: 2 }, { host: 'other-host', boot: 'boot-old', epoch: 3 }]);
+    },
+  };
+}
+
+export function narrowestToldCases(m: Pick<Witness, 'narrowestTold'>): Record<string, SuiteCase> {
+  const told = (operatorRung: WTuple['told']['operatorRung'], latches: WTuple['told']['latches'] = []) => wtuple({ told: { operatorRung, latches } });
+  return {
+    'no counting source answers null': () => {
+      expect(m.narrowestTold([])).toBeNull();
+      expect(m.narrowestTold([wsource('same-host', 'consistent', told('chat'))])).toBeNull();
+      expect(m.narrowestTold([wsource('unmeasured', 'consistent', told('chat'))])).toBeNull();
+      expect(m.narrowestTold([wsource('console', 'stale', told('chat'))])).toBeNull();
+      expect(m.narrowestTold([wsource('console', 'consistent', null)])).toBeNull();
+    },
+    'a counting source with nothing told answers an empty told, not null': () => {
+      expect(m.narrowestTold([wsource('console', 'consistent', told(null))])).toEqual({ operatorRung: null, latches: [] });
+    },
+    'the lowest operator rung wins, and a null rung never widens it': () => {
+      expect(m.narrowestTold([wsource('console', 'consistent', told('full')), wsource('other-host', 'consistent', told('chat'))]))
+        .toEqual({ operatorRung: 'chat', latches: [] });
+      expect(m.narrowestTold([wsource('other-host', 'consistent', told('advise')), wsource('console', 'consistent', told(null))]))
+        .toEqual({ operatorRung: 'advise', latches: [] });
+      expect(m.narrowestTold([wsource('console', 'consistent', told(null)), wsource('console', 'consistent', told('off'))]))
+        .toEqual({ operatorRung: 'off', latches: [] });
+    },
+    'a non-counting source never narrows': () => {
+      expect(m.narrowestTold([wsource('console', 'consistent', told('full')), wsource('same-host', 'consistent', told('off', [{ cause: 'a-cause', cap: 'off' }]))]))
+        .toEqual({ operatorRung: 'full', latches: [] });
+    },
+    'latches are the union, each cause at its lowest cap, sorted by cause': () => {
+      expect(m.narrowestTold([
+        wsource('console', 'consistent', told(null, [{ cause: 'b-cause', cap: 'advise' }, { cause: 'c-cause', cap: 'chat' }])),
+        wsource('other-host', 'consistent', told(null, [{ cause: 'a-cause', cap: 'advise' }, { cause: 'b-cause', cap: 'chat' }, { cause: 'c-cause', cap: 'advise' }])),
+      ])).toEqual({ operatorRung: null, latches: [{ cause: 'a-cause', cap: 'advise' }, { cause: 'b-cause', cap: 'chat' }, { cause: 'c-cause', cap: 'chat' }] });
+    },
+  };
+}
+
 export function witnessKeepCases(m: Pick<WitnessL0, 'witnessKeep'>): Record<string, SuiteCase> {
   const at = (epoch: number, boot: string): WTuple => wtuple({ epoch, boot, terms: { authority: epoch, privacy: 'absent', act: 'absent' } });
   return {
@@ -739,11 +804,39 @@ const OFF_VOLUME_SET: MutantSet<Witness> = {
     { id: 'O5 another host does not count', old: "(h.host === 'other-host' || h.host === 'console')", new: "h.host === 'console'" },
     { id: 'O6 an equal epoch is not held', old: 'h.epoch >= epoch', new: 'h.epoch > epoch' },
     { id: 'O7 a lower epoch is held', old: 'h.epoch >= epoch', new: 'h.epoch >= epoch - 1' },
-    { id: 'O8 a holder from this boot is dropped', old: 'holders.some((h) =>', new: 'holders.filter((h) => h.boot !== _thisBoot).some((h) =>' },
     { id: 'O9 always held', old: "return held ? 'held' : 'not-yet';", new: "return 'held';" },
     { id: 'O10 never held', old: "return held ? 'held' : 'not-yet';", new: "return 'not-yet';" },
   ],
   suite: (mod) => offVolumeHeldCases(mod),
+};
+
+const HOLDERS_SET: MutantSet<Witness> = {
+  modulePath: WITNESS_TS,
+  mutants: [
+    { id: 'H1 any verdict holds', old: "if (s.verdict !== 'consistent' || s.tuple === null || s.tuple.base !== serverBase) continue;", new: "if (s.tuple === null || s.tuple.base !== serverBase) continue;" },
+    { id: 'H2 any base holds', old: "if (s.verdict !== 'consistent' || s.tuple === null || s.tuple.base !== serverBase) continue;", new: "if (s.verdict !== 'consistent' || s.tuple === null) continue;" },
+    { id: 'H3 the epoch in place of the authority sequence', old: 'epoch: s.tuple.authority?.sequence ?? 0', new: 'epoch: s.tuple.epoch' },
+    { id: 'H4 no head holds everything', old: 'epoch: s.tuple.authority?.sequence ?? 0', new: 'epoch: s.tuple.authority?.sequence ?? Number.MAX_SAFE_INTEGER' },
+    { id: 'H5 the host dropped', old: 'out.push({ host: s.host,', new: "out.push({ host: 'console' as const," },
+    { id: 'H6 nothing kept', old: 'out.push({', new: 'void ({' },
+  ],
+  suite: (mod) => offVolumeHoldersCases(mod),
+};
+
+const TOLD_SET: MutantSet<Witness> = {
+  modulePath: WITNESS_TS,
+  mutants: [
+    { id: 'T1 a same-host source counts', old: "if ((s.host !== 'other-host' && s.host !== 'console') || s.verdict !== 'consistent' || s.tuple === null) continue;", new: "if (s.verdict !== 'consistent' || s.tuple === null) continue;" },
+    { id: 'T2 any verdict counts', old: "if ((s.host !== 'other-host' && s.host !== 'console') || s.verdict !== 'consistent' || s.tuple === null) continue;", new: "if ((s.host !== 'other-host' && s.host !== 'console') || s.tuple === null) continue;" },
+    { id: 'T3 the highest rung wins', old: 'rank(t.operatorRung) < rank(rung)', new: 'rank(t.operatorRung) > rank(rung)' },
+    { id: 'T4 a null rung wins', old: 'if (t.operatorRung !== null && (rung === null || rank(t.operatorRung) < rank(rung))) rung = t.operatorRung;', new: 'if (t.operatorRung === null || rung === null || rank(t.operatorRung) < rank(rung)) rung = t.operatorRung;' },
+    { id: 'T5 the highest cap wins', old: 'rank(l.cap) < rank(had)', new: 'rank(l.cap) > rank(had)' },
+    { id: 'T6 the last cap wins', old: 'if (had === undefined || rank(l.cap) < rank(had)) caps.set', new: 'caps.set' },
+    { id: 'T7 unsorted', old: "const latches = [...caps].map(([cause, cap]) => ({ cause, cap })).sort((a, b) => (a.cause < b.cause ? -1 : a.cause > b.cause ? 1 : 0));\n  return { operatorRung: rung, latches };", new: "const latches = [...caps].map(([cause, cap]) => ({ cause, cap }));\n  return { operatorRung: rung, latches };" },
+    { id: 'T8 none counting answers an empty told', old: 'if (!any) return null;', new: '' },
+    { id: 'T9 a counting source with nothing told answers null', old: 'any = true;', new: '' },
+  ],
+  suite: (mod) => narrowestToldCases(mod),
 };
 
 const KEEP_SET: MutantSet<WitnessL0> = {
@@ -799,4 +892,6 @@ export const OVERLORD_AUTHORITY_MUTANT_SETS: Record<string, MutantSet<never>> = 
   [OFF_VOLUME_HELD_KEY]: OFF_VOLUME_SET as MutantSet<never>,
   [WITNESS_KEEP_KEY]: KEEP_SET as MutantSet<never>,
   [PARSE_WITNESS_TUPLE_KEY]: PARSE_SET as MutantSet<never>,
+  [OFF_VOLUME_HOLDERS_KEY]: HOLDERS_SET as MutantSet<never>,
+  [NARROWEST_TOLD_KEY]: TOLD_SET as MutantSet<never>,
 };
