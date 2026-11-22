@@ -85,9 +85,12 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
   by the packet the README's holding run approved; the ticket can close with the PR.
 - `w8-overlord-skill`: built by run 3251 (below). The Overlord skill's door table gains `link team`, and says what it does below `full`.
-- `w8-confirm-unmeasured`: the Overlord's confirm route answers `unavailable`, not `team-unknown`, when the pair cannot be
-  measured (a slot it cannot read, or no connected workspace), by the unmeasured-aware resolver `measuredProjectTeam` the
-  operator's write already uses. Found by review 3253 F1 on run 3251.
+- `w8-confirm-unmeasured`: the Overlord's confirm route answers `team-unknown` for an unreadable slot or no connected
+  workspace. The operator's write answers `team-unknown` there only when it names a workspace; with none named it stores the
+  key with no workspace. The fix: both answer `unavailable` when a slot they need cannot be read, and the operator is told
+  plainly when no workspace is connected. Found by review 3253 F1 on run 3251, corrected by reviews 3261 F1 and 3266 F4.
+- `w8-suggest-pair-last`: built by run 3264 (below). The client puts the pane's pair last on the linking suggest and
+  confirm doors and on the call record.
 - `w8-call-anchor`: built by run 3209 (below).
 - `w8-triage-l1`: built by run 3155 (below). It moved the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`)
   into `planPolicy.ts` beside `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It had stayed in the route because
@@ -309,3 +312,46 @@ Fix round 2 (review 3260, as the coordinator ruled):
 - A2: the rung pin is exact on the words' side too: no sentence that says the Overlord may confirm names a refused rung.
   Measured: appending "At `chat` or `advise` you may confirm too." turns it red.
 - A3: `w8-confirm-unmeasured` is carried above and in D-8808's follow-up list, as open.
+
+## Run 3264 (`w8-suggest-pair-last`): what was built
+
+Review 3245 A2 of #3174 measured it: on `linking.suggest` and `linking.confirm`, `ccd/ccrc-api` refused a body naming `byId`
+or `byUuid` by a text match, then spliced the pane's pair in FIRST with `splice_body_field`. A key the text match misses (a
+JSON escape such as `"by\u0049d"`) passed, and the server's JSON parse, which keeps the later of two duplicate keys, then
+kept the body's value, not the pane's. The `calls.record` door, whose rule the linking doors follow, had the same shape. The
+server still checks the registry's uuid for the named id, so this was defence in depth, not a measured spoof.
+
+- The three doors now call `append_body_field`, `byId` then `byUuid`, as the note, goals, probe and remaining-work doors do
+  (review 2039 F7), and their comments say why. The text refusal of a plain `byId` or `byUuid` key stays, and the body the
+  server reads is otherwise unchanged.
+- `server/test/ccrc-api.test.ts` gains one case per door: a body with escaped `byId` and `byUuid` keys reaches the server
+  with the pane's pair as the last two keys, and a plain body arrives as itself with the pair appended. Measured red on
+  `main` on all three doors (the parsed `byId` was the forged one), green with the change.
+- `server/test/ccrc-api-closed.test.ts`'s append-last census lists the three doors, and its refusal-and-order check covers
+  them beside the remaining-work door.
+
+`runs review-rounds` still splices its identity in first. That is safe there, and not the review 3245 A2 gap: its refusal
+is structural, because `jq` parses the body and refuses every `byId` or `byUuid` key at any depth, case-folded.
+
+Fix round 1 (review 3266, as the coordinator ruled):
+
+- F1: `ccrc-api-closed.test.ts`'s call record and note door assertions still named `splice_body_field`, and passed only by
+  matching the `runs.review-rounds` block later in the file. Each slice now ends at its own block's closing `fi` and asserts
+  the refusal, no splice, and `append_body_field` for `byId` before `byUuid`. Measured: each door reverted to
+  `splice_body_field` turns its assertion red; restored, it passes.
+- F2: the call record's comment no longer says the server refuses an escaped key (`bad-field`): a `\u`-escaped spelling
+  passes the text test and is outranked by the appended pair at the server's parse.
+- F3: the `runs review-rounds` sentence above says why its splice-first order is safe.
+- F4: the `w8-confirm-unmeasured` entry is exact about the operator's write, which answers `team-unknown` only when it names
+  a workspace. A store with no slot measures `not-configured`, which today's verdict folds into `team-unknown`, so the
+  measured resolver alone would not tell the operator that no workspace is connected.
+
+Fix round 2 (review 3271, as the coordinator ruled):
+
+- F1: fix round 1's comment and note sentence said a nested key passes the text test too. It does not: the test is a
+  substring match over the whitespace-stripped body, so a nested or a whitespace-padded `byId` or `byUuid` key matches and
+  is refused (`bad-body`); only a `\u`-escaped spelling passes. The comment says so, and says how this door differs from the
+  `byId` fill, where the same match suppresses the fill instead of refusing.
+- F2: the probe answer's slice ends at its own block's closing `fi` too, through the same helper, so the `programme.remaining`
+  block can no longer satisfy it. Measured: the probe door reverted to `splice_body_field` turns its assertion red; restored,
+  it passes.

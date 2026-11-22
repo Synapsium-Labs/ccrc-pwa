@@ -2135,3 +2135,26 @@ describe('linking suggest fills identity from the pane and refuses a caller-name
     expect(seen).toEqual([]);
   });
 });
+
+// The pane's pair goes LAST on the linking and call doors (review 3245 A2, the note doors' rule of review 2039 F7): the server's
+// JSON parse keeps the later of two duplicate keys, so a spelling of `byId` or `byUuid` the textual refusal misses (a `\u` escape)
+// never outranks the pane's. Red when the client splices the pair first.
+describe('the linking and call doors put the pane\'s pair last (review 3245 A2, D-8808, D-8809)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  it.each([
+    [['linking', 'suggest', '--json', '-'], '/api/linking/suggest', '{"project":"project-a","team":"AAA","why":"w"}'],
+    [['linking', 'confirm', '--json', '-'], '/api/linking/confirm', '{"project":"project-a","team":"AAA","workspace":null}'],
+    [['calls', 'record', 'prog-a', '--json', '-'], '/api/coord/programmes/prog-a/calls', '{"class":"routine","text":"t","options":["a"],"chosen":0,"why":"w"}'],
+  ])('%j: an escaped byId or byUuid key cannot outrank the pane\'s pair', async (args, url, plain) => {
+    plantPane('demo-ws', 'uuid-7');
+    const forged = `{"by\\u0049d":"lane-b-project-a","by\\u0055uid":"u-other",${plain.slice(1)}`;
+    const r = await run(args, forged, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect([seen[0]!.method, seen[0]!.url]).toEqual(['POST', url]);
+    expect(JSON.parse(seen[0]!.body)).toMatchObject({ byId: 'demo-ws', byUuid: 'uuid-7' });
+    expect(seen[0]!.body.endsWith(',"byId":"demo-ws","byUuid":"uuid-7"}')).toBe(true);
+    seen = [];
+    expect((await run(args, plain, pane)).status).toBe(0);
+    expect(seen[0]!.body).toBe(`${plain.slice(0, -1)},"byId":"demo-ws","byUuid":"uuid-7"}`);
+  });
+});
