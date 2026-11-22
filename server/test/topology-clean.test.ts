@@ -67,11 +67,13 @@ import {
  *  stand-in the class's own rows below assert, and the tree measures zero ids
  *  under it too. */
 const FIXTURE_TRACKER_KEY = 'ACME';
-/** This repository's own tracker key stays named here, as it was before D-8181: CI runs this walk with no installer
- *  setting, and the guard must still catch this tree's real key. Only the RUNTIME check reads the setting alone. */
-const REPO_TRACKER_KEY = 'CCRCP';
+/** This repository's own tracker keys stay named here, as before D-8181: CI runs this walk with no installer
+ *  setting, and the guard must still catch this tree's real keys. Only the RUNTIME check reads the setting alone.
+ *  Two keys, because the tracker team was re-keyed on 2026-11-19 and the tracker still resolves an id under the
+ *  old key: the first is the key now, the second the one before it. */
+const REPO_TRACKER_KEYS: readonly string[] = ['OVR', 'CCRCP'];
 const PRIVATE_TRACKER_KEYS: readonly string[] = [...new Set([
-  FIXTURE_TRACKER_KEY, REPO_TRACKER_KEY,
+  FIXTURE_TRACKER_KEY, ...REPO_TRACKER_KEYS,
   ...privateTrackerKeysOf(process.env.CCRC_PRIVATE_TRACKER_KEYS).keys,
 ])];
 /** The classes the walk applies: the runtime list, with the tracker class built over those keys. */
