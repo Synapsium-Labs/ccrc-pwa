@@ -217,9 +217,10 @@ export interface CaptureTimings {
   readonly setupMs: number;
 }
 
-/** The production timings. A step of the drive against the stand-in takes seconds; 40 s each leaves room on a slow box. */
+/** The production timings. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box,
+ *  and keeps the pin with one more typed step than today's six (the model-switch step door B2 adds, coordinator's ruling). */
 export const CAPTURE_TIMINGS: CaptureTimings = Object.freeze({
-  stepMs: 40_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, stopWaitMs: 5_000, setupMs: 10_000,
+  stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, stopWaitMs: 5_000, setupMs: 10_000,
 });
 
 /** The slack kept beside the worst case: the frames' travel and the clocks of two processes. */

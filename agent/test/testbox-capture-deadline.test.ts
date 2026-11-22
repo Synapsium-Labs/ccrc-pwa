@@ -38,6 +38,10 @@ describe('the production timings fit the fleet agent\'s deadline (review 3226 F8
     const worst = captureWorstCaseMs(CAPTURE_TIMINGS);
     expect(2 * worst + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
   });
+  it('the pin still holds with one more typed step than the drive has (room for the model-switch step, door B2)', () => {
+    const more = [...CAPTURE_STEPS, { type: '/model haiku', waitFor: [] }];
+    expect(2 * captureWorstCaseMs(CAPTURE_TIMINGS, more) + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
+  });
   it('every step has a real wait: no timing is zero', () => {
     for (const [k, v] of Object.entries(CAPTURE_TIMINGS)) expect(v, k).toBeGreaterThan(0);
   });
