@@ -8,26 +8,34 @@
 // own shell, which refuses inside a session and a pane). A box-token lane, an `auth/gate.ts` EXEMPT entry: the token in its
 // own `onRequest`, as `continuity/routes.ts`'s lanes take it. Its caller has no session, so it takes no attribution: it stores
 // the verb's `recordedBy` trace (slug recorded-by-is-a-verb-trace). It measures the sha over the report's UTF-8 bytes itself
-// (slug the-door-checks-the-sha), hands the text to the decider and records what it maps as `pending`. A session holding the
-// box token could post a pending run; only the operator's confirmation, behind a session and a step-up, makes it count.
+// (slug the-door-checks-the-sha), hands the text to the decider and records what it maps as `pending`. A pending run counts
+// once it is confirmed: by the operator on the card, behind a session and a step-up, or by the confirm door below, for a run
+// recorded unattended (`unattended: true`), whose single-use confirm key only this door's answer carries (review 3232 F1a).
 //
 // `POST /api/continuity/quiz-runs/:id/rule` is that confirmation (F3): session-gated (no box token, no EXEMPT entry) and
 // behind the account gate's step-up (`AccountGate`, as `PUT /api/items/:id/secret` is), so it refuses while sign-in is dark,
 // from a plain-HTTP origin and without a recent step-up.
 //
 // The weekly unattended run (run 3212, the operator's ruling of 2026-11-22: the quiz runs, records and confirms itself)
-// adds two box-token lanes, each an EXEMPT entry. `POST /api/continuity/quiz-runs/:id/confirm` is the operator's matching
+// adds three box-token lanes, each an EXEMPT entry. `POST /api/continuity/quiz-runs/:id/confirm` is the operator's matching
 // rule, applied by the server: `ccrc quiz-record --confirm`, run by `ccd-quiz-weekly.service`, names the run id the record
-// answered and the sha its report printed, and the one ruler confirms the run on a match and discards it on a mismatch
-// (`quiz.ts#quizRuleVerdict`'s `match`). When that makes the baseline, the programme's coordinator is mailed
-// (`quiz.ts#quizBaselineMailOf`). The verb refuses inside a session and a pane; a session holding the box token could still
-// post through the client, which is the record door's residual too (an accident guard, not a wall).
-// `POST /api/continuity/quiz-status` is the runner's report of each tick (its act, outcome and word), stored in one row the
-// Shadow lanes card shows; a stop word mails the programme's coordinator once per week and word (`quiz.ts#quizStatusMailOf`).
+// answered, the confirm key it was answered and the sha its report printed, and the one ruler confirms the run when the key
+// and the sha match and refuses, writing nothing, when either does not (`quiz.ts#quizRuleVerdict`'s `match`; review 3232
+// F1a, F1b). Its `ruledBy` carries a fixed server head (`QUIZ_UNATTENDED_BY_PREFIX`, F1c). Once a confirmed baseline exists
+// the programme's coordinator is mailed, keyed on the run, and again on a later tick until the mail is queued
+// (`quiz.ts#quizBaselineMailOf`, F4). The verb refuses inside a session and a pane, and the session hook's quiz arm refuses
+// the client's record, confirm and status rows on every session; a session that runs the runner's exact flow outside a pane
+// still could (an accident guard, not a wall: the note's slug unattended-flow-outside-a-pane).
+// `POST /api/continuity/quiz-status` is the runner's report of each tick (its act, outcome, word and trace), stored in one row
+// the Shadow lanes card shows; a stop word mails the programme's coordinator once per week and word
+// (`quiz.ts#quizStatusMailOf`), and two ISO weeks of waiting mail it once more (`quiz.ts#quizWaitingStreakOf`, F9).
+// `POST /api/continuity/quiz-runs/:id/withdraw` is the operator's withdraw of a confirmed baseline (F1e): session-gated (no
+// box token, no EXEMPT entry), behind the account gate without a step-up (it only narrows), so it refuses while sign-in is
+// dark. Optional, never required, and it raises no item.
 // `POST /api/continuity/quiz-baseline/live` is the coordinator's Live on a W1a row once the baseline exists: attributed,
 // then owned (an open run of the quiz's programme), then `coord/laneArm.ts#decideLaneArmCoordLive`, then the one writer,
 // `CoordStore.setLaneArm`, and a record-only feed row naming the coordinator.
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AccountGate } from '../accounts/gate.js';
 import { decideLaneArmCoordLive, laneArmChangeLine, laneArmRowViewOf } from '../coord/laneArm.js';
@@ -38,8 +46,14 @@ import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_TEXT, isLaneArmLane } from '../../../shared/lane-arm.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
-import { QUIZ_ITEM_PROGRAMME, QUIZ_MATCH_RULING, QUIZ_STATUS_KEYS, isQuizRuleAction, quizBaselineMailOf, quizRecordVerdict, quizStatusMailOf, quizStatusOf } from './quiz.js';
-import { insertQuizRun, quizBaselineRead, quizPendingCount, quizReportRecorded, quizStatusRead, ruleQuizRun, writeQuizStatus } from './quizStore.js';
+import {
+  QUIZ_ITEM_PROGRAMME, QUIZ_MATCH_RULING, QUIZ_STATUS_KEYS, QUIZ_UNATTENDED_BY_PREFIX, QUIZ_WITHDRAW_RULING, isQuizRuleAction, isQuizTrace,
+  quizBaselineMailOf, quizRecordVerdict, quizStatusMailOf, quizStatusOf, quizWaitingStreakOf,
+} from './quiz.js';
+import {
+  insertQuizRun, markQuizBaselineWoken, quizBaselineRead, quizBaselineWakeRead, quizConfirmKeyHash, quizPendingCount, quizReportRecorded,
+  quizStatusRead, ruleQuizRun, writeQuizStatus,
+} from './quizStore.js';
 
 /** The record door's body cap (review 2442 F7): the verb refuses a report over 64 KiB, and `jq` writes each byte of it as at
  *  most six characters (`\u00XX`), so six times that plus room for the sha, the trace and the keys always fits. */
@@ -49,8 +63,6 @@ const RECORDED_BY_MAX = 200;
 const RUN_ID_RE = /^[1-9][0-9]{0,15}$/;
 const SHA_RE = /^[0-9a-f]{64}$/;
 const IDENTITY_RE = /^[A-Za-z0-9._-]{1,200}$/;
-/** The one-line trace a caller sends: `by` on the confirm door, `recordedBy` on the record door. */
-const isTrace = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= RECORDED_BY_MAX && !/[\r\n]/.test(v);
 
 export interface QuizRouteDeps {
   /** The coordination store, or undefined on a server without one: both doors answer `not-configured`. */
@@ -63,7 +75,8 @@ export interface QuizRouteDeps {
   gate: AccountGate;
   /** The Live door's sender check (`attributionVerdict` over the registry, on `fromUuid`). */
   attribute: (id: string, uuid: string) => Promise<AttributionRead>;
-  /** The confirm door's wake: queue one system mail (`rundefsTx.ts#queueSystemMail`); false when it was not queued. */
+  /** The baseline's wake and the status door's mail: queue one system mail (`rundefsTx.ts#queueSystemMail`); false when it was
+   *  not queued. */
   mail: (m: { toId: string; subject: string; body: string }) => boolean;
   /** The Live door's feed row. */
   notice: NoticeSink;
@@ -78,10 +91,27 @@ const TOKEN_DETAIL = {
 export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): void {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured', { detail: 'this server has no coordination store' });
 
-  /** `POST /api/continuity/quiz-runs { report, sha256, recordedBy }`: the token first, then the body's shape (`bad-request`
-   *  naming the field), then the decider over the text and the sha the door measured (`bad-request` naming its field), then
-   *  the one inserter (`write-failed`). `200 { ok, id, fresh, state }`; a resend of a recorded report is `fresh: false` with
-   *  the first row's state. */
+  /** The baseline's wake (review 3232 F4), asked by the confirm door and by every status tick: `quizBaselineMailOf` decides,
+   *  this queues and marks the run woken only once the mail was queued, so a lost wake (a throw, no one to tell) is retried. */
+  const wakeBaseline = (coord: CoordStore): void => {
+    const read = quizBaselineWakeRead(coord.db);
+    if (!read.ok) { console.warn(`ccrc-server: the quiz baseline's wake could not be read: ${read.detail}`); return; }
+    const d = coord.designationRead();
+    const wake = quizBaselineMailOf({ baseline: read.row, coordinator: coord.programmeCoordinator(QUIZ_ITEM_PROGRAMME),
+      designated: d.kind === 'designated' ? d.sessionId : null });
+    if (wake === null || read.row === null) return;
+    let queued = false;
+    try { queued = deps.mail(wake); } catch (e) { console.warn(`ccrc-server: quiz run ${read.row.id}'s wake threw: ${e instanceof Error ? e.message : String(e)}`); }
+    if (!queued) { console.warn(`ccrc-server: quiz run ${read.row.id} is the baseline, but its mail to ${wake.toId} was not queued; retried next tick`); return; }
+    if (!markQuizBaselineWoken(coord.db, read.row.id, deps.wall())) console.warn(`ccrc-server: quiz run ${read.row.id}'s wake was queued but not marked`);
+  };
+
+  /** `POST /api/continuity/quiz-runs { report, sha256, recordedBy, unattended? }`: the token first, then the body's shape
+   *  (`bad-request` naming the field), then the decider over the text and the sha the door measured (`bad-request` naming its
+   *  field), then the one inserter (`write-failed`). `200 { ok, id, fresh, state, confirmKey? }`; a resend of a recorded report
+   *  is `fresh: false` with the first row's state. `unattended: true` (the weekly run's record, review 3232 F1a) mints a
+   *  single-use confirm key, stored as its hash and answered once as `confirmKey`, for a fresh run or a pending one recorded
+   *  unattended; the confirm door takes nothing else. */
   app.post('/api/continuity/quiz-runs', {
     bodyLimit: QUIZ_RECORD_BODY_LIMIT,
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -92,8 +122,9 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
   }, async (req, reply) => {
     const b = (typeof req.body === 'object' && req.body !== null && !Array.isArray(req.body) ? req.body : null) as Record<string, unknown> | null;
     if (b === null) return refuseRoute(reply, 'bad-request', { field: '(body)', detail: 'the body is { report, sha256, recordedBy }' });
-    const { report, sha256, recordedBy } = b;
+    const { report, sha256, recordedBy, unattended } = b;
     if (typeof report !== 'string') return refuseRoute(reply, 'bad-request', { field: 'report', detail: 'report is the report file\'s text' });
+    if (unattended !== undefined && unattended !== true) return refuseRoute(reply, 'bad-request', { field: 'unattended', detail: 'unattended is true or absent' });
     if (typeof recordedBy !== 'string' || recordedBy.length === 0 || recordedBy.length > RECORDED_BY_MAX || /[\r\n]/.test(recordedBy)) {
       return refuseRoute(reply, 'bad-request', { field: 'recordedBy', detail: `recordedBy is one line of at most ${RECORDED_BY_MAX} characters` });
     }
@@ -108,9 +139,11 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     }
     const v = quizRecordVerdict({ text: report, claimedSha: sha256, measuredSha, now, pending, recorded });
     if (!v.ok) return refuseRoute(reply, v.word ?? 'bad-request', { field: v.field, detail: v.detail });
-    const r = insertQuizRun(deps.coord.db, { report: v.report, extra: v.extra, recordedBy, recordedAt: now });
+    const key = unattended === true ? randomBytes(32).toString('hex') : null;
+    const r = insertQuizRun(deps.coord.db, { report: v.report, extra: v.extra, recordedBy, recordedAt: now,
+      ...(key === null ? {} : { confirmKeyHash: quizConfirmKeyHash(key) }) });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be written' });
-    return reply.code(200).send({ ok: true, id: r.id, fresh: r.fresh, state: r.state });
+    return reply.code(200).send({ ok: true, id: r.id, fresh: r.fresh, state: r.state, ...(r.keyed && key !== null ? { confirmKey: key } : {}) });
   });
 
   /** `POST /api/continuity/quiz-runs/:id/rule { action: 'confirm' | 'discard' }`: the account gate with a step-up first,
@@ -134,9 +167,10 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     return reply.code(200).send({ ok: true, id: r.id, state: r.state, baseline: r.baseline });
   });
 
-  /** `POST /api/continuity/quiz-runs/:id/confirm { sha256, by }` (run 3212): the token first, then the id and the body, then the
-   *  one ruler with the `match` ruling (`bad-request` for an unknown id, or a run already ruled under another sha;
-   *  `write-failed`), then, when it made the baseline, the coordinator's mail. `200 { ok, id, state, baseline, changed }`. */
+  /** `POST /api/continuity/quiz-runs/:id/confirm { sha256, by, confirmKey? }` (run 3212): the token first, then the id and the
+   *  body, then the one ruler with the `match` ruling (`bad-request` for an unknown id, a pending run whose key or sha does not
+   *  match, or a run already ruled under another sha; `write-failed`), then the baseline's wake. `ruledBy` is the trace under
+   *  `QUIZ_UNATTENDED_BY_PREFIX`. `200 { ok, id, state, baseline, changed }`. */
   app.post('/api/continuity/quiz-runs/:id/confirm', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
       const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/continuity/quiz-runs/:id/confirm');
@@ -150,25 +184,48 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     if (b === null || typeof b['sha256'] !== 'string' || !SHA_RE.test(b['sha256'])) {
       return refuseRoute(reply, 'bad-request', { field: 'sha256', detail: 'sha256 is the report\'s sha, 64 lower-case hex' });
     }
-    if (!isTrace(b['by'])) return refuseRoute(reply, 'bad-request', { field: 'by', detail: `by is one line of at most ${RECORDED_BY_MAX} characters` });
+    if (!isQuizTrace(b['by'])) return refuseRoute(reply, 'bad-request', { field: 'by', detail: `by is one line of at most ${RECORDED_BY_MAX} characters` });
+    const confirmKey = b['confirmKey'];
+    if (confirmKey !== undefined && (typeof confirmKey !== 'string' || !SHA_RE.test(confirmKey))) {
+      return refuseRoute(reply, 'bad-request', { field: 'confirmKey', detail: 'confirmKey is the record\'s answer, 64 lower-case hex' });
+    }
     const coord = deps.coord;
     if (coord === undefined) return notConfigured(reply);
-    const r = ruleQuizRun(coord.db, { id: Number(id), action: QUIZ_MATCH_RULING, at: deps.wall(), by: b['by'], sha: b['sha256'] },
-      (lane) => coord.laneArmSetting(lane));
+    const r = ruleQuizRun(coord.db, { id: Number(id), action: QUIZ_MATCH_RULING, at: deps.wall(), by: `${QUIZ_UNATTENDED_BY_PREFIX}${b['by']}`,
+      sha: b['sha256'], ...(confirmKey === undefined ? {} : { key: confirmKey }) }, (lane) => coord.laneArmSetting(lane));
     if (!r.ok) {
       return r.kind === 'bad-request'
         ? refuseRoute(reply, 'bad-request', { detail: r.detail })
         : refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be written' });
     }
-    const wake = quizBaselineMailOf({ ruled: r, reportSha: r.reportSha, coordinator: coord.programmeCoordinator(QUIZ_ITEM_PROGRAMME) });
-    if (wake !== null && !deps.mail(wake)) console.warn(`ccrc-server: quiz run ${r.id} is the baseline, but its mail to ${wake.toId} was not queued`);
+    wakeBaseline(coord);
     return reply.code(200).send({ ok: true, id: r.id, state: r.state, baseline: r.baseline, changed: r.changed });
   });
 
-  /** `POST /api/continuity/quiz-status { week, act, outcome, word, detail, account, at }` (run 3212): the token first, then the
-   *  body (`bad-request` naming the field), then the stored row's mailed key, the stop mail when `quizStatusMailOf` answers one,
-   *  and the one writer (`write-failed`). A mail that was not queued keeps the old key, so the next tick mails again.
-   *  `200 { ok, mailed }`. */
+  /** `POST /api/continuity/quiz-runs/:id/withdraw` (review 3232 F1e): the account gate without a step-up first (a withdraw only
+   *  narrows), then the id, then the one ruler with the `withdraw` ruling (`bad-request` for an unknown id or a run that is not
+   *  the confirmed baseline; `write-failed`). `200 { ok, id, state, baseline }`. */
+  app.post('/api/continuity/quiz-runs/:id/withdraw', async (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null });
+    if (!g.pass) return reply;
+    const { id } = req.params as { id: string };
+    if (!RUN_ID_RE.test(id)) return refuseRoute(reply, 'bad-request', { detail: 'the run id is a positive whole number' });
+    const coord = deps.coord;
+    if (coord === undefined) return notConfigured(reply);
+    const r = ruleQuizRun(coord.db, { id: Number(id), action: QUIZ_WITHDRAW_RULING, at: deps.wall(), by: String(g.actor) }, (lane) => coord.laneArmSetting(lane));
+    if (!r.ok) {
+      return r.kind === 'bad-request'
+        ? refuseRoute(reply, 'bad-request', { detail: r.detail })
+        : refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be written' });
+    }
+    return reply.code(200).send({ ok: true, id: r.id, state: r.state, baseline: r.baseline });
+  });
+
+  /** `POST /api/continuity/quiz-status { week, act, outcome, word, detail, account, at, by }` (run 3212): the token first, then
+   *  the body (`bad-request` naming the field; `by` is the runner's trace), then the stored row, the stop mail when
+   *  `quizStatusMailOf` answers one, the waiting streak's mail when `quizWaitingStreakOf` answers one, the one writer
+   *  (`write-failed`), and the baseline's wake. A mail that was not queued keeps the old key, so the next tick mails again.
+   *  `200 { ok, mailed }`, `mailed` true when any mail was queued. */
   app.post('/api/continuity/quiz-status', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
       const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/continuity/quiz-status');
@@ -182,12 +239,19 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     if (coord === undefined) return notConfigured(reply);
     const before = quizStatusRead(coord.db);
     if (!before.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_status could not be read' });
-    const decided = quizStatusMailOf({ status: parsed.status, mailedKey: before.row?.mailedKey ?? null,
-      coordinator: coord.programmeCoordinator(QUIZ_ITEM_PROGRAMME) });
+    const coordinator = coord.programmeCoordinator(QUIZ_ITEM_PROGRAMME);
+    const decided = quizStatusMailOf({ status: parsed.status, mailedKey: before.row?.mailedKey ?? null, coordinator });
     const mailed = decided.mail !== null && deps.mail(decided.mail);
     const key = decided.mail === null || mailed ? decided.key : (before.row?.mailedKey ?? null);
-    if (!writeQuizStatus(coord.db, parsed.status, deps.wall(), key)) return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_status could not be written' });
-    return reply.code(200).send({ ok: true, mailed });
+    const streak = quizWaitingStreakOf({ status: parsed.status, waitingSince: before.row?.waitingSince ?? null,
+      goneMailedKey: before.row?.goneMailedKey ?? null, coordinator });
+    const goneMailed = streak.mail !== null && deps.mail(streak.mail);
+    const goneKey = streak.mail === null || goneMailed ? streak.goneKey : (before.row?.goneMailedKey ?? null);
+    if (!writeQuizStatus(coord.db, parsed.status, parsed.by, deps.wall(), { mailedKey: key, waitingSince: streak.waitingSince, goneMailedKey: goneKey })) {
+      return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_status could not be written' });
+    }
+    wakeBaseline(coord);
+    return reply.code(200).send({ ok: true, mailed: mailed || goneMailed });
   });
 
   /** `POST /api/continuity/quiz-baseline/live { fromId, fromUuid, lane }` (run 3212): the token first, then the body, then the

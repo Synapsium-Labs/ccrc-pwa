@@ -175,14 +175,18 @@ function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const rule = async (id: number, action: QuizRuleAction): Promise<void> => {
+  const rule = async (id: number, action: QuizRuleAction | 'withdraw'): Promise<void> => {
     if (busy) return;
     setBusy(true);
     setRefusal(null);
     try {
       let ruled = false;
-      const outcome = await stepUp.runAct(async () => { await api.ruleQuizRun(id, action); ruled = true; });
-      if (outcome === 'step-up' || !ruled) return;
+      // A withdraw only narrows, so it takes no step-up (review 3232 F1e); a ruling counts a run, so it does.
+      if (action === 'withdraw') {
+        await api.withdrawQuizBaseline(id);
+        ruled = true;
+      } else if (await stepUp.runAct(async () => { await api.ruleQuizRun(id, action); ruled = true; }) === 'step-up') return;
+      if (!ruled) return;
       reload();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return;
@@ -219,6 +223,12 @@ function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload
       {refusal !== null && <p className={SETTINGS_AMBER_NOTE} role="alert">{refusal}</p>}
       <p className={b.state === 'unreadable' ? SETTINGS_AMBER_NOTE : SETTINGS_NOW_CLASS.note}>{baselineLine}</p>
       {b.state === 'unreadable' && <p className={SETTINGS_NOW_CLASS.note}>{b.detail}</p>}
+      {b.state === 'recorded' && b.id !== undefined && (
+        <div data-quiz-withdraw={b.id}>
+          <p className={SETTINGS_NOW_CLASS.note}>{T.quizWithdrawNote}</p>
+          <Button variant="ghost" size="fit" disabled={busy} onClick={() => { void rule(b.id as number, 'withdraw'); }}>{T.quizWithdraw}</Button>
+        </div>
+      )}
     </div>
   );
 }

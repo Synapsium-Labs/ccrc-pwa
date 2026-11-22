@@ -217,18 +217,38 @@ function plantConfirm(confirmBody: string, rc = 0): void {
 }
 
 describe('ccrc quiz-record --confirm: the unattended run\'s confirmation (run 3212)', () => {
-  it('records, then confirms the run the record answered with the same sha and the timer\'s trace', async () => {
+  it('records unattended, then confirms the run the record answered with its confirm key, the same sha and the timer\'s trace', async () => {
+    const KEY = 'c'.repeat(64);
+    plantClient(`{"ok":true,"id":7,"fresh":true,"state":"pending","confirmKey":"${KEY}"}`);
     plantConfirm('{"ok":true,"id":7,"state":"confirmed","baseline":true,"changed":true}');
     const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toBe(`confirmed run 7, report sha ${SHA.slice(0, 12)} (the baseline)\n`);
     expect(clientCalls()).toEqual(['quiz record --json -', 'quiz confirm 7 --json -']);
-    const bodies = clientStdin().split('}{').length;
-    expect(bodies).toBe(2);
-    const confirmBody = JSON.parse(`{${clientStdin().split('}{')[1]!}`) as Record<string, unknown>;
-    expect(Object.keys(confirmBody).sort()).toEqual(['by', 'sha256']);
+    const parts = clientStdin().split('}{');
+    expect(parts.length).toBe(2);
+    const recordBody = JSON.parse(`${parts[0]!}}`) as Record<string, unknown>;
+    expect(recordBody['unattended']).toBe(true);
+    const confirmBody = JSON.parse(`{${parts[1]!}`) as Record<string, unknown>;
+    expect(Object.keys(confirmBody).sort()).toEqual(['by', 'confirmKey', 'sha256']);
+    expect(confirmBody['confirmKey']).toBe(KEY);
     expect(confirmBody['sha256']).toBe(SHA);
     expect(String(confirmBody['by'])).toMatch(/^quiz-unattended /);
+  });
+  it('a record answered with no key (a run already ruled) confirms with no key, so the server answers its state', async () => {
+    plantClient('{"ok":true,"id":7,"fresh":false,"state":"confirmed"}');
+    plantConfirm('{"ok":true,"id":7,"state":"confirmed","baseline":false,"changed":false}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code, r.stderr).toBe(0);
+    const confirmBody = JSON.parse(`{${clientStdin().split('}{')[1]!}`) as Record<string, unknown>;
+    expect(Object.keys(confirmBody).sort()).toEqual(['by', 'sha256']);
+  });
+  it('a withdrawn run exits 1 and says so', async () => {
+    plantConfirm('{"ok":true,"id":7,"state":"withdrawn","baseline":false,"changed":false}');
+    const r = await run(['--report', report(), '--sha', SHA, '--confirm']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/withdrawn: the operator withdrew run 7/);
+    expect(r.stdout).toBe('');
   });
   it('prints no baseline tail for a run that is not the baseline', async () => {
     plantConfirm('{"ok":true,"id":7,"state":"confirmed","baseline":false,"changed":false}');

@@ -2278,9 +2278,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     notice,
     masker: deps.masker,
   });
-  // The replay quiz's record door (box token, the operator's shell) and its rule door (session and step-up), from their own file.
-  // Run 3212 adds the unattended confirm door (its baseline mail rides `queueSystemMail`, the operator's sender, as the watcher's
-  // notices do) and the coordinator's Live door (attributed on `fromUuid`, with a record-only feed row).
+  // The replay quiz's record door (box token, the operator's shell and the weekly timer) and its rule door (session and step-up),
+  // from their own file. Run 3212 adds the unattended confirm door, which confirms only a run whose record's single-use key and sha
+  // it is handed (review 3232 F1), the tick report, the coordinator's Live door (attributed on `fromUuid`, with a record-only feed
+  // row) and the operator's withdraw (session-gated). Their mail rides `queueSystemMail` as the operator's sender, as the
+  // watcher's notices do: the baseline's wake (keyed on its run, retried each tick) and the stop and waiting-streak mails.
   registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate,
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'), notice,
     mail: (m) => (deps.coord === undefined ? false : queueSystemMail(deps.coord, null, { fromId: ASK_OPERATOR_PRINCIPAL, runId: null, kind: 'status', ...m }).queued) });

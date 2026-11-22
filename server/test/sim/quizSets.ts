@@ -117,15 +117,20 @@ const QUIZ_RULE_SET: MutantSet<Quiz> = {
     { id: 'V1', old: "if (i.state === null) return { kind: 'refuse', detail: `no quiz run ${i.id}` };", new: '' },
     { id: 'V2', old: "if (i.state !== 'pending') return { kind: 'refuse', detail: `already ${i.state}` };", new: '' },
     { id: 'V3', old: "return { kind: 'write', state: 'discarded', baseline: false };", new: "return { kind: 'write', state: 'discarded', baseline: true };" },
-    { id: 'V4', old: "baseline: quizBaseline(i.runs, i.w1aChoices) };", new: 'baseline: true };' },
+    { id: 'V4', old: "  return { kind: 'write', state: 'confirmed', baseline: quizBaseline(i.runs, i.w1aChoices) };\n}", new: "  return { kind: 'write', state: 'confirmed', baseline: true };\n}" },
     { id: 'V5', old: "if (i.action === 'discard') return", new: "if (i.action !== 'discard') return" },
-    // Run 3212, the unattended `match` ruling: the sha never compared; a mismatch confirmed; a resend answered for a run ruled
-    // under another sha; a match without its sha accepted; a match's confirm made the baseline whatever the rule says.
+    // Run 3212, the unattended `match` ruling: the sha never compared; a mismatch confirmed (review 3232 F1b: it refuses); a
+    // resend answered for a run ruled under another sha; a match without its sha accepted; a match's confirm made the baseline
+    // whatever the rule says; the confirm key never asked (F1a); the withdraw of a run that is not the baseline, or not
+    // confirmed (F1e).
     { id: 'V6', old: 'const matched = i.sha.stored === i.sha.claimed;', new: 'const matched = true;' },
-    { id: 'V7', old: ": { kind: 'write', state: 'discarded', baseline: false };\n    }", new: ": { kind: 'write', state: 'confirmed', baseline: false };\n    }" },
+    { id: 'V7', old: "      if (!matched) return { kind: 'refuse'", new: "      if (false) return { kind: 'refuse'" },
     { id: 'V8', old: "if (matched && i.state !== 'unknown') return", new: "if (i.state !== 'unknown') return" },
     { id: 'V9', old: "if (i.sha === undefined) return { kind: 'refuse', detail: 'a match ruling carries the sha the run measured' };", new: "if (i.sha === undefined) return { kind: 'write', state: 'confirmed', baseline: false };" },
-    { id: 'V10', old: "return matched ? { kind: 'write', state: 'confirmed', baseline: quizBaseline(i.runs, i.w1aChoices) }", new: "return matched ? { kind: 'write', state: 'confirmed', baseline: true }" },
+    { id: 'V10', old: "      return { kind: 'write', state: 'confirmed', baseline: quizBaseline(i.runs, i.w1aChoices) };\n    }\n    if (matched", new: "      return { kind: 'write', state: 'confirmed', baseline: true };\n    }\n    if (matched" },
+    { id: 'V11', old: "      if (i.key !== 'matches') {", new: "      if (false) {" },
+    { id: 'V12', old: "    if (i.sha?.baseline !== true) return { kind: 'refuse', detail: `run ${i.id} is not the baseline` };", new: '' },
+    { id: 'V13', old: "    if (i.state !== 'confirmed') return { kind: 'refuse', detail: `run ${i.id} is ${i.state}, not a confirmed baseline` };", new: '' },
   ],
   suite(m): Record<string, SuiteCase> {
     const base = { id: 7, action: 'confirm' as const, runs: [], w1aChoices: SHADOW };
@@ -141,13 +146,21 @@ const QUIZ_RULE_SET: MutantSet<Quiz> = {
         expect(m.quizRuleVerdict({ ...base, state: 'confirmed' })).toEqual({ kind: 'refuse', detail: 'already confirmed' });
       },
       'an unknown id refuses': () => { expect(m.quizRuleVerdict({ ...base, state: null })).toEqual({ kind: 'refuse', detail: 'no quiz run 7' }); },
-      'a match confirms on the sha by the baseline rule, and discards on another': () => {
-        const match = { ...base, action: 'match' as const, state: 'pending' as const };
+      'a match confirms on the key and the sha by the baseline rule, and refuses on another sha or key': () => {
+        const match = { ...base, action: 'match' as const, state: 'pending' as const, key: 'matches' as const };
         const sha = (stored: string | null, baseline = false) => ({ stored, claimed: 'a'.repeat(64), baseline });
         expect(m.quizRuleVerdict({ ...match, sha: sha('a'.repeat(64)) })).toEqual({ kind: 'write', state: 'confirmed', baseline: true });
         expect(m.quizRuleVerdict({ ...match, runs: [CONFIRMED(true)], sha: sha('a'.repeat(64)) })).toEqual({ kind: 'write', state: 'confirmed', baseline: false });
-        expect(m.quizRuleVerdict({ ...match, sha: sha('b'.repeat(64)) })).toEqual({ kind: 'write', state: 'discarded', baseline: false });
+        expect(m.quizRuleVerdict({ ...match, sha: sha('b'.repeat(64)) })).toMatchObject({ kind: 'refuse' });
+        for (const key of ['absent', 'wrong'] as const) expect(m.quizRuleVerdict({ ...match, key, sha: sha('a'.repeat(64)) })).toMatchObject({ kind: 'refuse' });
         expect(m.quizRuleVerdict(match)).toEqual({ kind: 'refuse', detail: 'a match ruling carries the sha the run measured' });
+      },
+      'a withdraw takes back only the confirmed baseline': () => {
+        const w = { ...base, action: 'withdraw' as const };
+        const sha = (baseline: boolean) => ({ stored: 'a'.repeat(64), claimed: '', baseline });
+        expect(m.quizRuleVerdict({ ...w, state: 'confirmed', sha: sha(true) })).toEqual({ kind: 'write', state: 'withdrawn', baseline: false });
+        expect(m.quizRuleVerdict({ ...w, state: 'confirmed', sha: sha(false) })).toMatchObject({ kind: 'refuse' });
+        expect(m.quizRuleVerdict({ ...w, state: 'pending', sha: sha(true) })).toMatchObject({ kind: 'refuse' });
       },
       'a match on a run already ruled answers it on the same sha and refuses on another': () => {
         const sha = (stored: string, baseline: boolean) => ({ stored, claimed: 'a'.repeat(64), baseline });
@@ -270,9 +283,11 @@ const LANE_ARM_QUIZ_SET: MutantSet<typeof LaneArmModule> = {
   modulePath: LANE_ARM_TS,
   mutants: [
     { id: 'A1', old: "? { state: 'unreadable', detail: q.baseline.detail }", new: "? { state: 'not-yet' }" },
-    { id: 'A2', old: ": q.baseline.exists ? { state: 'recorded', at: q.baseline.at } : { state: 'not-yet' };", new: ": { state: 'recorded', at: q.baseline.at };" },
+    { id: 'A2', old: ": q.baseline.exists ? { state: 'recorded', at: q.baseline.at, ...(typeof q.baselineId === 'number' ? { id: q.baselineId } : {}) } : { state: 'not-yet' };", new: ": { state: 'recorded', at: q.baseline.at };" },
     { id: 'A3', old: "q.pending.ok ? { ok: true, runs: [...q.pending.runs] } : { ok: false, detail: q.pending.detail };", new: '{ ok: true, runs: q.pending.ok ? [...q.pending.runs] : [] };' },
     { id: 'A4', old: '{ lanes, quizBaseline: laneArmQuizViewOf(quiz) }', new: '{ lanes }' },
+    // Review 3232 F1e: the baseline's run id, which the card's Withdraw names.
+    { id: 'A5', old: "...(typeof q.baselineId === 'number' ? { id: q.baselineId } : {})", new: '' },
   ],
   suite(m): Record<string, SuiteCase> {
     const run = { id: 1, recordedAt: 6, reportShaPrefix: 'a'.repeat(12), recordedBy: 'operator', measuredAt: 5, score: 0.8, lo: 0.7, hi: 0.9, questions: 10, families: 3, answered: 10, runFailed: 0, absent: 0 };
@@ -280,6 +295,7 @@ const LANE_ARM_QUIZ_SET: MutantSet<typeof LaneArmModule> = {
     return {
       'a recorded baseline carries its date': () => {
         expect(m.laneArmQuizViewOf({ baseline: { ok: true, exists: true, at: 9 }, pending: ok })).toEqual({ baseline: { state: 'recorded', at: 9 }, pending: ok });
+        expect(m.laneArmQuizViewOf({ baseline: { ok: true, exists: true, at: 9 }, baselineId: 4, pending: ok }).baseline).toEqual({ state: 'recorded', at: 9, id: 4 });
       },
       'no baseline is not yet': () => {
         expect(m.laneArmQuizViewOf({ baseline: { ok: true, exists: false, at: null }, pending: ok }).baseline).toEqual({ state: 'not-yet' });

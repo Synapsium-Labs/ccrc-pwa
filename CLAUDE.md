@@ -677,12 +677,17 @@ run on the Shadow lanes card, behind the account gate's step-up, so it refuses w
 either and is session-gated when armed; its record door, `POST /api/continuity/quiz-runs`, is a box-token lane whose caller is
 the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`), and it records a run as pending only. The
 weekly unattended run (`ccd-quiz-weekly.timer`, `deploy/history-quiz-unattended.mjs`) adds three box-token lanes beside it:
-`POST /api/continuity/quiz-runs/:id/confirm` (`ccrc quiz-record --confirm`: the server confirms the recorded run on the sha its
-report printed and discards it on another, through the one ruler), `POST /api/continuity/quiz-status` (each tick's word, which the
-Shadow lanes card shows and which mails the coordinator once per week and stop word) and `POST /api/continuity/quiz-baseline/live`
-(the programme coordinator's Live on a W1a lane once a confirmed baseline exists, attributed and ownership-checked). All five
-register from `server/src/continuity/quizRoutes.ts`, which the census reads as a lane source of its own and checks against a
-hand-kept `QUIZ_SESSION_DOORS` in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+`POST /api/continuity/quiz-runs/:id/confirm` (`ccrc quiz-record --confirm`: the server confirms the recorded run, through the one
+ruler, when the single-use key its unattended record was answered and the sha its report printed both match, and refuses, leaving
+it pending, otherwise), `POST /api/continuity/quiz-status` (each tick's word and trace, which the Shadow lanes card shows and which
+mails the coordinator once per week and stop word) and `POST /api/continuity/quiz-baseline/live` (the programme coordinator's Live
+on a W1a lane once a confirmed baseline exists, attributed and ownership-checked). The record, confirm and status rows of
+`ccrc-api` are the timer's, never a session's: the session hook's quiz arm refuses them on every session, an accident guard as the
+account arm is (a session running the runner's flow outside a pane runs past it); `quiz live` stays open. The operator's
+`POST /api/continuity/quiz-runs/:id/withdraw` (a wrong baseline undone, behind the account gate without a step-up, so it refuses
+while sign-in is dark) consults no box token and is session-gated when armed. All six register from
+`server/src/continuity/quizRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept
+`QUIZ_SESSION_DOORS` in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.

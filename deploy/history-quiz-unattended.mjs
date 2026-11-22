@@ -51,8 +51,9 @@
 // (the word lives in the state file), 1 for `failed`, 2 for the early refusals (`in-session`, `in-pane`, `home-unset`).
 //
 // Environment: main gets a by-name projection {HOME, TMUX_PANE, LANG, PATH, CLAUDECODE}; nothing here reads process.env whole.
-import { appendFileSync, closeSync, constants, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, constants, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { userInfo } from 'node:os';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -86,7 +87,7 @@ export const LAST_ACTS = Object.freeze([...ACTS, 'none']);
 export const OUTCOMES = Object.freeze(['ok', 'waiting', 'refused', 'failed']);
 /** This file's own words that can stand in `last.word` (beside the driver's refusal words, which pass through, and the record
  *  verb's, an open set: the first token of its last stderr line). */
-export const OWN_WORDS = Object.freeze(['no-account-admitted', 'no-room', 'week-ended', 'marker-sha-mismatch', 'marker-unparseable',
+export const OWN_WORDS = Object.freeze(['no-account-admitted', 'no-room', 'account-disabled', 'record-path-missing', 'week-ended', 'marker-sha-mismatch', 'marker-unparseable',
   'headless-on-incomplete', 'headless-on-unreadable', 'headless-on-cross-device', 'history-store-absent', 'record-failed',
   'record-unconfirmed', 'record-sha-mismatch', 'driver-failed', 'spawn-failed', 'no-sha-line', 'internal-error']);
 /** The words that only ever reach stderr (a tick that prints one writes no `last`, and posts nothing). */
@@ -198,16 +199,31 @@ export function stateShapeOk(s) {
 }
 
 // ── the state, the lock and the directories (L3) ─────────────────────────────────────────────────────────────────────
-function loadState(file) {
+/** The one reader of the state file and its shape check: {state}, {absent}, {unreadable: code} or {malformed: why}. */
+function readState(file) {
   let text;
   try { text = readFileSync(file, 'utf8'); } catch (e) {
-    if (e?.code === 'ENOENT') return { state: freshState() };
-    return { unreadable: `cannot read ${STATE_FILE}: ${e?.code ?? e}` };
+    return e?.code === 'ENOENT' ? { absent: true } : { unreadable: String(e?.code ?? 'EUNKNOWN') };
   }
   let v;
-  try { v = JSON.parse(text); } catch { return { unreadable: `${STATE_FILE} is not JSON` }; }
-  if (!stateShapeOk(v)) return { unreadable: `${STATE_FILE} is not a ${STATE_KIND} v1 file` };
+  try { v = JSON.parse(text); } catch { return { malformed: 'not JSON' }; }
+  if (!stateShapeOk(v)) return { malformed: `not a ${STATE_KIND} v1 file` };
   return { state: v };
+}
+function loadState(file) {
+  const r = readState(file);
+  if (r.absent === true) return { state: freshState() };
+  if (r.unreadable !== undefined) return { unreadable: `cannot read ${STATE_FILE}: ${r.unreadable}` };
+  if (r.malformed !== undefined) return { unreadable: `${STATE_FILE} is ${r.malformed}` };
+  return { state: r.state };
+}
+/** The one line `--state-verdict` prints: ok, absent, `unreadable <code>` or `malformed <why>`. */
+export function stateVerdictOf(file) {
+  const r = readState(file);
+  if (r.absent === true) return 'absent';
+  if (r.unreadable !== undefined) return `unreadable ${r.unreadable}`;
+  if (r.malformed !== undefined) return `malformed ${r.malformed}`;
+  return 'ok';
 }
 /** Whole, by write-to-temp-then-rename. */
 function saveState(file, state) {
@@ -282,9 +298,15 @@ const flagsOf = (o) => Object.entries(o).flatMap(([k, v]) => [`--${k}`, String(v
 
 /** The roster's eligible account ids, in roster order: not hidden, `exec.kind` upstream or generated, telemetry neither
  *  openrouter nor codex. Pure.  @param {unknown[]} accounts */
-export function eligibleAccountsOf(accounts) {
+export function eligibleAccountsOf(accounts, disabled = () => false) {
   return accounts.filter((a) => plainObject(a) && typeof a.id === 'string' && a.id !== '' && a.hidden !== true && plainObject(a.exec)
-    && ELIGIBLE_KINDS.includes(a.exec.kind) && !EXCLUDED_TELEMETRY.includes(a.telemetry)).map((a) => a.id);
+    && ELIGIBLE_KINDS.includes(a.exec.kind) && !EXCLUDED_TELEMETRY.includes(a.telemetry) && !disabled(a.id)).map((a) => a.id);
+}
+/** The operator's per-account lane kill switch, read as ccd's `_lane_enabled` reads it: `$HOME/.cc-sessions/<id>-disabled` is a
+ *  regular file (`-f`, which follows a link). An id that is not a plain name is read as disabled (never a path out of the registry). */
+function laneDisabled(home, id) {
+  if (!/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith('.')) return true;
+  try { return statSync(path.join(home, '.cc-sessions', `${id}-disabled`)).isFile(); } catch { return false; }
 }
 /** The candidates with room, the lowest `seven` first, ties in roster order. Pure.
  *  @param {Array<{ id: string, room: boolean, seven?: number }>} readings  in roster order */
@@ -297,7 +319,7 @@ function candidatesOf(home) {
     return { error: `the roster is unreadable (${e?.code ?? 'not JSON'})` };
   }
   if (!plainObject(roster) || !Array.isArray(roster.accounts)) return { error: 'the roster has no accounts list' };
-  return { ids: eligibleAccountsOf(roster.accounts) };
+  return { ids: eligibleAccountsOf(roster.accounts, (id) => laneDisabled(home, id)) };
 }
 /** The driver's own reading of an account's room: its limits row, decided by decideLimits at the driver's defaults. */
 function roomOf(ctx, id) {
@@ -410,18 +432,20 @@ async function actHeadless(ctx) {
     const st = lstatOrNull(target);
     if (st === null) {
       try { unlinkSync(tmp); } catch { /* none left by a crashed run */ }
-      writeFileSync(tmp, m.text, { flag: 'wx', mode: 0o600 });
+      const fd = openSync(tmp, 'wx', 0o600);
+      try { writeFileSync(fd, m.text); fsyncSync(fd); } finally { closeSync(fd); }   // the bytes are on disk before the link names them
+      journalHeadless(ctx, expected, 'writing');   // the intent first: a crash after the link leaves a journalled marker, never an unjournalled one
       try {
         if (ctx.beforeHeadlessWrite !== undefined) ctx.beforeHeadlessWrite();   // a test's seam: the window between the probe and the link
         ctx.link(tmp, target);
       } catch (e) {
+        journalNote(ctx, `headless-on not written (${e?.code ?? 'error'})`);
         if (e?.code === 'EEXIST') continue;   // a racer wrote it: judge what is there
         if (e?.code === 'EXDEV') return stopOf('headless-on-cross-device', 'the quiz root and the history store are on different devices; nothing was written');
         throw e;
       } finally {
         try { unlinkSync(tmp); } catch { /* gone */ }
       }
-      journalHeadless(ctx, expected);
       s.headless = 'written';
       return { ok: true };
     }
@@ -435,10 +459,13 @@ async function actHeadless(ctx) {
   return stopOf('headless-on-unreadable', 'headless-on kept changing under the runner; it is left as it is');
 }
 /** One line: the ISO time, `headless-on written`, the store id and the frozen families' ccrc ids and generations. No history content. */
-function journalHeadless(ctx, expected) {
+function journalHeadless(ctx, expected, word) {
   const fams = expected.pairs.map((p) => `${p.ccrcId}/${p.generation === '' ? '-' : p.generation}`).join(' ');
+  journalNote(ctx, `headless-on ${word} store ${expected.storeId} families ${fams}`);
+}
+function journalNote(ctx, text) {
   try {
-    appendFileSync(path.join(ctx.root, 'journal.log'), `${new Date(ctx.now()).toISOString()} headless-on written store ${expected.storeId} families ${fams}\n`, { mode: 0o600 });
+    appendFileSync(path.join(ctx.root, 'journal.log'), `${new Date(ctx.now()).toISOString()} ${text}\n`, { mode: 0o600 });
   } catch (e) { ctx.err(`${PREFIX}: journal: ${e?.code ?? e}\n`); }
 }
 
@@ -460,6 +487,9 @@ async function actWeek(ctx, act) {
     ctx.save(null);   // the row stands before the driver runs, so a crash mid-arms resumes this directory
   }
   if (act === 'arms' || act === 'judge') {   // the spend steps: the setup's account must still have room (report and record spend nothing)
+    if (laneDisabled(ctx.home, ctx.state.setup.account)) {
+      return { stop: { outcome: 'waiting', word: 'account-disabled', detail: 'the setup\'s account is switched off by the operator\'s lane kill switch', driver: false } };
+    }
     const r = roomOf(ctx, ctx.state.setup.account);
     if (!r.room) return noRoomStop(`the setup's account: ${r.word} ${r.detail}`);
   }
@@ -521,13 +551,26 @@ function prune(ctx) {
   for (const key of Object.keys(ctx.state.weeks)) if (!keep.includes(key)) delete ctx.state.weeks[key];
 }
 
+/** The trace `ccrc quiz-record` carries: `quiz-unattended <user> <role> <UTC time to the second>`; the user is cut to
+ *  [A-Za-z0-9._-] (else `unknown`), the role is the ccrc.env file's CCRC_ROLE cut to lower-case letters (else `unknown`). */
+function traceOf(ctx) {
+  let user = '';
+  try { user = userInfo().username.replace(/[^A-Za-z0-9._-]/g, ''); } catch { /* unknown */ }
+  let role = '';
+  try {
+    const lines = readFileSync(path.join(ctx.home, '.ccrc', 'ccrc.env'), 'utf8').split('\n').filter((l) => /^\s*CCRC_ROLE=/.test(l));
+    if (lines.length > 0) role = lines[lines.length - 1].slice(lines[lines.length - 1].indexOf('=') + 1).replace(/[^a-z]/g, '');
+  } catch { /* unknown */ }
+  return `quiz-unattended ${user === '' ? 'unknown' : user} ${role === '' ? 'unknown' : role} ${new Date(ctx.now()).toISOString().replace(/\.\d+Z$/, 'Z')}`;
+}
+
 // ── the status post (L4) ─────────────────────────────────────────────────────────────────────────────────────────────
 /** The tick's `last`, posted with `ccrc-api quiz status --json -`. A failed post never fails the tick: `last.posted` records it. */
 async function postStatus(ctx) {
   const last = ctx.state?.last;
   if (!plainObject(last)) return;
   const body = JSON.stringify({ week: last.week, act: last.act, outcome: last.outcome, word: last.word,
-    detail: typeof last.detail === 'string' ? last.detail.slice(0, STATUS_DETAIL_MAX) : null, at: last.at_ms, account: ctx.state.setup?.account ?? null });
+    detail: typeof last.detail === 'string' ? last.detail.slice(0, STATUS_DETAIL_MAX) : null, at: last.at_ms, account: ctx.state.setup?.account ?? null, by: traceOf(ctx) });
   let posted = false;
   try {
     const r = await runChild(ctx, ctx.client, ['quiz', 'status', '--json', '-'], { input: body, timeoutMs: POST_TIMEOUT_MS });
@@ -599,6 +642,18 @@ export async function main(env, deps = {}) {
   }
 }
 
+/** The spend guard: before ANY act (so before setup and before every week's arms and judge) the runner proves it can record: the
+ *  status client is an executable regular file and the agent credential file (under the ccrc directory) is a regular file. By
+ *  stat only: that file holds a secret and is never opened. null when both stand, else the detail naming which one is missing. */
+function recordPathMissing(ctx) {
+  let exec = false;
+  try { const st = statSync(ctx.client); exec = st.isFile() && (st.mode & 0o111) !== 0; } catch { /* absent */ }
+  if (!exec) return `the status client (${path.basename(ctx.client)}) is not an executable regular file; nothing was spent`;
+  const e = lstatOrNull(path.join(ctx.home, '.ccrc', ['agent', 'env'].join('.')));
+  if (e === null || !e.isFile()) return 'the agent credential file under the ccrc directory is not a regular file; nothing was spent';
+  return null;
+}
+
 /** The acts, in order, until a stop or the week is done. */
 async function run(ctx) {
   // the runner works the current ISO week only: a week still running when a new one starts is over
@@ -627,6 +682,11 @@ async function run(ctx) {
       ctx.save({ week: null, act, outcome: 'refused', word: latch.word, detail: latch.detail });
       return EXIT.OK;
     }
+    const missing = recordPathMissing(ctx);
+    if (missing !== null) {
+      ctx.save({ week, act, outcome: 'waiting', word: 'record-path-missing', detail: missing });
+      return EXIT.OK;
+    }
     const r = await ACT_FN[act](ctx);
     if (r.stop === undefined && setupAct) ctx.state.setup_refused = null;
     if (r.stop !== undefined && setupAct && r.stop.outcome === 'refused') {
@@ -645,7 +705,12 @@ async function run(ctx) {
 
 // The entry guard stays the LAST block of this file. Importing the module (the tests do) runs nothing. The exit code is set,
 // never forced, so stderr drains. main gets a by-name projection of the environment, never process.env whole.
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href && process.argv[2] === '--state-verdict') {
+  // Read-only: it reads only this runner's own state file, with no lock and no child, and writes nothing, so it may run where a
+  // tick refuses (in a session or a pane): doctor asks it from either.
+  const home = process.env.HOME;
+  process.stdout.write(`${typeof home === 'string' && path.isAbsolute(home) ? stateVerdictOf(path.join(home, '.ccrc', 'quiz', STATE_FILE)) : 'unreadable EHOME'}\n`);
+} else if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   process.exitCode = await main({ HOME: process.env.HOME, TMUX_PANE: process.env.TMUX_PANE, LANG: process.env.LANG,
     PATH: process.env.PATH, CLAUDECODE: process.env.CLAUDECODE });
 }

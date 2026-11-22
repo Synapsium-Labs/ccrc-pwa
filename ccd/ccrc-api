@@ -294,17 +294,20 @@ declare -A ROUTES=(
   [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
   [sessions.loads]='POST|/api/sessions/{id}/start/loads|yes|-'
   # The replay quiz's record (Overlord W1a quiz record, plan 2026-11-17 §5): the operator's `ccrc quiz-record` posts one
-  # single-arm report through this row, its body (`report`, `sha256`, `recordedBy`) on stdin (`--json -`). The run is recorded
-  # pending: only the operator's confirmation on the Shadow lanes card, behind a session and a step-up, makes it count, so a
-  # session calling this row records nothing that counts (coordinator ruling, slug quiz-record-posts-through-the-client).
+  # single-arm report through this row, its body (`report`, `sha256`, `recordedBy`, and `unattended: true` from the weekly
+  # timer) on stdin (`--json -`). The run is recorded pending: the operator's confirmation on the Shadow lanes card makes it
+  # count, and so does the server's matching rule over the next row, for a run recorded unattended (coordinator ruling, slug
+  # quiz-record-posts-through-the-client; run 3212). The record, confirm and status rows are the weekly timer's: the session
+  # hook's quiz arm refuses them on every session (an accident guard, not a wall).
   [quiz.record]='POST|/api/continuity/quiz-runs|no|-'
-  # The unattended confirmation (run 3212): `ccrc quiz-record --confirm`, run by the weekly timer, names the run the record
-  # answered (`{id}`) and posts `{"sha256","by"}`; the server confirms the run on a match and discards it on a mismatch. And the
-  # coordinator's Live on a W1a lane once the baseline exists, its body `{"fromId","fromUuid","lane"}`.
+  # The unattended confirmation (run 3212; review 3232 F1): `ccrc quiz-record --confirm`, run by the weekly timer, names the run
+  # the record answered (`{id}`) and posts `{"sha256","by","confirmKey"}`, the key that record answered; the server confirms the
+  # run when the key and the sha match, and refuses, leaving it pending, when either does not. And the Overlord coordinator's
+  # Live on a W1a lane once the baseline exists, its body `{"fromId","fromUuid","lane"}`.
   [quiz.confirm]='POST|/api/continuity/quiz-runs/{id}/confirm|yes|-'
   [quiz.live]='POST|/api/continuity/quiz-baseline/live|no|-'
-  # The weekly runner's report of each tick (`{"week","act","outcome","word","detail","at","account"}`), which the Shadow lanes
-  # card shows and which mails the coordinator once per week and stop word.
+  # The weekly runner's report of each tick (`{"week","act","outcome","word","detail","at","account","by"}`), which the Shadow
+  # lanes card shows and which mails the coordinator once per week and stop word, and once for two weeks of waiting.
   [quiz.status]='POST|/api/continuity/quiz-status|no|-'
   # The act-key claim (Overlord W1 door process A1, spec §3.3.11 H12): the door process presents its launch nonce once and is
   # answered the act key once. THIS ROW'S BODY CARRIES A SECRET (`{"fromId","fromUuid","nonce"}`), which is why every body

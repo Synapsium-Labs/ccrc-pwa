@@ -190,7 +190,8 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs (through the module)'],
     collector: 'deploy/history-quiz-unattended.mjs (its own week directories beyond the newest four, once their week is confirmed or failed)',
     bound: 'the setup directory for as long as the quiz lane runs; a week directory until its run is confirmed or discarded', tier: 'one setup\'s frozen list, or one week\'s transcripts and scores',
-    ruling: null },
+    // Review 3232 F10: the collector covers the runner's own week directories only, so what it never removes keeps a ruling.
+    ruling: 'operator-made for what the runner does not collect: a hand-run --out, and a setup directory the runner left after a refusal, is removed by hand once its run is confirmed or discarded' },
   // Run 3212: the weekly unattended run's own record. Its state (written whole by rename), its lock, its journal (one line
   // each time it writes the history marker headless-on, which is once) and that write's temp file, which it removes.
   { name: 'quiz-unattended', root: '~/.ccrc/quiz/ (0700): unattended.json, unattended.lock, journal.log and headless-on.tmp.<pid>', pattern: 'O',

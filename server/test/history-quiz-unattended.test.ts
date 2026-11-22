@@ -8,9 +8,10 @@
 // `ccrc` or anything against the live HOME or the live history store, and no fixture names a real account, host or path.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as unMod from '../../deploy/history-quiz-unattended.mjs';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
 import * as drvMod from '../../deploy/history-replay.mjs';
@@ -130,7 +131,7 @@ interface Box {
   state(): R | null;
   tick(o?: { now?: number; env?: R; deps?: R }): Promise<{ code: number; err: string }>;
 }
-function mkBox(o: { accounts?: R[] | null; history?: boolean; limits?: Record<string, R | null> } = {}): Box {
+function mkBox(o: { accounts?: R[] | null; history?: boolean; limits?: Record<string, R | null>; agentEnv?: boolean } = {}): Box {
   const home = mkTmp('quiz-unattended-');
   const fake = join(home, 'fake');
   mkdirSync(fake, { recursive: true });
@@ -144,6 +145,8 @@ function mkBox(o: { accounts?: R[] | null; history?: boolean; limits?: Record<st
   chmodSync(driver, 0o755);
   chmodSync(verb, 0o755);
   mkdirSync(join(home, '.ccrc'), { recursive: true });
+  // the spend guard's second probe: an empty regular file stands in for the credential file (never any real content)
+  if (o.agentEnv !== false) writeFileSync(join(home, '.ccrc', 'agent.env'), '');
   const accounts = o.accounts === undefined ? [acct('acct-a', { hidden: true }), acct('acct-b'), acct('acct-c', { exec: { kind: 'generated' }, telemetry: 'none' })] : o.accounts;
   const limits: Record<string, R | null> = { ...o.limits };
   if (accounts !== null) writeFileSync(join(home, '.ccrc', 'accounts.json'), JSON.stringify({ accounts }));
@@ -492,8 +495,12 @@ describe('the status post', () => {
     const c = client(b);
     expect(c.length).toBe(1);
     expect(c[0].argv).toEqual(['quiz', 'status', '--json', '-']);
-    expect(JSON.parse(c[0].stdin)).toEqual({ week: WEEK, act: 'done', outcome: 'ok', word: null, detail: null, at: NOW, account: 'acct-b' });
-    expect(Object.keys(JSON.parse(c[0].stdin))).toEqual(['week', 'act', 'outcome', 'word', 'detail', 'at', 'account']);
+    const body = JSON.parse(c[0].stdin);
+    expect(body).toMatchObject({ week: WEEK, act: 'done', outcome: 'ok', word: null, detail: null, at: NOW, account: 'acct-b' });
+    expect(Object.keys(body)).toEqual(['week', 'act', 'outcome', 'word', 'detail', 'at', 'account', 'by']);
+    // the trace the record and confirm calls carry, and the server's own one-line bound on it (quizRoutes' isTrace)
+    expect(body.by).toMatch(/^quiz-unattended [A-Za-z0-9._-]+ unknown 2026-11-21T12:00:00Z$/);
+    expect(body.by.length).toBeLessThanOrEqual(200);
     expect(Object.keys(c[0].env).sort()).toEqual(['HOME', 'LANG', 'PATH']);
     expect((b.state() as R).last.posted).toBe(true);
   });
@@ -538,7 +545,6 @@ describe('the status post', () => {
     ['the client exits non-zero', { client: [{ exit: 3, stdout: '' }] }, {}],
     ['the client answers ok:false', { client: [{ stdout: '{"ok":false}\n' }] }, {}],
     ['the client prints no JSON', { client: [{ stdout: 'nope' }] }, {}],
-    ['there is no client at all', {}, { client: '/nonexistent/ccrc-api' }],
   ] as Array<[string, R, R]>) {
     it(`a failed post never fails the tick: ${name} records posted: false`, async () => {
       const b = mkBox();
@@ -550,6 +556,15 @@ describe('the status post', () => {
       expect(st.weeks[WEEK].state).toBe('confirmed');
     });
   }
+  it('a client that cannot be started (an executable with a missing interpreter) records posted: false', async () => {
+    const b = mkBox();
+    const bad = join(b.home, 'fake', 'bad-client');
+    writeFileSync(bad, '#!/nonexistent/interpreter\n');
+    chmodSync(bad, 0o755);
+    const r = await b.tick({ deps: { client: bad } });
+    expect(r.code).toBe(0);
+    expect((b.state() as R).last).toMatchObject({ act: 'done', outcome: 'ok', posted: false });
+  });
   it('a failed post after an internal failure keeps the exit code 1', async () => {
     const b = mkBox();
     b.plan({ arms: [{ exit: 1, stderr: 'x\n' }], client: [{ exit: 3 }] });
@@ -564,6 +579,11 @@ describe('the headless marker is written once, atomically, and never edited', ()
     const f = join(b.root, 'journal.log');
     return existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
   };
+  // a link that did not happen: the intent line stands, a note names the failure, and no line claims `written`
+  const notOurs = (b: Box, code: string): boolean => {
+    const j = journalOf(b);
+    return j.length === 2 && j[0].includes('headless-on writing store') && j[1].includes(`headless-on not written (${code})`) && !j.some((l) => / written store/.test(l));
+  };
   it('absent: written atomically (the exact bytes, 0600, no temp left), journalled once', async () => {
     const b = mkBox();
     await b.tick();
@@ -573,7 +593,7 @@ describe('the headless marker is written once, atomically, and never edited', ()
     expect((b.state() as R).setup.headless).toBe('written');
     expect(tree(b.root).filter((p) => p.includes('headless-on'))).toEqual([]);
     const j = journalOf(b);
-    expect(j).toEqual([`${new Date(NOW).toISOString()} headless-on written store ${STORE} families fam-one/${GEN1} fam-two/-`]);
+    expect(j).toEqual([`${new Date(NOW).toISOString()} headless-on writing store ${STORE} families fam-one/${GEN1} fam-two/-`]);
     expect(statSync(join(b.root, 'journal.log')).mode & 0o777).toBe(0o600);
     // later ticks and weeks write and journal nothing more
     await b.tick({ now: NEXT_NOW });
@@ -657,7 +677,7 @@ describe('the headless marker is written once, atomically, and never edited', ()
     await b.tick({ deps: { beforeHeadlessWrite: () => writeFileSync(h, INCOMPLETE) } });
     expect(readFileSync(h, 'utf8')).toBe(INCOMPLETE);
     expect((b.state() as R).last).toMatchObject({ act: 'headless', outcome: 'refused', word: 'headless-on-incomplete' });
-    expect(journalOf(b)).toEqual([]);
+    expect(notOurs(b, 'EEXIST')).toBe(true);
     expect(tree(b.root).filter((p) => p.includes('headless-on'))).toEqual([]);
   });
   it('a racer that wrote the complete marker is judged `present` (EEXIST), not journalled as ours', async () => {
@@ -666,7 +686,28 @@ describe('the headless marker is written once, atomically, and never edited', ()
     await b.tick({ deps: { beforeHeadlessWrite: () => writeFileSync(h, SUPERSET) } });
     expect(readFileSync(h, 'utf8')).toBe(SUPERSET);
     expect((b.state() as R).setup.headless).toBe('present');
-    expect(journalOf(b)).toEqual([]);
+    expect(notOurs(b, 'EEXIST')).toBe(true);
+  });
+  it('the journal line is written BEFORE the link, and the link sees the complete bytes', async () => {
+    const b = mkBox();
+    let seen: string[] = [];
+    let tmpBytes = '';
+    await b.tick({ deps: { link: (a: string, t: string) => {
+      seen = journalOf(b);
+      tmpBytes = readFileSync(a, 'utf8');
+      linkSync(a, t);
+    } } });
+    expect(seen.length).toBe(1);
+    expect(seen[0]).toContain('headless-on writing store');
+    expect(tmpBytes).toBe(MARKER);
+    expect(readFileSync(join(b.history, 'headless-on'), 'utf8')).toBe(MARKER);
+    expect(journalOf(b).length).toBe(1);
+  });
+  it('an unexpected link failure leaves the intent journalled with a not-written note', async () => {
+    const b = mkBox();
+    await b.tick({ deps: { link: () => { throw Object.assign(new Error('io'), { code: 'EIO' }); } } });
+    expect(existsSync(join(b.history, 'headless-on'))).toBe(false);
+    expect(notOurs(b, 'EIO')).toBe(true);
   });
   it('a link across devices is refused headless-on-cross-device, with no temp left and nothing written', async () => {
     const b = mkBox();
@@ -674,7 +715,7 @@ describe('the headless marker is written once, atomically, and never edited', ()
     expect((b.state() as R).last).toMatchObject({ act: 'headless', outcome: 'refused', word: 'headless-on-cross-device' });
     expect(existsSync(join(b.history, 'headless-on'))).toBe(false);
     expect(tree(b.root).filter((p) => p.includes('headless-on'))).toEqual([]);
-    expect(journalOf(b)).toEqual([]);
+    expect(notOurs(b, 'EXDEV')).toBe(true);
   });
   it('the history store absent: refused history-store-absent and the runner makes no ~/.ccrc/history', async () => {
     const b = mkBox({ history: false });
@@ -1054,5 +1095,170 @@ describe('pure: nextActOf, weekKeyOf and the line readers', () => {
   it('exports the setup constants, the models named once', () => {
     expect([U.BUDGET, U.SETTINGS_MODE, U.WRITER_MODEL, U.JUDGE_MODEL, U.ARM_MODEL]).toEqual([5000000, 'restricted', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5']);
     expect(U.KEEP_WEEKS).toBe(4);
+  });
+});
+
+describe('the spend guard: the runner proves it can record before it spends anything (F3)', () => {
+  const credPath = (b: Box): string => join(b.home, '.ccrc', 'agent.env');
+  it('no credential file (a box of the `both` role): nothing is spent, the waiting word is recorded and posted', async () => {
+    const b = mkBox({ agentEnv: false });
+    const r = await b.tick();
+    expect(r.code).toBe(0);
+    expect(b.calls('driver')).toEqual([]);
+    expect(b.calls('verb')).toEqual([]);
+    const st = b.state() as R;
+    expect(st.last).toMatchObject({ act: 'setup', outcome: 'waiting', word: 'record-path-missing' });
+    expect(st.last.detail).toContain('credential file');
+    expect(st.setup).toBeNull();
+    expect(st.setup_refused ?? null).toBeNull();   // a waiting word never latches
+    const posted = b.calls('client');
+    expect(posted.length).toBe(1);
+    expect(JSON.parse(posted[0].stdin)).toMatchObject({ outcome: 'waiting', word: 'record-path-missing' });
+    // it comes back by itself once the file stands
+    writeFileSync(credPath(b), '');
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK].state).toBe('confirmed');
+  });
+  it('a credential path that is not a regular file (a directory, a link) counts as missing', async () => {
+    const b = mkBox({ agentEnv: false });
+    mkdirSync(credPath(b));
+    await b.tick();
+    expect(b.calls('driver')).toEqual([]);
+    expect((b.state() as R).last).toMatchObject({ outcome: 'waiting', word: 'record-path-missing' });
+  });
+  it('the credential file is checked by stat only: an unreadable one still passes the guard', async () => {
+    const b = mkBox();
+    chmodSync(credPath(b), 0o000);
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK].state).toBe('confirmed');
+  });
+  for (const [name, mk] of [
+    ['missing', (b: Box) => join(b.home, 'fake', 'no-such-client')],
+    ['not executable', (b: Box) => { const f = join(b.home, 'fake', 'plain'); writeFileSync(f, '#!/bin/sh\n'); chmodSync(f, 0o644); return f; }],
+    ['a directory', (b: Box) => { const f = join(b.home, 'fake', 'dir'); mkdirSync(f); return f; }],
+  ] as Array<[string, (b: Box) => string]>) {
+    it(`a status client that is ${name}: nothing is spent and the tick waits record-path-missing, naming the client`, async () => {
+      const b = mkBox();
+      const r = await b.tick({ deps: { client: mk(b) } });
+      expect(r.code).toBe(0);
+      expect(b.calls()).toEqual([]);
+      const st = b.state() as R;
+      expect(st.last).toMatchObject({ outcome: 'waiting', word: 'record-path-missing' });
+      expect(st.last.detail).toContain('status client');
+    });
+  }
+  it('it also stops before a week\'s arms: a credential file that vanishes mid-way spends nothing more and the week stays running', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('interrupted')] });
+    await b.tick();
+    expect((b.state() as R).last).toMatchObject({ act: 'arms', word: 'interrupted' });
+    const n = b.calls().length;
+    unlinkSync(credPath(b));
+    await b.tick({ now: NOW + 3600_000 });
+    expect(b.calls().length).toBe(n);
+    const st = b.state() as R;
+    expect(st.last).toMatchObject({ act: 'arms', outcome: 'waiting', word: 'record-path-missing' });
+    expect(st.weeks[WEEK].state).toBe('running');
+  });
+});
+
+describe('the operator\'s per-account lane kill switch (F5)', () => {
+  const disable = (b: Box, id: string): void => { mkdirSync(join(b.home, '.cc-sessions'), { recursive: true }); writeFileSync(join(b.home, '.cc-sessions', `${id}-disabled`), ''); };
+  it('a disabled account is never picked at setup', async () => {
+    const b = mkBox();
+    disable(b, 'acct-b');
+    await b.tick();
+    expect(b.calls('driver').filter((c) => c.argv[0] === 'setup').map((c) => c.argv[c.argv.indexOf('--account') + 1])).toEqual(['acct-c']);
+    expect((b.state() as R).setup.account).toBe('acct-c');
+  });
+  it('every candidate disabled: no-account-admitted, with no spawn', async () => {
+    const b = mkBox();
+    disable(b, 'acct-b');
+    disable(b, 'acct-c');
+    await b.tick();
+    expect(b.calls('driver')).toEqual([]);
+    expect((b.state() as R).last).toMatchObject({ outcome: 'refused', word: 'no-account-admitted' });
+  });
+  it('the marker is read as ccd reads it: only a regular file counts (a directory of that name is no switch)', async () => {
+    const b = mkBox();
+    mkdirSync(join(b.home, '.cc-sessions', 'acct-b-disabled'), { recursive: true });
+    await b.tick();
+    expect((b.state() as R).setup.account).toBe('acct-b');
+  });
+  for (const act of ['arms', 'judge']) {
+    it(`before ${act}: the setup's account switched off waits account-disabled (not no-room), spawns nothing, and resumes when it is back on`, async () => {
+      const b = mkBox();
+      b.plan({ [act]: [REFUSE('interrupted')] });
+      await b.tick();
+      const account = (b.state() as R).setup.account as string;
+      const n = b.calls().length;
+      disable(b, account);
+      await b.tick({ now: NOW + 3600_000 });
+      expect(b.calls().length).toBe(n);
+      const st = b.state() as R;
+      expect(st.last).toMatchObject({ week: WEEK, act, outcome: 'waiting', word: 'account-disabled' });
+      expect(st.weeks[WEEK].state).toBe('running');
+      unlinkSync(join(b.home, '.cc-sessions', `${account}-disabled`));
+      await b.tick({ now: NOW + 2 * 3600_000 });
+      expect((b.state() as R).weeks[WEEK].state).toBe('confirmed');
+    });
+  }
+  it('eligibleAccountsOf takes the switch as a predicate and defaults to none', () => {
+    const roster = [acct('acct-x'), acct('acct-y')];
+    expect(U.eligibleAccountsOf(roster)).toEqual(['acct-x', 'acct-y']);
+    expect(U.eligibleAccountsOf(roster, (id: string) => id === 'acct-x')).toEqual(['acct-y']);
+  });
+});
+
+describe('--state-verdict: the runner\'s own reading of its state file, for doctor (F8)', () => {
+  const RUNNER = fileURLToPath(new URL('../../deploy/history-quiz-unattended.mjs', import.meta.url));
+  const verdict = (home: string, extra: R = {}): { out: string; code: number | null; err: string } => {
+    const r = spawnSync(process.execPath, ['--no-warnings', RUNNER, '--state-verdict'], { env: { HOME: home, PATH: process.env.PATH ?? '', ...extra }, encoding: 'utf8' });
+    return { out: r.stdout, code: r.status, err: r.stderr };
+  };
+  const put = (b: Box, text: string): string => { mkdirSync(b.root, { recursive: true }); const f = join(b.root, 'unattended.json'); writeFileSync(f, text); return f; };
+  it('absent, then ok after a tick: one line each, exit 0, and it writes nothing', async () => {
+    const b = mkBox();
+    expect(verdict(b.home)).toEqual({ out: 'absent\n', code: 0, err: '' });
+    expect(existsSync(b.root)).toBe(false);
+    await b.tick();
+    const before = tree(b.root);
+    const bytes = readFileSync(join(b.root, 'unattended.json'), 'utf8');
+    expect(verdict(b.home)).toEqual({ out: 'ok\n', code: 0, err: '' });
+    expect(tree(b.root)).toEqual(before);
+    expect(readFileSync(join(b.root, 'unattended.json'), 'utf8')).toBe(bytes);
+    expect(existsSync(join(b.root, 'unattended.lock'))).toBe(false);
+  });
+  for (const [name, text, want] of [
+    ['a torn file', '{ "kind": "ccrc-quiz', 'malformed not JSON'],
+    ['not JSON', 'nope', 'malformed not JSON'],
+    ['another kind', JSON.stringify({ kind: 'something-else', v: 1, setup: null, weeks: {}, last: null }), 'malformed not a ccrc-quiz-unattended-state v1 file'],
+    ['an unknown version', JSON.stringify({ kind: 'ccrc-quiz-unattended-state', v: 2, setup: null, weeks: {}, last: null }), 'malformed not a ccrc-quiz-unattended-state v1 file'],
+    ['an array', '[]', 'malformed not a ccrc-quiz-unattended-state v1 file'],
+  ] as Array<[string, string, string]>) {
+    it(`${name}: ${want}`, () => {
+      const b = mkBox();
+      const f = put(b, text);
+      expect(verdict(b.home)).toEqual({ out: `${want}\n`, code: 0, err: '' });
+      expect(readFileSync(f, 'utf8')).toBe(text);
+    });
+  }
+  it.skipIf(process.getuid?.() === 0)('an unreadable file: `unreadable EACCES`', () => {
+    const b = mkBox();
+    const f = put(b, JSON.stringify(U.freshState()));
+    chmodSync(f, 0o000);
+    expect(verdict(b.home)).toEqual({ out: 'unreadable EACCES\n', code: 0, err: '' });
+    chmodSync(f, 0o600);
+  });
+  it('it is the same reading the tick uses: whatever the verdict calls ok, the tick loads, and a malformed one it refuses', async () => {
+    const b = mkBox();
+    put(b, JSON.stringify({ kind: 'ccrc-quiz-unattended-state', v: 2, setup: null, weeks: {}, last: null }));
+    expect(verdict(b.home).out).toBe('malformed not a ccrc-quiz-unattended-state v1 file\n');
+    expect((await b.tick()).err).toContain('state-unreadable');
+    expect(U.stateVerdictOf(join(b.root, 'unattended.json'))).toBe('malformed not a ccrc-quiz-unattended-state v1 file');
+  });
+  it('it runs where a tick refuses: with CLAUDECODE and TMUX_PANE set', () => {
+    const b = mkBox();
+    expect(verdict(b.home, { CLAUDECODE: '1', TMUX_PANE: '%1' })).toEqual({ out: 'absent\n', code: 0, err: '' });
   });
 });

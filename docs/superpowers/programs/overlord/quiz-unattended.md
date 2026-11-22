@@ -70,19 +70,27 @@ sequenceDiagram
 
 ### 2. Confirmation without the operator
 
-- `ccrc quiz-record --confirm` records the run as before, then posts `{ sha256, by }` to the new box-token door
+- `ccrc quiz-record --confirm` records the run with `unattended: true`, which the record door answers with a single-use
+  confirm key (stored as its sha256 hash), then posts `{ sha256, by, confirmKey }` to the box-token door
   `POST /api/continuity/quiz-runs/:id/confirm`, with the run id the record answered.
-- The door asks the one ruler, `quizStore.ts#ruleQuizRun`, with the action `match`: a pending row whose report sha
-  equals the sha is confirmed under the existing baseline rule (`quiz.ts#quizBaseline`), and a pending row whose sha
-  differs is discarded. A row already ruled answers its own state when its sha matches (a resend), and is refused
-  otherwise. The ruling stays the one writer of `state`, `ruledAt`, `ruledBy` and `baseline`.
+- The door asks the one ruler, `quizStore.ts#ruleQuizRun`, with the action `match`: a pending row is confirmed under the
+  existing baseline rule (`quiz.ts#quizBaseline`) when the key matches its stored hash and its report sha equals the sha;
+  a missing or wrong key, or another sha, is refused and the row stays pending (fix round 2, F1a and F1b). A row already
+  ruled answers its own state when its sha matches (a resend), and is refused otherwise. `ruledBy` is the caller's trace
+  under the server's fixed head `ccrc-unattended:` (F1c). The ruling stays the one writer of `state`, `ruledAt`, `ruledBy`
+  and `baseline`, and of the withdraw's `withdrawnAt` and `withdrawnBy`.
+- The operator can withdraw a confirmed baseline from the card (`POST /api/continuity/quiz-runs/:id/withdraw`, F1e): the
+  run becomes `withdrawn`, never counts again, and the next run confirmed while every W1a lane is in shadow becomes the
+  baseline.
 - The baseline rule is unchanged: the first confirmed run while every W1a lane is in shadow becomes the baseline, and it
   is never a W2 result, a PASS or a measured benefit of recall.
 
 ### 3. Waking the coordinator, and its Live
 
-- When a confirmation makes the baseline, the server queues one system mail to the programme's coordinator
-  (`CoordStore.programmeCoordinator('overlord')`), subject `quiz-baseline-confirmed`.
+- Once a confirmed baseline exists, the server queues one system mail to the programme's coordinator
+  (`CoordStore.programmeCoordinator('overlord')`), or, with no overlord run open, to the designated Overlord session,
+  subject `quiz-baseline-confirmed run <id>`. It is keyed on the run (`wokeAt`): the confirm door and every status tick
+  ask, and the run is marked woken only once the mail was queued, so a throw or a missing recipient is retried (F4).
 - Taking a W1a lane Live was an operator switch: `POST /api/coord/lane-arm` is session-gated and refuses Live while
   sign-in is dark. The smallest door for the coordinator is `POST /api/continuity/quiz-baseline/live { fromId, fromUuid,
   lane }`: box-token gated, attribution-checked, ownership-checked (the caller holds an open run of `overlord`), a W1a
@@ -158,6 +166,57 @@ The pull request's fast run was red in six cases, none of them run locally in th
   `unattended` block and the ruler's `changed` and `reportSha`.
 
 All five files pass, run together through `ccrc test`.
+
+## Fix round 2 (review 3232, ruled in the coordinator's fix-round mail)
+
+| Finding | What changed |
+|---|---|
+| F1a | The record door answers an unattended record (`unattended: true`) a single-use confirm key and stores its sha256 (`confirmKeyHash`, migration 119). The confirm door rules `match` only with that key; a run recorded by hand never gains one, so only the card confirms it. An unattended resend of a run still pending mints a new key and voids the old one, so a runner whose confirmation was lost can finish on its next tick. |
+| F1b | A sha mismatch refuses and leaves the run pending; it is never discarded. |
+| F1c | `ruledBy` is `ccrc-unattended:` and the caller's trace. |
+| F1d | The session hook's deny program gains a quiz row (`qzmatch`): `ccrc-api` followed by `quiz` and `record`, `confirm` or `status` is refused on every session, child or top-level, bare, path-qualified, quoted or as a `$VAR` program; `quiz live` stays open. Its prefilter reads `quiz` followed by a blank, never `quiz` alone: with `quiz` alone, a session whose path names `quiz` forked jq on every call, and the merge-deny suite's 100 KB bounded-time cases failed under such a temp path. An accident guard as the account arm is; CLAUDE.md says so. |
+| F1e | The withdraw door and the card's Withdraw (no step-up: it only narrows; it still refuses while sign-in is dark). It raises no item. |
+| F2 | The stale "only the operator's confirmation makes it count" sentences are rewritten in `ccd/ccrc-api`, `auth/gate.ts`'s EXEMPT reasons, `quizRoutes.ts`'s header, `server.ts`'s registration comment and `ccd/ccrc-quiz-record`'s header. |
+| F3 | Before every act the runner checks it can record: the client is an executable file and the box credential file exists (by `stat`, never opened). Otherwise the tick waits with `record-path-missing` and spends nothing. The timer stays on `both`. |
+| F4 | The baseline's wake is keyed on its run and retried each tick until queued; with no overlord run open it goes to the designated Overlord session. |
+| F5 | The account pick and the weekly room check read the operator's lane switch (`~/.cc-sessions/<id>-disabled`, as ccd's `_lane_enabled` reads it); a switched-off setup account waits with `account-disabled`. |
+| F6 | No change: whichever of #3169 and #3170 lands first keeps 119, the other renumbers. |
+| F7 | One shared helper (`laneArm.ts`'s row and baseline rules) for both Live deciders, and a parity test over one input table (`lane-arm-parity.test.ts`). |
+| F8 | The runner has one state reader, shared with doctor through `--state-verdict` (`ok`, `absent`, `unreadable <code>`, `malformed <why>`). Doctor names EACCES on its own line, and its remedy for a bad file is honest: read the journal, move the file aside, start the service, which then starts a NEW setup (it spends again and breaks week-to-week comparability). |
+| F9 | Two ISO weeks of waiting ticks mail the coordinator once, `setup-account-gone`. The account is never re-picked. |
+| F10 | `history-quiz-single-out` carries a ruling again, for what the runner never collects (a hand-run `--out`, a setup directory left after a refusal), with its pin. |
+| Nits | The marker's journal line is written before the link, and the temp is fsynced; the status door takes the runner's trace; an empty detail is stored as none; a setup-phase stop's mail key carries its week. |
+
+**Schema and README.** Migration 119 gains four nullable columns on `continuity_quiz_runs` and three on its new table, by a
+second packet on run 3213's yes (it checked the state column has no CHECK). README's confirmation clause changed by a second
+packet on run 1850's coordinator's yes.
+
+**Departures, fix round 2:**
+- **unattended-flow-outside-a-pane**: the remaining residual. A session that runs the runner's exact flow itself, outside a
+  pane, by a script or another interpreter, still records and confirms a run. The key closes confirming a run someone else
+  recorded; the hook arm closes the client called from a session; neither is a wall.
+- **status-door-trace-not-session**: "the attribution check its siblings have" is the trace the record and confirm doors take
+  (`by`, stored as `reportedBy`), because the runner has no session and so no `fromUuid`. The hook arm refuses the status row
+  on every session.
+- **kill-switch-is-a-file**: the runner tests `<id>-disabled` as ccd does (`[[ -f ]]`, a regular file), not by `lstat`; a
+  directory of that name is not a switch, as in ccd.
+- **card-baseline-wakes-too**: a baseline the operator confirms on the card is also woken for, on the next status tick.
+- **withdrawn-lanes-stay-live**: a withdraw never moves a lane; a lane already live stays live, so the next baseline waits until
+  every W1a lane is back in shadow.
+- **waiting-streak-counts-every-wait**: F9's streak counts every `waiting` tick (no room, the lane switch, the record path, the
+  limits words), since each means the setup account cannot finish the week.
+- **fsync-unobserved**: no test can observe the marker temp's fsync; the test title no longer claims it.
+
+**Known limits (the review's other nits):** the service's stop handler signals its direct child only (systemd's control-group
+kill covers the rest); two runners can both judge a stale lock stale, and a recycled pid after a reboot can hold `locked`
+(doctor's stale bound catches it); an unknown-outcome status row left by a rollback blocks every status post until the new
+build returns; an operator Discard of a stuck timer run is retried every six hours that week; doctor reads an absent state
+file as PASS and names no waiting word, and when node or the runner cannot run its verdict line borrows the move-aside remedy;
+`LaneArmQuizReads.status` is optional; the card's amber choice is made in `ShadowLanesSection.tsx`; the stop mail's fallback key
+is chosen in `quizRoutes.ts`; a `generated` account with telemetry `none` is admitted; `continuity_quiz_status`'s writer is not in
+`single-definition/writers-map.test.ts` (as `continuity_quiz_runs`'s is not); a week rollover can spend two budgets
+(`week-ended`); `~/.ccrc/quiz/weeks/` keeps four weeks of history-derived transcripts; any session can start the service by
+hand (`systemctl --user start`), which is idempotent and one budget a week.
 
 ## An incident to report
 

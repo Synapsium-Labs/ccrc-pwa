@@ -199,7 +199,7 @@ const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-n
 /** The replay quiz's rule door (Overlord W1a quiz record): the operator confirms or discards a recorded run, behind a session
  *  and the account gate's step-up. Hand-kept for the NAME only, compared with the quiz file's registrations in both directions
  *  below; it consults no box token and does not sit in EXEMPT. */
-const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule'];
+const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule', '/api/continuity/quiz-runs/:id/withdraw'];
 
 /** The Models sheet's write door (programme model-class-advance, wave R4), registered from `server/src/laneModelsRoutes.ts`, which no
  *  harvest above can see: `POST /api/models/:lane`, hold, release and revert of one class. Hand-kept for the NAME only, like

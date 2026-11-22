@@ -102,8 +102,9 @@ export function validQuizReport(json: unknown): QuizReportVerdict {
 }
 
 /** A recorded run's state: `pending` from the record door until the operator rules on it, then `confirmed` or `discarded`
- *  (F3). Only a confirmed run can be the baseline; a discarded row stays and never counts. */
-export const QUIZ_RUN_STATES = ['pending', 'confirmed', 'discarded'] as const;
+ *  (F3). Only a confirmed run can be the baseline; a discarded row stays and never counts. `withdrawn` is a confirmed baseline
+ *  the operator took back (review 3232 F1e): it stays, never counts and is never the baseline again. */
+export const QUIZ_RUN_STATES = ['pending', 'confirmed', 'discarded', 'withdrawn'] as const;
 export type QuizRunState = (typeof QUIZ_RUN_STATES)[number];
 
 /** THE BASELINE RULE: true when no earlier CONFIRMED row is a baseline and every W1a row's stored choice reads exactly
@@ -123,10 +124,19 @@ export const QUIZ_RULE_ACTIONS = ['confirm', 'discard'] as const;
 export type QuizRuleAction = (typeof QUIZ_RULE_ACTIONS)[number];
 export const isQuizRuleAction = (v: unknown): v is QuizRuleAction => typeof v === 'string' && (QUIZ_RULE_ACTIONS as readonly string[]).includes(v);
 /** The unattended run's ruling (run 3212, the operator's ruling of 2026-11-22; `quizRoutes.ts`'s confirm door): the operator's
- *  rule, applied by the server. The run the timer recorded is confirmed when its stored report sha is the sha the timer's
- *  report printed, and discarded when it is not. Never a wire word of the rule door. */
+ *  rule, applied by the server. The run the timer recorded is confirmed when the confirm key its record call was answered
+ *  matches and its stored report sha is the sha the timer's report printed; otherwise it is refused and left pending (review
+ *  3232 F1a, F1b). Never a wire word of the rule door. */
 export const QUIZ_MATCH_RULING = 'match';
-export type QuizRuling = QuizRuleAction | typeof QUIZ_MATCH_RULING;
+/** The operator's withdraw of a confirmed baseline (review 3232 F1e; `quizRoutes.ts`'s withdraw door). */
+export const QUIZ_WITHDRAW_RULING = 'withdraw';
+export type QuizRuling = QuizRuleAction | typeof QUIZ_MATCH_RULING | typeof QUIZ_WITHDRAW_RULING;
+/** What the store measured of the confirm key a `match` carried against the run's stored hash: `matches`, `absent` (the run
+ *  holds no key: recorded by hand, or the call carried none) or `wrong`. */
+export type QuizConfirmKeyFact = 'matches' | 'absent' | 'wrong';
+/** The fixed head the server puts on an unattended ruling's `ruledBy` (review 3232 F1c), so the audit never reads the caller's
+ *  trace as an operator's device. */
+export const QUIZ_UNATTENDED_BY_PREFIX = 'ccrc-unattended:';
 
 export type QuizRuleVerdict =
   | { readonly kind: 'refuse'; readonly detail: string }
@@ -135,22 +145,37 @@ export type QuizRuleVerdict =
 
 /** THE RULING (F3), asked inside `quizStore.ts#ruleQuizRun`'s transaction: only a `pending` run is ruled on (an unknown id or
  *  any other state refuses, naming it); a confirm is the baseline by `quizBaseline` over the rows already recorded and the
- *  W1a rows read now; a discard is never one. `match` (the unattended run's) carries the row's stored sha and the sha the
- *  timer measured: equal, a pending run is confirmed by the same rule, and a run already ruled answers its own state and
- *  writes nothing (a resend, `same`); unequal, a pending run is discarded, and a run already ruled refuses. */
+ *  W1a rows read now; a discard is never one. `match` (the unattended run's) carries the row's stored sha, the sha the timer
+ *  measured and the confirm key's fact: on a pending run, a key that does not match refuses first, then a sha that differs
+ *  refuses (review 3232 F1b: the run stays pending, never discarded), and both matching confirm it by the same rule; a run
+ *  already ruled answers its own state and writes nothing when the sha matches (a resend, `same`) and refuses otherwise.
+ *  `withdraw` (the operator's) takes back the confirmed baseline only: it becomes `withdrawn`, never the baseline again. */
 export function quizRuleVerdict(i: {
   readonly id: number; readonly state: QuizRunState | 'unknown' | null; readonly action: QuizRuling;
   readonly runs: readonly { readonly state: QuizRunState; readonly baseline: boolean }[];
   readonly w1aChoices: Readonly<Record<W1aArmRow, LaneArmRead>>;
-  /** `match` only: the row's stored report sha (null for no row), the sha the timer measured, and the row's own baseline flag. */
+  /** `match` and `withdraw`: the row's stored report sha (null for no row), the sha the timer measured (`match`), and the row's
+   *  own baseline flag. */
   readonly sha?: { readonly stored: string | null; readonly claimed: string; readonly baseline: boolean };
+  /** `match` only: the confirm key, as the store measured it against the run's stored hash. */
+  readonly key?: QuizConfirmKeyFact;
 }): QuizRuleVerdict {
   if (i.state === null) return { kind: 'refuse', detail: `no quiz run ${i.id}` };
+  if (i.action === QUIZ_WITHDRAW_RULING) {
+    if (i.state !== 'confirmed') return { kind: 'refuse', detail: `run ${i.id} is ${i.state}, not a confirmed baseline` };
+    if (i.sha?.baseline !== true) return { kind: 'refuse', detail: `run ${i.id} is not the baseline` };
+    return { kind: 'write', state: 'withdrawn', baseline: false };
+  }
   if (i.action === QUIZ_MATCH_RULING) {
     if (i.sha === undefined) return { kind: 'refuse', detail: 'a match ruling carries the sha the run measured' };
     const matched = i.sha.stored === i.sha.claimed;
     if (i.state === 'pending') {
-      return matched ? { kind: 'write', state: 'confirmed', baseline: quizBaseline(i.runs, i.w1aChoices) } : { kind: 'write', state: 'discarded', baseline: false };
+      if (i.key !== 'matches') {
+        return { kind: 'refuse', detail: i.key === 'wrong' ? `the confirm key is not run ${i.id}'s; nothing was written`
+          : `run ${i.id} was not recorded for the unattended confirmation, or the call carried no confirm key; nothing was written` };
+      }
+      if (!matched) return { kind: 'refuse', detail: `run ${i.id}'s stored report sha is not ${i.sha.claimed.slice(0, QUIZ_SHA_PREFIX)}; it stays pending` };
+      return { kind: 'write', state: 'confirmed', baseline: quizBaseline(i.runs, i.w1aChoices) };
     }
     if (matched && i.state !== 'unknown') return { kind: 'same', state: i.state, baseline: i.state === 'confirmed' && i.sha.baseline };
     return { kind: 'refuse', detail: `already ${i.state}` };
@@ -160,16 +185,20 @@ export function quizRuleVerdict(i: {
   return { kind: 'write', state: 'confirmed', baseline: quizBaseline(i.runs, i.w1aChoices) };
 }
 
-/** The mail that wakes the programme's coordinator when an unattended confirmation made the baseline (run 3212), or null
- *  when there is nothing to say: no change, no baseline, or no coordinator to tell. The door queues what this answers. */
+/** The mail that wakes the programme's coordinator once a confirmed baseline exists (run 3212), keyed on its run (review 3232
+ *  F4): null when there is no baseline, when the coordinator was already mailed for this one (`wokeAt`), or when there is
+ *  nobody to tell. It goes to the programme's coordinator, or, with no overlord run open, to the designated Overlord session,
+ *  with no run, so it reaches the next coordinator. The confirm door and every status tick ask it, and the door marks the run
+ *  woken only once the mail was queued, so a lost wake is sent again on the next tick. */
 export function quizBaselineMailOf(i: {
-  readonly ruled: { readonly changed: boolean; readonly baseline: boolean; readonly id: number }; readonly reportSha: string;
-  readonly coordinator: string | null;
+  readonly baseline: { readonly id: number; readonly reportSha: string; readonly wokeAt: number | null } | null;
+  readonly coordinator: string | null; readonly designated: string | null;
 }): { readonly toId: string; readonly subject: string; readonly body: string } | null {
-  if (!i.ruled.changed || !i.ruled.baseline || i.coordinator === null) return null;
+  const to = i.coordinator ?? i.designated;
+  if (i.baseline === null || i.baseline.wokeAt !== null || to === null) return null;
   return {
-    toId: i.coordinator, subject: QUIZ_BASELINE_MAIL_SUBJECT,
-    body: `The replay quiz's baseline is recorded: run ${i.ruled.id}, report sha ${i.reportSha.slice(0, QUIZ_SHA_PREFIX)}, confirmed `
+    toId: to, subject: `${QUIZ_BASELINE_MAIL_SUBJECT} run ${i.baseline.id}`,
+    body: `The replay quiz's baseline is recorded: run ${i.baseline.id}, report sha ${i.baseline.reportSha.slice(0, QUIZ_SHA_PREFIX)}, confirmed `
       + 'by the unattended weekly run. Each W1a lane (' + W1A_ARM_ROWS.join(', ') + ') can now go live through '
       + '~/.local/bin/ccrc-api quiz live --json - with the body {"fromId","fromUuid","lane"}, one lane per call. The baseline is a '
       + 'score and its interval only: never a W2 result, a PASS or a measured benefit of recall.',
@@ -186,12 +215,17 @@ const QUIZ_WEEK_RE = /^[0-9]{4}-W[0-9]{2}$/;
 const QUIZ_TOKEN_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const QUIZ_ACCOUNT_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const isLine = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= QUIZ_STATUS_FIELD_MAX && !/[\r\n]/.test(v);
+/** The one-line trace an unattended caller sends (`quiz-unattended <user> <role> <ISO time>`): `by` on the confirm and status
+ *  doors, `recordedBy` on the record door. Attribution, not authentication: the runner has no session. */
+export const isQuizTrace = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= QUIZ_STATUS_FIELD_MAX && !/[\r\n]/.test(v);
 /** The body's fields, and nothing else. */
-export const QUIZ_STATUS_KEYS = ['week', 'act', 'outcome', 'word', 'detail', 'account', 'at'] as const;
+export const QUIZ_STATUS_KEYS = ['week', 'act', 'outcome', 'word', 'detail', 'account', 'at', 'by'] as const;
 
 /** The status body, read (pure): the ISO week or null, the act and the word as short lower-case tokens, the outcome one of
- *  `QUIZ_TICK_OUTCOMES`, the detail one line or null, the account an id or null, the tick's wall ms. Any other key refuses. */
-export function quizStatusOf(body: unknown): { readonly ok: true; readonly status: LaneArmQuizTick } | { readonly ok: false; readonly field: string } {
+ *  `QUIZ_TICK_OUTCOMES`, the detail one line, empty or null (an empty one is stored as null), the account an id or null, the
+ *  tick's wall ms, and the runner's trace (`by`, the sender check its sibling doors take). Any other key refuses. */
+export function quizStatusOf(body: unknown):
+  { readonly ok: true; readonly status: LaneArmQuizTick; readonly by: string } | { readonly ok: false; readonly field: string } {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, field: '(body)' };
   const b = body as Record<string, unknown>;
   const unknownKey = Object.keys(b).find((k) => !(QUIZ_STATUS_KEYS as readonly string[]).includes(k));
@@ -200,11 +234,12 @@ export function quizStatusOf(body: unknown): { readonly ok: true; readonly statu
   if (typeof b['act'] !== 'string' || !QUIZ_TOKEN_RE.test(b['act'])) return { ok: false, field: 'act' };
   if (!isQuizTickOutcome(b['outcome'])) return { ok: false, field: 'outcome' };
   if (b['word'] !== null && (typeof b['word'] !== 'string' || !QUIZ_TOKEN_RE.test(b['word']))) return { ok: false, field: 'word' };
-  if (b['detail'] !== null && !isLine(b['detail'])) return { ok: false, field: 'detail' };
+  if (b['detail'] !== null && b['detail'] !== '' && !isLine(b['detail'])) return { ok: false, field: 'detail' };
   if (b['account'] !== null && (typeof b['account'] !== 'string' || !QUIZ_ACCOUNT_RE.test(b['account']))) return { ok: false, field: 'account' };
   if (typeof b['at'] !== 'number' || !Number.isSafeInteger(b['at']) || b['at'] <= 0) return { ok: false, field: 'at' };
-  return { ok: true, status: { week: b['week'] as string | null, act: b['act'], outcome: b['outcome'], word: b['word'] as string | null,
-    detail: b['detail'] as string | null, account: b['account'] as string | null, at: b['at'] } };
+  if (!isQuizTrace(b['by'])) return { ok: false, field: 'by' };
+  return { ok: true, by: b['by'], status: { week: b['week'] as string | null, act: b['act'], outcome: b['outcome'], word: b['word'] as string | null,
+    detail: b['detail'] === '' ? null : b['detail'] as string | null, account: b['account'] as string | null, at: b['at'] } };
 }
 
 /** The stop words the coordinator is told of even though the tick only waits: no account had weekly room (ask 695's ruling). */
@@ -221,12 +256,36 @@ export function quizStatusMailOf(i: { readonly status: LaneArmQuizTick; readonly
   const t = i.status;
   const stops = t.word !== null
     && (t.outcome === 'refused' || t.outcome === 'failed' || (QUIZ_STATUS_MAIL_WAITING_WORDS as readonly string[]).includes(t.word));
-  const key = stops ? `${t.week ?? 'setup'} ${t.word}` : null;
+  // A setup-phase stop has no week of its own: its key carries the week it happened in, so it mails once a week (review 3232).
+  const key = stops ? `${t.week ?? `setup ${quizWeek(t.at).key}`} ${t.word}` : null;
   if (key === null || key === i.mailedKey || i.coordinator === null) return { mail: null, key: i.mailedKey };
   return { key, mail: { toId: i.coordinator, subject: `${QUIZ_STATUS_MAIL_SUBJECT} ${key}`,
     body: `The weekly unattended replay quiz stopped (${t.week ?? 'its setup'}): at ${t.act}, ${t.outcome}, word ${t.word}`
       + `${t.detail === null ? '' : `: ${t.detail}`}. It is retried at its next tick; the Shadow lanes card shows its last word, and `
       + 'doctor\'s quiz line on the fleet box says more. You are told once per week and word.' } };
+}
+
+/** The word of the mail that says the setup's account has waited two weeks running (review 3232 F9). */
+export const QUIZ_SETUP_ACCOUNT_GONE = 'setup-account-gone';
+/** The setup account's waiting streak (review 3232 F9). The setup's account is never re-picked, because a new account is a new
+ *  setup and breaks comparability; so a run of `waiting` ticks (no room, a switched-off account, a missing record path) that
+ *  spans two ISO weeks mails the coordinator once, with `QUIZ_SETUP_ACCOUNT_GONE`, for a fix to be dispatched. A tick with any
+ *  other outcome ends the streak; a setup-phase tick (no week) leaves it as it stands. `goneKey` is the streak's first week once
+ *  mailed; a mail that is not queued keeps the stored key, so a later tick mails again. */
+export function quizWaitingStreakOf(i: {
+  readonly status: LaneArmQuizTick; readonly waitingSince: string | null; readonly goneMailedKey: string | null; readonly coordinator: string | null;
+}): { readonly waitingSince: string | null; readonly goneKey: string | null;
+      readonly mail: { readonly toId: string; readonly subject: string; readonly body: string } | null } {
+  const t = i.status;
+  if (t.week === null) return { waitingSince: i.waitingSince, goneKey: i.goneMailedKey, mail: null };
+  const since = t.outcome === 'waiting' ? (i.waitingSince ?? t.week) : null;
+  if (since === null || since === t.week || i.goneMailedKey === since || i.coordinator === null) {
+    return { waitingSince: since, goneKey: i.goneMailedKey, mail: null };
+  }
+  return { waitingSince: since, goneKey: since, mail: { toId: i.coordinator, subject: `${QUIZ_STATUS_MAIL_SUBJECT} ${t.week} ${QUIZ_SETUP_ACCOUNT_GONE}`,
+    body: `The weekly unattended replay quiz has waited on its setup's account since ${since} (now ${t.week}: at ${t.act}, word `
+      + `${t.word ?? 'none'}). The account is never re-picked, because a new account is a new setup and breaks comparability, so this `
+      + 'needs a fix to be dispatched: the account\'s room, its lane switch, or a new setup. You are told once for this run of weeks.' } };
 }
 
 // ── The record door's decider (plan `2026-11-17-overlord-quiz-record.md` §5, F2; slugs the-door-checks-the-sha,

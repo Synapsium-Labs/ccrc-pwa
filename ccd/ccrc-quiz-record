@@ -8,10 +8,11 @@ set +x
 # It posts one report (a regular file of at most 64 KiB) as a JSON body and prints what the server answered. The run it
 # records is PENDING: the operator's confirmation on the Shadow lanes card makes it count, or, with `--confirm`, the
 # operator's matching rule applied by the server (run 3212; the operator's ruling of 2026-11-22). `--confirm` is what the
-# weekly timer runs (`deploy/history-quiz-unattended.mjs`): after the record it posts the run id the record answered and
-# this `--sha` to `ccrc-api quiz confirm`, and the server confirms that run when its stored sha is this one and discards it
-# when it is not. It prints `confirmed run <id>, report sha <12 hex>`, with ` (the baseline)` when the run became it, and
-# exits 0; a discarded run or a refusal prints its word on stderr and exits 1.
+# weekly timer runs (`deploy/history-quiz-unattended.mjs`): it records with `unattended: true`, which the server answers with a
+# single-use confirm key, then posts the run id the record answered, that key and this `--sha` to `ccrc-api quiz confirm`; the
+# server confirms that run when the key and its stored sha match, and refuses, leaving it pending, when either does not
+# (review 3232 F1a, F1b). It prints `confirmed run <id>, report sha <12 hex>`, with ` (the baseline)` when the run became it,
+# and exits 0; a discarded or withdrawn run, or a refusal, prints its word on stderr and exits 1.
 #
 # IT POSTS THROUGH THE CLIENT (coordinator ruling, plan slug `quiz-record-posts-through-the-client`; CLAUDE.md's
 # consolidate rule: no fifth hand copy of the URL-and-credential read). This file does its own validation and packaging
@@ -22,8 +23,9 @@ set +x
 #
 # It refuses inside a session (`CLAUDECODE` set at all, even empty, as history's single-arm module reads it) and inside a
 # pane (`TMUX_PANE`) before it reads anything. Those are speed
-# bumps, not walls: a session that holds the box credential could post a pending run through the client anyway, and
-# nothing here makes a run count. The operator's confirmation on the card does.
+# bumps, not walls: a session that holds the box credential could post through the client anyway (the session hook's quiz arm
+# refuses the client's record, confirm and status rows on every session, an accident guard too). A run counts once it is
+# confirmed: on the card by the operator, or with `--confirm`, by the server's matching rule over the key and sha above.
 #
 # Portability: the file is measured with `wc -c`; no `stat -c`, no `sha256sum`, no bare `timeout` (the client's own
 # deadline bounds the call).
@@ -77,8 +79,8 @@ verb=quiz-record
 trace="$verb ${user:-unknown} ${role:-unknown} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # The report travels as UTF-8 JSON text: `jq --rawfile` reads the file, never a shell variable.
-body=$(jq -n --rawfile report "$report" --arg sha "$sha" --arg by "$trace" \
-  '{report: $report, sha256: $sha, recordedBy: $by}') || die "could not build the request body"
+body=$(jq -n --rawfile report "$report" --arg sha "$sha" --arg by "$trace" --argjson un "$([ "$confirm" -eq 1 ] && echo true || echo false)" \
+  '{report: $report, sha256: $sha, recordedBy: $by} + (if $un then {unattended: true} else {} end)') || die "could not build the request body"
 
 # The client's stderr (`http <code>`) is left to reach the terminal as it is.
 answer=$(printf '%s' "$body" | "$CLIENT" quiz record --json -)
@@ -105,8 +107,11 @@ if [ "$ok" = true ]; then
     exit 0
   fi
   [[ "$id" =~ ^[1-9][0-9]*$ ]] || die "the record answered no run id; nothing was confirmed"
-  # The confirmation: the run id the record answered and the sha the report printed, ruled by the server's matching rule.
-  cbody=$(jq -n --arg sha "$sha" --arg by "$trace" '{sha256: $sha, by: $by}') || die "could not build the confirm body"
+  # The confirmation: the run id the record answered, the confirm key it answered (none for a run already ruled, whose resend
+  # answers its own state) and the sha the report printed, ruled by the server's matching rule.
+  key=$(printf '%s' "$answer" | jq -r '.confirmKey // ""')
+  cbody=$(jq -n --arg sha "$sha" --arg by "$trace" --arg key "$key" \
+    '{sha256: $sha, by: $by} + (if $key == "" then {} else {confirmKey: $key} end)') || die "could not build the confirm body"
   answer=$(printf '%s' "$cbody" | "$CLIENT" quiz confirm "$id" --json -)
   rc=$?
   [ "$rc" -eq 0 ] || die "no answer to the confirmation (ccrc-api exited $rc); run $id is recorded, its ruling unknown"
@@ -118,7 +123,8 @@ if [ "$ok" = true ]; then
     printf 'confirmed run %s, report sha %s%s\n' "$id" "${sha:0:12}" "$tail"
     exit 0
   fi
-  if [ "$state" = discarded ]; then die "discarded: run $id's stored report sha is not ${sha:0:12}…; it does not count"; fi
+  if [ "$state" = discarded ]; then die "discarded: run $id was discarded; it does not count"; fi
+  if [ "$state" = withdrawn ]; then die "withdrawn: the operator withdrew run $id as the baseline; it does not count"; fi
   word=$(printf '%s' "$answer" | jq -r '.error // "confirm-refused"')
   detail=$(printf '%s' "$answer" | jq -r '.detail // "no detail"')
   printf '%s: %s\n' "$word" "$detail" >&2

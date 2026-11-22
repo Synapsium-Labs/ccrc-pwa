@@ -344,6 +344,29 @@ describe('the replay quiz block (Overlord W1a, quiz record)', () => {
     expect(document.querySelector('[data-quiz-tick]')).toBeNull();
   });
 
+  // Review 3232 F1e: the operator's undo of a wrong baseline, by its run id, with no step-up.
+  it('a recorded baseline with its run id offers Withdraw, which withdraws that run and re-reads; without the id it is not offered', async () => {
+    const read = vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ baseline: { state: 'recorded', at: AT, id: 4 } })));
+    const withdraw = vi.spyOn(api, 'withdrawQuizBaseline').mockResolvedValue({ ok: true, id: 4, state: 'withdrawn', baseline: false } as never);
+    const rule = vi.spyOn(api, 'ruleQuizRun');
+    mount();
+    expect(await screen.findByText(T.quizWithdrawNote)).toBeInTheDocument();
+    expect(document.querySelector('[data-quiz-withdraw]')?.getAttribute('data-quiz-withdraw')).toBe('4');
+    const calls = read.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: T.quizWithdraw }));
+    await waitFor(() => expect(withdraw).toHaveBeenCalledWith(4));
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(calls));
+    expect(rule).not.toHaveBeenCalled();
+    cleanup();
+    vi.restoreAllMocks();
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ baseline: { state: 'recorded', at: AT } })));
+    mount();
+    await screen.findByText(T.quizBaseline.recorded(laneArmQuizDate(AT)));
+    expect(screen.queryByRole('button', { name: T.quizWithdraw })).toBeNull();
+    expect(asLaneArmView({ lanes: [], quizBaseline: { baseline: { state: 'recorded', at: AT, id: 4 }, pending: { ok: true, runs: [] } } })?.quizBaseline?.baseline)
+      .toEqual({ state: 'recorded', at: AT, id: 4 });
+  });
+
   it('a view without the field shows no block', async () => {
     vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz());
     mount();

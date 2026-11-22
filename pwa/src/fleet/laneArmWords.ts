@@ -71,7 +71,7 @@ function asQuizBlock(raw: unknown): LaneArmQuizView | null {
   if (!isRecord(raw) || !isRecord(raw.baseline) || !isRecord(raw.pending)) return null;
   const b = raw.baseline;
   let baseline: LaneArmQuizView['baseline'];
-  if (b.state === 'recorded' && isFiniteNum(b.at)) baseline = { state: 'recorded', at: b.at };
+  if (b.state === 'recorded' && isFiniteNum(b.at)) baseline = { state: 'recorded', at: b.at, ...(isFiniteNum(b.id) ? { id: b.id } : {}) };
   else if (b.state === 'not-yet') baseline = { state: 'not-yet' };
   else if (b.state === 'unreadable' && typeof b.detail === 'string') baseline = { state: 'unreadable', detail: b.detail };
   else return null;

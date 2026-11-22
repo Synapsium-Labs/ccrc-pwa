@@ -1517,7 +1517,8 @@ the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`
 (`POST /api/continuity/quiz-runs`, which the operator's `ccrc quiz-record` reaches through `ccrc-api` and which records a run
 as pending only; its rule door, `POST /api/continuity/quiz-runs/:id/rule`, is gated, behind a session and a step-up), the weekly
 unattended run's confirmation (`POST /api/continuity/quiz-runs/:id/confirm`, which `ccrc quiz-record --confirm` reaches through
-`ccrc-api` and which confirms a recorded run on the sha its report printed or discards it) and its tick report
+`ccrc-api` and which confirms a recorded run when its record's single-use key and the sha its report printed match, and
+refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 `/api/notify`, which refuses an absent token like every lane,

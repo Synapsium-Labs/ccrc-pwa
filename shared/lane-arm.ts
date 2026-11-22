@@ -160,7 +160,7 @@ export const LANE_ARM_QUIZ_TICK_STATES = ['none', 'reported', 'unreadable'] as c
  *  an older server sends none, and the card then shows no tick line). */
 export interface LaneArmQuizView {
   baseline:
-    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number }
+    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number; id?: number }
     | { state: Extract<LaneArmQuizState, 'not-yet'> }
     | { state: Extract<LaneArmQuizState, 'unreadable'>; detail: string };
   pending: { ok: true; runs: LaneArmQuizPending[] } | { ok: false; detail: string };
@@ -323,6 +323,10 @@ export const LANE_ARM_TEXT = {
   quizPendingUnreadable: 'The server could not read the replay quiz runs waiting for you',
   quizConfirm: 'Confirm',
   quizDiscard: 'Discard',
+  /** Review 3232 F1e: the operator's undo of a wrong baseline. Optional; nothing asks for it. */
+  quizWithdraw: 'Withdraw the baseline',
+  quizWithdrawNote: 'Withdraw only a baseline you know is wrong: the run is kept, never counts again, and the next run confirmed '
+    + 'while every W1a lane is in shadow becomes the baseline. A lane already live stays live.',
   quizRuleNote: 'Before you confirm, match the run\'s report sha with the one report and ccrc quiz-record printed, and '
     + 'discard any run you did not record. Confirm counts the run; the first one confirmed while every W1a lane is in shadow '
     + 'becomes the baseline. Discard keeps the row and never counts it.',

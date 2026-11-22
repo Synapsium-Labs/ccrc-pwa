@@ -68,10 +68,11 @@ describe('quizBaseline (the rule, L1)', () => {
     expect(quizBaseline([C(false)], allShadow())).toBe(true);
   });
 
-  it('reads confirmed rows only: a pending or discarded row is never an earlier baseline, whatever its flag says', () => {
+  it('reads confirmed rows only: a pending, discarded or withdrawn row is never an earlier baseline, whatever its flag says', () => {
     expect(quizBaseline([{ state: 'pending', baseline: true }], allShadow())).toBe(true);
     expect(quizBaseline([{ state: 'discarded', baseline: true }], allShadow())).toBe(true);
-    expect([...QUIZ_RUN_STATES]).toEqual(['pending', 'confirmed', 'discarded']);
+    expect(quizBaseline([{ state: 'withdrawn', baseline: true }], allShadow())).toBe(true);
+    expect([...QUIZ_RUN_STATES]).toEqual(['pending', 'confirmed', 'discarded', 'withdrawn']);
   });
 
   it('a first run recorded while any W1a row is live is not the baseline', () => {
@@ -148,13 +149,13 @@ describe('quizRuleVerdict (the operator\'s ruling, L1)', () => {
 describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
   const ins = (coord: CoordStore, over: Partial<Record<keyof QuizReport, unknown>> = {}, recordedAt = 1000) =>
     insertQuizRun(coord.db, { report: good(over), extra: EXTRA, recordedBy: 'quiz-record op both 2026-11-17T00:00:00Z', recordedAt });
-  const rule = (coord: CoordStore, id: number, action: 'confirm' | 'discard', read: (l: W1aArmRow) => LaneArmRead) =>
+  const rule = (coord: CoordStore, id: number, action: 'confirm' | 'discard' | 'withdraw', read: (l: W1aArmRow) => LaneArmRead) =>
     ruleQuizRun(coord.db, { id, action, at: 5000, by: 'device-a' }, read);
   const idOf = (r: ReturnType<typeof insertQuizRun>): number => { if (!r.ok) throw new Error('insert failed'); return r.id; };
 
   it('the inserter writes a pending run with no baseline, and the extra columns', () => {
     const { coord } = setup();
-    expect(ins(coord)).toEqual({ ok: true, id: expect.any(Number), fresh: true, state: 'pending' });
+    expect(ins(coord)).toEqual({ ok: true, id: expect.any(Number), fresh: true, state: 'pending', keyed: false });
     expect(quizBaselineRead(coord.db)).toEqual({ ok: true, exists: false, at: null });
     const runs = quizRuns(coord.db);
     expect(runs.ok && runs.rows[0]).toMatchObject({ ...report(), state: 'pending', baseline: false, ruledAt: null, ruledBy: null,
@@ -217,12 +218,31 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
     expect(runs.ok && runs.rows.map((r) => r.state)).toEqual(['confirmed']);
   });
 
+  it('withdraw takes back the confirmed baseline only: it becomes withdrawn, keeps its confirmation, and the next run can be the baseline (review 3232 F1e)', () => {
+    const { coord, read } = setup();
+    const a = idOf(ins(coord, {}, 1000));
+    const b = idOf(ins(coord, { reportSha: SHA('c') }, 2000));
+    const p = idOf(ins(coord, { reportSha: SHA('d') }, 3000));
+    rule(coord, a, 'confirm', read);
+    rule(coord, b, 'confirm', read);
+    expect(rule(coord, b, 'withdraw', read)).toEqual({ ok: false, kind: 'bad-request', detail: `run ${b} is not the baseline` });
+    expect(rule(coord, p, 'withdraw', read)).toEqual({ ok: false, kind: 'bad-request', detail: `run ${p} is pending, not a confirmed baseline` });
+    expect(ruleQuizRun(coord.db, { id: a, action: 'withdraw', at: 7000, by: 'device-b' }, read))
+      .toEqual({ ok: true, id: a, state: 'withdrawn', baseline: false, changed: true, reportSha: SHA('a') });
+    expect(coord.db.prepare('SELECT state, baseline, ruledAt, ruledBy, withdrawnAt, withdrawnBy FROM continuity_quiz_runs WHERE id = ?').get(a))
+      .toEqual({ state: 'withdrawn', baseline: 0, ruledAt: 5000, ruledBy: 'device-a', withdrawnAt: 7000, withdrawnBy: 'device-b' });
+    expect(quizBaselineRead(coord.db)).toEqual({ ok: true, exists: false, at: null });
+    expect(quizRecordedAts(coord.db)).toEqual({ ok: true, value: [2000] });
+    expect(rule(coord, a, 'withdraw', read)).toEqual({ ok: false, kind: 'bad-request', detail: `run ${a} is withdrawn, not a confirmed baseline` });
+    expect(rule(coord, p, 'confirm', read)).toMatchObject({ ok: true, baseline: true });
+  });
+
   it('a duplicate reportSha is one row: the resend answers the first row\'s id and state, unchanged', () => {
     const { coord, read } = setup();
     const a = idOf(ins(coord, {}, 1000));
-    expect(ins(coord, { score: 0.1, lo: 0.0, hi: 0.2 }, 2000)).toEqual({ ok: true, id: a, fresh: false, state: 'pending' });
+    expect(ins(coord, { score: 0.1, lo: 0.0, hi: 0.2 }, 2000)).toEqual({ ok: true, id: a, fresh: false, state: 'pending', keyed: false });
     rule(coord, a, 'discard', read);
-    expect(ins(coord, {}, 3000)).toEqual({ ok: true, id: a, fresh: false, state: 'discarded' });
+    expect(ins(coord, {}, 3000)).toEqual({ ok: true, id: a, fresh: false, state: 'discarded', keyed: false });
     const runs = quizRuns(coord.db);
     expect(runs.ok && runs.rows.length).toBe(1);
     expect(runs.ok && runs.rows[0]).toMatchObject({ score: 0.71, recordedAt: 1000 });
@@ -282,7 +302,8 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
     const cols = (coord.db.prepare('PRAGMA table_info(continuity_quiz_runs)').all() as { name: string }[]).map((c) => c.name);
     expect(cols).toEqual(['id', 'measuredAt', 'recordedAt', 'recordedBy', 'reportSha', 'questionsSha', 'questions', 'families',
       'score', 'lo', 'hi', 'judgeModel', 'ccrcRelease', 'claudeBuilds', 'steerArmed', 'agentsOnArmed', 'baseline', 'state', 'ruledAt',
-      'ruledBy', 'answered', 'correct', 'runFailed', 'absent', 'arm', 'settingsMode', 'pilot', 'ci', 'method', 'bootstrapB', 'inputs']);
+      'ruledBy', 'answered', 'correct', 'runFailed', 'absent', 'arm', 'settingsMode', 'pilot', 'ci', 'method', 'bootstrapB', 'inputs',
+      'confirmKeyHash', 'withdrawnAt', 'withdrawnBy', 'wokeAt']);
     for (const c of cols) expect(c).not.toMatch(/pass|verdict|benefit|gain|lift|delta/i);
   });
 });

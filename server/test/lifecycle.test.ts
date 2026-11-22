@@ -1539,7 +1539,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     // Run 3212: the weekly unattended run names these directories too, and collects its own week directories.
     expect(c!.creators).toEqual(['deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs (through the module)']);
     expect(c!.collector).toContain('deploy/history-quiz-unattended.mjs');
-    expect(c!.ruling).toBeNull();
+    // Review 3232 F10: what the runner never collects (a hand-run --out, a setup directory left after a refusal) keeps a ruling.
+    expect(c!.ruling).toContain('removed by hand once its run is confirmed or discarded');
+    expect(c!.ruling).toContain('a hand-run --out');
     const { KEEP_WEEKS } = await import('../../deploy/history-quiz-unattended.mjs');
     expect(KEEP_WEEKS, 'the row names another keep count than the runner prunes to').toBe(4);
     expect(c!.collector).toContain('beyond the newest four');

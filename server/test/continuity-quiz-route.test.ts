@@ -275,6 +275,45 @@ describe('POST /api/continuity/quiz-runs/:id/rule (the rule door, session and st
   });
 });
 
+describe('POST /api/continuity/quiz-runs/:id/withdraw (the operator\'s withdraw of the baseline, session, no step-up; review 3232 F1e)', () => {
+  const withdraw = (r: Rig, id: number | string, o: { cookie?: boolean; headers?: Record<string, string> } = {}) =>
+    r.send({ url: `/api/continuity/quiz-runs/${id}/withdraw`, payload: {}, ...o });
+  const baseline = async (r: Rig): Promise<number> => {
+    const id = json(await record(r, bodyOf(r)))['id'] as number;
+    expect(ruleQuizRun(r.coord.db, { id, action: 'confirm', at: 1, by: 'device-a' }, (l) => r.coord.laneArmSetting(l))).toMatchObject({ baseline: true });
+    return id;
+  };
+
+  it('refuses while sign-in is dark, and without a session, the box token alone included', async () => {
+    const dark = await rig();
+    const id = await baseline(dark);
+    expect(json(await withdraw(dark, id))).toMatchObject({ ok: false, error: 'auth-off' });
+    // The card names the baseline's run, so its Withdraw can.
+    const card = await app!.inject({ method: 'GET', url: '/api/coord/lane-arm' });
+    expect(json(card)['quizBaseline']).toMatchObject({ baseline: { state: 'recorded', id } });
+    await app!.close();
+    const r = await rig({ armed: true });
+    const id2 = await baseline(r);
+    expect(json(await withdraw(r, id2, { cookie: false }))).toMatchObject({ ok: false, error: 'unauthenticated' });
+    expect((await withdraw(r, id2, { cookie: false, headers: TOKEN })).statusCode).toBeGreaterThanOrEqual(400);
+    expect(quizBaselineRead(r.coord.db)).toMatchObject({ ok: true, exists: true });
+  });
+
+  it('with a session and no step-up: the baseline is withdrawn, once', async () => {
+    const r = await rig({ armed: true });
+    const id = await baseline(r);
+    const res = await withdraw(r, id);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(json(res)).toEqual({ ok: true, id, state: 'withdrawn', baseline: false });
+    expect(quizBaselineRead(r.coord.db)).toEqual({ ok: true, exists: false, at: null });
+    const again = await withdraw(r, id);
+    expect(again.statusCode).toBe(400);
+    expect(json(again)).toMatchObject({ ok: false, error: 'bad-request', detail: `run ${id} is withdrawn, not a confirmed baseline` });
+    expect(json(await withdraw(r, 999))).toEqual({ ok: false, error: 'bad-request', detail: 'no quiz run 999' });
+    expect(json(await withdraw(r, 'x'))).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+});
+
 // The contract with PR 1 (#2988): the report `deploy/history-quiz-single.mjs#singleReportOf` builds, written as its `report`
 // subcommand writes it, is the report the record door takes, field for field (plan §4 and §5).
 describe('the contract: history\'s single-arm report is the record door\'s', () => {

@@ -4246,8 +4246,16 @@ export const MIGRATIONS: readonly string[] = [
   // lanes card reads it. The coordinator allotted slot 120 to this entry beside run 3213's 119; by position it is the next
   // free one on this branch, and whoever lands second renumbers on absorbing main.
   //
-  // A NEW TABLE, nothing on an existing table: an older build opening a file at this entry's version takes rule 3 (it warns,
-  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // Review 3232 (fix round 1) adds the confirmation's binding to the record and the operator's withdraw to the runs table:
+  // `confirmKeyHash` is the sha256 of the single-use key the record door answered an unattended record (NULL for a hand
+  // record and once used), so only the caller that recorded a run can have the server confirm it; `withdrawnAt` and
+  // `withdrawnBy` are the operator's withdraw of a wrong baseline (state `withdrawn`); `wokeAt` is when the coordinator was
+  // mailed that this run became the baseline, keyed on the run so a lost wake is sent again on a later tick. The status row
+  // gains the runner's trace and the waiting streak that mails `setup-account-gone` once.
+  //
+  // A NEW TABLE and nullable columns on one existing table: an older build opening a file at this entry's version takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the new table, inserts runs by named columns (each new
+  // one NULL) and reads an unknown state as no state. Every earlier entry is frozen. RE-MEASURE the slot
   // before merge (it must print 118 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
@@ -4262,8 +4270,15 @@ export const MIGRATIONS: readonly string[] = [
     account     TEXT,                  -- the setup's account id, or NULL before setup
     at          INTEGER NOT NULL,      -- wall ms of the tick (the runner's)
     receivedAt  INTEGER NOT NULL,      -- wall ms the server stored it
-    mailedKey   TEXT                   -- '<week> <word>' the coordinator was last mailed for, or NULL
+    mailedKey   TEXT,                  -- '<week> <word>' the coordinator was last mailed for, or NULL
+    reportedBy  TEXT,                  -- the runner's trace ('quiz-unattended <user> <role> <time>')
+    waitingSince TEXT,                 -- the ISO week the current run of waiting ticks began, or NULL
+    goneMailedKey TEXT                 -- the waitingSince week setup-account-gone was mailed for, or NULL
   );
+  ALTER TABLE continuity_quiz_runs ADD COLUMN confirmKeyHash TEXT;  -- sha256 of the unattended record's single-use key
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnAt INTEGER;  -- wall ms of the operator's withdraw
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
+  ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
   `,
 ];
 

@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 291 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 292 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -656,21 +656,23 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'a round of another session\'s invisible'],
   // The replay quiz's record door (Overlord W1a, plan `2026-11-17-overlord-quiz-record.md` §5): the operator records a run.
   ['POST /api/continuity/quiz-runs',
-    "the operator's quiz record from the box: box-token gated, refused inside a session and a pane at the client; a session " +
-    'holding the token could post a pending run, and only the operator\'s confirmation, behind a session and a step-up, ' +
-    'makes it count'],
+    "the operator's quiz record from the box: box-token gated, refused inside a session and a pane at the client and by the " +
+    'session hook\'s quiz arm; a run it records is pending, and counts once the operator confirms it on the card or, for a run ' +
+    'recorded unattended, once the confirm door below matches the single-use key this door answered and the sha'],
   // Run 3212 (the operator's ruling of 2026-11-22: the weekly replay quiz runs, records and confirms itself).
   ['POST /api/continuity/quiz-runs/:id/confirm',
-    "the weekly timer's confirmation from the box: box-token gated, refused inside a session and a pane at the client; the " +
-    'server applies the operator\'s matching rule (confirm on the sha the run printed, discard on another), so a session ' +
-    'holding the token could confirm a run it recorded itself: an accident guard, the record door\'s residual'],
+    "the weekly timer's confirmation from the box: box-token gated, refused inside a session and a pane at the client and by " +
+    'the session hook\'s quiz arm; the server applies the operator\'s matching rule (confirm when the record\'s single-use key ' +
+    'and the sha match, refuse and leave the run pending otherwise), so only the caller that recorded the run can confirm it; a ' +
+    'session that runs that flow itself outside a pane still could: an accident guard, the record door\'s residual'],
   ['POST /api/continuity/quiz-baseline/live',
     "the overlord programme's coordinator takes a W1a lane live once the quiz's baseline is confirmed: box-token gated, no " +
     'cookie jar, attribution of fromUuid checked against the registry, then ownership (an open run of the programme), then ' +
     'the baseline; W1a rows only, Live only'],
   ['POST /api/continuity/quiz-status',
-    "the weekly timer's report of each tick from the box: box-token gated, no cookie jar; it stores one row the Shadow " +
-    'lanes card shows and mails the coordinator once per week and stop word, and makes no run count'],
+    "the weekly timer's report of each tick from the box: box-token gated, no cookie jar, its trace required, refused by the " +
+    'session hook\'s quiz arm; it stores one row the Shadow lanes card shows and mails the coordinator once per week and stop ' +
+    'word, and makes no run count'],
 
   ['POST /api/token/claim',
     'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +

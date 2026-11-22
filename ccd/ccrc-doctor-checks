@@ -11854,18 +11854,21 @@ _check_pane-scope-stop() {
 # characters); a last tick older than a run plus two ticks (12 h + two periods of the shipped timer, 24 h) is a WARN stale. SKIPs on
 # a server-role box (no history store); on macOS the timer is never installed, so the record is absent and it PASSes. Re-run doctor after the next tick: a refusal is the runner's own and clears itself.
 _check_quiz-weekly() {
-  local role="" rec="$HOME/.ccrc/quiz/unattended.json" out at wk act oc word det st age win cad_rc=0
+  local role="" rec="$HOME/.ccrc/quiz/unattended.json" vd out at wk act oc word det st age win cad_rc=0
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   if [ "$role" = server ]; then
     _dr_skip quiz-weekly "this box records CCRC_ROLE=server, so it keeps no history store and runs no weekly replay quiz"; return 3
   fi
   if [ ! -e "$rec" ]; then _dr_pass quiz-weekly "no unattended run recorded yet ($rec is absent), so the weekly replay quiz has not ticked here"; return 0; fi
-  if ! out="$(jq -er 'def c: tostring | explode | map(if . < 32 then 32 else . end) | implode;
-      if .kind == "ccrc-quiz-unattended-state" and (.last.at_ms | type) == "number" and .last.at_ms >= 0 and .last.at_ms < 1e15 then
+  vd="$(node --no-warnings "$CCRC_HERE/../deploy/history-quiz-unattended.mjs" --state-verdict 2>/dev/null)" || vd="unreadable verdict-not-run"
+  [ "$vd" != ok ] || out="$(jq -er 'def c: tostring | explode | map(if . < 32 then 32 else . end) | implode;
+      if (.last.at_ms | type) == "number" and .last.at_ms >= 0 and .last.at_ms < 1e15 then
       [(.last.at_ms | floor | tostring), (.last.week // "-" | c), (.last.act // "-" | c), (.last.outcome // "-" | c), (.last.word // "-" | c),
-       (.last.detail // "-" | c | .[0:200]), (if .last.week then (.weeks[.last.week].state // "-" | c) else "-" end)] | join("\u001f") else empty end' "$rec" 2>/dev/null)"; then
-    _dr_warn quiz-weekly "the record at $rec is not JSON or not a ccrc-quiz-unattended-state record, so the last unattended run cannot be read" \
-      "let the runner rewrite it: systemctl --user start ccd-quiz-weekly.service; then re-run doctor"
+       (.last.detail // "-" | c | .[0:200]), (if .last.week then (.weeks[.last.week].state // "-" | c) else "-" end)] | join("\u001f") else empty end' "$rec" 2>/dev/null)" || vd="malformed no-tick-time"
+  if [ "$vd" != ok ]; then
+    [ "$vd" = "unreadable EACCES" ] && out="the runner has no permission to read it: fix its owner or mode (chmod u+rw), then re-run doctor" \
+      || out="read why: journalctl --user -u ccd-quiz-weekly.service; move the file aside, then systemctl --user start ccd-quiz-weekly.service. With no state file the runner starts a NEW setup even where a setup directory exists: it spends again and breaks week-to-week comparability"
+    _dr_warn quiz-weekly "the record at $rec is $vd (the runner's own shape check), so the last unattended run cannot be read" "$out"
     return 2
   fi
   IFS=$'\x1f' read -r at wk act oc word det st <<< "$out"

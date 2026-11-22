@@ -45,6 +45,8 @@ export interface LaneArmQuizReads {
   readonly baseline: { readonly ok: true; readonly exists: true; readonly at: number } | { readonly ok: true; readonly exists: false; readonly at: null }
     | { readonly ok: false; readonly detail: string };
   readonly pending: { readonly ok: true; readonly runs: readonly LaneArmQuizPending[] } | { readonly ok: false; readonly detail: string };
+  /** The confirmed baseline's run id (review 3232 F1e: the card's Withdraw names it), or null when none was read. */
+  readonly baselineId?: number | null;
   /** The unattended run's last tick (run 3212; `quizStore.ts#quizStatusRead`), or no row yet, or why the read failed. */
   readonly status?: { readonly ok: true; readonly row: LaneArmQuizTick | null } | { readonly ok: false; readonly detail: string };
 }
@@ -55,7 +57,7 @@ export interface LaneArmQuizReads {
 export function laneArmQuizViewOf(q: LaneArmQuizReads): LaneArmQuizView {
   const baseline: LaneArmQuizView['baseline'] = !q.baseline.ok
     ? { state: 'unreadable', detail: q.baseline.detail }
-    : q.baseline.exists ? { state: 'recorded', at: q.baseline.at } : { state: 'not-yet' };
+    : q.baseline.exists ? { state: 'recorded', at: q.baseline.at, ...(typeof q.baselineId === 'number' ? { id: q.baselineId } : {}) } : { state: 'not-yet' };
   const pending: LaneArmQuizView['pending'] = q.pending.ok ? { ok: true, runs: [...q.pending.runs] } : { ok: false, detail: q.pending.detail };
   if (q.status === undefined) return { baseline, pending };
   const s = q.status;
@@ -116,6 +118,21 @@ export type LaneArmPostVerdict =
   | { readonly kind: 'confirm'; readonly body: LaneArmConfirmRequired }
   | { readonly kind: 'write'; readonly lane: LaneArmLane; readonly choice: LaneArmChoice };
 
+/** THE TWO LIVE DOORS' SHARED RULES (review 3232 F7): an unreadable row refuses whatever the choice, and Live on a W1a row
+ *  waits for the replay quiz's baseline (an unreadable baseline refuses as unreadable, never as missing). The card's door and
+ *  the coordinator's both ask it, so a new rule here reaches both; what stays apart is legitimately different: the card asks
+ *  a signed-in operator and a confirm key, the coordinator's door is reached only after the box token, attribution and
+ *  ownership, and refuses every row the baseline does not gate. */
+function laneArmRowRefusal(lane: LaneArmLane, row: LaneArmRowView, live: boolean, baseline: LaneArmBaseline):
+  { readonly kind: 'unreadable'; readonly detail: string } | { readonly kind: 'baseline-missing' } | null {
+  if (row.stored === 'unreadable') return { kind: 'unreadable', detail: row.detail ?? 'the row could not be read' };
+  if (live && isW1aArmRow(lane)) {
+    if (!baseline.ok) return { kind: 'unreadable', detail: `${LANE_ARM_TEXT.baselineUnreadable}: ${baseline.detail}` };
+    if (!baseline.exists) return { kind: 'baseline-missing' };
+  }
+  return null;
+}
+
 /** `gate` is `laneArmGate(request.lane)`; a caller passes another only to drive a gated lane's live path in a test. */
 export function decideLaneArmPost(i: {
   readonly request: LaneArmRequest; readonly row: LaneArmRowView; readonly signedIn: boolean; readonly baseline: LaneArmBaseline;
@@ -125,11 +142,8 @@ export function decideLaneArmPost(i: {
   const gate = i.gate === undefined ? laneArmGate(request.lane) : i.gate;
   if (request.choice === 'live' && gate !== null) return { kind: 'gated', reason: gate };
   if (request.choice === 'live' && !i.signedIn) return { kind: 'sign-in-unarmed' };
-  if (row.stored === 'unreadable') return { kind: 'unreadable', detail: row.detail ?? 'the row could not be read' };
-  if (request.choice === 'live' && isW1aArmRow(request.lane)) {
-    if (!i.baseline.ok) return { kind: 'unreadable', detail: `${LANE_ARM_TEXT.baselineUnreadable}: ${i.baseline.detail}` };
-    if (!i.baseline.exists) return { kind: 'baseline-missing' };
-  }
+  const refused = laneArmRowRefusal(request.lane, row, request.choice === 'live', i.baseline);
+  if (refused !== null) return refused;
   if (request.choice === 'live') {
     const key = laneArmConfirmKey(row);
     if (request.confirm !== key) {
@@ -160,10 +174,7 @@ export function decideLaneArmCoordLive(i: {
   if (!isW1aArmRow(i.lane)) return { kind: 'not-w1a' };
   const gate = i.gate === undefined ? laneArmGate(i.lane) : i.gate;
   if (gate !== null) return { kind: 'gated', reason: gate };
-  if (i.row.stored === 'unreadable') return { kind: 'unreadable', detail: i.row.detail ?? 'the row could not be read' };
-  if (!i.baseline.ok) return { kind: 'unreadable', detail: `${LANE_ARM_TEXT.baselineUnreadable}: ${i.baseline.detail}` };
-  if (!i.baseline.exists) return { kind: 'baseline-missing' };
-  return { kind: 'write', lane: i.lane };
+  return laneArmRowRefusal(i.lane, i.row, true, i.baseline) ?? { kind: 'write', lane: i.lane };
 }
 
 /** The feed row's body for a change, or null when the stored choice did not move. */

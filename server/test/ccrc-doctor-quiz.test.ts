@@ -5,7 +5,7 @@
 // naming the week and its state; it SKIPs on a server-role box and answers PASS on Darwin, where no record exists. Fixture HOMEs only (`healthy()`); the check runs
 // alone, sourced, as the pane-scope-stop suite runs its own.
 import { describe, expect, it } from 'vitest';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { writeShippedTimer } from './shippedTimers.js';
@@ -49,18 +49,32 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
     expect(r.out[1]).toBe('');
   });
 
-  it('WARN unreadable for a record that is not JSON, not the runner\'s kind, or has no readable tick time', () => {
-    for (const [tag, record] of [
-      ['text', 'not json at all'],
-      ['kind', JSON.stringify({ kind: 'something-else', v: 1, last: last() })],
-      ['nolast', JSON.stringify({ kind: 'ccrc-quiz-unattended-state', v: 1, weeks: {}, last: null })],
-      ['atms', state(last({ at_ms: 'soon' as unknown as number }))],
+  const MALFORMED_REMEDY = /^ {2}remedy: read why: journalctl --user -u ccd-quiz-weekly\.service; move the file aside, then systemctl --user start ccd-quiz-weekly\.service\. With no state file the runner starts a NEW setup even where a setup directory exists: it spends again and breaks week-to-week comparability$/;
+  it('WARN malformed, by the runner\'s own verdict, for a record that is not JSON, not its kind or version, or has no readable tick time', () => {
+    for (const [tag, record, why] of [
+      ['text', 'not json at all', 'malformed not JSON'],
+      ['torn', '{ "kind": "ccrc-quiz-unat', 'malformed not JSON'],
+      ['kind', JSON.stringify({ kind: 'something-else', v: 1, setup: null, weeks: {}, last: last() }), 'malformed not a ccrc-quiz-unattended-state v1 file'],
+      ['v2', JSON.stringify({ kind: 'ccrc-quiz-unattended-state', v: 2, setup: null, weeks: {}, last: last() }), 'malformed not a ccrc-quiz-unattended-state v1 file'],
+      ['nolast', JSON.stringify({ kind: 'ccrc-quiz-unattended-state', v: 1, setup: null, weeks: {}, last: null }), 'malformed no-tick-time'],
+      ['atms', state(last({ at_ms: 'soon' as unknown as number })), 'malformed no-tick-time'],
     ] as const) {
       const r = check(box(`ccrc-doctor-qw-bad-${tag}-`, { record }));
       expect(r.code, tag).toBe(2);
-      expect(r.out[0], tag).toMatch(/^WARN quiz-weekly: the record at .*unattended\.json is not JSON or not a ccrc-quiz-unattended-state record, so the last unattended run cannot be read$/);
-      expect(r.out[1], tag).toBe('  remedy: let the runner rewrite it: systemctl --user start ccd-quiz-weekly.service; then re-run doctor');
+      expect(r.out[0], tag).toMatch(new RegExp(`^WARN quiz-weekly: the record at .*unattended\\.json is ${why} \\(the runner's own shape check\\), so the last unattended run cannot be read$`));
+      expect(r.out[1], tag).toMatch(MALFORMED_REMEDY);
     }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('WARN unreadable EACCES names the permission problem, not the move-aside remedy', () => {
+    const home = box('ccrc-doctor-qw-eacces-', { record: state(last()) });
+    const f = join(home, '.ccrc', 'quiz', 'unattended.json');
+    chmodSync(f, 0o000);
+    const r = check(home);
+    chmodSync(f, 0o600);
+    expect(r.code).toBe(2);
+    expect(r.out[0]).toMatch(/^WARN quiz-weekly: the record at .*unattended\.json is unreadable EACCES \(the runner's own shape check\), so the last unattended run cannot be read$/);
+    expect(r.out[1]).toBe('  remedy: the runner has no permission to read it: fix its owner or mode (chmod u+rw), then re-run doctor');
   });
 
   it('WARN for a refused or failed last tick, naming week, act, word and detail cut to 200 characters', () => {
