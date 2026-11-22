@@ -80,6 +80,8 @@ export const INBOX_PAGE_ROWS = 100;
 
 /** The read ledger's served outcome: the one outcome a ceiling counts (board and history's ruling R8). */
 export const READ_SERVED_OUTCOME = 'rows';
+/** The outcome of the line a ceiling refusal writes (one for each door and window), which the counter reads the newest of. */
+export const READ_CEILING_OUTCOME = 'read-ceiling';
 export const READ_CEILING_WINDOW_MS = 3_600_000;
 /** Every read door's ceiling over a rolling hour (question 1), total over the ledger's doors. */
 export const READ_CEILINGS: Readonly<Record<ReadDoor, { readonly perHour: number }>> = {

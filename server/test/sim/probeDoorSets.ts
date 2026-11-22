@@ -998,7 +998,7 @@ const BOOK_OF_SET: MutantSet<ProbeDoorModule> = {
     { id: 'L1 an unreadable designation read as uncovered', old: "  if (i.designation === 'unmeasured') return { ok: false, detail: 'the designation could not be read' };\n", new: '' },
     { id: 'L2 every session covered', old: "  if (identityOf(i.callerId, i.designation) !== 'overlord') return { ok: true, value: { covered: false, reads: 0 } };\n", new: '' },
     { id: 'L5 no ledger writer still covers', old: "  if (!i.ledgerWritten) return { ok: true, value: { covered: false, reads: 0 } };\n", new: '' },
-    { id: 'L6 the build claims a ledger writer', old: 'export const READ_LEDGER_WRITTEN = false;', new: 'export const READ_LEDGER_WRITTEN = true;' },
+    { id: 'L6 the build denies its ledger writer', old: 'export const READ_LEDGER_WRITTEN = true;', new: 'export const READ_LEDGER_WRITTEN = false;' },
     { id: 'L3 a count never asked read as zero', old: "if (i.reads === null) return { ok: false, detail: 'the read ledger was not asked' };", new: "if (i.reads === null) return { ok: true, value: { covered: true, reads: 0 } };" },
     { id: 'L4 an unreadable count read as zero', old: "return i.reads.kind === 'measured' ? { ok: true, value: { covered: true, reads: i.reads.value } } : { ok: false, detail: i.reads.why };", new: "return { ok: true, value: { covered: true, reads: i.reads.kind === 'measured' ? i.reads.value : 0 } };" },
   ],

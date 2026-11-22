@@ -429,19 +429,33 @@ describe('recordRead: the one writer of the read ledger', () => {
 });
 
 describe('readsBetween: the count closed-book reads (Overlord W1 door process B1)', () => {
-  it('counts the named callers\' lines in the closed span, never the operator\'s or an outside line', () => {
+  it('counts the named callers\' served lines in the closed span, never the operator\'s or an outside line', () => {
     const f = fixture();
-    const reader = { ...LINE, caller: 'reader' as const, generation: null, generationRead: 'unmeasured' as const, turnState: 'stale' as const };
-    const operator = { ...LINE, caller: 'operator' as const, generation: null, generationRead: 'not-a-session' as const, turnState: null };
-    f.store.recordRead({ ...LINE, at: 99 });
-    f.store.recordRead({ ...LINE, at: 100 });
+    const served = { ...LINE, outcome: 'rows' };
+    const reader = { ...served, caller: 'reader' as const, generation: null, generationRead: 'unmeasured' as const, turnState: 'stale' as const };
+    const operator = { ...served, caller: 'operator' as const, generation: null, generationRead: 'not-a-session' as const, turnState: null };
+    f.store.recordRead({ ...served, at: 99 });
+    f.store.recordRead({ ...served, at: 100 });
     f.store.recordRead({ ...reader, at: 150 });
     f.store.recordRead({ ...operator, at: 150 });
-    f.store.recordRead({ ...LINE, at: 200 });
-    f.store.recordRead({ ...LINE, at: 201 });
+    f.store.recordRead({ ...served, at: 200 });
+    f.store.recordRead({ ...served, at: 201 });
     expect(f.store.readsBetween(['overlord', 'reader'], 100, 200)).toEqual({ kind: 'measured', value: 3 });
     expect(f.store.readsBetween(['overlord'], 100, 200)).toEqual({ kind: 'measured', value: 2 });
     expect(f.store.readsBetween(['overlord', 'reader'], 202, 300)).toEqual({ kind: 'measured', value: 0 });
+  });
+  it('leaves out the inbox\'s lines, and every line whose outcome is not the served one, so the inbox read that tells the Overlord a round is open never opens its book (the inbox plan, question 6)', () => {
+    const f = fixture();
+    const served = { ...LINE, outcome: 'rows' };
+    f.store.recordRead({ ...served, at: 100, door: 'inbox' });
+    f.store.recordRead({ ...served, at: 101, door: 'messages' });
+    f.store.recordRead({ ...served, at: 102, door: 'board' });
+    f.store.recordRead({ ...served, at: 103, door: 'history' });
+    f.store.recordRead({ ...served, at: 104, door: 'sequence' });
+    f.store.recordRead({ ...LINE, at: 105, door: 'messages', outcome: 'absent' });
+    f.store.recordRead({ ...LINE, at: 106, door: 'board', outcome: 'unmeasured' });
+    f.store.recordRead({ ...LINE, at: 107, door: 'board', outcome: 'read-ceiling', count: 0 });
+    expect(f.store.readsBetween(['overlord', 'reader'], 0, 1000)).toEqual({ kind: 'measured', value: 4 });
   });
   it('is unmeasured, never zero, for a closed store, an empty or unknown caller list and a bad bound', () => {
     const f = fixture();
@@ -451,5 +465,72 @@ describe('readsBetween: the count closed-book reads (Overlord W1 door process B1
     expect(f.store.readsBetween(['overlord'], 0, 1.5).kind).toBe('unmeasured');
     f.db.close();
     expect(f.store.readsBetween(['overlord'], 0, 1).kind).toBe('unmeasured');
+  });
+});
+
+// The inbox plan, Task 2 (question 6, 20): the read ceiling's counter, and the two text-free readers.
+const SERVED: ReadLine = { ...LINE, outcome: 'rows' };
+const OPERATOR_LINE: ReadLine = { ...SERVED, caller: 'operator', generation: null, generationRead: 'not-a-session', turnState: null };
+
+describe('servedReadsSince: the read ceiling\'s counter', () => {
+  it('counts the door\'s served lines inside the window, with the oldest one\'s time, and leaves out the console, other outcomes, other doors and the window\'s edge', () => {
+    const f = fixture();
+    f.store.recordRead({ ...SERVED, at: 1_000 });                                  // at the edge: not counted
+    f.store.recordRead({ ...SERVED, at: 1_001 });
+    f.store.recordRead({ ...SERVED, at: 1_500, caller: 'reader', generation: null, generationRead: 'unmeasured', turnState: 'stale' });
+    f.store.recordRead({ ...OPERATOR_LINE, at: 1_200 });                           // the console: not counted
+    f.store.recordRead({ ...SERVED, at: 1_300, outcome: 'unmeasured' });           // another outcome
+    f.store.recordRead({ ...SERVED, at: 1_400, door: 'messages' });                // another door
+    f.store.recordRead({ ...SERVED, at: 2_000 });
+    expect(f.store.servedReadsSince('board', 1_000)).toEqual({ kind: 'measured', value: { count: 3, oldestAt: 1_001, lastRefusalAt: 'none' } });
+  });
+  it('answers the newest read-ceiling line\'s time for the door, in or out of the window', () => {
+    const f = fixture();
+    f.store.recordRead({ ...SERVED, at: 5_000 });
+    f.store.recordRead({ ...SERVED, at: 100, outcome: 'read-ceiling', count: 0 });
+    f.store.recordRead({ ...SERVED, at: 300, outcome: 'read-ceiling', count: 0 });
+    f.store.recordRead({ ...SERVED, at: 900, outcome: 'read-ceiling', count: 0, door: 'messages' });
+    expect(f.store.servedReadsSince('board', 4_000)).toEqual({ kind: 'measured', value: { count: 1, oldestAt: 5_000, lastRefusalAt: 300 } });
+  });
+  it('answers none and a zero count with no line, and unmeasured on a closed handle', () => {
+    const f = fixture();
+    expect(f.store.servedReadsSince('inbox', 0)).toEqual({ kind: 'measured', value: { count: 0, oldestAt: 'none', lastRefusalAt: 'none' } });
+    f.db.close();
+    expect(f.store.servedReadsSince('inbox', 0).kind).toBe('unmeasured');
+  });
+});
+
+describe('unsettledFacts and messageFactsById: the text-free readers', () => {
+  it('answer every fact of every unsettled row in id order, never trimmed, and no text or sha256 key', () => {
+    const f = fixture();
+    const a = idOf(record(f, { at: 100, term: 2, text: 'a private sentence' }));
+    idOf(record(f, { at: 200, mark: true }));
+    const c = idOf(record(f, { at: 300, text: 'x'.repeat(20_000) }));
+    f.store.moveMessage(c, 'deliver', 'mail-lane', 1);
+    const r = f.store.unsettledFacts();
+    expect(r).toEqual({ kind: 'measured', value: [
+      { id: a, at: 100, term: 2, state: 'recorded', cut: false },
+      { id: c, at: 300, term: 1, state: 'delivered', cut: true },
+    ] });
+    for (const row of r.kind === 'measured' ? r.value : []) {
+      expect(Object.keys(row).sort()).toEqual(['at', 'cut', 'id', 'state', 'term']);
+    }
+    expect(JSON.stringify(r)).not.toContain('private sentence');
+  });
+  it('messageFactsById answers one message\'s facts, or absent', () => {
+    const f = fixture();
+    const id = idOf(record(f, { at: 50, text: 'a private sentence' }));
+    f.store.moveMessage(id, 'settle', 'acknowledge', 60);
+    const r = f.store.messageFactsById(id);
+    expect(r).toEqual({ kind: 'measured', value: { id, at: 50, term: 1, state: 'settled', cut: false } });
+    expect(Object.keys(r.kind === 'measured' && r.value !== 'absent' ? r.value : {}).sort()).toEqual(['at', 'cut', 'id', 'state', 'term']);
+    expect(f.store.messageFactsById(id + 9)).toEqual({ kind: 'measured', value: 'absent' });
+  });
+  it('answer unmeasured on a closed handle', () => {
+    const f = fixture();
+    record(f);
+    f.db.close();
+    expect(f.store.unsettledFacts().kind).toBe('unmeasured');
+    expect(f.store.messageFactsById(1).kind).toBe('unmeasured');
   });
 });
