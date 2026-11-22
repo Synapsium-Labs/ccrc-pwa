@@ -116,6 +116,7 @@ export interface CaptureStep { readonly type: string | null; readonly waitFor: r
 /** The drive (spec Table 1). The build's start raises SessionStart; `/exit` ends it with SessionEnd. */
 export const CAPTURE_STEPS: readonly CaptureStep[] = Object.freeze([
   { type: null, waitFor: ['SessionStart'] },
+  { type: '/model haiku', waitFor: ['PreModelSwitch', 'PostModelSwitch'] },   // before any turn, so no cache dialog (W0-12); door process B2
   { type: CAPTURE_MARK.one, waitFor: ['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Stop'] },
   { type: CAPTURE_MARK.two, waitFor: ['SubagentStart', 'SubagentStop', 'Stop'] },
   { type: '/compact', waitFor: ['PreCompact', 'PostCompact'] },
