@@ -415,7 +415,9 @@ interface ClearedGrouping { readonly title: (program: string | null) => string; 
 
 /** "Recently cleared": what the coordinator confirmed in the last 48 hours (`CLEARED_WINDOW_MS`, D-8194), newest first, each struck
  *  through with its number and when. The newest `CLEARED_SHOWN` show; Show all reveals the whole window and Show fewer folds it
- *  back. `where` names the programme beside a row where the list holds several; the list filtered to one programme leaves it out.
+ *  back. A call the address names keeps its marked row drawn while its notice stands (review 3222): the folded trail draws it
+ *  after the shown rows when it lies past them (`clearedFolded`), and Show all opens its programme's group
+ *  (`clearedOpenOnShowAll`). `where` names the programme beside a row where the list holds several; the list filtered to one programme leaves it out.
  *  Nothing is drawn for none.
  *
  *  THE WHOLE WINDOW IS GROUPED BY PROGRAMME where the list holds several (`grouping`, D-8194): a heading per programme in the
