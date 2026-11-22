@@ -45,7 +45,7 @@ const MIN: Record<TestboxAdminSub, Record<string, unknown>> = {
   'preflight': {}, 'connect': { settings: { CCRC_TESTBOX_WORKERS: '3' }, repos: [ROW] },
   'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } }, 'settings-box': { settings: { CCRC_TESTBOX_WORKERS: '3' } },
   'cancel': {}, 'parity': {}, 'repair': {}, 'apply-release': {}, 'disconnect': {}, 'key-rotate': {}, 'key-revoke': {},
-  'tools-home': {},
+  'tools-home': {}, 'build-copy': { version: '2.1.330' },
 };
 
 const build = (sub: unknown, fields: unknown) => buildTestboxAdminArgv(sub, fields);
@@ -62,10 +62,10 @@ const ip = (s: string): string => s.replace(/_/g, '.');
 describe('the sub table', () => {
   it('every sub has a spec and every spec a sub', () => {
     expect(Object.keys(TESTBOX_ADMIN_SUBS).sort()).toEqual([...SUBS].sort());
-    expect(SUBS).toHaveLength(17);
+    expect(SUBS).toHaveLength(18);
     expect(SUBS.sort()).toEqual([
-      'apply-release', 'cancel', 'connect', 'disconnect', 'key', 'key-revoke', 'key-rotate', 'parity', 'pin', 'preflight', 'probe',
-      'read', 'repair', 'settings-box', 'settings-fleet', 'status', 'tools-home',
+      'apply-release', 'build-copy', 'cancel', 'connect', 'disconnect', 'key', 'key-revoke', 'key-rotate', 'parity', 'pin', 'preflight',
+      'probe', 'read', 'repair', 'settings-box', 'settings-fleet', 'status', 'tools-home',
     ]);
     for (const s of SUBS) expect(MIN[s], s).toBeDefined();
   });
@@ -262,7 +262,7 @@ describe('the argv builder', () => {
       'settings-fleet': { settings: { CCRC_TESTBOX_POLL: '1m' } },
       'settings-box': { settings: { CCRC_TESTBOX_RUNS: '2' }, whenIdle: true },
       'cancel': {}, 'parity': { prs: [1, '2'] }, 'repair': {}, 'apply-release': {}, 'disconnect': { replace: true },
-      'key-rotate': {}, 'key-revoke': {}, 'tools-home': {},
+      'key-rotate': {}, 'key-revoke': {}, 'tools-home': {}, 'build-copy': { version: '2.1.330' },
     };
     for (const s of SUBS) expect(build(s, wire[s]).ok, s).toBe(true);
     // a list of K=V strings is not a settings map
@@ -640,6 +640,7 @@ describe('the codes', () => {
       'install-failed', 'pair-failed', 'status-not-ok', 'pairing-keys-in-ccrc-env', 'key-in-ccrc-env', 'runs-in-progress',
       'idle-deadline', 'cancelled', 'gh-signed-out', 'parity-differs', 'not-connected', 'box-side-skipped',
       'interrupted', 'new-key-refused', 'old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed', 'tools-home-failed',
+      'build-not-on-fleet', 'build-not-regular', 'build-too-large', 'build-hash-mismatch', 'build-copy-failed',
     ]) expect(TESTBOX_ADMIN_CODES, c).toContain(c);
     // the codes whose refusal names a public key line for the operator to remove by hand (D-8337)
     expect([...TESTBOX_LINE_CODES]).toEqual(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);

@@ -17,6 +17,7 @@
 // row runs a fixed bash program; values are its arguments.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1287,5 +1288,210 @@ exit 1
     expect(second.rc, second.err).toBe(0);
     expect(second.out).toBe('kept\n');
     expect(readFileSync(calls, 'utf8')).toBe('daemon-reload\ndaemon-reload\n');
+  });
+});
+
+// The build capture's copy (capture runner spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.2, Table 2;
+// ccd/testbox-build-copy): the fleet's own copy of one Claude Code build, read only, hashed on this host, streamed into a stage
+// on the box, hashed there, and installed read only under the box's root. The fleet side runs against a fixture HOME and the
+// fake ssh; the box's two one-line programs run for real against a fixture root (chown to the running user's own ids).
+describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin build-copy (build-source-is-the-fleet)', () => {
+  const V = '2.1.330';
+  const BYTES = 'BUILD-BYTES-OF-2.1.330\n';
+  const SUM = createHash('sha256').update(BYTES).digest('hex');
+  const STAGE = '/srv/box/captures/builds/.copy.AbC123';
+  const COPY_RULES = (over: Partial<Record<'stage' | 'sha' | 'install' | 'rm', [string, string]>> = {}): string[][] => [
+    ['\\.copy\\.XXXXXXXX', ...(over.stage ?? ['0', `${STAGE}\\n`])],
+    [`^(sudo -n -- )?sha256sum -- ${escapeRe(STAGE)}$`, ...(over.sha ?? ['0', `${SUM}  ${STAGE}\\n`])],
+    // The rule reads the command as `%q` wrote it (a space inside the program is escaped), so it keys on the words after it.
+    ['installed sh /srv/box ', ...(over.install ?? ['0', 'installed\\n'])],
+    [`^(sudo -n -- )?rm -f -- ${escapeRe(STAGE)}$`, ...(over.rm ?? ['0', ''])],
+    ...PASSING_RULES,
+  ];
+  const versions = (h: Home): string => join(h.home, '.local', 'share', 'claude', 'versions');
+  function placed(h: Home, body = BYTES): string {
+    mkdirSync(versions(h), { recursive: true });
+    const f = join(versions(h), V);
+    writeFileSync(f, body, { mode: 0o755 });
+    return f;
+  }
+  const copy = (h: Home, ...words: string[]): { out: string; err: string; rc: number } => verb(h, 'build-copy', `--version=${V}`, '--from', 'agent', ...words);
+  const boxCmds = (h: Home, before: number): string[] => cmds(h).slice(before);
+
+  it('copies in three box calls: the bytes into a stage, the box\'s hash of them, the install; and answers the build and its hash', () => {
+    const h = fixture({}, COPY_RULES());
+    connectedTo(h);
+    placed(h);
+    const before = sshCalls(h).length;
+    expect(json(copy(h))).toEqual({ ok: true, build: V, sha256: SUM });
+    const calls = boxCmds(h, before).filter((c) => !c.includes('ssh-keyscan'));
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toMatch(/^sh -c set -e; r=\$1; d=\$r\/captures\/builds; .*\.copy\.XXXXXXXX.* sh \/srv\/box$/);
+    expect(stdinOfLast(h, '.copy.XXXXXXXX'), 'the build\'s bytes ride the stage call\'s stdin').toBe(BYTES);
+    expect(calls[1]).toBe(`sha256sum -- ${STAGE}`);
+    expect(calls[2]).toMatch(new RegExp(`echo installed sh /srv/box ${escapeRe(STAGE)} ${escapeRe(V)}$`));
+    for (const c of calls) expect(c).not.toContain('\n');
+    expect(existsSync(join(h.home, 'systemd-run-calls')), 'a short act never detaches').toBe(false);
+    expect(readFileSync(h.lg, 'utf8')).toMatch(/build-copy: ok \(2\.1\.330\)/);
+  });
+
+  it('never writes the fleet\'s versions directory: its listing, the file\'s bytes, mode and time are as they were', () => {
+    const h = fixture({}, COPY_RULES());
+    connectedTo(h);
+    const f = placed(h);
+    const was = statSync(f);
+    expect(json(copy(h))['ok']).toBe(true);
+    expect(readdirSync(versions(h))).toEqual([V]);
+    const now = statSync(f);
+    expect([readFileSync(f, 'utf8'), now.mode, now.mtimeMs, now.ino]).toEqual([BYTES, was.mode, was.mtimeMs, was.ino]);
+  });
+
+  it.each([
+    ['the fleet holds no such build', (h: Home) => { mkdirSync(versions(h), { recursive: true }); }, 'build-not-on-fleet'],
+    ['the build is a symbolic link', (h: Home) => { const real = join(h.home, 'elsewhere'); writeFileSync(real, BYTES); mkdirSync(versions(h), { recursive: true }); symlinkSync(real, join(versions(h), V)); }, 'build-not-regular'],
+    ['a dangling symbolic link', (h: Home) => { mkdirSync(versions(h), { recursive: true }); symlinkSync(join(h.home, 'nowhere'), join(versions(h), V)); }, 'build-not-regular'],
+    ['the build is a directory', (h: Home) => { mkdirSync(join(versions(h), V), { recursive: true }); }, 'build-not-regular'],
+  ])('%s: %s, and no box is reached', (_n, arrange, code) => {
+    const h = fixture({}, COPY_RULES());
+    connectedTo(h);
+    arrange(h);
+    const before = sshCalls(h).length;
+    expect(json(copy(h))).toEqual({ ok: false, code });
+    expect(sshCalls(h).length).toBe(before);
+  });
+
+  it('a build over the size cap is refused build-too-large before any box call; at the cap it is copied', () => {
+    const h = fixture({}, COPY_RULES());
+    connectedTo(h);
+    placed(h);
+    const before = sshCalls(h).length;
+    const over = sh(h, SRC + `TBA_BUILD_COPY_MAX=${BYTES.length - 1}; _tba_main build-copy --version=${V} --from agent`, [VERB]);
+    expect(json(over)).toEqual({ ok: false, code: 'build-too-large' });
+    expect(sshCalls(h).length).toBe(before);
+    const at = sh(h, SRC + `TBA_BUILD_COPY_MAX=${BYTES.length}; _tba_main build-copy --version=${V} --from agent`, [VERB]);
+    expect(json(at)).toEqual({ ok: true, build: V, sha256: SUM });
+  });
+
+  it('the cap is 1 GiB', () => {
+    expect(sh(fixture(), `. "$1"; printf %s "$TBA_BUILD_COPY_MAX"`, [VERB]).out).toBe(String(1024 ** 3));
+  });
+
+  it('a hash that differs on the box refuses build-hash-mismatch, removes the stage and installs nothing', () => {
+    const h = fixture({}, COPY_RULES({ sha: ['0', `${'0'.repeat(64)}  ${STAGE}\\n`] }));
+    connectedTo(h);
+    placed(h);
+    const before = sshCalls(h).length;
+    expect(json(copy(h))).toEqual({ ok: false, code: 'build-hash-mismatch' });
+    const calls = boxCmds(h, before);
+    expect(calls).toContain(`rm -f -- ${STAGE}`);
+    expect(calls.some((c) => c.includes('echo installed'))).toBe(false);
+  });
+
+  it.each([
+    ['the stage call fails', { stage: ['1', ''] as [string, string] }],
+    ['the stage is not under the box root\'s store', { stage: ['0', '/tmp/.copy.AbC123\\n'] as [string, string] }],
+    ['the stage is under another root', { stage: ['0', '/srv/other/captures/builds/.copy.AbC123\\n'] as [string, string] }],
+  ])('%s: build-copy-failed, and nothing is hashed or installed', (_n, over) => {
+    const h = fixture({}, COPY_RULES(over));
+    connectedTo(h);
+    placed(h);
+    const before = sshCalls(h).length;
+    expect(json(copy(h))).toEqual({ ok: false, code: 'build-copy-failed' });
+    const calls = boxCmds(h, before);
+    expect(calls.some((c) => c.startsWith('sha256sum'))).toBe(false);
+    expect(calls.some((c) => c.includes('echo installed'))).toBe(false);
+  });
+
+  it.each([
+    ['the box\'s hash call fails', { sha: ['1', ''] as [string, string] }, false],
+    ['the install fails', { install: ['1', ''] as [string, string] }, true],
+    ['the install answers something else', { install: ['0', 'what\\n'] as [string, string] }, true],
+  ])('%s: build-copy-failed, and the stage is removed', (_n, over, installed) => {
+    const h = fixture({}, COPY_RULES(over));
+    connectedTo(h);
+    placed(h);
+    const before = sshCalls(h).length;
+    expect(json(copy(h))).toEqual({ ok: false, code: 'build-copy-failed' });
+    const calls = boxCmds(h, before);
+    expect(calls).toContain(`rm -f -- ${STAGE}`);
+    expect(calls.some((c) => c.includes('echo installed'))).toBe(installed);
+  });
+
+  it('with no connection it answers not-connected and reaches no box', () => {
+    const h = fixture({}, COPY_RULES());
+    placed(h);
+    expect(json(copy(h))).toEqual({ ok: false, code: 'not-connected' });
+    expect(sshCalls(h)).toEqual([]);
+  });
+
+  it('is busy while a long act holds the lock, and reaches no box', () => {
+    const h = fixture({}, COPY_RULES());
+    connectedTo(h);
+    placed(h);
+    const before = sshCalls(h).length;
+    const r = sh(h, SRC + `exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; _tba_main build-copy --version=${V} --from pwa`, [VERB]);
+    expect(json(r)).toEqual({ ok: false, code: 'busy' });
+    expect(sshCalls(h).length).toBe(before);
+  });
+
+  it.each([['2.1'], ['02.1.3'], ['2.1.3x'], ['../2.1.3'], ['-2.1.3'], ['v2.1.3']])('--version=%s is a usage error naming the flag, and no box is reached', (v) => {
+    const h = fixture({}, COPY_RULES());
+    connectedTo(h);
+    const before = sshCalls(h).length;
+    const r = verb(h, 'build-copy', `--version=${v}`, '--from', 'agent');
+    expect(r.rc).toBe(2);
+    expect(r.err).toContain('(--version)');
+    expect(sshCalls(h).length).toBe(before);
+  });
+
+  it('a missing --version is a usage error', () => {
+    const h = fixture();
+    const r = verb(h, 'build-copy', '--from', 'agent');
+    expect(r.rc).toBe(2);
+    expect(r.err).toContain('(--version)');
+  });
+
+  it('the bash grammar agrees with shared/claudeVersion.ts on one corpus', () => {
+    const corpus = ['0.0.0', '2.1.330', '10.20.30', '2.1', '2.1.3.4', '02.1.3', '2.01.3', '2.1.03', 'a.b.c', '2.1.3 ', ' 2.1.3', '', '2.1.3\nx'];
+    const r = sh(fixture(), `. "$1"; shift; for v in "$@"; do if _tba_is_claude_version "$v"; then echo 1; else echo 0; fi; done`, [VERB, ...corpus]);
+    expect(r.out.trim().split('\n').map((x) => x === '1')).toEqual(corpus.map((v) => /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)));
+  });
+
+  describe('the box\'s two programs, run for real against a fixture root', () => {
+    const run = (h: Home, prog: 'TBA_BUILD_STAGE_SH' | 'TBA_BUILD_INSTALL_SH', args: string[], stdin = ''): { out: string; err: string; rc: number } => {
+      const r = spawnSync(BASH, ['-c', `. "$1"; shift; sh -c "$${prog}" sh "$@"`, '_', VERB, ...args], { env: h.env, encoding: 'utf8', cwd: h.home, input: stdin });
+      return { out: r.stdout ?? '', err: r.stderr ?? '', rc: r.status ?? -1 };
+    };
+
+    it('the stage program writes stdin to a fresh stage beside the store and prints its path; the install moves it in, mode 0555', () => {
+      const h = fixture();
+      const root = join(h.home, 'boxroot');
+      mkdirSync(root);
+      const st = run(h, 'TBA_BUILD_STAGE_SH', [root], BYTES);
+      expect(st.rc, st.err).toBe(0);
+      const stage = st.out.trim();
+      expect(stage.startsWith(`${root}/captures/builds/.copy.`)).toBe(true);
+      expect(readFileSync(stage, 'utf8')).toBe(BYTES);
+      const inst = run(h, 'TBA_BUILD_INSTALL_SH', [root, stage, V]);
+      expect(inst.rc, inst.err).toBe(0);
+      expect(inst.out).toBe('installed\n');
+      const f = join(root, 'captures', 'builds', V);
+      expect(readFileSync(f, 'utf8')).toBe(BYTES);
+      expect(statSync(f).mode & 0o777).toBe(0o555);
+      expect(existsSync(stage)).toBe(false);
+      expect(readdirSync(join(root, 'captures', 'builds'))).toEqual([V]);
+    });
+
+    it('the install refuses a stage that is not one of the store\'s own, and moves nothing', () => {
+      const h = fixture();
+      const root = join(h.home, 'boxroot');
+      mkdirSync(join(root, 'captures', 'builds'), { recursive: true });
+      const other = join(h.home, 'not-a-stage');
+      writeFileSync(other, BYTES);
+      const inst = run(h, 'TBA_BUILD_INSTALL_SH', [root, other, V]);
+      expect(inst.rc).toBe(2);
+      expect(existsSync(other)).toBe(true);
+      expect(existsSync(join(root, 'captures', 'builds', V))).toBe(false);
+    });
   });
 });
