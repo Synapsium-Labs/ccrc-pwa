@@ -301,6 +301,7 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/linear/proxy/search': ['stays-open', 'a read sent as a POST (question 7)'],
   'POST /api/linking/suggest': ['stays-open', 'a box-token write lane, attribution-checked, that the Overlord uses too: below the full rung it suggests a team instead of linking (D-8808, spec §3.1 step 5); it stores the caller\'s own suggestion only'],
   'POST /api/linking/confirm': ['overlord-door', 'an Overlord door (`link-team` in `OVERLORD_DOORS`, class `other`, others refused): it runs the Overlord gate, which refuses every caller that is not the designated Overlord and allows the act at `full` only (D-8809)'],
+  'POST /api/overlord/messages/:id/acknowledge': ['overlord-door', 'an Overlord door (`acknowledge` in `OVERLORD_DOORS`, class `other`, others refused, fenced): it runs the Overlord gate, which refuses every caller that is not the designated Overlord (the W1 inbox piece)'],
   'POST /api/auth/login': ['operator-sign-in', 'the operator\'s sign-in door; no session identity rides it'],
   'POST /api/auth/passkey/assert/start': ['operator-sign-in', 'the operator\'s passkey door'],
   'POST /api/auth/passkey/assert/finish': ['operator-sign-in', 'the operator\'s passkey door'],

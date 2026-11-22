@@ -222,7 +222,7 @@ import {
 } from './coord/store.js';
 import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
-import { settleFixedLine, settleOperatorNudge } from './operatorModel/nudgeLane.js';
+import { settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
 import type { overlordReadGate } from './coord/overlordGateRun.js';
 import { isInboxWakeMail } from '../../shared/overlordInbox.js';
@@ -8459,7 +8459,6 @@ export class FleetWatcher {
       sessionId: '', project: '', title: 'Mail held', body: `The Overlord designation could not be read (${why}), so mail waits.`,
       tag: 'designation-unmeasured' }, this.activeProjects); });
     if (designation === 'unmeasured') return;
-    const sweepDesignation = sweepDesignationOf(designation);
     // The renewal act's hold (Overlord W1a): each session's live generation by its `state` column, read once a sweep (a
     // failed read holds nothing, as before the act existed); `renewalHoldsMail` decides, before any attempt is counted.
     const gens = store.liveGenerations();
@@ -8849,7 +8848,7 @@ export class FleetWatcher {
         // An operator message's nudge types its own fixed line and resumes only that line (`mailNudgeOf`, the private store's
         // mail branch); every other mail is the id-agnostic line above, as before.
         const origin = store.mailOrigin(d.mailId);
-        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignation, now);
+        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
@@ -8896,14 +8895,13 @@ export class FleetWatcher {
         // `esc to interrupt`. It is best-effort: blind below `READER_MIN_COLS`,
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
-        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin, sweepDesignation, now).line,
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin, sweepDesignationOf(designation), now).line,
           { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           if (!this.landed(store.markDelivered(d.id, now), 'markDelivered', d.id)) continue;
-          if (nudge.operatorMessageId !== null) settleOperatorNudge({ coord: store, operatorModel: this.deps.operatorModel, now, warn: (l) => { console.warn(l); } }, d, nudge.operatorMessageId);
-          else if (nudge.firstDelivery === 'none') settleFixedLine({ coord: store, now, warn: (l) => { console.warn(l); } }, d);
+          settleNudge({ coord: store, operatorModel: this.deps.operatorModel, now, warn: (l) => { console.warn(l); } }, d, nudge);
           // A REPLAY — this row was already `delivered` before this send —
           // counts against its own ceiling, independent of `attempts` (fix,
           // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own

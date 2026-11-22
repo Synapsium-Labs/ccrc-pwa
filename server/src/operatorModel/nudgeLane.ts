@@ -45,6 +45,16 @@ export function settleFixedLine(
   if (delivery.deliveredAt === null) ackDelivery(deps, delivery.id);
 }
 
+/** After the mail lane typed a nudge and `markDelivered` landed: an operator message's move and ack, a fixed line's
+ *  first-delivery ack, or nothing for the generic nudge. The table row decided which (`mailNudgeOf`); this only dispatches. */
+export function settleNudge(
+  deps: NudgeLaneDeps, delivery: { readonly id: number; readonly deliveredAt: number | null },
+  nudge: { readonly operatorMessageId: number | null; readonly firstDelivery?: 'none' },
+): void {
+  if (nudge.operatorMessageId !== null) settleOperatorNudge(deps, delivery, nudge.operatorMessageId);
+  else if (nudge.firstDelivery === 'none') settleFixedLine(deps, delivery);
+}
+
 /** The ack route's half (review 2627 F-1): a session that acks its operator-message nudge itself, before the lane types it or
  *  while the lane's send is in flight (whose `markDelivered` is then refused as terminal), settles the row as the lane's own ack
  *  does, so a self-ack never leaves it `queued` until a boot. Called after an ack that landed; any other mail is left alone. */
