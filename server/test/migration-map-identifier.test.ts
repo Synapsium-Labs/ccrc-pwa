@@ -145,6 +145,20 @@ describe('plan map-propose by visible identifier (D-8186)', () => {
       expect(stored(r)).toEqual({ state: 'proposing', entries: null, snapshot: null });
       expect(writes(r)).toEqual([]);
     });
+    it('an identifier only another workspace\'s team has: the read is the migration\'s workspace alone', async () => {
+      const { r, post } = await routed((x) => { x.addIssue(1); x.addIssue(2); });
+      // Another workspace holds team AAA too: there AAA-9 is open, and AAA-1 is a different issue.
+      const elsewhere = [{ ...r.issues.get(U(101))!, id: U(191) }, { ...r.issues.get(U(101))!, id: U(199), identifier: 'AAA-9' }];
+      r.override.current = (ask) => ask.op === 'teamOpenIssues' && ask.workspaceId !== WS.a.id ? ok({ nodes: elsewhere, next: null }) : undefined;
+      const res = await post({ entries: [...covering, byIdentifier('AAA-9', { ...target, ticketKey: 'k9' })] });
+      expect([res.status, res.json.error, res.json.detail]).toEqual([409, 'map-incomplete', 'not-open:AAA-9']);
+      expect(r.asks.map((a) => a.workspaceId)).toEqual([WS.a.id]);
+      expect(itemsOf(r)).toEqual([]);
+      expect(stored(r)).toEqual({ state: 'proposing', entries: null, snapshot: null });
+      // control: the same map without AAA-9 is stored with this workspace's AAA-1, never the other's
+      expect((await post({ entries: covering })).status).toBe(200);
+      expect(stored(r).entries!.map((e) => e.issue)).toEqual([U(101), U(102)]);
+    });
     it('a non-string issue', async () => {
       await refused(undefined, { entries: [{ issue: 101, identifier: 'AAA-1', class: 'leaf', target }] },
         { status: 400, error: 'plan-bad-body', detail: "an entry's issue is not a string" });
