@@ -1154,9 +1154,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  opened by its number after it left the Recently cleared window still opens, read-only. `unknown-item` (404) for a number
      *  no item has, or one the operator was never shown. Session-gated when armed. */
     item: (id: number) => getJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}`),
-    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
-     *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
-     *  `ApiError` like every non-2xx, and the item is unchanged. */
+    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides for a `decide` or a `value` item,
+     *  and for a `do` item ticked with its optional note (D-8931); a `do` item ticked with none sends no body at
+     *  all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an `ApiError` like every non-2xx, and the
+     *  item is unchanged. */
     tickItem: (id: number, answer?: string) =>
       postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
     /** `POST /api/calls/:id/seen` (D-8126): the operator's Seen on a big call, idempotent. A refusal (`not-big`, `unknown-call`)

@@ -31,8 +31,9 @@ export type Markable = { markable: true } | { markable: false; reason: NotMarkab
 
 /** Which boxes each kind of item carries (spec §9.2.1, C70; answer marks C, #2900). A question (`decide`, `value`) carries
  *  both. A task (`do`) carries `could-answer` alone: handing a task over is the same signal as handing a question over, and
- *  the box reads "The Overlord could handle this"; it has no answer, so no `unsure`. A `secret` item carries none. Every kind
- *  that carries `unsure` carries `could-answer` too, which `itemMarksView` relies on. */
+ *  the box reads "The Overlord could handle this"; it answers no question, so no `unsure`: the optional note its tick may
+ *  carry (D-8931) says what was done, and is stored in `answer` without being one. A `secret` item carries
+ *  none. Every kind that carries `unsure` carries `could-answer` too, which `itemMarksView` relies on. */
 const ITEM_MARKS: Readonly<Record<ItemKind, Readonly<Record<AnswerMarkName, boolean>>>> = {
   decide: { 'could-answer': true, unsure: true },
   value: { 'could-answer': true, unsure: true },
