@@ -23,7 +23,7 @@ import type { LiveSpendReading } from '../../shared/portfolio.js';
 import type { HealthVerdict, SpendTurnRead } from '../../shared/programmeFacts.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
+import { defaultCachePath, inventoryBuildAgreement, inventoryBuilds, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -6316,6 +6316,14 @@ export class FleetWatcher {
             (sid, inc) => intentOfCheckpoint(this.delegationCheckpointIfReady(), sid, inc), id),
           // Whether the fleet node runs this server's build, from the node inventory (W1 sandbox: `profiledigest` waits for it).
           buildAgreement: () => inventoryBuildAgreement(coord),
+        },
+        // The skew notice (W1 sandbox B): the body's liveness from the fleet state, both builds from the node inventory, and
+        // one feed row and push per session and build pair, its once-only key read back through `hasNotice`.
+        skew: {
+          running: (id) => { const x = this.deps.fleetState?.sessions.find((r) => r.id === id); return x === undefined ? 'unmeasured' : x.status !== 'dead'; },
+          builds: () => { const b = inventoryBuilds(coord); const w = (i: typeof b.own) => (i === null ? null : i.version ?? i.sha.slice(0, 9)); return { fleet: w(b.fleet), server: w(b.own) }; },
+          noticed: (id, key) => coord.hasNotice('coord', id, key),
+          raise: (id, key, body) => this.pushOne({ kind: 'coord', sessionId: id, project: '', title: 'The Overlord waits for one build', body, runId: null, recordAlways: true, dedupeKey: key }, this.activeProjects),
         },
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
     });

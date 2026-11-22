@@ -226,7 +226,8 @@ export interface SkewFacts {
   readonly agreement: BuildAgreement;
   readonly fleetBuild: string | null;
   readonly serverBuild: string | null;
-  readonly noticed: ReadonlySet<string>;
+  /** Whether a notice with this key was raised already (the feed's once-only key, `CoordStore.hasNotice`). */
+  readonly noticed: (key: string) => boolean;
 }
 
 /** The one notice a dead Overlord under build skew raises (question 5, slug `dead-overlord-waits-for-build-agreement`): once
@@ -237,6 +238,6 @@ export function skewNoticeOf(f: SkewFacts): { readonly key: string; readonly bod
   const fleet = f.fleetBuild ?? 'an unread build';
   const server = f.serverBuild ?? 'an unread build';
   const key = `${f.sessionId}:${fleet}:${server}`;
-  if (f.noticed.has(key)) return null;
+  if (f.noticed(key)) return null;
   return { key, body: `The Overlord (${f.sessionId}) is down and stays down until both boxes run one build: the fleet box runs ${fleet}, the server ${server}. Its launch profile is checked against the server's build, so a respawn now would be refused.` };
 }

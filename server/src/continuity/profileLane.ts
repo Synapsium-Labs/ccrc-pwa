@@ -39,6 +39,8 @@ import type { SessionRecord } from '../registry.js';
 import { designationFactFrom, roleFactsOf, roleOf } from '../roleOf.js';
 import type { UsageRead } from '../usage.js';
 import { plainAutoMemoryOf, profileDigestWriteOf, profileFor } from './profileFor.js';
+import { skewNoticeOf } from './sandboxCheck.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
 
 /** The lane's `LANE_SCHEDULE` row. */
 export const LAUNCH_PROFILE_LANE_ROW = 'launchProfile';
@@ -104,6 +106,16 @@ export interface ProfileLaneDeps {
   /** A row's gate (`laneArmGate`), unless a test opens one; nothing in the server passes it. */
   readonly gate?: (lane: LaneArmLane) => string | null;
   readonly memory: ProfileLaneMemory;
+  /** The skew notice's reads and its one raise (W1 sandbox B, question 5; `skewNoticeOf`). Absent, the pass raises none. */
+  readonly skew?: {
+    /** Whether the session runs: false for a dead row, `unmeasured` when the fleet state does not list it. */
+    running(id: string): boolean | 'unmeasured';
+    /** The fleet node's and the server's builds, as the inventory names them (a tag, else a short sha), or null. */
+    builds(): { readonly fleet: string | null; readonly server: string | null };
+    /** Whether a notice with this once-only key was raised (`CoordStore.hasNotice`), and the raise that records it. */
+    noticed(id: string, key: string): boolean;
+    raise(id: string, key: string, body: string): void;
+  };
 }
 
 export interface ProfileLaneResult {
@@ -148,7 +160,8 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   // The designation is read once a pass; unmeasured, no row is written (a pending Overlord read as plain would be given a
   // plain profile): every row counts with `roleUnread`, which the pass line journals once.
   let designation: ReturnType<typeof designationFactFrom>;
-  try { designation = designationFactFrom(coord.designationRead()); } catch { designation = 'unmeasured'; }
+  let designationRaw: DesignationRead | null = null;
+  try { designationRaw = coord.designationRead(); designation = designationFactFrom(designationRaw); } catch { designation = 'unmeasured'; }
   const byField = zeroFields();
   let would = 0; let written = 0; let failed = 0; let deferred = 0; let unsupported = 0;
   let routeUnread = 0; let roleUnread = 0; let steered = 0; let steerUnread = 0; let memoryUnread = 0;
@@ -212,7 +225,28 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     memoryUnread,
   };
   logPass(deps, result, failures);
+  skewPass(deps, rows, designationRaw, builds);
   return result;
+}
+
+/** The skew notice (W1 sandbox B, question 5, slug `dead-overlord-waits-for-build-agreement`): the Overlord's body, bound or
+ *  pending, is down while its route carries `profiledigest` and the two boxes run different builds, so ccd refuses every
+ *  respawn until they agree. `skewNoticeOf` decides; this raises its one notice, keyed once per session and build pair in the
+ *  feed (`hasNotice`), so a restart does not raise it again. A designation it cannot read raises nothing. */
+function skewPass(deps: ProfileLaneDeps, rows: readonly ProfileRow[], read: DesignationRead | null, seen: BuildAgreement | null): void {
+  const s = deps.skew;
+  if (s === undefined || read === null || read.kind === 'unmeasured') return;
+  const id = read.kind === 'designated' ? read.sessionId : read.row?.pending?.sessionId ?? null;
+  if (id === null) return;
+  try {
+    const route = rows.find((r) => r.id === id)?.route ?? null;
+    const pair = s.builds();
+    const n = skewNoticeOf({ sessionId: id, running: s.running(id), digestStands: route?.fields.profiledigest !== undefined,
+      agreement: seen ?? deps.reads.buildAgreement(), fleetBuild: pair.fleet, serverBuild: pair.server, noticed: (key) => s.noticed(id, key) });
+    if (n !== null) s.raise(id, n.key, n.body);
+  } catch (e) {
+    deps.log(`ccrc-server: launch-profile: the skew notice could not be read: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /** The measured window of a usage read, or null: a stale or missing reading is unmeasured, never a window. */

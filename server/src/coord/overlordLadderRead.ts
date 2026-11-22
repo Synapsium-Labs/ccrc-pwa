@@ -4,7 +4,9 @@ import type { CONTINUITY_LANE } from '../../../shared/lane-arm.js';
 import { liveGenerationOf } from '../continuity/liveGeneration.js';
 import { degradedReading, effectiveRung, latchKnown, narrowingState, offModelReading, rungAvailable, rungWordReading, type EffectiveRung } from './overlordLadder.js';
 import { offModelOf, type SidecarClass } from '../continuity/hookReports.js';
+import { expectedSurfaceOf, profileEngagedOf } from '../continuity/sandboxCheck.js';
 import { familyClassOf } from '../../../shared/models.js';
+import { OVERLORD_PROJECT } from '../../../shared/overlord-designation.js';
 import type { SessionUsage } from '../../../shared/api.js';
 import type { LadderRowsRead } from './overlordLadderStore.js';
 import type { CoordStore } from './store.js';
@@ -46,7 +48,7 @@ export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
 export type SidecarOf = (sessionId: string) => Pick<SessionUsage, 'class' | 'stale'> | null | undefined;
 const sidecarClassOf = (u: ReturnType<SidecarOf>): SidecarClass => (u === null || u === undefined ? { kind: 'absent' } : u.stale ? { kind: 'stale' } : { kind: 'fresh', class: u.class });
 
-export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf }): LadderConditionInputs {
+export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf' | 'startLoadsOfNewestStart'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf }): LadderConditionInputs {
   return {
     'generation-degraded': () => {
       try {
@@ -71,6 +73,20 @@ export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<C
           sidecarClass: sidecarClassOf(deps.sidecar?.(designation.sessionId)),
         });
         return offModelReading(designation, 'present', answer);
+      } catch { return 'unmeasured'; }
+    },
+    // The designated body's newest `startup` or `resume` start, by its own report (W1 sandbox B, `profileEngagedOf`): not engaged
+    // stands; no designation lifts; an unreadable read, or a store without the read, is unmeasured. The workspace is the one the
+    // settle step measured when this binding went live: a bound body's registry project never changes (slug
+    // `ladder-reads-the-workspace-the-settle-measured`), and its cwd and instruction files are still each start's own report.
+    'launch-profile-unengaged': () => {
+      try {
+        const designation = deps.coord.designationRead();
+        if (designation.kind !== 'designated') return designation.kind === 'unmeasured' ? 'unmeasured' : 'lifted';
+        const expected = expectedSurfaceOf('overlord');
+        const read = deps.coord.startLoadsOfNewestStart?.(designation.sessionId);
+        if (expected === null || read === undefined || !read.ok) return 'unmeasured';
+        return profileEngagedOf(read.newest, expected, { kind: 'measured', project: OVERLORD_PROJECT }, read.newest?.carry) === 'engaged' ? 'lifted' : 'standing';
       } catch { return 'unmeasured'; }
     },
     'rung-word-missing': () => {

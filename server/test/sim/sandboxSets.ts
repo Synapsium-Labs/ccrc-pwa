@@ -199,8 +199,8 @@ export function settleCases(m: SandboxModule): Record<string, SuiteCase> {
 }
 
 export function skewCases(m: SandboxModule): Record<string, SuiteCase> {
-  const base = { sessionId: BODY, running: false, digestStands: true, agreement: 'skewed', fleetBuild: 'v0.9.1', serverBuild: 'v0.9.2',
-    noticed: new Set<string>() } as const;
+  const base: Parameters<SandboxModule['skewNoticeOf']>[0] = { sessionId: BODY, running: false, digestStands: true, agreement: 'skewed',
+    fleetBuild: 'v0.9.1', serverBuild: 'v0.9.2', noticed: () => false };
   return {
     'a dead Overlord under skew answers one notice naming both builds': () => {
       const n = m.skewNoticeOf(base);
@@ -215,10 +215,10 @@ export function skewCases(m: SandboxModule): Record<string, SuiteCase> {
       expect(m.skewNoticeOf({ ...base, agreement: 'unknown' })).toBeNull();
       expect(m.skewNoticeOf({ ...base, digestStands: false })).toBeNull();
       expect(m.skewNoticeOf({ ...base, sessionId: null })).toBeNull();
-      expect(m.skewNoticeOf({ ...base, noticed: new Set([`${BODY}:v0.9.1:v0.9.2`]) })).toBeNull();
+      expect(m.skewNoticeOf({ ...base, noticed: (k) => k === `${BODY}:v0.9.1:v0.9.2` })).toBeNull();
     },
     'a new build pair is noticed again': () => {
-      expect(m.skewNoticeOf({ ...base, serverBuild: 'v0.9.3', noticed: new Set([`${BODY}:v0.9.1:v0.9.2`]) })).not.toBeNull();
+      expect(m.skewNoticeOf({ ...base, serverBuild: 'v0.9.3', noticed: (k) => k === `${BODY}:v0.9.1:v0.9.2` })).not.toBeNull();
     },
   };
 }
@@ -261,7 +261,7 @@ const SANDBOX_SETTLE_SET: MutantSet<SandboxModule> = {
     { id: 'T3', old: "if (verdict.engaged) return { kind: 'go-live'", new: "if (true) return { kind: 'go-live'" },
     { id: 'T4', old: "if (p.generation === null || p.generation !== newest.rowIncarnation) return { kind: 'none' };", new: "if (p.generation === null) return { kind: 'none' };" },
     { id: 'T5', old: "if (f.sessionId === null || f.running !== false ||", new: "if (f.sessionId === null || f.running === 'unmeasured' ||" },
-    { id: 'T6', old: '  if (f.noticed.has(key)) return null;\n', new: '' },
+    { id: 'T6', old: '  if (f.noticed(key)) return null;\n', new: '' },
   ],
   suite: (mod) => ({ ...settleCases(mod), ...skewCases(mod) }),
 };
