@@ -9,6 +9,7 @@ import { LADDER_CAUSE_MAP } from '../../shared/overlord-ladder.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import type { IsolationRead } from '../../shared/isolation.js';
 import { SERVER_CAPS } from '../../shared/api.js';
+import { ISOLATION_NOT_WIRED } from '../src/isolationWord.js';
 
 // @ts-expect-error Both condition keys need a reader.
 const incompleteInputs: LadderConditionInputs = { 'generation-degraded': () => 'lifted' };
@@ -109,6 +110,8 @@ describe("the shared-user condition, read from the isolation word (Overlord W1, 
     db.close();
   });
   it('an unmeasured reading, and no reader wired, bind advise with the condition unmeasured', () => {
+    // The ladder projects only the condition, so pin the default's reason before that projection.
+    expect(ISOLATION_NOT_WIRED).toEqual({ kind: 'unmeasured', why: 'not-wired' });
     const { db, coord } = atFull();
     for (const read of [{ kind: 'unmeasured', why: 'agent-older' } as const, null]) {
       const r = ladderRead(coord, inputs(coord, read), NO_WITNESS_YET, WORDS);

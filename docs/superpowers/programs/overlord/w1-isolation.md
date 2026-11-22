@@ -20,7 +20,9 @@ below are this build's, from the plan or from main as it stood at `b33a9ae137` o
 | `isolation-wiring-is-one-seam` | The composition root builds the reader and the log, notes once at boot, and subscribes the log to the link | The wiring is one function, `wireIsolation` (isolationLog.ts, L4), which index.ts calls once, so its test pins the live state object and both listeners (review F5). It adds no writer. |
 | `only-resolved-ancestry-guards-reads` | Question 11 names the leaf and its directories, including the resolution through links | Only the resolved leaf and its actual ancestors can guard reads. A directory that only hosted a link still contributes ownership and write exposure, but never read protection. A parent step is followed after any preceding link. If no resolved component could guard reads, the holding is exposed even with an unmeasured server UID; if that UID could establish the guard, exposure remains unmeasured. |
 | `code-root-without-marker-is-unmeasured` | Question 11 holds the root the running entry loaded from, never a guessed path | The bounded search requires a regular package marker. Only a missing marker lets the search continue. Without an established root, the named code holding remains in the list with ownership and exposure both unmeasured; the entry directory is not a fallback. |
-| `non-local-proxy-with-equal-digests` | The Task 3 proxy case is `kernel-unproven` | The distinct proxy fixture has an agent reporting both local digests. The peer itself is not local, so the reading is `unmeasured: other-namespace`. The bridge case with no equal digest remains `unmeasured: kernel-unproven`. Neither widens isolation; the runtime rule did not change. |
+| `non-local-proxy-with-equal-digests` | The Task 3 proxy case is `kernel-unproven`, with relation `unmeasured` | The distinct proxy fixture has an agent reporting both local digests. The peer itself is not local, so the isolation reading is `unmeasured: other-namespace`; the link relation is `same-host` on the equal digests. The bridge case with no equal digest remains `unmeasured: kernel-unproven`, with relation `unmeasured`. Neither widens isolation or counts as a witness; the runtime rule did not change. |
+| `ready-adjacent-callback-type-guards` | Task 2 adds the ready report and socket measurement; tail and PTY dispatch are out of scope | The changed-code CodeQL check flagged the dynamic calls to tail and PTY listeners. Each now checks `typeof listener === 'function'` before invocation. Both maps hold callbacks; no wire or dispatch policy changed. |
+| `undecodable-link-target-is-unmeasured` | A held path's link target must be measured as written (question 11) | The filesystem adapter decodes target bytes as strict UTF-8 without dropping a leading BOM. If the bytes cannot be decoded losslessly, it returns `unmeasured`, not a substituted name or observed absence. The adapter contract test stubs only the OS read and checks both invalid bytes and valid text without resolving a path. |
 
 ## Measured, not assumed
 
@@ -29,7 +31,8 @@ below are this build's, from the plan or from main as it stood at `b33a9ae137` o
   second re-points it to `AgentHostRelation | 'console'` and asks `deps.isolation.relationOf(...)`. In W1 the relation
   counts no agent, so the authority plan's residual on the witness file stays true. A later piece that makes
   `other-host` reachable must re-argue that residual first (plan question 18); `hostRelationSuite` pins that no input
-  of the generated domain yields `other-host`.
+  of the generated domain yields `other-host`, and the reader port is checked with both equal-digest and unproven
+  non-local peers.
 - **The ladder's pin is now presence and value, never a count.** Sandbox B, authority journal B and renewal readings C
   each add rows to the same table, in any order.
 - **Every `LadderConditionInputs` literal in the tests gains `'shared-user'`.** That includes eleven in the ladder actor

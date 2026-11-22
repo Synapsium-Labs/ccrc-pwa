@@ -196,7 +196,7 @@ type Lstat = { readonly uid: number; readonly mode: number; readonly dir: boolea
 /** The server's own reads, as a seam: tests pass synthetic trees and values. */
 export interface ServerSeams {
   lstat(p: string): Lstat | 'absent' | 'unmeasured';
-  /** A symbolic link's target, as written. */
+  /** A symbolic link's target, as written, or `unmeasured` if it cannot be read or decoded losslessly. */
   readlink(p: string): string | 'unmeasured';
   readText(p: string): string | 'unmeasured';
   uid(): number | undefined;
@@ -215,7 +215,12 @@ export function realServerSeams(): ServerSeams {
         return (err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ENOTDIR' ? 'absent' : 'unmeasured';
       }
     },
-    readlink: (p) => { try { return readlinkSync(p); } catch { return 'unmeasured'; } },
+    readlink: (p) => {
+      try {
+        // A leading BOM is part of the target, not metadata. Never resolve a lossy spelling.
+        return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readlinkSync(p, { encoding: 'buffer' }));
+      } catch { return 'unmeasured'; }
+    },
     readText: (p) => { const t = readBounded(p, 64 * 1024); return t === 'absent' ? 'unmeasured' : t; },
     uid: () => process.getuid?.(),
     hostIds: () => readHostIds(),

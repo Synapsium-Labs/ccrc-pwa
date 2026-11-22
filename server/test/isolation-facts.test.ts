@@ -1,14 +1,19 @@
 // The server's own facts and the reader (Overlord W1, plan `w1-isolation.md` Task 3): `measureServerFacts` over a
 // synthetic tree of stats (no live path, mode or uid is read), and `makeIsolationReader` over a live `FleetState` object.
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { codeRootOf, makeIsolationReader, measureServerFacts, realServerSeams, type MeasuredServer, type ServerSeams } from '../src/isolationFacts.js';
 import { hostDigest } from '../../shared/host-identity.mjs';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  return { ...fs, readlinkSync: vi.fn(fs.readlinkSync) };
+});
 
 const HOME = '/h/u';
 const SERVER_UID = 1000;
@@ -199,6 +204,18 @@ describe('measureServerFacts', () => {
   });
 });
 
+describe('realServerSeams link-target decoding', () => {
+  it.each([
+    ['undecodable bytes', Buffer.from([0xc3]), 'unmeasured'],
+    ['valid text', Buffer.from('﻿fixture-�', 'utf8'), '﻿fixture-�'],
+  ])('preserves the measurement distinction for %s', (_label, bytes, expected) => {
+    // Substitute only the OS read; do not create or resolve any filesystem path for these bytes.
+    vi.mocked(readlinkSync).mockImplementationOnce((_p, options?: string | { encoding?: string | null } | null) =>
+      (typeof options === 'string' ? options : options?.encoding) === 'buffer' ? bytes : bytes.toString('utf8'));
+    expect(realServerSeams().readlink('fixture')).toBe(expected);
+  });
+});
+
 describe('realServerSeams over fixture paths', () => {
   it('measures file mode and kind, reads link targets and bounded text, and distinguishes failure from absence', () => {
     const root = mkTmp('ccrc-isoadapter-');
@@ -301,6 +318,13 @@ describe('makeIsolationReader', () => {
     expect(r.read()).toEqual({ kind: 'unmeasured', why: 'agent-older' });
     Object.assign(state, { hostReport: { uid: 1000, ...sd }, peer: { locality: 'local', uid: 1000 } });
     expect(r.read()).toEqual({ kind: 'measured', word: 'shared-user', cause: 'same-user' });
+  });
+
+  it('the reader relation stays conservative for a non-local peer', () => {
+    const r = makeIsolationReader('remote', measured(), BEARER, null);
+    const nonLocal = { link: 'ready', peer: { locality: 'not-local', uid: 'unmeasured' }, serverDigests: sd, readySerial: 1 } as const;
+    expect(r.relationOf({ ...nonLocal, report: { uid: 3000, ...sd } })).toBe('same-host');
+    expect(r.relationOf({ ...nonLocal, report: { uid: 3000, machine: 'unmeasured', boot: 'unmeasured' } })).toBe('unmeasured');
   });
 
   it("digests the server's ids under the link's bearer: another bearer's report is another kernel", () => {
