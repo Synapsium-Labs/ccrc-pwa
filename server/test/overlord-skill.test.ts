@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { RUNG_CELLS } from '../../shared/overlord-ladder.js';
+import { callsIn, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/overlord-skill');
@@ -400,22 +401,24 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
     for (const w of ['`rung-below`', 'Project linking card', 'decision brief', 'never by another route']) expect(p).toContain(w);
   });
 
+  // Keyed on the parsed calls and symbols (`scan/symbols.ts`), never on the file's text (ARCH-06's counting rule).
   it("gives the confirm route's refusals", () => {
-    const route = readFileSync(path.join(root, 'server/src/linking/routes.ts'), 'utf8');
-    const from = route.indexOf("app.post('/api/linking/confirm'");
-    expect(from).toBeGreaterThan(-1);
-    const to = route.indexOf('app.post(', from + 1);
-    const body = route.slice(from, to === -1 ? undefined : to);
-    const policy = readFileSync(path.join(root, 'server/src/linking/policy.ts'), 'utf8');
-    const pf = policy.indexOf('export function teamPairVerdict');
-    expect(pf, 'policy.ts lost teamPairVerdict').toBeGreaterThan(-1);
-    const pe = policy.indexOf('\nexport ', pf + 1);
-    const policyFn = policy.slice(pf, pe === -1 ? undefined : pe);
-    const p = paragraph();
-    for (const w of ['team-set', 'team-unknown', 'team-ambiguous', 'no-project', 'unavailable', 'write-failed']) {
-      expect(p, `the paragraph omits \`${w}\``).toContain(`\`${w}\``);
-      const viaPair = policyFn.includes(`'${w}'`) && body.includes('refuseRoute(reply, pair.error');
-      expect(body.includes(`'${w}'`) || viaPair, `the confirm route has no '${w}', directly or through teamPairVerdict`).toBe(true);
+    const calls = callsIn(symbolOf('server/src/linking/routes.ts', 'registerLinkingRoutes'));
+    const confirm = calls.filter((c) => c.callee === 'app.post' && c.args[0]?.kind === 'string' && c.args[0].text === '/api/linking/confirm');
+    expect(confirm, 'registerLinkingRoutes registers the confirm route once').toHaveLength(1);
+    const refusals = calls.filter((c) => c.start > confirm[0]!.start && c.end <= confirm[0]!.end && c.name === 'refuseRoute');
+    const words = new Set(refusals.flatMap((c) => (c.args[1]?.kind === 'string' ? [c.args[1].text] : [])));
+    // `pair.error` is `teamPairVerdict`'s word: the ones its declared return type names.
+    if (refusals.some((c) => c.args[1]?.text === 'pair.error')) {
+      const pairType = /error: ((?:'[a-z-]+'(?: \| )?)+)/.exec(sourceOfSymbol('server/src/linking/policy.ts', 'teamPairVerdict'));
+      expect(pairType, 'teamPairVerdict declares no error words').toBeTruthy();
+      for (const m of pairType![1]!.matchAll(/'([a-z-]+)'/g)) words.add(m[1]!);
     }
+    // The token and the body's shape are the door process's to get right: the Overlord never sends either.
+    for (const w of ['unauthenticated', 'bad-request']) words.delete(w);
+    expect([...words].sort(), 'the confirm route answers a refusal the paragraph does not name, or lost one')
+      .toEqual(['no-project', 'team-ambiguous', 'team-set', 'team-unknown', 'unavailable', 'write-failed']);
+    const p = paragraph();
+    for (const w of words) expect(p, `the paragraph omits \`${w}\``).toContain(`\`${w}\``);
   });
 });
