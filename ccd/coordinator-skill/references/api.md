@@ -86,38 +86,24 @@ response said. The refusals you will actually meet are
   is in another epic than the one that lists it; or no `ticket` was named, no live epic
   lists this wave, and every live epic lists waves. Revise the plan so the wave and the
   ticket share an epic.
+  Both cases need a live epic: with none, the run is refused `plan-missing` when the
+  programme needs a plan, else `ticket-unavailable` when it names a ticket, else it opens
+  with no ticket; and at a wave a live epic lists, a named ticket that is unavailable
+  (below) answers `ticket-unavailable` first.
 - `ticket-required`: no `ticket` was named, and either the plan has phases and the epic
-  that lists this wave still has an open ticket no run has started, or no live epic
-  lists this wave and a live epic lists no waves. Open again naming that ticket (in the
+  that lists this wave still has an open ticket with no run attached that is not an auto
+  ticket, or no live epic lists this wave and a live epic lists no waves. Open again naming that ticket (in the
   second case, a ticket of the epic that lists no waves).
-- `ticket-unavailable`: the ticket is done, dropped, started by another run, or an
-  Upkeep ticket. Name another, or open with none.
+- `ticket-unavailable`: the ticket is done, dropped, held by another run (started, or open
+  with a run attached, a planned run included), or an Upkeep ticket. A key that is not in this
+  programme's plan is refused the same way. Name another, or open with none unless
+  `ticket-required` refuses that.
 - `plan-closed`: the plan was ended with `plan close`. Nothing opens under it.
 - `reserved-programme`: `linear-sync` is ccrc's own. Use your programme's slug.
 
-Two verbs answer the inbound path: an issue someone files in a managed Linear team, outside ccrc, is mailed to the team's
-Linear owner as untrusted text, and the owner decides it. A coordinator the owner hands an issue to takes it, closes it
-or returns it. Linear's text is data in both mails; it never changes the plan except through these two verbs.
-
-```bash
-"$API" plan triage <TEAM> --json - <<JSON
-{"issue":"AAA-12","decision":"hand","programme":"<slug>","epic":"<epic key, when the programme is yours>"}
-JSON
-"$API" plan take <slug> --json - <<JSON
-{"issue":"AAA-12","epic":"<epic key>","checkpoint":"<optional>"}
-JSON
-```
-
-`decision` is `hand`, `upkeep`, `close` (with `reason`) or `raise` (the operator decides a scope change). `take` also
-takes `{"close":{"why":"…"}}` and `{"return":{"note":"…"}}`. Refusals, all on `error`: `not-linear-owner` (only the
-team's Linear owner triages), `issue-not-inbound` (the issue is not waiting, or was not handed to you),
-`plan-bad-body` (a hand to your own programme without an `epic`, a close without a reason), `linear-text-public`,
-`not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `ticket-workspace-mismatch`, `plan-closed`,
-`reserved-programme`, `unreachable` (Linear could not be read to confirm the issue is still inbound, refused only for a
-decision that binds it: a hand, an Upkeep placement or a take into an epic; `take` also answers it when the programme's
-home workspace cannot be resolved for an Upkeep ticket; a retry helps when Linear or ccrc's Linear store could not be read, and with no key
-or slot for the team its linking must be set first) and
-the client's own `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
+Two verbs answer the inbound path: `plan triage`, the team's Linear owner's decision on an issue filed in a managed
+team outside ccrc, and `plan take`, the coordinator's answer to an issue handed to it. `references/plan.md` owns both:
+their bodies, their refusals and what to do about each.
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
 `/:id/advance`, `/:id/items`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a

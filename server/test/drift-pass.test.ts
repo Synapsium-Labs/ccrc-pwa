@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import Fastify from 'fastify';
+import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
   NO_PLAN_CHANGES, applyPlanChanges, driftCursorsOf, driftEventsOf, planStorePort, type PlanChanges, type PlanStorePort,
@@ -19,6 +21,7 @@ import type { FleetSession } from '../../shared/api.js';
 import { DRIFT_PASS_MS, DRIFT_SWEEP_MARGIN_MS, LINEAR_TEXT_PREFACE, bindingByLinearIdOf } from '../src/linear/driftPolicy.js';
 import { LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, type LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
+import { measuredTeamRoutes } from '../src/linear/route.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
 import { recordedAnswer } from './linearRecorded.js';
@@ -356,7 +359,7 @@ describe('the drift pass (D-8183)', () => {
     r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
     r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();
     const [it] = items(r);
-    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: true });
     const m = mails(r).filter((x) => x.subject.includes('drift on'));
     expect(m).toHaveLength(1);
     expect(m[0]).toMatchObject({ toId: 'owner-b' });
@@ -365,6 +368,51 @@ describe('the drift pass (D-8183)', () => {
     const ev = r.db.prepare('SELECT note FROM operator_item_events WHERE itemId = ? ORDER BY id DESC LIMIT 1').get(it!.id) as { note: string } | undefined;
     expect(ev?.note).toContain('Linear owner');
     expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
+  });
+
+  it('round 2: Hand refuses unmeasured team ownership without settling or mailing', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    r.db.prepare("UPDATE project_linking SET teamWorkspace = ?, linearOwner = 'coord-b' WHERE project = 'project-a'").run(WS.a.id);
+    r.db.prepare("INSERT INTO project_linking (rowid, project, teamKey, linearOwner) VALUES (0, 'project-b', 'AAA', 'coord-c')").run();
+    const [item] = items(r);
+    const app = Fastify();
+    try {
+      registerHierarchyRoutes(app, {
+        plan: r.plan, serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive',
+        itemOf: (id) => r.coord.itemById(id), readLinearStore: async () => ({ kind: 'unreadable', code: 'EIO' }),
+        driftAct: (id, act, binding, slots) => r.drift.act(id, act, binding, slots),
+      });
+      const result = await app.inject({ method: 'POST', url: `/api/items/${item!.id}/linear`, payload: { act: 'hand' } });
+      expect([result.statusCode, result.json().error]).toEqual([503, 'unreachable']);
+      expect(r.coord.itemById(item!.id)?.state).toBe('open');
+      expect(bindingOf(r, 'ticket').heldItemId).toBe(item!.id);
+      expect(mails(r).filter((m) => m.subject.includes('drift on'))).toEqual([]);
+    } finally { await app.close(); }
+  });
+
+  it('Hand mails the lower-order unpinned owner when the project workspace uniquely holds the key', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    r.db.prepare("UPDATE project_linking SET teamWorkspace = ?, linearOwner = 'coord-b' WHERE project = 'project-a'").run(WS.a.id);
+    r.db.prepare("INSERT INTO project_linking (rowid, project, teamKey, linearOwner) VALUES (0, 'project-b', 'AAA', 'coord-c')").run();
+    const [item] = items(r);
+    const app = Fastify();
+    try {
+      registerHierarchyRoutes(app, {
+        plan: r.plan, serial: (fn) => fn(), by: () => 'device-a', presenceOf: () => 'alive',
+        itemOf: (id) => r.coord.itemById(id), readLinearStore: () => readLinearStore(r.ccrcDir),
+        driftAct: (id, act, binding, slots) => r.drift.act(id, act, binding, slots),
+      });
+      const result = await app.inject({ method: 'POST', url: `/api/items/${item!.id}/linear`, payload: { act: 'hand' } });
+      expect(result.statusCode).toBe(200);
+      expect(mails(r).filter((m) => m.subject.includes('drift on')).map((m) => m.toId)).toEqual(['coord-c']);
+      expect(r.coord.itemById(item!.id)?.state).toBe('done');
+    } finally { await app.close(); }
   });
 
   it('hand on an Upkeep binding mails the project\'s Linear owner and settles (A-7)', async () => {
@@ -381,7 +429,7 @@ describe('the drift pass (D-8183)', () => {
       dueKeyOfBinding: (id) => (id === ticket.id ? 'upkeep:project-a' : r.plan.dueKeyOfBinding(id)),
       bindingsOf: (key) => r.plan.bindingsOf(key === 'upkeep:project-a' ? SLUG : key),
     };
-    expect(r.build({ plan: upkeep }).act(it!.id, 'hand', ticket.id)).toEqual({ ok: true });
+    expect(r.build({ plan: upkeep }).act(it!.id, 'hand', ticket.id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: true });
     const m = mails(r).filter((x) => x.subject.includes('drift on'));
     expect(m).toHaveLength(1);
     expect(m[0]).toMatchObject({ toId: 'owner-b' });
@@ -397,10 +445,10 @@ describe('the drift pass (D-8183)', () => {
     const [it] = items(r);
     const id = bindingOf(r, 'ticket').id;
     // none named and no coordinator to default to
-    expect(r.drift.act(it!.id, 'hand', id)).toEqual({ ok: false, word: 'no-linear-owner' });
+    expect(r.drift.act(it!.id, 'hand', id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: false, word: 'no-linear-owner' });
     // one named, but gone
     r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();
-    expect(r.build({ presenceOf: () => 'dead' }).act(it!.id, 'hand', id)).toEqual({ ok: false, word: 'no-linear-owner' });
+    expect(r.build({ presenceOf: () => 'dead' }).act(it!.id, 'hand', id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: false, word: 'no-linear-owner' });
     expect(items(r)[0]!.state).toBe('open');
     expect(bindingOf(r, 'ticket').heldItemId).toBe(it!.id);
     expect(mails(r).filter((x) => x.subject.includes('drift on'))).toEqual([]);
@@ -658,7 +706,7 @@ describe('the drift pass (D-8183)', () => {
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
     const [it] = items(r);
-    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: true });
     expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + DAY);
     expect(items(r)).toHaveLength(2);
@@ -674,7 +722,7 @@ describe('the drift pass (D-8183)', () => {
     r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
     r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();       // A-7: Hand needs an owner to go to
     const [it] = items(r);
-    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: true });
     expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + DAY);
     expect(items(r)).toHaveLength(2);
@@ -1241,7 +1289,7 @@ describe('the drift record names a one-way set for what it is (round 3 F1)', () 
     expect(ev.value).not.toBe('');
     expect(it!.why).toContain(line);
     expect(it!.why).not.toContain('milestoneIds = ');
-    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'epic').id)).toEqual({ ok: true });
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'epic').id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: true });
     const m = mails(r).filter((x) => x.subject.includes('drift on'));
     expect(m).toHaveLength(1);
     expect(m[0]!.body).toContain(line);

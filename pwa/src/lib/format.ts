@@ -37,3 +37,12 @@ export const isPlaceableInstant = (ms: number): boolean => !Number.isNaN(new Dat
 export function releaseDate(ms: number): string {
   return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
 }
+
+/** A path cut after each `/`: the worktree row draws each piece as a box of its own, so it breaks between pieces, after a `/`,
+ *  and inside one only when it is wider than its line (review 3123 F3: a hyphen inside a segment is a break a browser takes
+ *  first when the line is filled greedily, so a `<wbr>` alone was not enough, measured). The pieces joined are the path,
+ *  character for character. It lives here, not in the worktree words module, so the row's markup (`WorkLine.tsx`) names no
+ *  module of the delegation broker (the closed scope census, `delegation-wave3.integration.test.ts`). */
+export function pathBreaks(path: string): readonly string[] {
+  return path.split(/(?<=\/)/).filter((p) => p !== '');
+}

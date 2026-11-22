@@ -669,7 +669,7 @@ const probe = (next: DelegationCheckpointV1): Outcome => {
 const VOCABULARY: readonly Sql[] = [
   ...DELEGATION_ACTIVITY_SOURCE_KINDS, ...DELEGATION_LEASE_SOURCE_KINDS, ...DELEGATION_EXECUTION_STATES, ...DELEGATION_PARENTAGE_STATES,
   ...DELEGATION_WORKSPACE_STATES, ...DELEGATION_DISPOSITIONS, ...DELEGATION_CLEANUP_STATES, ...DELEGATION_CLEANUP_POPULATIONS,
-  ...DELEGATION_ATTEMPT_VERDICTS,
+  ...DELEGATION_ATTEMPT_VERDICTS, ...model.DELEGATION_END_BASES,   // D-8830: delegation_activities.endBasis
 ];
 interface Pool { all: Sql[]; byColumn: ReadonlyMap<string, Sql[]> }
 const poolOf = (cp: DelegationCheckpointV1): Pool => {

@@ -12630,6 +12630,9 @@ _codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yam
 #      `how: "hand"`) is recorded in the advance file as the hand move it was, and is no event and no push (ruling
 #      RC3). The recovery is read whether or not the answer was ok (D-6067): a refusal after the writer's first
 #      successful write still carries it. When the backfill created the file or settled a move, the plan is read again.
+#      It never writes a class's run of sightings of a missing pin: the first pass's `materialise --refresh true` does,
+#      after every successful probe, so an hour this step skips (readiness, budget, a held lock) still records it, and
+#      a pin listed again ends the run before any step here reads it (programme wave 3, D-8838).
 #   3. READINESS, asked once, no lock (D22): the lane's mode first, by a bounded read; on `litellm`,
 #      `_codex_tier_ours --bounded-read` for the LiteLLM tier and then the shim, each 0 (ours and running; the shim's 0
 #      is its proof that the listener answers as THIS lane, D-5210), then the check-only `litellm` op answering
@@ -13375,7 +13378,10 @@ _models_box_sub() {   # <subcommand> [args…]
           local mreason="" mat_body mat_rc=0
           # Under the lane-files lock (auto-advance spec D21): a refresh overlapping a hand verb, or another
           # refresh, re-materialises after it, never interleaved. A held lock is this row's reason, never a hang.
-          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
+          # `--refresh true` (programme wave 3, D-8838, D-8842) is this call alone: it writes the fallback for an
+          # effort level the new catalogue dropped, and records this probe's sightings of a missing pin. The switch
+          # and ensure callers' materialise passes nothing, so a dropped level is refused there as before.
+          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" --refresh true 2>/dev/null)" || mat_rc=$?
           if [ "$mat_rc" -ne 0 ]; then
             mreason="$(printf '%s' "$mat_body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
             [ -n "$mreason" ] || mreason="materialise exited $mat_rc with no answer"
@@ -13421,6 +13427,13 @@ _models_box_sub() {   # <subcommand> [args…]
             # row is about to take is kept, so the step's events land on it.
             if [ "$probe" = codex ]; then adv_ids+=("$id"); adv_at+=("${#rows[@]}"); fi
           fi
+          # D-8842, D-8865: a dropped level's fallback is never silent: every row whose materialise kept one, the
+          # LiteLLM-failure row and a refusal whose write-back failed included, carries what materialise wrote and
+          # whether the advance file recorded it (`effortFallbackRecord`), on every lane, with or without that file.
+          local fbrow
+          fbrow="$(printf '%s' "$mat_body" | tail -n1 | jq -c --argjson r "$row" \
+            '$r + (if (.effortFallback | type) == "array" then {effortFallback, effortFallbackRecord} else {} end)' \
+            2>/dev/null)" && [ -n "$fbrow" ] && row="$fbrow"
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
           # probe's own first stderr line, captured by `_models_refresh_one`.
@@ -19104,6 +19117,10 @@ _inst_units() {
     # none. Gated `!= server`, so `fleet` and `both` take it.
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.service" "$dir/ccd-land-probe.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.timer" "$dir/ccd-land-probe.timer" 644
+    # The weekly replay quiz's pair (Overlord W1a), role-gated for its own reason: a server box keeps no history store and
+    # runs no sessions. The unit runs the tree's deploy/history-quiz-unattended.mjs through node, so no bin is placed.
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.timer" "$dir/ccd-quiz-weekly.timer" 644
     # The test box durations timer's pair (D-7413): the fleet host's gh fetches them for its own `ccrc test`, so `!= server`.
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.service" "$dir/ccd-testbox-times.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.timer" "$dir/ccd-testbox-times.timer" 644
@@ -19601,6 +19618,8 @@ _inst_enable() {
   # idiom: a radar is a reading, not the guardrail `ccd-cap-scopes.timer` is, and it measures nothing until the
   # operator opts a project in with a conf under ~/.ccrc/landing/.
   [ "$INST_ROLE" = server ] || _inst_enable_timer land-probe ccd-land-probe.timer
+  # Same gate as its unit files, and the same DEGRADE-rather-than-die idiom: the weekly quiz is an unattended reading, not a guardrail.
+  [ "$INST_ROLE" = server ] || _inst_enable_timer quiz-weekly ccd-quiz-weekly.timer
   [ "$INST_ROLE" = server ] || _inst_enable_timer testbox-times ccd-testbox-times.timer   # a reading; with no test box URL it fetches nothing
   [ "$INST_ROLE" = server ] || _inst_enable_timer carry-dedupe ccd-carry-dedupe.timer   # housekeeping, a dry run until the operator arms it
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
@@ -29039,7 +29058,7 @@ _uninst_units() {
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
       ccd-limit-watchdog.timer ccd-limit-watchdog.service \
-      ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
+      ccd-land-probe.timer ccd-land-probe.service ccd-quiz-weekly.timer ccd-quiz-weekly.service ccd-testbox-times.timer ccd-testbox-times.service \
       ccd-carry-dedupe.timer ccd-carry-dedupe.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
@@ -29071,7 +29090,7 @@ _uninst_units() {
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
     "$dir/ccd-limit-watchdog.service" "$dir/ccd-limit-watchdog.timer" \
-    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
+    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
     "$dir/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \

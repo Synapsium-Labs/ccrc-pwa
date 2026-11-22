@@ -11,6 +11,7 @@
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
 import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
+import { type ParkedApprovalView } from './approval-park.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
@@ -97,9 +98,14 @@ export type ItemAction =
   | { verb: 'linear-drift'; bindingId: number }
   | { verb: 'linear-initiatives'; workspaceId: string }
   | { verb: 'linear-owner'; project: string }
+  // D-8808 (review 3048 F5): inbound issues of a team key two connected workspaces hold wait because the projects that hold the
+  // key name no workspace. One open item per team key (upper-case); the remedy is the project row's Workspace on
+  // `LINEAR_PROJECTS_SETTINGS_PATH`, so the item takes no act of its own and settles itself once no waiting issue of the key
+  // depends on the workspace choice (an issue may still wait then, on its owner).
+  | { verb: 'linear-team-workspace'; teamKey: string }
   | ReleaseReviewAction
-  // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2): children on this Claude Code build cannot route permission prompts
-  // until it is captured. The build is the item's key: one open item per build. It names no run, so it abandons nothing.
+  // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2), narrowed by the Overlord's slug item-only-when-given-up: ccrc gave up
+  // capturing this Claude Code build. The build is the item's key: one open item per build. It names no run, so it abandons nothing.
   | { verb: 'untrusted-build'; build: string };
 /** The untrusted-build action's verb, the one spelling its readers bind (approvals PR 2, Task 2.2). */
 export const UNTRUSTED_BUILD_VERB = 'untrusted-build' as const;
@@ -108,11 +114,15 @@ export const isUntrustedBuildAction = (a: ItemAction | null): a is UntrustedBuil
 /** The console page the untrusted-build item's step links to (review 2752 F4): Settings' Automation section, whose Test box
  *  build list holds the build's row and its Capture again. The item's text names it, and the console links a routed path. */
 export const UNTRUSTED_BUILD_SETTINGS_PATH = '/settings/automation';
-/** The five hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). */
-export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner';
+/** The console page that holds every project's Linear row, its team key and its Workspace (D-8808): Settings' Security section.
+ *  The `linear-team-workspace` item's text names it and the console links it. */
+export const LINEAR_PROJECTS_SETTINGS_PATH = '/settings/security';
+/** The six hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). `linear-team-workspace`
+ *  takes none: its remedy is a setting on the project's row (D-8808). */
+export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner' | 'linear-team-workspace';
 export type LinearItemAct = 'approve' | 'return' | 'put-back' | 'done' | 'hand' | 'keep' | 'check-again' | 'name';
 const LINEAR_ACTION_VERB_MAP: Record<LinearActionVerb, true> = {
-  'linear-map': true, 'linear-report': true, 'linear-drift': true, 'linear-initiatives': true, 'linear-owner': true,
+  'linear-map': true, 'linear-report': true, 'linear-drift': true, 'linear-initiatives': true, 'linear-owner': true, 'linear-team-workspace': true,
 };
 export const isLinearActionVerb = (v: unknown): v is LinearActionVerb =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ACTION_VERB_MAP, v);
@@ -123,7 +133,7 @@ export const isLinearItemAct = (v: unknown): v is LinearItemAct =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ITEM_ACT_MAP, v);
 export const LINEAR_ITEM_ACTS: Readonly<Record<LinearActionVerb, readonly LinearItemAct[]>> = {
   'linear-map': ['approve', 'return'], 'linear-report': ['put-back', 'done'], 'linear-drift': ['hand', 'keep'],
-  'linear-initiatives': ['check-again'], 'linear-owner': ['name'],
+  'linear-initiatives': ['check-again'], 'linear-owner': ['name'], 'linear-team-workspace': [],
 };
 export type LinearItemAction = Extract<ItemAction, { verb: LinearActionVerb }>;
 export const isLinearItemAction = (a: ItemAction | null): a is LinearItemAction =>
@@ -185,6 +195,10 @@ export function parseItemAction(text: string): ItemAction | null {
   if (o['verb'] === 'linear-owner') {
     const project = word('project');
     return project === null ? null : { verb: 'linear-owner', project };
+  }
+  if (o['verb'] === 'linear-team-workspace') {
+    const teamKey = word('teamKey');
+    return teamKey === null ? null : { verb: 'linear-team-workspace', teamKey };
   }
   if (o['verb'] === UNTRUSTED_BUILD_VERB) {
     const build = word('build');
@@ -435,6 +449,9 @@ export interface WaitingView {
    *  server cannot mark an ask (an older one, or its read of the asks failed), so the console draws no ask box. */
   asks?: AskMarkRow[];
   asksCleared?: AskMarkRow[];
+  /** Approvals PR 3 (§3.3.2): the parked permission prompts, oldest first, each "with your coordinator", which the operator
+   *  may rule. OPTIONAL and ADDITIVE: absent means an older server, or a read that failed (never an empty list then). */
+  approvals?: ParkedApprovalView[];
 }
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };

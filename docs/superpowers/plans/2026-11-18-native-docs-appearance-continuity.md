@@ -393,8 +393,36 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
   - While hosted, the disc is `text-muted`, fill and stroke, and the mark is `bg`. Each rule carries `!important` and is scoped to the hosted mark, and the disc's rule never reaches the mark. The mark on the disc is the gate's `text-muted`-on-`bg` pair, 4.5:1 or better in every palette, and the disc meets 3:1 on `surface` and `surface2` as a line does. Test 5's drawn-pairs and closed-colours rows read both. A library mutation that drops the disc's rule, or lets it reach the mark, reds a row.
   - Why: the sentence cannot be built as written. `text-muted` is already a closed colour of the drawing and a measured line colour. The branch's own colour would need the library to infer a commit's branch from the layout, and a black disc fails the closed colours and the dark palettes (L1's ask 660, answered by the coordinator 2026-11-20, option 0).
   - Amended in place in §10 and test 5, each marked "(amended 2026-11-20; D-8816)".
+- **D-8824 (2026-11-20)**: old-cap-row-frames-in-ci. Issued to run 2843 (L1, the library's appearance contract) and defined here, because a library wave's departures are asked and defined in ccrc. It departs from X1 spec §10 test 7's "a document at the old srcdoc cap still mounts with both faces and the largest appearance the validator accepts." It also departs from test 8's closing "a document at 1.1.0's default cap mounts in every layout with both faces and the largest appearance."
+  - CI's row frames the document at 1.1.0's default cap with both faces and the largest appearance; it is a unit row.
+  - The browser mount at that size is a measured row, gated off CI. It is measured once on Chromium with headroom, and on WebKit through a workflow input, before the library's release.
+  - CI's browser run mounts a document of about 1.4 MiB.
+  - **Figures,** printed by the Node row in CI at the landing tip `4c7b2ac`:
+    - the document is 114 584 725 characters at the landing's assets (4 558 002);
+    - at 1.1.0's asset lengths it is 114 554 743, under 1.1.0's cap of 114 569 828;
+    - with both faces and the largest appearance it is 114 935 752, within the derived `MAX_SRCDOC_CHARS_DEFAULT` of 114 950 837.
+  - The gated row leaves out the snapshot and the 64 Mermaid secure keys, so it is not a full mount at the cap.
+  - Why: the shared test slice's memory cap killed the browser mount of a document at the cap (reviews 2906 F1 and 2945 F4).
+  - Amended in place in §10 tests 7 and 8, each marked "(amended 2026-11-20; D-8824)".
+- **D-8825 (2026-11-20)**: stick-arrowhead-by-stroke. Issued to run 2843 (L1) and defined here. It departs from X1 spec §10's "The stylesheet paints those markers' paths (`marker[id$="-stickTopArrowHead"] path` and `marker[id$="-stickBottomArrowHead"] path`) `text-muted`".
+  - The stylesheet selects those paths by their literal stroke, `marker path[stroke="black"]`, under the hosted figure's mark. The full-screen copy remaps every id, so an id-suffix selector would miss the copy.
+  - Test 5 still finds the paths by marker id, so a rule that missed one reds.
+  - Why: review 2906 F2.
+  - Amended in place in §10, marked "(amended 2026-11-20; D-8825)".
+- **D-8826 (2026-11-20)**: author-styled-scan-widened. Issued to run 2843 (L1) and defined here. It departs from X1 spec §10's "Author-styled" sentences: "The scan reads the figure's text outside front matter as statements: split at every line break and every `;` (flowchart, ER and sequence diagrams accept `;` between statements), each trimmed of any leading white space, tabs included." It also departs from the two sentences that follow, on the heads and on the `<` rule.
+  - The scan removes only the init directives that Mermaid 12.1.0 itself removes: its own `directiveRegex`, closed by `}%%`.
+  - A head counts after the text's start, white space, a `;` or a `}`, and before white space, a `;`, a `:` or the end.
+  - A `<<name>>` is spared only where an annotation stands, in class and state diagrams.
+  - The scan errs toward 1.1.0's drawing.
+  - Why: §10's split rule and `<` wording missed figures the bundled Mermaid draws styled, which is the 1.07:1 case (review 2906 F5, review 2945 F1 and F12, review 2965 F1).
+  - Amended in place in §10, marked "(amended 2026-11-20; D-8826)".
+- **D-8827 (2026-11-20)**: test-4-length-tolerance. Issued to run 2843 (L1) and defined here. It departs from X1 spec §10 test 4's "with no appearance, the rendered output and computed styles equal 1.1.0's for the corpus;".
+  - Two lengths in px within 0.1 px are taken as equal, the repository's visual-comparison tolerance.
+  - The width is pinned: a row reds when the tolerance is widened to 0.5 px.
+  - Why: a box the reader sizes from measured text can land a sub-pixel apart between two pages that differ in nothing a rule sets (review 2945 F5).
+  - Amended in place in §10 test 4, marked "(amended 2026-11-20; D-8827)".
 
-All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's one number is defined: 8816.
+All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's numbers are defined: 8816 and 8824 to 8827.
 
 ## Results
 

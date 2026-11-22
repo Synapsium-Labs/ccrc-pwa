@@ -38,7 +38,7 @@
 //
 // Every process it starts goes through the service's one bounded spawner (`exec.ts#boundedExec`, D-7501), so the
 // spawner audit gains no row. Every threshold is a setting; no number here is compared with a test box quantity.
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,7 @@ import {
   type RunCancel, type RunSubmit, type RunSummary, type StatusAnswer, type TestboxFallbackId, type TestboxFrame,
   type TestboxRef, type TestboxToolVersions,
 } from '../../../shared/testbox.js';
+import { startedAsProgram } from './entry.js';
 import { estimate, minutes, readDurations, workerCount, type DurationsRead } from './budget.js';
 import { absPath, durationMs, knobEnv, parseKnobLines, sizeBytes, count, type KnobLine } from './config.js';
 import { boundedExec, SHORT_BOUND_MS } from './exec.js';
@@ -591,9 +592,7 @@ export async function main(args: readonly string[]): Promise<number> {
 }
 
 /** Run as a program (not imported): its argv path and this module are one file, compared by real path. */
-const invoked = ((): boolean => {
-  try { return process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
-})();
+const invoked = startedAsProgram(process.argv[1], import.meta.url);
 if (invoked) {
   main(process.argv.slice(2)).then((code) => {
     process.exitCode = code;

@@ -55,11 +55,15 @@ import { operatorRetainLease, resolveLease, retainLease, runStampsOfSeries, type
 import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } from './delegation-lease-acts.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { doneRunOf } from './fingerprint.js';   // D-6096: an in-place run's done-claim is measured on its recorded branch
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { bindRunInPlace, type InPlaceOutcome } from './dispatch.js';   // D-6096: the in-place bind
+import { inPlaceRequest } from './dispatchDecide.js';   // D-6096: the in-place body, shaped in L1 (review 2993 F8)
 import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
+import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
@@ -109,7 +113,7 @@ import { TESTBOX_PARITY_REQUIRED_SENTENCE, type PeerRetry } from '../../../share
 import { isMailClientKey, MAIL_CLIENT_KEY_MAX } from '../../../shared/api.js';
 import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
 import { knownFleetIdentity } from '../accounts/audit.js';
-import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
+import { parityRefusedByCcd, switchActorOf, switchOnGate, toolsSyncCallerOf, writeSwitchRow } from '../testboxAdmin.js';
 import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
 import { landingAdvanceOf } from './landingEntry.js';
 import { landingEjectionAsk } from './landingLine.js';
@@ -136,6 +140,9 @@ import {
   type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
 } from './questions.js';
 import { noticeSink, questionOutboxOf, type NoticeSink } from '../notice.js';
+import { approvalOperatorArm } from './approvalParkDoor.js';
+import type { AccountGate } from '../accounts/gate.js';
+import { APPROVAL_RULED_GRACE_MS } from '../askwindow.js';
 import { itemBoundOf, outboxSettledOf } from '../pushSender.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
 import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
@@ -329,6 +336,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // type is `number` and must stay so: `by` is the project's NAME.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
         ...(r.by === undefined ? {} : { by: r.by }),
+        ...(r.detail === undefined ? {} : { detail: r.detail }),
         ...(r.key === undefined ? {} : { key: r.key }), ...(r.holder === undefined ? {} : { holder: r.holder }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
@@ -363,6 +371,17 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
     }
   }
+}
+
+/**
+ * `bindRunInPlace`'s result -> HTTP status + body (D-6096). A bind answers `200 {ok, id, sessionId, inPlace, branch}`; the
+ * caller's attribution refusal goes out through `refuseRoute` with the words `requireAttribution` uses; every other refusal
+ * is a member of `DispatchOutcome`'s failures and is answered by `sendDispatchOutcome`, so the two doors share one wire.
+ */
+function sendInPlaceOutcome(reply: FastifyReply, r: InPlaceOutcome) {
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, sessionId: r.sessionId, inPlace: true, branch: r.branch });
+  if (r.kind === 'attribution') return refuseRoute(reply, r.error, { detail: r.detail });
+  return sendDispatchOutcome(reply, r);
 }
 
 /** `closeRun`'s typed result union -> HTTP status + body. Same discipline as
@@ -533,6 +552,8 @@ export { homeProjectVerdict, shapeHomeProject, type HomeProjectShape, type HomeP
 export interface OperatorDoorWiring {
   readonly knownId: (id: string) => Promise<boolean>;
   readonly answerDeps: OperatorDoorDeps;
+  /** Approvals PR 3: the account gate, for the `approval-<n>` arm's step-up (`approvalParkDoor.ts#approvalOperatorArm`). */
+  readonly gate: AccountGate;
 }
 
 export interface CoordRoutesHandle {
@@ -913,6 +934,14 @@ export function registerCoordRoutes(
         `clientKey must be 1 to ${MAIL_CLIENT_KEY_MAX} letters, digits, '_' or '-' when given`);
     }
 
+    // `urgent` (mid-turn mail, plan Task 2.4): optional and additive. Absent, null or false is an ordinary mail, answered
+    // as before; any other value than a boolean is a shape error. Who may mark a mail urgent is check 8.5's.
+    const urgentRaw = body['urgent'];
+    if (urgentRaw !== undefined && urgentRaw !== null && typeof urgentRaw !== 'boolean') {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId }, 'urgent must be a boolean when given');
+    }
+    const urgent = urgentRaw === true;
+
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
     // a sender cannot ask for the we-do-not-know bucket.
     if (!isSendableMailKind(kind)) {
@@ -1024,9 +1053,9 @@ export function registerCoordRoutes(
     // answer to a keyed send echoes `clientKey` (review 2725 F3), so a client can tell a server that ignored the key. No
     // `await` follows this read before the insert below, so no other send can store this key in between; if one ever did,
     // `mail_client_key_once` refuses the insert and the catch around it asks the verdict again (F5), never a 500.
-    const keyedRequest = { toId, runId, kind, subject, body: msgBody, artifacts: artifacts as string[], inReplyTo };
+    const keyedRequest = { toId, runId, kind, subject, body: msgBody, artifacts: artifacts as string[], inReplyTo, urgent };
     const answerKeyed = (v: MailKeyVerdict) => v.verdict === 'same'
-      ? reply.code(202).send({ ok: true, id: v.id, already: true, clientKey })
+      ? reply.code(202).send({ ok: true, id: v.id, already: true, clientKey, ...(v.urgent ? { urgent: true } : {}) })
       : v.verdict === 'conflict'
         ? refuse(reply, 'key-conflict', { fromId, fromUuid, toId, kind, subject, runId }, v.detail)
         : null;
@@ -1101,6 +1130,25 @@ export function registerCoordRoutes(
       return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
     }
 
+    // 8.5: urgent (mid-turn mail, spec §3.1, plan Task 2.4). The rule is `urgentSenderVerdict`'s (L1), over the facts
+    // `CoordStore.urgentVerdict` reads for the RESOLVED recipient: its runs by incarnation, from its registry mark (a
+    // listed row this read could not build is unreadable, so `urgent-unmeasured`), the sender's claims, the designation
+    // and the pair's outstanding urgent mail. A refusal writes no mail. No `await` follows this read before the insert,
+    // so two sends cannot both pass (P4). A keyed retry was answered at 6.5, so it never meets its own outstanding mail.
+    let urgentAs: Extract<ReturnType<CoordStore['urgentVerdict']>, { kind: 'allowed' }>['role'] | null = null;
+    if (urgent) {
+      const row = registry.find((r) => r.id === resolvedToId);
+      const mark = row !== undefined ? row.child
+        : names.includes(`${resolvedToId}.uuid`) ? { kind: 'unreadable' as const } : { kind: 'none' as const };
+      const v = coord.urgentVerdict(fromId, resolvedToId, runId, mark);
+      if (v.kind === 'refused') {
+        // The rule's refusal word, named as one: the D-5381 scan reads a `.code` argument as a status.
+        const { code: refusal, detail } = v;
+        return refuse(reply, refusal, { fromId, fromUuid, toId, kind, subject, runId }, detail);
+      }
+      urgentAs = v.role;
+    }
+
     // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole
     // 2). Run mail is bounded by its run's own lifecycle and stays
     // byte-identical (the dark pin in mail-peer-quota.test.ts). Nothing ever
@@ -1156,7 +1204,7 @@ export function registerCoordRoutes(
     try {
       ({ id } = tx(coord.db, () => {
         const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-          artifacts: artifactPaths, answersMail, clientKey, inReplyTo });
+          artifacts: artifactPaths, answersMail, clientKey, inReplyTo, urgentAs });
         const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
         const envelope = renderEnvelope({
           id: delivery.id, fromId, toId: resolvedToId, runId,
@@ -1185,6 +1233,9 @@ export function registerCoordRoutes(
 
     // 202, not 200: the server has ACCEPTED the message, not delivered it —
     // the delivery lane is minutes away by design (MAIL_SWEEP_MS, Task 8). A keyed send echoes its key (F3).
+    // An urgent mail echoes `urgent: true` (mid-turn mail, Task 2.4): absence is "not urgent", and an older server never
+    // echoes it, so a client can tell a server that ignored the field.
+    if (urgentAs !== null) return reply.code(202).send({ ok: true, id, ...(clientKey === null ? {} : { clientKey }), urgent: true });
     return reply.code(202).send(clientKey === null ? { ok: true, id } : { ok: true, id, clientKey });
   });
 
@@ -1273,6 +1324,14 @@ export function registerCoordRoutes(
     const acked = coord.markAcked(id, Date.now());
     // A session's own ack of an operator-message nudge settles that message as the lane's ack does (Overlord W1 private store B).
     if (acked.ok) settleAckedOperatorNudge({ coord, operatorModel: deps.operatorModel, now: Date.now(), warn: (l) => console.warn(l) }, delivery.mailId);
+    // Mid-turn mail (plan Task 4.4): a landed ack kicks the mailhold projection (`index.ts` composes the watcher's
+    // `kick('mailHold')`), so a released hold's marker clears at the next tick. After the commit, never awaited, and a
+    // kick that throws never changes the answer. A refused, parked or repeated ack kicks nothing.
+    if (acked.ok) {
+      try { deps.onMailAcked?.(); } catch (e) {
+        console.warn(`ccrc-server: the ack's mailhold kick threw: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     if (acked.ok) {
       return reply.code(200).send({ ok: true, already: false, parked: false, state: acked.state });
     }
@@ -1759,6 +1818,17 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown };
+    // D-6096: the IN-PLACE bind. A coordinator takes its own refused wave as the run's worker; no process starts and no
+    // fleet act is composed, so none of the dispatch's deps below are built for it, and the skill self-install (which
+    // belongs to a bound WORKER) never runs for it. The body is shaped in L1 (`inPlaceRequest`, review 2993 F8).
+    const inPlace = inPlaceRequest(req.body ?? {});
+    if (inPlace !== null) {
+      if (!inPlace.ok) return refuseRoute(reply, 'bad-request', { detail: inPlace.detail });
+      const { by, byUuid, branch } = inPlace;
+      const inPlaceDeps = { coord, io: deps.io, cfg: deps.cfg,
+        attribute: (who: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, who, uuid, 'claimedByUuid') };
+      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, branch, body.intents)));
+    }
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
       // The one place a wrapper becomes a directory, called from L4 where the
@@ -1982,7 +2052,7 @@ export function registerCoordRoutes(
     if (to === 'awaiting-review' || to === 'merging') {
       const measured = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+        doneRunOf(run),
         claim,
       );
       if (!measured.ok) {
@@ -2083,6 +2153,7 @@ export function registerCoordRoutes(
       const sendBackOverConcurrency = await sendBackCapCheck(coord, capPorts, id, to);
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
         overConcurrency: sendBackOverConcurrency });
+      waitOnSendBackRefusal(coord, id, gate);   // D-6095: a send-back the cap refused waits like a refused dispatch
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });
@@ -2401,7 +2472,7 @@ export function registerCoordRoutes(
     if (body !== undefined && body !== null && !(typeof body === 'object' && Object.keys(body).length === 0)) {
       return refuseRoute(reply, 'bad-request');
     }
-    const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync();
+    const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync(toolsSyncCallerOf(req, sessionAuth(req)));
     if (!r.ok) {
       const refusal = TESTBOX_SYNC_REFUSAL[r.reason];
       return refuseRoute(reply, refusal.error, { detail: refusal.detail });
@@ -4644,6 +4715,8 @@ export function registerCoordRoutes(
    *  store, where every claimant door answers `notConfigured` before it would be read. */
   const claimantDeps: ClaimantDoorDeps | undefined = deps.coord === undefined ? undefined : {
     coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, signerFor, rulingsAllowedHere, heldFor, notice,
+    // Approvals PR 3 (F2's carry): the one signing site re-checks the child's deny standing at signing.
+    denyStanding,
     approvalsKilled, pressAsk: (childId, key, optionIndexes) => answerAsk(askDeps, childId, key, optionIndexes),
   };
   /** A core's answer, sent: the status and the body it answered, never decided here. */
@@ -4692,6 +4765,8 @@ export function registerCoordRoutes(
       // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.
       case 'approval-released': return refuseRoute(reply, 'approval-released', { id: v.id, releaseReason: v.releaseReason });
       case 'minted': {
+        // Approvals PR 3: the park's word decided and stored at mint; a mint with no park step answers as before.
+        if (v.park !== null) return reply.code(201).send({ id: v.id, waitS: v.waitS, park: v.park } satisfies ApprovalRequestAccepted);
         const accepted: ApprovalRequestAccepted = { id: v.id, waitS: v.waitS };
         return reply.code(201).send(accepted);
       }
@@ -4721,6 +4796,7 @@ export function registerCoordRoutes(
     const answer: ApprovalRulingAnswer = (row.state === 'allowed' || row.state === 'denied') && row.ruling !== null
       ? { state: row.state, ruling: JSON.parse(row.ruling) as NonNullable<ApprovalRulingAnswer['ruling']> }
       : { state: row.state };
+    questions.noteRulingServed(row, Date.now(), APPROVAL_RULED_GRACE_MS);   // approvals PR 3 (F8-c): `fetchedAt`
     return reply.code(200).send(answer);
   });
 
@@ -4788,6 +4864,8 @@ export function registerCoordRoutes(
     if (wiring === undefined) return notConfigured(reply);
     const qid = parseQuestionId((req.params as { id: string }).id);
     if (qid === null) return refuseRoute(reply, 'bad-request');
+    // Approvals PR 3 (F3-a): an `approval-<n>` id is the operator's ruling on a parked row, which presses nothing.
+    if (qid.kind === 'approval') return approvalOperatorArm(req, reply, qid.id, { gate: wiring.gate, questions });
     if (qid.kind !== 'session') return refuseRoute(reply, 'kind-mismatch');
     if (!(await wiring.knownId(qid.sessionId))) return refuseRoute(reply, 'unknown-session');
     const body = (req.body ?? {}) as Record<string, unknown>;

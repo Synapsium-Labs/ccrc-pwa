@@ -254,10 +254,12 @@ export interface LinearWorkspaceShown {
 export type LinearWorkspaceView = LinearWorkspaceShown & LinearConnectionView;
 
 /** The legacy pair's row (spec §3.4): `view` is today's `LinearConnectionView` of the pair; `workspace` is what its
- *  Check again learned for the key now stored, or null; `superseded` is true while a file slot holds that workspace. */
+ *  Check again learned for the key now stored, or null; `superseded` is true while a file slot holds that workspace.
+ *  D-8808 (review 2971 A1): `workspace.workspaceId` is that workspace's id, the one the server routes the legacy slot by, so the
+ *  project card's picker can offer it; additive, absent from an older server (the picker then leaves the legacy workspace out). */
 export interface LinearLegacyRow {
   view: LinearConnectionView;
-  workspace: { name: string; urlKey: string; teams: LinearTeamShown[] } | null;
+  workspace: { workspaceId?: string; name: string; urlKey: string; teams: LinearTeamShown[] } | null;
   superseded: boolean;
 }
 

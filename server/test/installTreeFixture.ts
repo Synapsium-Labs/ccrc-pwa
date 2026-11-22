@@ -157,6 +157,9 @@ export const TREE_FILES = [
   // ccrc history's policy ring (`ccd/history/lib.mjs`, copied whole with `ccd/history`) imports the run-id grammar from here
   // (W4 addendum P10, the shared arm); a placed tree without it fails `status --json` at load, and doctor's history check with it.
   'shared/workflow-ids.mjs',
+  // The weekly quiz runner (run 3212): `ccd-quiz-weekly.service` runs it as `%h/ccrc/deploy/history-quiz-unattended.mjs`, so the
+  // versioned audit's unit row needs it in the placed tree.
+  'deploy/history-quiz-unattended.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would

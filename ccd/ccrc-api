@@ -21,13 +21,13 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, ninety-two rows, and nothing else; the
+#   * The route comes from ROUTES below, ninety-eight rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
 #     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
-#     the eleven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183), `plan phase-ref`
+#     the twelve `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183, D-8186), `plan phase-ref`
 #     `capability-missing` for `plan-phases-v1` (programme work map WM0), `plan ticket-done` the same for
 #     `plan-ticket-done-v1` (WM1), and `plan take` and `plan triage` the same for `plan-inbound-v1` (D-8736), these four rows
 #     from one table gate (D-8183), and the three
@@ -108,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Ninety-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Ninety-eight rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -280,16 +280,35 @@ declare -A ROUTES=(
   # visibility, and the mode they give. One read, no id and no query key: the project is the caller's registry record's, and the
   # identity rides the query like every Linear row's (the block in `main` that appends it).
   [linking.show]='GET|/api/linking|no|-'
+  # A coordinator's suggestion of a Linear team for its project (D-8808): a POST whose body (`project`, `team`, optionally
+  # `workspace`, and `why`) is the caller's own, and whose identity is the PANE's: this client splices `byId` and `byUuid` and
+  # REFUSES a body that names either (the `calls.record` rule). A candidate only; the reason is shown in the console, never in Linear.
+  [linking.suggest]='POST|/api/linking/suggest|no|-'
+  # The Overlord's confirm of one of a project's current team candidates (D-8809), which links it as a call made in the
+  # operator's name: the suggestion row's form (a body of `project`, `team` and `workspace`, the pane's pair spliced, a body naming
+  # either refused). Its door is an Overlord door: the door process sends it fenced, and any other caller is refused by the gate.
+  [linking.confirm]='POST|/api/linking/confirm|no|-'
   # The start report (Overlord W1a, spec §3.3.11): the session hook reports one SessionStart of its own session. `{id}` is the
   # session's id; the body (`fromId`, `fromUuid`, `startedUuid`, `reportId`, `source`, `model`, `rowIncarnation`, `reportedAt`) is
   # one JSON report, as the hook builds it or keeps it on one line of its spool.
   [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
   [sessions.loads]='POST|/api/sessions/{id}/start/loads|yes|-'
   # The replay quiz's record (Overlord W1a quiz record, plan 2026-11-17 §5): the operator's `ccrc quiz-record` posts one
-  # single-arm report through this row, its body (`report`, `sha256`, `recordedBy`) on stdin (`--json -`). The run is recorded
-  # pending: only the operator's confirmation on the Shadow lanes card, behind a session and a step-up, makes it count, so a
-  # session calling this row records nothing that counts (coordinator ruling, slug quiz-record-posts-through-the-client).
+  # single-arm report through this row, its body (`report`, `sha256`, `recordedBy`, and `unattended: true` from the weekly
+  # timer) on stdin (`--json -`). The run is recorded pending: the operator's confirmation on the Shadow lanes card makes it
+  # count, and so does the server's matching rule over the next row, for a run recorded unattended (coordinator ruling, slug
+  # quiz-record-posts-through-the-client; run 3212). The record, confirm and status rows are the weekly timer's: the session
+  # hook's quiz arm refuses them on every session (an accident guard, not a wall).
   [quiz.record]='POST|/api/continuity/quiz-runs|no|-'
+  # The unattended confirmation (run 3212; review 3232 F1): `ccrc quiz-record --confirm`, run by the weekly timer, names the run
+  # the record answered (`{id}`) and posts `{"sha256","by","confirmKey"}`, the key that record answered; the server confirms the
+  # run when the key and the sha match, and refuses, leaving it pending, when either does not. And the Overlord coordinator's
+  # Live on a W1a lane once the baseline exists, its body `{"fromId","fromUuid","lane"}`.
+  [quiz.confirm]='POST|/api/continuity/quiz-runs/{id}/confirm|yes|-'
+  [quiz.live]='POST|/api/continuity/quiz-baseline/live|no|-'
+  # The weekly runner's report of each tick (`{"week","act","outcome","word","detail","at","account","by"}`), which the Shadow
+  # lanes card shows and which mails the coordinator once per week and stop word, and once for two weeks of waiting.
+  [quiz.status]='POST|/api/continuity/quiz-status|no|-'
   # The act-key claim (Overlord W1 door process A1, spec §3.3.11 H12): the door process presents its launch nonce once and is
   # answered the act key once. THIS ROW'S BODY CARRIES A SECRET (`{"fromId","fromUuid","nonce"}`), which is why every body
   # rides curl's stdin (`send_request`); its answer carries the key, which only the door process reads.
@@ -340,6 +359,9 @@ declare -A ROUTES=(
   # Both carry the pane's identity in the query and take the caller's body whole, like the rows above.
   [plan.take]='POST|/api/programmes/{id}/plan/take|yes|-'
   [plan.triage]='POST|/api/teams/{id}/plan/triage|yes|-'
+  # `plan map-propose` (D-8186, the per-team migration): the team's Linear owner sends the map of its open issues. `{id}` is the
+  # Linear team key; the body is the map (`entries`, and `backlog` and `epics` when it declares structure). Behind `plan-v1`.
+  [plan.map-propose]='POST|/api/teams/{id}/plan/map|yes|-'
   # The timers (Overlord W1a, the timers piece; spec §3.3.12 C61, C64): a session sets, lists and cancels its OWN timers. All
   # three are parsed whole by `parse_timer`, which derives the pane's pair and refuses a typed one; `{id}` is the timer's id. All
   # are refused locally `capability-missing` when a CURRENT cap file omits `timers-v1`.
@@ -1253,10 +1275,14 @@ main() {
   # THE FOURTH BODY THIS CLIENT FILLS, and the first it never lets the caller speak for (D-8126): a call's attribution pair is the
   # PANE's, through `derive_identity`, as `runs.open` derives its uuid, but here the opposite of the `byId` fill's rule: a body that
   # names `byId` or `byUuid` is REFUSED, unsent, because the call record is the coordinator's account of its own decision and
-  # the route stores `madeBy` from this pair. The textual test is the `byId` fill's, over a whitespace-stripped copy, with the
-  # same stated limits (a nested or `\u`-escaped key is the server's to refuse after parsing, `bad-field`, as the Linear rows').
+  # the route stores `madeBy` from this pair. The textual test is the `byId` fill's substring match, over a whitespace-stripped
+  # copy, but a match here REFUSES where the `byId` fill's suppresses its fill: a nested or a whitespace-padded `byId` or
+  # `byUuid` key matches and is refused, and only a `\u`-escaped spelling passes, which the appended pair outranks at the
+  # server's parse.
   # A bodyless call is refused (`no-body`), a body that is not a JSON object is refused, and a pane with no identity is refused;
-  # nothing is sent in any of the three. The splice is safe for the reason the `byId` fill's is: SAFE_RE admits no quote.
+  # nothing is sent in any of the three. The pair is appended LAST, byId then byUuid, as the note doors' is (review 2039 F7,
+  # review 3245 A2): the server's JSON parse keeps the later of two duplicate keys, so a spelling of `byId` the textual test
+  # misses never outranks the pane's. The append is safe for the reason the `byId` fill's splice is: SAFE_RE admits no quote.
   if [[ "$key" == 'calls.record' ]]; then
     [[ -n "$body" ]] || refuse 'no-body' 'the call record needs a body on --json'
     local cb="${body//[[:space:]]/}"
@@ -1265,8 +1291,24 @@ main() {
         refuse 'bad-body' 'the body names byId or byUuid; a call is attributed to this pane, and the client fills both' ;;
     esac
     derive_identity
-    splice_body_field 'byUuid' "$DERIVED_UUID" 'the call body is not a JSON object; byUuid cannot be added'
-    splice_body_field 'byId' "$DERIVED_ID" 'the call body is not a JSON object; byId cannot be added'
+    append_body_field 'byId' "$DERIVED_ID" 'the call body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the call body is not a JSON object; byUuid cannot be added'
+  fi
+
+  # THE SUGGESTION AND CONFIRM DOORS' IDENTITY (D-8808, D-8809), the `calls.record` rule: a suggestion or a confirm is attributed
+  # to this pane, so a body that names `byId` or `byUuid` is REFUSED, unsent, and both are appended LAST from `derive_identity`,
+  # byId then byUuid (review 2039 F7, review 3245 A2: a parser keeps the later of two duplicate keys, so a spelling the textual
+  # test misses never outranks the pane's); a bodyless call is refused.
+  if [[ "$key" == 'linking.suggest' || "$key" == 'linking.confirm' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' "${key/./ } needs a body on --json"
+    local sb="${body//[[:space:]]/}"
+    case "$sb" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; the call is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the body is not a JSON object; byUuid cannot be added'
   fi
 
   # THE NOTE DOOR'S IDENTITY (Overlord W1a, the notes piece), the `calls.record` rule: a note is attributed to this pane, so a

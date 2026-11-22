@@ -94,6 +94,14 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'drops the opener itself from claimantsOfSession\'s answer (a self-claimed run is admitted, D-3012): the binding is decided in claimantsOf' },
   { file: 'server/src/coord/planRunFacts.ts', text: 'r.run.claimedBy === claimedBy',
     why: 'the claimant of the ONE run that holds a ticket against the claimant of this open request (D-8181): a retried open of the same claimant sees its own planned run\'s ticket as free; no session is asked which run is its' },
+  { file: 'server/src/coord/dispatchDecide.ts', text: 'run.claimedBy !== by',
+    why: 'the in-place bind (decideInPlaceRequest) compares the claimant of the ONE planned run it was handed with the caller: an attribute of one run row, no session is asked which run is its (D-8126)' },
+  { file: 'server/src/coord/dispatchDecide.ts', text: 'run.sessionId !== by',
+    why: 'the in-place bind (decideInPlaceRequest) refuses a planned run already bound to another session: it reads the one run row it holds, and no session is asked which run is its (D-8126)' },
+  { file: 'server/src/coord/rundefs.ts', text: 'run.sessionId === run.claimedBy',
+    why: 'actsOnClaimant compares two fields of the ONE run being closed or watched (bound to its own claimant, as an in-place run reads after a rebuild): no session is asked which run is its (D-6096)' },
+  { file: 'server/src/coord/dispatchDecide.ts', text: 'run.sessionId === run.claimedBy',
+    why: 'the self-dispatch refusal compares two fields of the ONE run being dispatched (bound to its own claimant): no session is asked which run is its (D-6096, D-8126)' },
   { file: 'server/src/coord/dispatchDecide.ts', text: 'r.id === f.sessionId',
     why: 'a lookup of a REGISTRY record by its id, to measure the wrapper and identity of the session: no run is read' },
   { file: 'server/src/coord/landingWrites.ts', text: 'c.claimedBy === command.setBy',
@@ -269,6 +277,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the live process file's conversation id against the one before the /clear, until it rotates (Overlord W2 forecasts B, F3): Claude Code's conversation, no run is read" },
   { file: 'server/src/continuity/routes.ts', text: 'owner.value.sessionId !== id',
     why: "the private store's addressee of an operator message against the session reporting it picked up (Overlord W1 door process B1, the report door's picked-up arm): a message's recipient, no run is read" },
+  { file: 'server/src/coord/admissionWake.ts', text: 'w.claimedBy === b.madeBy',
+    why: 'a capacity block is matched to an admission waiter of the coordinator that recorded it (capacity follow-ups, T4 F3): one waiter row\'s claimant against one call row\'s maker, no session is asked about' },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */

@@ -241,11 +241,11 @@ export function isPrNumber(v: unknown): boolean {
 
 export type TestboxAdminSub =
   | 'status' | 'read' | 'key' | 'probe' | 'pin' | 'preflight' | 'connect' | 'settings-fleet' | 'settings-box'
-  | 'cancel' | 'parity' | 'repair' | 'apply-release' | 'disconnect' | 'key-rotate' | 'key-revoke';
+  | 'cancel' | 'parity' | 'repair' | 'apply-release' | 'disconnect' | 'key-rotate' | 'key-revoke' | 'tools-home';
 export const TESTBOX_ADMIN_SUB_MAP: Record<TestboxAdminSub, true> = {
   status: true, read: true, key: true, probe: true, pin: true, preflight: true, connect: true, 'settings-fleet': true,
   'settings-box': true, cancel: true, parity: true, repair: true, 'apply-release': true, disconnect: true,
-  'key-rotate': true, 'key-revoke': true,
+  'key-rotate': true, 'key-revoke': true, 'tools-home': true,
 };
 
 /** The acts the ledger records (spec §2.10) and the cancel that ends one. */
@@ -275,7 +275,7 @@ export type TestboxAdminCode =
   | 'status-not-ok' | 'pairing-keys-in-ccrc-env' | 'key-in-ccrc-env' | 'runs-in-progress' | 'idle-deadline'
   | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped' | 'interrupted'
   | 'unpair-failed' | 'address-not-private' | 'box-already-set' | 'new-key-refused' | 'old-line-kept' | 'revoked-box-skipped'
-  | 'revoked-unpair-failed';
+  | 'revoked-unpair-failed' | 'tools-home-failed';
 /** Each code in one line that names no value (no address, path, key or setting text), for the card. */
 export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'busy': 'Another test box act is already running; wait for it to end or cancel it.',
@@ -322,6 +322,8 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'old-line-kept': 'ccrc now uses its new access key, but the box still lets the old key in; remove the old key\'s line shown by hand.',
   'revoked-box-skipped': 'ccrc deleted its access key and forgot the box, but did not remove its lines from the box; remove them by hand as shown.',
   'revoked-unpair-failed': 'ccrc deleted its access key, but the box\'s unpair or the removal of its line did not finish; finish both by hand.',
+  // testbox-sync-home: the tools unit's runtime HOME drop-in (`tools-home`).
+  'tools-home-failed': 'The box did not take the tool sync\'s home setting, so a box whose tools cannot sync themselves stays as it was.',
 };
 /** The codes whose refusal carries `line`: the PUBLIC words of an access key whose line the operator removes from the box's
  *  authorized_keys by hand (D-8337). Never a private key; the route holds it to one printable line. */
@@ -453,6 +455,11 @@ export const TESTBOX_ADMIN_SUBS: Readonly<Record<TestboxAdminSub, TestboxAdminSu
   // credential (C14), and both read the connection, the key and the pin from the state, so they take no field.
   'key-rotate': spec({}, { stepUp: true, act: 'key-rotate' }),
   'key-revoke': spec({}, { stepUp: true, act: 'key-revoke' }),
+  // stale-tree-recovery-over-admin-lane (testbox-sync-home): the tools unit gets a HOME through one runtime drop-in, for a box
+  // whose installed tool sync predates `_tbt_home` and so cannot fetch the release that fixes it. Short, no field, and recorded
+  // as a repair: it rewrites nothing the installer wrote. The server composes it from `POST /api/testbox/tools-sync` when the
+  // box's last sync failed that way (`server/src/testbox.ts#toolsSyncNeedsHome`).
+  'tools-home': spec({}, { act: 'repair' }),
 } satisfies Record<TestboxAdminSub, TestboxAdminSubSpec>);
 
 /** The fleet-host settings whose change needs the passkey step-up although `settings-fleet` does not (C14 rules a plain value

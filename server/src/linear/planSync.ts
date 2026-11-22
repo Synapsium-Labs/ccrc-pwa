@@ -46,12 +46,12 @@ import type { LinearJournal } from './journal.js';
 import type { CcrcPass, LinearWritePolicy } from './policy.js';
 import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
-import { currentDetails, routableSlots, routeLinear } from './route.js';
+import { currentDetails, measuredTeamRoutes, routableSlots, routeProjectTeam, type TeamRoutes } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import { restoreCommentChoice, restoreHoldVerdict, restoreTargetVerdict, restoredDescription } from './driftPolicy.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
-  withoutPutBack, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  withoutPutBack, putBackTicketsOf, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -96,6 +96,9 @@ export interface RestoreOutcome { bindingId: number; outcome: 'restored' | 'moot
 export interface PlanSyncDeps {
   /** For the mail and for `goalsFor`, `linkingOf` and `programs()` only: every plan read and write goes through `plan`. */
   coord: CoordStore;
+  /** D-8796: the objects an approved or applying migration still writes, as `<bindingKind>:<localId>` (`planStore.ts#migratingLocals`);
+   *  their steps go on lane `migration`. Absent (a test, a script): none. */
+  migrating?: () => ReadonlySet<string>;
   plan: PlanStorePort;
   ccrcDir: string;
   /** The Linear store as the routes read it: where each workspace's slot, its key digest and its team ids live. */
@@ -115,14 +118,16 @@ export interface PlanSyncDeps {
   /** A test's shorter tick budget. */
   tickDeadlineMs?: number;
   /** The Linear owner of a project (D-8183): who an Upkeep epic's failure mails, since it has no coordinator. None: no mail. */
-  upkeepOwnerOf?: (project: string) => string | null;
+  upkeepOwnerOf?: (project: string, routes: TeamRoutes | null) => string | null;
 }
 
 export interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; key: string }[] }
 /** The drift pass's restore pass, taken from the list (never spelled beside `'plan-sync'`: the list is policy.ts's alone). */
 export type RestorePass = Extract<CcrcPass, `${string}restore`>;
 /** Which of ccrc's passes a send belongs to: the sync's own, or the restore's (D-8183: a restore's calls are journaled `drift-restore`). */
-type SendPass = 'plan-sync' | RestorePass;
+type SendPass = 'plan-sync' | 'migration' | RestorePass;
+/** D-8796 (condition 1, spec §10.6): a send's rate lane follows its pass, so a migration's writes never spend the sync's share. */
+const laneOf = (pass: SendPass): 'sync' | 'migration' => (pass === 'migration' ? 'migration' : 'sync');
 /** `next`: go on; `defer`: the pass ends and its programme row is deferred; `held`: the step's workspace is held for this
  *  programme (D-8183) and the pass goes on with the steps in other workspaces. */
 type Flow = 'next' | 'defer' | 'held';
@@ -133,7 +138,7 @@ type Failure = Exclude<CcrcOpOutcome, { ok: true }>;
  *  said `same`, or a link answered `conflict`). Neither: nothing went (no key, no slot). */
 interface SendNote { wrote: boolean; same: boolean }
 /** What failing a binding needs to know about its object (a skip's binding is failed with no slot: A2). */
-interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan }
+interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan; routes: TeamRoutes | null }
 /** What a failed outcome needs to know about the object it was for. */
 interface Subject extends Told { slot: SlotInfo; /** The pass every call of this step is journaled under (`readAsk` reads it). */ pass: SendPass }
 
@@ -310,6 +315,15 @@ export class PlanSync {
     return built === null ? null : { bindings: built.snap.bindings, owned: planSyncSteps(built.snap).owned };
   }
 
+  /** D-8796 (D-8186, Task 7.3): what the sync plans for ONE binding's owned fields, from the very snapshot and deciders a pass
+   *  sends by, computed synchronously from a store the caller has read, so the migration takes it inside the transaction that
+   *  adopts the issue and writes its move row (its after-state is then the sync's by construction). Read-only, as `plannedOwned`:
+   *  no episode advances and no fill is asked. Null: the key has no snapshot, or the plan places nothing for that binding now. */
+  plannedOwnedNow(key: string, store: LinearStoreRead, bindingId: number): PlannedOwned | null {
+    const built = this.snapshot(key, store, true);
+    return built === null ? null : planSyncSteps(built.snap).owned.find((o) => o.bindingId === bindingId) ?? null;
+  }
+
   /** The drift pass's restore (D-8183, §7.2): it puts the named bindings' planned fields back, in the key's flight, so it runs
    *  after any pass in flight and never between two of its steps. It RE-READS THE PLAN INSIDE THE FLIGHT: a target whose
    *  binding is gone, no longer `bound`, or whose fingerprint is no longer the one the drift pass read (`seen`) is `moot`,
@@ -392,7 +406,7 @@ export class PlanSync {
     const slot = built.slots.get(b.workspaceId);
     if (slot === undefined || b.linearId === null) return false;
     const chosen = restoreCommentChoice(c, textRefusalOf([c.body], textFactsOf(built.snap, b), built.snap.privateTrackerKeys));
-    if (chosen.refused) this.mailRestoreTextRefused(slug, b, built.snap.plan);
+    if (chosen.refused) this.mailRestoreTextRefused(slug, b, built.snap.plan, built.routes);
     const [op, key, target, teamKey] = b.localKind === 'programme' ? ['initiativeComment', 'initiativeId', b.linearId, null] as const
       : b.localKind === 'epic' ? ['projectComment', 'projectId', b.linearId, b.teamKey] as const
       : b.localKind === 'ticket' ? ['issueComment', 'issueId', b.identifier ?? b.linearId, b.teamKey] as const : [null, null, null, null] as const;
@@ -451,10 +465,10 @@ export class PlanSync {
     return this.workspaceOfProject(t.project, store.kind === 'listed' ? routableSlots(store) : []);
   }
 
-  /** The workspace a project's linked team routes to (`routeLinear`), null when it has no team or no slot serves it. */
-  private workspaceOfProject(project: string, listed: ReturnType<typeof routableSlots>): string | null {
+  /** The workspace a project's linked team routes to (`routeProjectTeam`), null when it has no team or no slot serves it. */
+  private workspaceOfProject(project: string, listed: TeamRoutes['slots']): string | null {
     const l = this.deps.coord.linkingOf(project);
-    const route = l.teamKey === null ? null : routeLinear(listed, { kind: 'team', team: l.teamKey, workspace: null });
+    const route = l.teamKey === null ? null : routeProjectTeam(listed, { teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null });
     return route !== null && route.kind === 'slot' ? route.slot.workspaceId : null;
   }
 
@@ -472,8 +486,10 @@ export class PlanSync {
   private ticketOfRun(runId: number): { run: NonNullable<Extract<ReturnType<CoordStore['run']>, { ok: true }>['run']>; ticket: TicketRow } | null {
     const read = this.deps.coord.run(runId);
     if (!read.ok || read.run === null) return null;
-    const ticket = this.deps.plan.planOf(read.run.program).epics.flatMap((e) => e.tickets).find((t) => t.runId === runId);
-    return ticket === undefined ? null : { run: read.run, ticket };
+    // The store's one reader of a run's ticket (review 2892 F9): a ticket put back is not the run's (wave 3 A5, carried to wave 7).
+    const own = this.deps.plan.ticketOfRun(runId);
+    const ticket = own === null || own.ticketId === null ? null : this.deps.plan.ticketById(own.ticketId);
+    return ticket === null ? null : { run: read.run, ticket };
   }
 
   // ── One pass ──
@@ -492,7 +508,7 @@ export class PlanSync {
       if (built === null) { plan.clearSyncDue(slug); return 'done'; }
       try { if (built.snap.program !== null) this.reconcileInitiativesItems(built.snap); } catch { console.warn('ccrc-server: linear plan sync initiatives item failed'); }
       const { steps, failedInputs, notices, waits } = planSyncSteps(built.snap);
-      for (const n of notices) this.mailOpenIssuesLeft(slug, n.count);
+      for (const n of notices) this.mailOpenIssuesLeft(slug, n.count, built.routes);
       let requeued = false;
       for (const f of failedInputs) {
         const b = built.snap.bindings.find((x) => x.id === f.bindingId);
@@ -513,7 +529,7 @@ export class PlanSync {
           // once, and no refill is asked for it: the next refill or plan change looks again.
           const probe = probeWaitsVerdict(waits, (ws) => this.streakOf(`probe|${ws}`));
           for (const ws of probe.bounded) {
-            this.mailEpisode(slug, ws, 'probe', built.snap);
+            this.mailEpisode(slug, ws, 'probe', built.routes, built.snap);
             plan.addSettledProbe(ws, slug);
           }
           const waitsOn = probe.waitOn.flatMap((ws) => { const slot = built.slots.get(ws); return slot === undefined ? [] : [slot]; });
@@ -532,12 +548,13 @@ export class PlanSync {
           // I1: statuses never read wait on the backoff, and past the bound the coordinator is told once per episode.
           const unread = new Set(built.unread);
           const w = directoryWaitVerdict(waitedOn.map((ws) => ({ workspaceId: ws, missing: unread.has(ws) ? 'statuses' as const : 'directory' as const, streak: this.streakOf(`statuses|${ws}`) })));
-          for (const ws of w.tell) this.mailEpisode(slug, ws, 'statuses');
+          for (const ws of w.tell) this.mailEpisode(slug, ws, 'statuses', built.routes);
           this.deferFor(slug, w.cause);
         } else if (held.length > 0) this.deferUntil(slug, held[0]!.until, held[0]!.why);   // the earliest workspace hold (D-8702)
         return 'deferred';                                   // not configured: the due row stays for the next tick
       }
-      const flow = await this.execute(slug, runnable[0]!, built, deadlineAt, 'plan-sync');
+      const step = runnable[0]!;
+      const flow = await this.execute(slug, step, built, deadlineAt, this.chargeOf(step));
       if (flow === 'defer') return 'deferred';          // `held`: that workspace is out of this pass, the others go on
     }
   }
@@ -554,14 +571,15 @@ export class PlanSync {
    *  `upkeep:<project>` reads that project's Upkeep epic instead (D-8183): `program` is null, there is no programme row, and a
    *  project with no Upkeep epic has no snapshot. `readOnly` (the drift pass's `plannedOwned`): no episode is observed and no fill
    *  is asked for, so a read changes nothing. */
-  private snapshot(slug: string, store: LinearStoreRead, readOnly = false): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[]; unread: string[] } | null {
+  private snapshot(slug: string, store: LinearStoreRead, readOnly = false): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; routes: TeamRoutes | null; waiting: string[]; unread: string[] } | null {
     const { plan, coord } = this.deps;
     const upkeep = slug.startsWith(UPKEEP_DUE_PREFIX);
     const rowid = upkeep ? null : plan.programmeRowId(slug);
     const found = upkeep ? undefined : coord.programs().find((p) => p.slug === slug);
     const prog = rowid === null || found === undefined ? null : { rowid, row: found };
     if (!upkeep && prog === null) return null;
-    const stored = withoutPutBack(upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug));   // Task 3.1: a record Put back dropped is never in the snapshot
+    const raw = upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug);
+    const stored = withoutPutBack(raw);   // Task 3.1: a record Put back dropped is never in the snapshot
     if (upkeep && stored.epics.length === 0) return null;
     const bindings = plan.bindingsOf(slug);
     const planEnd = upkeep ? null : plan.planEndOf(slug);
@@ -571,7 +589,8 @@ export class PlanSync {
       openTickets: tickets.filter((t) => t.state === 'open' || t.state === 'started').length,
     });
     const slots = slotsOf(store);
-    const listed = store.kind === 'listed' ? routableSlots(store) : [];
+    const routes = measuredTeamRoutes(store);
+    const listed = routes?.slots ?? [];
     const projectNames = [...new Set(stored.epics.flatMap((e) => [e.project, ...e.tickets.map((t) => t.project)]))];
     const projects: SyncSnapshot['projects'] = projectNames.map((project) => {
       const l = coord.linkingOf(project);
@@ -614,9 +633,9 @@ export class PlanSync {
         end: outcome === null ? null : { outcome, why: planEnd?.why ?? null, at: planEnd?.at ?? this.deps.now() },
         doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.row.state === 'paused',
       },
-      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs,
+      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs, putBackTickets: putBackTicketsOf(raw),
     };
-    return { snap, slots, waiting, unread };
+    return { snap, slots, routes, waiting, unread };
   }
 
   /** §5.6: the PR of each bound ticket's run, as a URL on the project's measured repository (an unmeasured repository has no
@@ -649,13 +668,13 @@ export class PlanSync {
       if (b === null) return 'next';
       // A2: failing a binding writes coord.db and mails; it calls nothing in Linear, so it needs no slot. A `workspace-mismatch`
       // whose old workspace no slot serves is failed and told once like any other, never left due at every beat.
-      this.fail({ slug, local: step.local, workspaceId: ws, bindingId: b.id, inputs: step.inputs ?? '', plan: built.snap.plan }, step.why);
+      this.fail({ slug, local: step.local, workspaceId: ws, bindingId: b.id, inputs: step.inputs ?? '', plan: built.snap.plan, routes: built.routes }, step.why);
       return 'next';
     }
     const slot = built.slots.get(step.workspaceId);
     if (slot === undefined) { this.notConfigured.add(step.workspaceId); return 'next'; }
     let b = step.bindingId === null ? null : built.snap.bindings.find((x) => x.id === step.bindingId) ?? null;
-    const subject = (bindingId: number | null): Subject => ({ slug, local: step.local, workspaceId: step.workspaceId, bindingId, inputs: step.inputs, slot, plan: built.snap.plan, pass });
+    const subject = (bindingId: number | null): Subject => ({ slug, local: step.local, workspaceId: step.workspaceId, bindingId, inputs: step.inputs, slot, plan: built.snap.plan, routes: built.routes, pass });
 
     if (step.kind === 'create') {
       const existed = b !== null;
@@ -703,7 +722,7 @@ export class PlanSync {
       send = verdict === 'state-held' ? withoutState(step) : step;
       if (step.comment !== undefined) {
         const c = await this.deps.call({
-          op: 'issueComment', pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
+          op: 'issueComment', pass, lane: laneOf(pass), slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
           target: b.identifier ?? b.linearId, fields: ['body'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
         });
         // C13: a `conflict` answer is a comment made already (same id): done, like an ok.
@@ -940,16 +959,22 @@ export class PlanSync {
     return this.deps.plan.bindingsOf(slug).find((b) => b.id === id) ?? null;
   }
 
+  /** D-8796 (condition 1): a step for an object a migration adopted or declared, while its move row is not applied, is charged
+   *  to lane `migration` and journalled with pass `migration`; every other step is the sync's own. */
+  private chargeOf(step: SyncStep): SendPass {
+    return step.kind !== 'skip' && (this.deps.migrating?.().has(`${step.local.kind}:${step.local.id}`) ?? false) ? 'migration' : 'plan-sync';
+  }
+
   private askOf(step: Exclude<SyncStep, { kind: 'skip' }>, slot: SlotInfo, b: BindingRow | null, pass: SendPass): CcrcOpAsk {
     const target = step.kind === 'create' ? null : step.op === 'issueUpdate' || step.op === 'issueLink' ? (b?.identifier ?? b?.linearId ?? null) : (b?.linearId ?? null);
     return {
-      op: step.op, pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey, target, fields: step.fields, input: step.input,
+      op: step.op, pass, lane: laneOf(pass), slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey, target, fields: step.fields, input: step.input,
       ...(step.teamKeys === undefined ? {} : { teamKeys: step.teamKeys }),
     };
   }
 
   private readAsk(op: CcrcOpAsk['op'], s: Subject, teamKey: string | null, input: CcrcOpAsk['input']): CcrcOpAsk {
-    return { op, pass: s.pass, lane: 'sync', slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
+    return { op, pass: s.pass, lane: laneOf(s.pass), slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
   }
 
   /** The binding is failed with the word, and the coordinator is told once per object and word. */
@@ -972,7 +997,7 @@ export class PlanSync {
   }
 
   /** D-8701's episode mail: once per programme, workspace and episode (its first fill names it), in a fixed sentence. */
-  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses', snap?: SyncSnapshot): void {
+  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses', routes: TeamRoutes | null, snap?: SyncSnapshot): void {
     const streak = this.streakOf(`${kind}|${workspaceId}`);
     if (streak === undefined) return;
     if (kind === 'probe') {
@@ -980,16 +1005,16 @@ export class PlanSync {
       // programme ended (so the initiative's close waits too).
       const bound = snap?.program != null && snap.bindings.some((b) => b.localKind === 'programme' && b.localId === snap.program!.rowid && b.workspaceId === workspaceId && b.state === 'bound' && b.linearId !== null);
       this.mailOnce(slug, `Linear sync: workspace ${workspaceId} initiatives-unknown since ${streak.since} (${slug})`,
-        probeEpisodeText({ slug, workspaceId, initiativeBound: bound, endWaiting: snap?.program?.end != null }));
+        probeEpisodeText({ slug, workspaceId, initiativeBound: bound, endWaiting: snap?.program?.end != null }), routes);
     } else {
       this.mailOnce(slug, `Linear sync: workspace ${workspaceId} statuses-unread since ${streak.since} (${slug})`,
-        `ccrc could not read the project statuses of the Linear workspace ${workspaceId}, so nothing of ${slug} in that workspace syncs until they read. The sync retries on its backoff.`);
+        `ccrc could not read the project statuses of the Linear workspace ${workspaceId}, so nothing of ${slug} in that workspace syncs until they read. The sync retries on its backoff.`, routes);
     }
   }
 
   /** §5.4: a programme ended `done` with open issues: the coordinator is told once, in a fixed sentence (no Linear text). */
-  private mailOpenIssuesLeft(slug: string, count: number): void {
-    const owner = this.ownerOf(slug);
+  private mailOpenIssuesLeft(slug: string, count: number, routes: TeamRoutes | null): void {
+    const owner = this.ownerOf(slug, routes);
     if (owner === null) return;
     const subject = `Linear sync: programme ${slug} open-issues-left`;
     const { coord } = this.deps;
@@ -999,34 +1024,34 @@ export class PlanSync {
   }
 
   /** Who is told about a key: a programme's coordinator, or an Upkeep epic's project's Linear owner (D-8183); none: nobody. */
-  private ownerOf(slug: string): string | null {
-    return slug.startsWith(UPKEEP_DUE_PREFIX) ? this.deps.upkeepOwnerOf?.(slug.slice(UPKEEP_DUE_PREFIX.length)) ?? null : this.deps.plan.planOwnerOf(slug);
+  private ownerOf(slug: string, routes: TeamRoutes | null): string | null {
+    return slug.startsWith(UPKEEP_DUE_PREFIX) ? this.deps.upkeepOwnerOf?.(slug.slice(UPKEEP_DUE_PREFIX.length), routes) ?? null : this.deps.plan.planOwnerOf(slug);
   }
 
   private mailFailed(s: Told, word: string): void {
     const key = s.local.kind === 'programme' ? s.slug : this.planKeyOf(s.plan, s.local);
     this.mailOnce(s.slug, `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} ${word} (${s.slug})`,
-      `The Linear sync could not write the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It stays as it is until the plan or the Linear setup changes, and the sync retries by itself.`);
+      `The Linear sync could not write the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It stays as it is until the plan or the Linear setup changes, and the sync retries by itself.`, s.routes);
   }
 
   /** Review 2457 F3: a restore comment the public-text check refused, told once per object, in a fixed sentence (never a value, never
    *  the check's class). The comment went out as ccrc's fallback naming the fields only, and the restore's field writes went. */
-  private mailRestoreTextRefused(slug: string, b: BindingRow, plan: StoredPlan): void {
+  private mailRestoreTextRefused(slug: string, b: BindingRow, plan: StoredPlan, routes: TeamRoutes | null): void {
     const local: Local = { kind: b.localKind, id: b.localId };
     const key = b.localKind === 'programme' ? slug : this.planKeyOf(plan, local);
     this.mailOnce(slug, `Linear sync: ${OBJECT_WORD[b.localKind]} ${key} restore-comment text-public (${slug})`,
-      `The Linear sync put back the ${OBJECT_WORD[b.localKind]} ${key} of ${slug} after it was changed in Linear, but the comment it would have left named text that is not safe to post in a public project. It left a comment that names only the fields it put back.`);
+      `The Linear sync put back the ${OBJECT_WORD[b.localKind]} ${key} of ${slug} after it was changed in Linear, but the comment it would have left named text that is not safe to post in a public project. It left a comment that names only the fields it put back.`, routes);
   }
 
   /** C16: a refused PR link, told once per ticket and word, in a fixed sentence (never the URL). */
   private mailLinkGivenUp(s: Subject, word: string): void {
     const key = this.planKeyOf(s.plan, s.local);
     this.mailOnce(s.slug, `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} pr-link ${word} (${s.slug})`,
-      `The Linear sync could not link the pull request to the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It does not try that link again; the issue stays in sync, and a later pull request is linked as usual.`);
+      `The Linear sync could not link the pull request to the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It does not try that link again; the issue stays in sync, and a later pull request is linked as usual.`, s.routes);
   }
 
-  private mailOnce(slug: string, subject: string, body: string): void {
-    const owner = this.ownerOf(slug);
+  private mailOnce(slug: string, subject: string, body: string, routes: TeamRoutes | null): void {
+    const owner = this.ownerOf(slug, routes);
     if (owner === null) return;
     const { coord } = this.deps;
     if (coord.hasMailWithSubject('operator', null, owner, subject)) return;
@@ -1084,9 +1109,13 @@ export function planSyncFor(o: {
       await (slot.source === 'legacy' ? markLinearRejected(o.ccrcDir, digest, now) : markLinearSlotRejected(o.ccrcDir, slot.id, digest, now));
     },
     now: Date.now, privateTrackerKeys: o.privateTrackerKeys, prOfRun: prOfRunFrom(o.coord, o.currentFleet ?? (() => null)),
-    upkeepOwnerOf: (project) => linearOwnerOfProject(project, o.plan.hierarchyProjectsOf(), {
+    migrating: () => o.plan.migratingLocals(),
+    upkeepOwnerOf: (project, routes) => {
+      const owner = linearOwnerOfProject(project, o.plan.hierarchyProjectsOf(), {
       latestProgrammeCoordinator: (p) => o.plan.latestProgrammeCoordinator(p), presence: o.presenceOf,
-    }).id,
+    }, routes);
+      return owner.kind === 'owner' ? owner.id : null;
+    },
   });
 }
 

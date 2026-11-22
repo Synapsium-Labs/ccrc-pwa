@@ -2216,6 +2216,63 @@ describe('archived footer row', () => {
     });
     expect(screen.getByRole('button', { name: /archived on disk · 1 · 1\.2 gb/i })).toBeInTheDocument();
   });
+
+  // H4 fix round 1 (review 2966 F5, the coordinator's ruling): the foot's one Archived row is also the door to the Archive's
+  // section "Work no session owns", so it draws when that section has something to show, even with nothing archived. The same
+  // row, the same door (`/archive`), and words that say what is there; it adds no row and no control.
+  describe('the same row is the door to work no session owns', () => {
+    const owned = { unowned: [unowned({ adminRecord: 'agent-u1' }), unowned({ adminRecord: 'agent-u2' })] };
+    const archivedTwo = [
+      session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, archivedBytes: 1_200_000_000 }),
+      session({ id: 'b', project: 'beta', workspace: 'still-cove', archivedAt: 200, archivedBytes: 1_100_000_000 }),
+    ];
+
+    it('archived only: the words are what they were', () => {
+      const store = makeStore();
+      renderFleet(<FleetScreen store={store} />);
+      seed(store, { conn: 'open', sessions: archivedTwo, delegation: frame({}) });
+      expect(screen.getByRole('button', { name: /^archived on disk · 2 · 2\.3 gb$/i })).toBeInTheDocument();
+    });
+
+    it('unowned work only: draws with nothing archived, says what is there, and routes to /archive', () => {
+      const store = makeStore();
+      renderFleet(<FleetScreen store={store} />);
+      seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha', workspace: null })], delegation: frame(owned) });
+      const row = screen.getByRole('button', { name: /^work no session owns · 2$/i });
+      expect(screen.queryByRole('button', { name: /archived on disk/i })).not.toBeInTheDocument();
+      fireEvent.click(row);
+      expect(location.pathname).toBe('/archive');
+    });
+
+    it('counts a worktree of two unlisted sessions too, and says one as one', () => {
+      const store = makeStore();
+      renderFleet(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', sessions: [session({ id: 'a', project: 'alpha', workspace: null })],
+        delegation: frame({ leases: [lease({ parentId: 'gone-a', via: 'gone-b', group: 'offline-coordinator' })] }),
+      });
+      expect(screen.getByRole('button', { name: /^work no session owns · 1$/i })).toBeInTheDocument();
+    });
+
+    // HF2 (review 2988 F8): "one row", not one line: the row draws its halves as two boxes joined by a `·` after a no-break
+    // space, so a narrow row breaks between them (measured in a real Chrome, `archive-unowned.browser.test.ts`).
+    it('both: one row says both, its halves joined by " · "', () => {
+      const store = makeStore();
+      renderFleet(<FleetScreen store={store} />);
+      seed(store, { conn: 'open', sessions: archivedTwo, delegation: frame(owned) });
+      expect(screen.getAllByRole('button', { name: /^archived on disk/i })).toHaveLength(1);
+      expect(screen.getByRole('button', { name: /^archived on disk · 2 · 2\.3 gb\u00A0· work no session owns · 2$/i })).toBeInTheDocument();
+    });
+
+    it('draws nothing for neither, for no frame, and for a lease a listed session owns', () => {
+      const store = makeStore();
+      renderFleet(<FleetScreen store={store} />);
+      seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha', workspace: null })], delegation: null });
+      expect(screen.queryByRole('button', { name: /work no session owns/i })).not.toBeInTheDocument();
+      seed(store, { delegation: frame({ leases: [lease({ parentId: 'a', via: null })] }) });
+      expect(screen.queryByRole('button', { name: /work no session owns/i })).not.toBeInTheDocument();
+    });
+  });
 });
 
 // — AccountsStrip —

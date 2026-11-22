@@ -17,6 +17,7 @@ export const APPROVAL_PATH_LABELS: Readonly<Record<ApprovalCensusPath, string>> 
   stale: 'Stood past the hook\'s wait',
   'operator-first': 'Answered or cleared at the pane before the coordinator',
   held: 'Still held',
+  parked: 'Parked on Waiting on you',
   unmeasured: 'Could not be placed',
 };
 

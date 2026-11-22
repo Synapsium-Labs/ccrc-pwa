@@ -14,13 +14,13 @@ import {
   parseSummary,
   runningView,
   scriptNameFor,
-  selectRows,
+  keepWorkflows,
   splitLines,
   summaryView,
   RUN_ID_RE,
   workflowsFrame,
 } from '../src/workflows/model.js';
-import { WORKFLOW_AGENTS_MAX, WORKFLOW_EVICT_MS } from '../../shared/workflows.js';
+import { HELPER_FINISHED_KEEP_MS, WORKFLOW_AGENTS_MAX } from '../../shared/workflows.js';
 
 const hex = (c: string): string => c.repeat(64);
 const KEY_A = `v2:${hex('a')}`;
@@ -242,18 +242,21 @@ describe('parseSummary / summaryView — a finished workflow', () => {
   });
 });
 
-describe('selectRows — finished rows drop off after Claude Code\'s 30 s', () => {
+// H2 (D-8872): the 30 s pins retired with `WORKFLOW_EVICT_MS`; the keep is the helpers' ten minutes, `keepWorkflows`
+// asking `isFinishedKept` (helpers-keep.test.ts holds its cases).
+describe('keepWorkflows — finished rows drop off ten minutes after their end', () => {
   const base = summaryView('wf_00000000-aaa', parseSummary(JSON.stringify(SUMMARY))!, 0);
-  it('a finished row is shown under 30 s from its end and gone at 30 s', () => {
+  const rows = (now: number): unknown[] => keepWorkflows([base], now, new Set()).rows;
+  it('a finished row is shown under ten minutes from its end and gone at ten minutes', () => {
     const end = base.endedAt!;
-    expect(selectRows([base], end + WORKFLOW_EVICT_MS - 1)).toHaveLength(1);
-    expect(selectRows([base], end + WORKFLOW_EVICT_MS)).toHaveLength(0);
+    expect(rows(end + HELPER_FINISHED_KEEP_MS - 1)).toHaveLength(1);
+    expect(rows(end + HELPER_FINISHED_KEEP_MS)).toHaveLength(0);
   });
   it('running rows always show, oldest start first, unknown starts last', () => {
     const fold = foldJournal(emptyFold(), RUNNING_2_1_302);
     const r = (id: string, startedAt: number | null) =>
       runningView({ id, name: id, fold, tokens: new Map(), phases: null, startedAt });
-    expect(selectRows([r('c', null), r('b', 20), r('a', 10)], 1e15).map((v) => v.id)).toEqual(['a', 'b', 'c']);
+    expect(keepWorkflows([r('c', null), r('b', 20), r('a', 10)], 1e15, new Set()).rows.map((v) => v.id)).toEqual(['a', 'b', 'c']);
   });
 });
 

@@ -27,7 +27,7 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
-import { linkTeamAuto, linkingAll, linkingOf, recordReading, recordTeamCandidates, setLinking } from './linkingStore.js';
+import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
@@ -49,6 +49,7 @@ import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
+import * as parks from './approvalParkStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
@@ -227,6 +228,7 @@ import {
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
 } from '../../../shared/api.js'; import { programmeNameFromSlug, PEER_MAIL_WINDOW_MS } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+import { type ApprovalParkWord, isApprovalParkWord } from '../../../shared/approval-park.js';
 
 /** One entry in `$REG/<id>.prhistory` (appended by ccd/ccd's `_pr_py`). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
@@ -992,10 +994,13 @@ export type StallObservation =
   | { recorded: true; eventId: number }
   | { recorded: false; why: StallWriteMiss };
 
-/** The state predicate of the observation writer: a closed union of exactly two members. `active` is the stall lane's
+/** The state predicate of the observation writer: a closed union of three members. `active` is the stall lane's
  *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
- *  is `episode`, PR landing in ccrc stage 1). */
-export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
+ *  is `episode`, PR landing in ccrc stage 1); `admission` is the admission wake's (D-6095: a run still waiting for the
+ *  cap in an idle state, with a claimant, whose newest refusal is still `refusedAt`). */
+export type ObservationPredicate =
+  | { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number }
+  | { readonly kind: 'admission'; readonly refusedAt: number };
 
 /** `delegationRunStamps`' answer: every stamp, or the one reason none is given (all-or-failure). */
 export type DelegationRunStampsResult =
@@ -1041,6 +1046,11 @@ export interface ApprovalRow {
    *  for a child under an older deny file (the installer's history named it) is `false`, and the rule door refuses its
    *  allow (`approvalAllowRefusal`). The column defaults to 1, and anything but 1 reads `false`. */
   denyCurrent: boolean;
+  /** Approvals PR 3 (F1): the park's word decided at mint (`live`, `shadow`, `capped`), null on a row minted before PR 3 or
+   *  released at mint; a token this build does not know reads null, which never parks. `parkKey` is the key a retry
+   *  repeats (null with no word). `fetchedAt` is the ruling read's first serve of a ruling (F8-c), `wouldPark` the shadow's
+   *  record that the row would have parked. */
+  parkWord: ApprovalParkWord | null; parkKey: string | null; fetchedAt: number | null; wouldPark: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -1095,6 +1105,7 @@ interface RunRowDb {
   closedBy: string | null;
   closeDetail: string | null;
   closePr: string | null;
+  inPlace: number | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -1115,7 +1126,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail, r.closePr';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail, r.closePr, r.inPlace';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -1996,6 +2007,9 @@ type AskMint = {
   releaseReason?: AskMintReleaseReason;
 };
 
+/** D-6096: the `run_events.detail` of both hops of an in-place bind (`CoordStore.bindInPlace`), the plan's word. */
+export const IN_PLACE_EVENT = 'in-place';
+
 /**
  * Every read and every write of the coordination database, in one class, and
  * SYNCHRONOUS throughout — `DatabaseSync` has no async surface, so a whole
@@ -2572,12 +2586,20 @@ export class CoordStore {
    * id>)` — the honest outcome, since the party that can tell which program it
    * meant is the human reading it. Recorded here rather than opened; an operator
    * door that re-points one by id is a decision somebody makes on purpose.
+   *
+   * THE OVERLORD'S URGENT MAIL TO A DISPLACED CLAIMANT MOVES TOO, by session id (mid-turn mail, review 2833 F3): the rule
+   * marks a mail `overlord` only when its recipient claims the run it names (`urgentMail.ts`, the Overlord arm), and the
+   * hold derives from the delivery (`urgentHolds`). So it is a mail to the CHAIR of a run in this programme, whatever its
+   * `toId` says; left on the displaced id, it would hold a session that is no longer the chair and never hold the heir.
+   * Its run names the programme (`r.program`), so nothing is guessed. A `coordinator` urgent mail is a run's worker's,
+   * and never moves, even when that worker later becomes the claimant and is displaced (review 3069 F3). An abandoned
+   * urgent park stays where it is, as every park does (slug `urgent-park-not-moved`).
    */
   private repointCoordinatorMail(program: string, to: string, displaced: readonly string[]): DeliveryBulkWrite {
     return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding',
       `toId IN (${placeholders(displaced.length)}) AND mailId IN (` +
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
-      "WHERE m.toId = 'coordinator' AND r.program = ?)",
+      "WHERE (m.toId = 'coordinator' OR m.urgentAs = 'overlord') AND r.program = ?)",
       [...displaced, program]) };
   }
 
@@ -3051,6 +3073,7 @@ export class CoordStore {
     ).run(runId, now, from, to, causedBy, detail ?? null);
     this.settleEndRequests(runId, from, to, causedBy, detail, now);
     planStore.onRunAdvancedInTx(this.db, runId, from, to, now);   // D-8181: the run's ticket and epic follow it, in this transaction
+    this.clearAdmissionWait(runId);   // D-6095: any move ends the wait for the cap
     return { ok: true as const, from, to };
   }
 
@@ -3158,10 +3181,17 @@ export class CoordStore {
       ? this.db.prepare(
         `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
       ).get(runId) as { state: string } | undefined
-      : this.db.prepare(
-        "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
-        "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
-      ).get(runId, runId, when.episode) as { state: string } | undefined;
+      : when.kind === 'admission'
+        // D-6095: the admission waiters' own predicate (`admissionWaiters`), narrowed to the refusal being woken, so a run
+        // that moved, was refused again or lost its claimant since the lane read it is `run-gone` and gets no mail.
+        ? this.db.prepare(
+          `SELECT state FROM runs WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL} AND admissionWaitSince IS NOT NULL ` +
+          "AND lastRefusedAt = ? AND claimedBy <> ''",
+        ).get(runId, when.refusedAt) as { state: string } | undefined
+        : this.db.prepare(
+          "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
+          "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
+        ).get(runId, runId, when.episode) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
     if (seen !== undefined) return { recorded: false, why: 'duplicate' };
@@ -3272,14 +3302,19 @@ export class CoordStore {
       const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
       if (!adv.ok) return adv;
       for (const title of input.items) this.addWorkItem(input.runId, title, []);
-      for (const key of input.intents ?? []) {
-        this.db.prepare(
-          'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
-          'SELECT id, project, ?, claimedBy, dispatchedAt FROM runs WHERE id = ?',
-        ).run(key, input.runId);
-      }
+      for (const key of input.intents ?? []) this.holdLandingIntent(input.runId, key, null);
       return adv;
     });
+  }
+
+  /** The ONE writer of `landing_intents` (D-7614 wave 5g; D-6096 gave it a second caller, `bindInPlace`): a hold on `key`
+   *  for the run's project, set by the run's claimant at `at`, or at the run's own `dispatchedAt` when `at` is null. A
+   *  repeated key throws on the primary key, so the caller's transaction rolls back. */
+  private holdLandingIntent(runId: number, key: string, at: number | null): void {
+    this.db.prepare(
+      'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
+      'SELECT id, project, ?, claimedBy, COALESCE(?, dispatchedAt) FROM runs WHERE id = ?',
+    ).run(key, at, runId);
   }
 
   /** The landing intents held in a project for these keys: every row whose run is not terminal, ordered by key then run
@@ -4155,6 +4190,33 @@ export class CoordStore {
     ).run(workspace, branch, resumed ? 1 : 0, at, runId);
   }
 
+  /**
+   * D-6096 (fleet-capacity W1-4b): the IN-PLACE bind. A coordinator whose wave the concurrency cap refused takes that wave as
+   * the run's own worker, in a sibling worktree on `branch`: `planned` -> `dispatched` -> `working` in ONE transaction (the
+   * machine has no `planned` -> `working` edge and is not widened), the run's session the claimant (through `bindSession`,
+   * the one writer of that column), `branch` the sibling worktree's, `resumed` 0 and `inPlace` 1.
+   *
+   * `dispatchedAt` IS LEFT NULL, and that is the point: an in-place run starts no process, so `capsUsage().running` and
+   * `capsCountedRuns` (both read `dispatchedAt IS NOT NULL`) charge it to neither cap. `workspace` is
+   * left null too: the sibling worktree is not a registry workspace. Two `run_events` rows, one per hop, both detail
+   * `in-place` (the plan's word); the admission stamp is cleared by the hops (`advanceInner`). `at` stamps the landing
+   * intents it holds, since `dispatchedAt` is null here.
+   *
+   * The first hop is taken BEFORE any column is written, so a run not `planned` (or not a work run) refuses
+   * `bad-transition` with nothing changed. The caller (`bindRunInPlace`, `dispatch.ts`) has already decided WHO may bind.
+   */
+  bindInPlace(runId: number, sessionId: string, branch: string, intents: readonly string[] = [], at: number = Date.now()): AdvanceResult {
+    return tx(this.db, () => {
+      const first = this.advanceInner(runId, 'dispatched', 'coordinator', IN_PLACE_EVENT);
+      if (!first.ok) return first;
+      this.bindSession(runId, sessionId);
+      this.db.prepare('UPDATE runs SET branch = ?, resumed = 0, inPlace = 1 WHERE id = ?').run(branch, runId);
+      // Landing intents (D-8086), as `dispatchRun` writes them, stamped `at`: `dispatchedAt` is null for an in-place run.
+      for (const key of intents) this.holdLandingIntent(runId, key, at);
+      return this.advanceInner(runId, 'working', 'coordinator', IN_PLACE_EVENT);
+    });
+  }
+
   /** `runs.prLineage`, written once at close from a `.prhistory` read
    *  (`coord/prhistory.ts`). Stored as JSON (spec:92-95's fold), never
    *  reconstructed lazily on read — the same "store the render, don't defer
@@ -4500,12 +4562,12 @@ export class CoordStore {
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
       'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace, inPlace FROM runs ' +
       `WHERE state NOT IN ${INACTIVE_RUN_STATES_SQL} AND sessionId IS NOT NULL ORDER BY id`,
     ).all() as unknown as
       { idText: string; kind: string; state: string; sessionId: string; claimedBy: string | null;
         dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
-        reviewsText: string | null; project: string; workspace: string | null }[];
+        reviewsText: string | null; project: string; workspace: string | null; inPlace: number | null }[];
     const runs: StallRunRow[] = [];
     for (const r of rows) {
       const nums = measureRunNumbers(r);
@@ -4518,7 +4580,7 @@ export class CoordStore {
       }
       runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId, claimedBy: r.claimedBy,
         dispatchedAt, program: r.program, wave: nums.nums.wave, waveOf: nums.nums.waveOf,
-        project: r.project, workspace: r.workspace });
+        project: r.project, workspace: r.workspace, ...(r.inPlace === 1 ? { inPlace: true as const } : {}) });
     }
     return { ok: true, runs };
   }
@@ -5151,12 +5213,14 @@ export class CoordStore {
     const ph = placeholders(sessionIds.length);
     const planned: RunState = 'planned';
     // `placedOnly` adds ONE clause to the newest-run subquery; the statement is otherwise the one `last` has always read.
+    // D-6096 (review 2993 F4): an in-place run is never its coordinator's run "as worker", so neither newest read counts
+    // one, and a coordinator whose last in-place run closed does not read released.
     const newest = (placedOnly: boolean): LastRun[] | { detail: string } => {
       const rows = this.db.prepare(
         'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
         'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
         'LEFT JOIN programs p ON p.slug = r.program ' +
-        `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph})${placedOnly ? ' AND state <> ?' : ''} ` +
+        `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) AND inPlace IS NOT 1${placedOnly ? ' AND state <> ?' : ''} ` +
         'GROUP BY sessionId) ORDER BY r.id',
       ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as unknown as {
         idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
@@ -5189,7 +5253,8 @@ export class CoordStore {
       `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
     ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     // D-8790: an active run beside the newest placed one (`planned` is never active, so the newest
-    // placed run is the newest whose state is not `planned`, as `newest(true)` reads it).
+    // placed run is the newest whose state is not `planned`). Unlike `newest(true)`, this subquery counts an in-place
+    // run, which here only ever holds a session awake (review 3023 F4-a).
     const other = (this.db.prepare(
       `SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
       'AND r.id <> (SELECT MAX(n.id) FROM runs n WHERE n.sessionId = r.sessionId AND n.state <> ?)',
@@ -5680,6 +5745,12 @@ export class CoordStore {
     return linkTeamAuto(this.db, project, link, at);
   }
 
+  /** D-8809: the Overlord's link and the call that records it, in one transaction: the call's id, or null when refused. */
+  linkTeamOverlord(project: string, link: Parameters<typeof linkTeamOverlord>[2], call: Parameters<typeof linkTeamOverlord>[3], at: number): number | null { return linkTeamOverlord(this.db, project, link, call, at); }
+
+  /** D-8808: a coordinator's suggested team for a project with no key: written, `team-set` or `no-project`. */
+  recordTeamSuggestion(project: string, s: Parameters<typeof recordTeamSuggestion>[2]): ReturnType<typeof recordTeamSuggestion> { return recordTeamSuggestion(this.db, project, s); }
+
   /** D-8405: the automatic pass's one-tap candidates for a project with no key. */
   recordTeamCandidates(project: string, candidates: Parameters<typeof recordTeamCandidates>[2]): void {
     recordTeamCandidates(this.db, project, candidates);
@@ -5869,6 +5940,8 @@ export class CoordStore {
       // stored word outside the three is no `closedBy`; the detail is the redacted form.
       closedBy: isRunClosedBy(row.closedBy) ? row.closedBy : null,
       closeDetail: row.closeDetail === null ? null : redactCommand(row.closeDetail),
+      // Migration 117 (D-6096): present exactly for a run its coordinator took in place, absent for every other.
+      ...(row.inPlace === 1 ? { inPlace: true } : {}),
     };
   }
 
@@ -6218,6 +6291,45 @@ export class CoordStore {
     ).all() as unknown as CapsCountedRun[];
   }
 
+  // ── the admission wait (D-6095) ───────────────────────────────────────────
+
+  /** A refusal by the concurrency cap, stamped on the run (inside the coordination serialiser): `admissionWaitSince` keeps
+   *  the OLDEST refusal (set only while null), `lastRefusedAt` always moves to `at`. Only a run still waiting (`planned`,
+   *  or parked in another idle state) takes a stamp. */
+  stampAdmissionWait(runId: number, at: number): void {
+    this.db.prepare(
+      `UPDATE runs SET admissionWaitSince = COALESCE(admissionWaitSince, ?), lastRefusedAt = ? WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL}`,
+    ).run(at, at, runId);
+  }
+
+  /** The `admissionWake` lane's mail for the run's newest refusal went out (or was already out): the only writer of
+   *  `admissionWokenAt`. A run with no stamp is left alone. */
+  markAdmissionWoken(runId: number, at: number): boolean {
+    const r = this.db.prepare('UPDATE runs SET admissionWokenAt = ? WHERE id = ? AND admissionWaitSince IS NOT NULL').run(at, runId);
+    return Number(r.changes) === 1;
+  }
+
+  /** All three columns to NULL. Called by `advanceInner` for every state move, so a dispatch, a send-back that proceeds, a
+   *  close and an abandon each end the wait. */
+  clearAdmissionWait(runId: number): void {
+    this.db.prepare(
+      'UPDATE runs SET admissionWaitSince = NULL, lastRefusedAt = NULL, admissionWokenAt = NULL WHERE id = ? AND admissionWaitSince IS NOT NULL',
+    ).run(runId);
+  }
+
+  /** The runs waiting on the cap, oldest refusal first: stamped, still `planned` or parked in an idle state (`sendBack`: a
+   *  refused send-back, not a refused dispatch), with a claimant, and ELIGIBLE: never woken, or refused again since the
+   *  wake (`lastRefusedAt` newer than `admissionWokenAt`). */
+  admissionWaiters(): { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; sendBack: boolean }[] {
+    const rows = this.db.prepare(
+      `SELECT id AS runId, program, claimedBy, admissionWaitSince AS since, lastRefusedAt, state FROM runs
+       WHERE admissionWaitSince IS NOT NULL AND lastRefusedAt IS NOT NULL AND state IN ${IDLE_RUN_STATES_SQL}
+         AND claimedBy <> '' AND (admissionWokenAt IS NULL OR admissionWokenAt < lastRefusedAt)
+       ORDER BY admissionWaitSince, id`,
+    ).all() as { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; state: string }[];
+    return rows.map((r) => ({ runId: r.runId, program: r.program, claimedBy: r.claimedBy, since: r.since, lastRefusedAt: r.lastRefusedAt, sendBack: r.state !== 'planned' }));
+  }
+
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────
 
   /** The "Roll idle sessions" row as read: a row, no row, or a read that failed, never one `null`. Nothing is decided
@@ -6305,7 +6417,7 @@ export class CoordStore {
   /** A capture's verdict, on a `queued` row only. */
   recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
   /** The operator's **Capture again** on a failed build. */
-  requeueClaudeBuild(build: string): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build); }
+  requeueClaudeBuild(build: string, opts?: builds.ClaudeBuildRequeueOptions): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build, opts); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 
@@ -6908,12 +7020,12 @@ export class CoordStore {
    *  sender stored none under that key. `mail_client_key_once` makes the row unique. A stored `kind` outside the sendable
    *  vocabulary cannot equal a request's, so it is read as it is; `artifacts` that do not parse as a list of strings read as
    *  `['']`, which no request carries (the ingress admits absolute paths only), so the decider answers `conflict`, never
-   *  `same`, on a row it cannot read. */
+   *  `same`, on a row it cannot read. `urgent` is whether `mail.urgentAs` is set (mid-turn mail, ruling N10). */
   mailByClientKey(fromId: string, clientKey: string): KeyedMail | null {
     const row = this.db.prepare(
-      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo FROM mail WHERE fromId = ? AND clientKey = ?',
+      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo, urgentAs FROM mail WHERE fromId = ? AND clientKey = ?',
     ).get(fromId, clientKey) as { id: number; toId: string; runId: number | null; kind: string; subject: string;
-      body: string; artifacts: string; inReplyTo: number | null } | undefined;
+      body: string; artifacts: string; inReplyTo: number | null; urgentAs: string | null } | undefined;
     if (row === undefined) return null;
     const UNREADABLE: readonly string[] = [''];
     let artifacts: readonly string[] = UNREADABLE;
@@ -6922,7 +7034,7 @@ export class CoordStore {
       if (Array.isArray(parsed) && parsed.every((a) => typeof a === 'string')) artifacts = parsed;
     } catch { /* UNREADABLE stands */ }
     return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
-      body: row.body, artifacts, inReplyTo: row.inReplyTo };
+      body: row.body, artifacts, inReplyTo: row.inReplyTo, urgent: row.urgentAs !== null };
   }
 
   /** The urgent hold (mid-turn mail, spec §3.2, plan Task 2.5): per recipient, the urgent deliveries `mail inbox` would
@@ -9938,14 +10050,14 @@ export class CoordStore {
   private static readonly APPROVAL_COLS =
     'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
     'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
-    'answeredBy, toolUseId, corrected, denyCurrent';
+    'answeredBy, toolUseId, corrected, denyCurrent, parkWord, parkKey, fetchedAt, wouldPark';
 
   private hydrateApproval(r: {
     idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
     agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
     releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
     reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
-    denyCurrent: number;
+    denyCurrent: number; parkWord: string | null; parkKey: string | null; fetchedAt: number | null; wouldPark: number | null;
   }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'approval id');
     if (!id.ok) return id;
@@ -9970,6 +10082,8 @@ export class CoordStore {
         reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
         corrected: r.corrected === 1,
         denyCurrent: r.denyCurrent === 1,
+        parkWord: isApprovalParkWord(r.parkWord) ? r.parkWord : null,
+        parkKey: r.parkKey, fetchedAt: r.fetchedAt === null ? null : Number(r.fetchedAt), wouldPark: r.wouldPark === 1,
       },
     };
   }
@@ -10042,26 +10156,43 @@ export class CoordStore {
      *  the grammar cannot list them) and `literalInRoot`. Absent: stored NULL, as on a row minted before them. */
     commandWords?: readonly string[] | null; literalInRoot?: boolean;
   }): number {
+    return this.insertApprovalAt(a).id;
+  }
+
+  /** `insertApproval` with the park's step (approvals PR 3, F1): given `park` (its key and the lane's and sign-in's state)
+   *  on a held row with a run, the word is decided INSIDE this transaction from the key's slots as read here, a `live`
+   *  word reserves a slot, and the row stores the word and key. Answers the id and the word (null: no park step ran). */
+  insertApprovalAt(a: Parameters<CoordStore['insertApproval']>[0] & {
+    park?: { key: string; runId: number; laneLive: boolean; signedIn: boolean };
+  }): { id: number; parkWord: ApprovalParkWord | null } {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot, parkWord, parkKey) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
+      // The park's word, decided here with the slots this transaction reads (the cap race, F1): only a held row with a run.
+      // The park's run is the key's (the child's live binding run, review 2889 F2), not the row's.
+      const park = a.park !== undefined && reason === null && a.runId !== null ? a.park : null;
+      const parkWord = park === null ? null : parks.reserveParkAtMint(this.db, {
+        key: park.key, childId: a.childId, runId: park.runId, laneLive: park.laneLive, signedIn: park.signedIn, now: a.askAt,
+      });
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
         a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
         a.commandWords === undefined || a.commandWords === null ? null : JSON.stringify(a.commandWords),
         a.literalInRoot === undefined ? null : (a.literalInRoot ? 1 : 0),
+        parkWord, park === null ? null : park.key,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');
       }
-      return Number(exactId);
+      return { id: Number(exactId), parkWord };
     });
   }
 
@@ -10076,7 +10207,9 @@ export class CoordStore {
         'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
         "WHERE id = ? AND state IN ('held','released') AND releaseReason IS NULL",
       ).run(r.verdict === 'allow' ? 'allowed' : 'denied', r.verdict, r.reason, r.ruling, r.now, r.by, id);
-      if (Number(res.changes) > 0) return { ok: true as const };
+      // Approvals PR 3: a row ruled inside its window releases its park slot, and a coordinator's deny is recorded on the
+      // key's park in this same transaction (F3), so no later allow of the key is signed for anyone.
+      if (Number(res.changes) > 0) return parks.afterRulingOfRow(this.db, id, r.verdict === 'deny' && r.by !== ASK_OPERATOR_PRINCIPAL);
       const read = this.approvalById(id);
       if (!read.ok) throw new Error(`takeApprovalForRule: ${read.detail}`);
       if (read.row === null) return { ok: false as const, why: 'unknown-approval' as const };
@@ -10089,17 +10222,37 @@ export class CoordStore {
 
   /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
-    const res = this.db.prepare(
+    // Approvals PR 3 (F3): the coordinator's decline is recorded on the key's park in the row's own transaction.
+    return tx(this.db, () => parks.noteDeclinedIf(this.db, id, Number(this.db.prepare(
       "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
-    ).run(now, by, id);
-    return Number(res.changes) > 0;
+    ).run(now, by, id).changes) > 0));
   }
 
   /** The window's end (`notifyAt`, D-5441): `held` -> `released`. A row a principal acted on is untouched. */
-  lapseApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'released' WHERE id = ? AND state = 'held'").run(id);
+  lapseApproval(id: number, wouldPark = false): boolean {
+    // Approvals PR 3: a shadow lapse records that the row would have parked (`wouldPark`), with the lapse itself.
+    const res = this.db.prepare(`UPDATE approvals SET state = 'released'${wouldPark ? ', wouldPark = 1' : ''} WHERE id = ? AND state = 'held'`).run(id);
     return Number(res.changes) > 0;
   }
+
+  // The park (approvals PR 3): its SQL is `approvalParkStore.ts`'s, every write in this store's transaction. `parkApprovalRow`
+  // is the one write of `parked`; `meetApprovalParkRuling` is the spend (F6); see each function there.
+  parkApprovalRow(id: number, now: number, runClosed: (runId: number) => boolean): parks.ParkMove { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now, runClosed)); }
+  /** The last-poll move's read (F2): ruled rows minted `live` at or after `sinceAskAt` whose ruling the hook never fetched. */
+  approvalsUnfetchedLive(sinceAskAt: number): ApprovalsReadResult {
+    return this.approvalRows("WHERE state IN ('allowed','denied') AND parkWord = 'live' AND fetchedAt IS NULL AND askAt >= ? ORDER BY id", sinceAskAt);
+  }
+  markApprovalFetched(id: number, now: number): boolean { return parks.markApprovalFetched(this.db, id, now); }
+  approvalPark(key: string): parks.ParkRow | null { return parks.parkByKey(this.db, key); }
+  recordApprovalParkRuling(key: string, r: Parameters<typeof parks.recordParkRuling>[2]): boolean {
+    return tx(this.db, () => parks.recordParkRuling(this.db, key, r));
+  }
+  meetApprovalParkRuling(...a: Parameters<typeof parks.meetParkRuling> extends [unknown, ...infer R] ? R : never): ReturnType<typeof parks.meetParkRuling> {
+    return tx(this.db, () => parks.meetParkRuling(this.db, ...a));
+  }
+
+  /** The park's retention (approvals PR 3, T8-4): parks whose horizon passed before `before`. */
+  pruneApprovalParks(before: number): number { return tx(this.db, () => parks.pruneParks(this.db, before)); }
 
   /** The operator answered the dialog, or the painted dialog closed with no ruling taken: every open row (`held` or
    *  `released`) of the child becomes `operator`, so a later ruling is `409 already-ruled`. Returns the count. */
@@ -10112,16 +10265,20 @@ export class CoordStore {
 
   /** A cleared painted dialog (`FleetWatcher`): of these rows, the ones no principal ruled become `operator`. */
   markApprovalOperatorRows(ids: readonly number[], now: number): number {
+    parks.voidParksOfParkedRows(this.db, ids);   // approvals PR 3 (F4): only the rows this cleared dialog covered (review 2889 F3)
     let n = 0;
     const stmt = this.db.prepare(
-      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released')");
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released','parked')");
     for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
     return n;
   }
 
-  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`. */
+  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`; or a
+   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. The other writers of `stale`
+   *  are `approvalParkStore.ts`'s `meetParkRuling` (a met key's parked rows) and `parkApprovalRow` (a `held` row whose key's
+   *  park is closed at its window's end, approvals PR 3c F-B), each inside its own transaction. */
   staleApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released')").run(id);
+    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released','parked')").run(id);
     return Number(res.changes) > 0;
   }
 

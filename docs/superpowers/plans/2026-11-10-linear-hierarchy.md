@@ -90,7 +90,7 @@ number from `POST /api/ledger/deviations`.
   - **The public-text check lands in wave 2** (Task 2.7), before any wave writes to Linear. The hashed private-name
     matcher moves into shared code (`shared/private-names.mjs`), and `server/test/private-names.mjs` keeps its CLI and
     re-exports the matcher. Each class's `catches` and `passes` fixtures stay in `topology-clean.test.ts`.
-  - **`references/plan.md` ships with `plan-missing`** (wave 2). Wave 6 adds clause 21 and the later verbs, and wave 7
+  - **`references/plan.md` ships with `plan-missing`** (wave 2). Wave 6 adds clause 22 and the later verbs, and wave 7
     adds `plan map-propose`.
   - **Wave 1 sends no new document live.** `directoryProjects` stays as recorded; the refresher starts the
     `projectStatuses` collection and the initiatives probe only in wave 3, after FX2 has recorded them.
@@ -298,18 +298,26 @@ number from `POST /api/ledger/deviations`.
   applies once the key is no longer shared, and the note under the select names the owner now. Both are
   additive and absence permits: an older server's answer reads as the project's own owner and today's words. Record:
   the wave 5 note (the coordinator's rulings of fix rounds 1 and 2, run 2447).
-- **D-8739 (2026-11-18)** — skills-clause-later: Task 6.1's clause 21, the count word "twenty-one" above the coordinator
-  contract, and the matching count words in README.md and CLAUDE.md move to a follow-up PR of the skills epic. They are
+- **D-8739 (2026-11-18)** — skills-clause-later: Task 6.1's clause (21 when planned, 22 when it lands), its count word
+  above the coordinator contract, and the matching count words in README.md and CLAUDE.md move to a follow-up PR of the
+  skills epic (the opening amended by review 2929 F4). They are
   held because the coordinator skill's pin file and README.md are frozen by the landing-order programme's run 1850 (#2837),
   which refused a co-edit on 2026-11-18. Wave 6's PR ships the rest of Tasks 6.1 and 6.2; the tests for
   `references/plan.md`, the open step and the ledger template's epic column live in a new file,
-  `server/test/coordinator-plan-reference.test.ts`. Until the follow-up lands, the rule that the operator acts on hierarchy
+  `server/test/coordinator-plan-reference.test.ts`. Until the follow-up landed, the rule that the operator acts on hierarchy
   items in the console, and that a coordinator never answers one for them nor asks for those approvals in its turn text,
-  lives in the coordinator SKILL.md's Linear section and `references/plan.md`, not in the contract (amended in review
-  round 1, run 2580 F1). In the same commit, the follow-up's caps hunk sets the coordinator skill's size cap to the
-  file's measured size with clause 21 (23872); wave 6's PR shrinks that file below `main`'s cap first, so the cap moves
-  by less than the clause's bytes (amended in review round 2, run 2590 A2). Record: the wave 6 note, which carries the
-  follow-up's exact content.
+  was kept outside the contract (amended in review round 1, run 2580 F1). The follow-up moved that sentence out of
+  SKILL.md's Linear section into clause 22, which is why the cap rose by 490 bytes for a 635-byte clause line, and
+  `references/plan.md` now points at the clause rather than restating the rule (amended by review 2960 A2). Clause 22 as
+  landed says this session "never files or edits a hierarchy object", where Task 6.1's text says "never files a hierarchy
+  object"; the words "or edits" came with wave 6's carried packet (the wave 6 note), not with run 2878's own range, and
+  the clause stands as landed (review 2960 F2's residue). In the same commit, the follow-up's caps hunk sets the coordinator skill's size cap to the
+  file's measured size with the clause, measured when it lands, never a figure carried from an older tree; wave 6's PR
+  shrank that file below `main`'s cap first, so the cap moves by less than the clause's bytes (amended in review round 2,
+  run 2590 A2). The Overlord's clause took 21, so this clause lands as 22; run 2878's carried packet measured 24829
+  against `main`'s 24339 (6c8f52199c), and the clause lands in run 2878's fix round 2 on #3119, once the operator's answer
+  to the landing-order programme's item 496 let run 1850 consent (amended by review 2920 F4, and by that fix round).
+  Record: the wave 6 note and the w6-clause note, which carry the follow-up's exact content.
 - **D-8733 (2026-11-18)** — drift-reads-every-team: `changedIssues` is asked with every team key the workspace's key
   lists, not only the managed ones, so a bound issue moved out of a managed team is still read and put back (§6.2 owns the
   team; round 6 P2). `ops.ts` stays frozen: no new document. An issue of a team ccrc does not manage that no binding names
@@ -330,9 +338,20 @@ number from `POST /api/ledger/deviations`.
   moved out of a managed team is retired too, with its own cause, `moved-out` (review run 2457 F4, D-8733's "inbound counts
   only issues now in a managed team"): take, triage and the close re-read the issue by id before acting and refuse it
   `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. When the
-  doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused), a decision that binds the issue
-  (a take into an epic, an Upkeep placement, a hand) is refused `unreachable` (503, the Linear read's existing word: a retry
-  helps), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused, no managed team in the issue's
+  workspace), a decision that binds the issue (a take into an epic, an Upkeep placement, a hand) is refused `unreachable`
+  (503, the Linear read's existing word, with one detail whatever the cause, so `references/plan.md` tells a coordinator
+  only to try once more and then tell the operator. By cause, a retry helps only when Linear or ccrc's Linear store could
+  not be read: a missing key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to
+  replace it, and a workspace with no managed team is not re-read at all. Linear's answer, as ccrc reads it, repeats
+  until the issue changes in Linear when Linear refused that one issue (`linear-forbidden`, `linear-invalid`), or when
+  ccrc's shaper reads it `malformed` because a field of the issue is outside the grammar (the by-id read shapes the whole
+  issue); it may clear on a retry when the body could not be read (a transport fault), or when a readable response
+  carried no `data` or no `issue` key, which the shaper reads `malformed` too (a readable null issue is `not-found`). A door re-reads the issue on every call and, for a
+  decision that binds the issue, refuses `unreachable` on any unmeasured answer, reading no retry table
+  (`inboundDoorVerdict`). `RETRY_WORDS` is the close lane's, and that lane gives `malformed` up past its last backoff
+  step, whether it came from its write or from its own by-id re-read; amended by review 2920 F4, review 2929 F3, review
+  2960 F1, review 3106 F1 and F2, review 3110 F1 to F4, and review 3121 A2), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
   before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
@@ -344,6 +363,208 @@ number from `POST /api/ledger/deviations`.
   Upkeep binding, or for a programme with no coordinator, now mails the home project's Linear owner, with no programme, in
   the same transaction as the settle; with no usable owner (none named, or gone) it is refused `no-linear-owner`. Record: the
   wave 4 follow-ups note.
+- **D-8795 (2026-11-20)** — migration-policy-interfaces: Task 7.1's deciders take the facts they cannot read, and stay pure.
+  `checkMap` takes a fourth argument, `ctx { home; teamOf(project); upkeepKeys }`: a map-declared epic with no project is the
+  home project's, a leaf whose epic's project is in another team is `plan-bad-body` (`leaf-other-team`), one whose epic's project
+  has no team key is `plan-bad-body` with its own detail (`leaf-no-team`), and an upkeep ticket key is checked against the
+  Upkeep epic's keys. A target that does not exist is `plan-bad-body` (`unknown-target`). `applySteps` takes a fourth argument,
+  `afterOf(entry)`, so the after-state comes from the sync's one builder (Task 7.3), never a copy; a null after waits. A move's
+  `after.expect` holds the issue's fields in a re-read's terms (state type, team key, ids, texts), and `reconcileMove` and
+  `putBackSteps` compare only the fields it lists, by key and type: a field the re-read cannot measure is never a match, and an
+  `expect` that lists none proves nothing. A milestone the migration created is put back by no write (Linear's milestone has no
+  status, D-8407): it stays in Linear under its canceled project, and `putBackSteps` lists it (`left`) for the report. An epic
+  the map declares must sit in a project of the map's own team (`epic-other-team`), so a team's Linear owner never creates
+  projects in another team (a security review of the wave's commits).
+  Record: `docs/superpowers/programs/linear-hierarchy/w7-migration.md` (the coordinator's ruling, mail of 2026-11-20).
+- **D-8796 (2026-11-20)** — migration-through-the-sync: every write the migration makes to an issue it adopts, and every object
+  its map's structure creates, goes through the plan sync's own passes (D-8179's one writer per Linear object). A leaf or upkeep
+  issue is re-read inside its key's flight; a changed one is skipped, listed and never adopted; otherwise ONE transaction adopts
+  it (`adoptIssueAsTicketInTx`: the ticket and a binding bound to the issue with the adopted fingerprint) and writes its move row,
+  whose `after.expect` is the sync's planned owned fields for that binding (`PlanSync#plannedOwnedNow`), and the key's pass sends
+  the one update. So adoption precedes the write but is atomic with the move row (Task 7.3 said "only after the write"), and its
+  second guard holds by construction: a listed issue has no binding until its move row exists. A crash leaves a row with no
+  `appliedAt` that `reconcileMove` settles on a later tick. The structure a map declares is inserted with its move rows
+  (`before` null, no Linear id) in one transaction (`declareMapStructure`), the key's pass creates and binds the objects, and the
+  rows take their Linear ids from the bindings. The issues it closes (a replaced level, finished, superseded, stale) are not
+  adopted, and it writes them itself through `runCcrcOp`, each move row before its write. The sync charges a step for an object a
+  migration still writes to lane `migration` and journals it with pass `migration` (`planStore.ts#migratingLocals`), and an
+  apply tick starts at most `MIGRATION_WRITES_PER_TICK` issue writes, so a large map's issue writes never spend the sync's own
+  share (§10.6; the Upkeep epic's one create does, below). A
+  live programme's part, its adoptions included, waits for no run in `ACTIVE_RUN_STATES`. A migration reads `applied` only
+  when every move row is applied or its issue skipped or taken, and listed. An adopted issue a person changes before the sync's write is
+  put aside in one transaction: its ticket dropped "put back", so the sync never writes over the change; its binding `retired`
+  (a binding state, the row kept), so the issue reaches the team's Linear owner as inbound, as §10.3 step 5 says; and it is
+  listed as skipped (fix round 1, review 2892 F5). An issue a live binding holds leaves the migration: one the team's Linear
+  owner has taken through inbound (before the apply, on an earlier tick of a close, or while it sits on the skipped list) is
+  neither adopted, commented on nor closed, whatever its class, is never asked of the owner in a follow-up map, and holds no
+  wait of its own (a live programme's part still waits for its wave boundary, and a held entry in it reaches `taken` when its
+  step comes); the report lists it as taken by the owner (`taken`), not as skipped (the coordinator's rulings on review 2955 F2
+  and A1). A close asks again inside its flight, after its read and before each of its writes (the comment, the relation, the
+  state), and a held answer ends it there, with nothing more sent. Only a take that lands while one write is already in flight
+  lets that one write reach Linear (recorded in the move row when it is the relation or the state write; a comment is recorded
+  nowhere); a state write that lands is followed by one more ask, so the issue is then listed taken, not counted closed, and
+  the move row's stamp and the report listing it taken are written in one transaction. A state write that reached Linear but
+  whose answer was refused leaves the row unapplied; the next tick's reconcile asks again after its read, and a held closer is
+  then listed taken, never marked applied, listed unrelated or counted closed. Either way the issue is left alone from then
+  on: put back asks before its read, again after it and again inside the write's flight just before the restoring update, so
+  it skips an issue a live binding holds, never reopens or rewrites it, and lists it as taken, the row marked handled and the
+  report saved in one transaction (the coordinator's rulings on review 2998 F1, F4 and F5, on review 3004 F2 and F3, and on
+  review 3016 F1, F2 and A2). The one window left, in a close and in put back alike, is a take that lands while a single
+  write is already in flight; nothing of this entry holds a team's migration back. The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
+  cap, and a rate refusal of any of them rests the lane. Two passes of the plan sync's own are counted by neither cap: step 1's
+  structure pass (only until the plan's objects exist), on lane `migration` for the objects the map declares, and the Upkeep
+  epic's pass, whose create has no move row and so goes out on lane `sync` as the plan sync's own. Each is bounded by its lane,
+  the pass deadline and the one rate service (review 2892 A7, narrowed by the coordinator's ruling on review 2918 F3 and
+  corrected on review 2955 F3). A step that cannot be placed now (its epic's or the Upkeep epic's
+  Linear project not created yet) spends none of the tick's issue reads and writes and is listed as waiting with its reason
+  (review 2892 F3); a replaced level whose placed ticket has not settled waits the same way and then closes related to it, as
+  Task 7.3 says (review 2918 F2). The
+  project's Upkeep epic, shared with the inbound path, is no object of the migration's: it has no move row and put back leaves
+  it. Put back is asked by the report's act (`putBackAskedAt`) and run by the migration lane, a few issues a tick, its records
+  dropped "put back" with `putBackAt` before its writes; a programme whose initiative it created has its plan end recorded
+  `abandoned` "put back" and the initiative canceled in its key's flight (with every epic put back, the sync sends the
+  initiative nothing more). A done programme's initiative
+  reads what the sync derives from its plan (active while its placed tickets are open), not a forced Completed; the report says
+  so. Record: the wave 7 note (the coordinator's ruling, mail of 2026-11-20).
+- **D-8797 (2026-11-20)** — upkeep-link-with-key: the project row's Upkeep link shows whenever the project has a team key, and
+  the inbound count beside it only when issues wait, departing from Task 5.1's "the Upkeep link when inbound issues wait": the
+  Upkeep page is the only way into a project's Upkeep epic and its refused closes, which outlive the waiting count. Wave 5
+  built it so (review run 2491 A5); `project-linking-card.test.tsx` pins both halves. Record: the wave 7 note (the
+  coordinator's ruling, mail of 2026-11-20).
+- **D-8798 (2026-11-20)** — apply-plan-required-scope: when a team's migration is applied, `planRequired` is set for the
+  programmes its map names and for the team's programmes that have declared a plan, not for every programme homed in the team
+  (Task 7.3 said "the team's programmes"). A live programme the map does not name and whose coordinator has declared no plan is
+  left alone: forcing it would refuse that coordinator's next run open `plan-missing` in the middle of its work, with no word to
+  it. `migration-apply.test.ts` pins both halves. Record: the wave 7 note (the coordinator's ruling on review 2892 F8, mail of
+  2026-11-20).
+- **D-8799 (2026-11-20)** — map-item-settles-on-approve: the map's `decide` item settles when the operator approves it, with a
+  note that the report follows, not when the migration reaches `applied` (Task 7.4); the report item, raised on `applied`, carries
+  the result and its Put back. An item left open across a long apply would read as still waiting on the operator. Record: the
+  wave 7 note (the coordinator's ruling on review 2892 A5, mail of 2026-11-20).
+- **D-8800 (2026-11-20)** — migration-columns: a third schema migration for this programme (the Global Constraints name two),
+  four nullable columns on `linear_migrations`: `project` (the ccrc project whose team is reshaped), `report` (the report's
+  lists as JSON), `putBackAskedAt` (the operator's Put back, run by the lane) and `reportDoneAt` (the report closed; the next team
+  may start only then, §10.2). Its slot is 114 on this branch (`main` took 110 to 113 first) and is renumbered at landing if
+  another migration lands first. One writer, `planStore.ts#setMigration`. Record: the wave 7 note (the coordinator's ruling on review
+  2892 A5, mail of 2026-11-20).
+- **D-8801 (2026-11-20)** — finished-evidence: a map's `finished` entry carries its evidence as `target.pr` (`<owner>/<repo>#<n>`)
+  or, with no pull request, a one-line `target.reason` (at most `FINISHED_REASON_MAX_CHARS`), or `checkMap` refuses the map
+  `plan-bad-body` `finished-needs-evidence:<id>`. Spec §10 and Task 7.3 name the merged pull request as the evidence. `target.pr`
+  and `target.reason` are new members of `MapEntry.target` beyond Task 7.1's interface, and `checkMap` checks the pull request's
+  shape only: L1 cannot ask GitHub whether it exists or merged. The close's comment names the evidence through the public-text
+  check (`migrationPolicy.ts#finishedComment`): a private team's names the pull request in full, a public or unmeasured team's
+  names one outside the project's own measured repository as "a pull request", and a text that fails the check falls back to
+  the bare sentence. Record: the wave 7 note (the coordinator's rulings on review 2892 F7 and review 2918 F4, mails of
+  2026-11-20).
+- **D-8802 (2026-11-20)** — plan-by-follows-the-last-put: a coordinator's first plan write after a migration's map declared the
+  plan rewrites `planBy` and `planAt` (the stored `planBy` is the migration's, `MIGRATION_PLAN_BY`, and the writer is someone
+  else), where Task 2.2 says `applyPlanChanges` sets them on the first call only. Put back reads `planBy` and ends only a plan
+  that is still the map's, so a programme its coordinator has since taken over keeps its plan and its initiative. Record: the
+  wave 7 note (the coordinator's rulings on review 2892 F1 and review 2918 F4, mails of 2026-11-20).
+- **D-8808 (2026-11-20)** — w8-team-and-workspace-mapping: wave 8 (spec §3.1, the operator's ruling of 2026-11-19, item
+  489). It departs from Tasks 8.1 to 8.6 in these places. The team-link vocabulary moved from `shared/api.ts` to
+  `shared/linking.ts` first, as a move commit with characterization pins; `shared/api.ts` gains one type-only import line
+  for `ProjectLinkingWire` (the L0 import pins move with it). The row's workspace is `project_linking.teamWorkspace`, in the
+  wave's one migration with `teamSuggestions` and `teamCallId`. The operator's write body's `workspace` is optional:
+  a named one must hold the key (`team-unknown`). With none named (absent or null), a key reads the Linear store: the one
+  connected workspace that holds it is stored, two holders are refused `team-ambiguous`, an unreadable store is
+  `unavailable`, and a key no connected workspace holds is stored with none. A cleared key reads no store. Saving the
+  unchanged key with the workspace absent keeps the stored workspace, a row written before this wave's migration keeping its
+  none, without reading the store: nothing new is stored, and a later use resolves the key and refuses `team-ambiguous`
+  if two workspaces hold it. An explicit `workspace: null` with the unchanged key reads the store like any other write with
+  a key (the code is the rule, review 3020 F1; the card never sends null). Saving the unchanged key keeps whoever set it (review 2971 F2, F4; review 2997 F3, A5). One resolver, `routeProjectTeam`, serves the plan
+  sync, the plan routes and the linking routes; the Linear proxy is unchanged, because it does not know the caller's
+  project. The inbound owner rule takes the issue's workspace at all four of its key lookups (review 2971 F1). Task 8.3's read
+  (`attachmentsForUrl`) has a constructed fixture (its schema is an assumption until the live capture), reads under its own
+  pass `team-link`, answers unmeasured unless every asked workspace answered, and is not wired into the lane: a guard test
+  goes red if it is, and wiring it is a follow-up after the operator's go. The suggestion's client row takes a JSON body
+  (`linking suggest --json -`, the identity spliced from the pane) rather than flags. The suggest door writes only an
+  existing row (`no-project` otherwise), refuses a reason naming a ticket id of any connected team or carrying line or
+  bidi control characters, refuses `team-ambiguous` for a key two connected workspaces hold when no workspace is named,
+  takes a suggestion only from a session that claims an open run (`not-a-coordinator`, 403, otherwise: the Overlord may
+  link a suggested candidate in the operator's name; `not-coordinator` already means another thing), keeps one suggestion
+  per suggester and at most eight suggesters (the oldest evicted), answers only what the caller wrote, and checks no
+  project ownership: a coordinator suggests for any keyless project its programme files into, and the console shows who
+  suggested; the Overlord's call says only "suggested by a coordinator" (review 2971 F6, F7). The README's
+  machine-lane count word moves (ninety-six after the absorbs) under the packet terms of the run that holds README.md. The wave's one
+  migration took slot 116 after the absorbs of main (wave 7 took 114, the approvals park 115). The choice of which inbound row a
+  `plan triage` acts on (searching every workspace that holds the key, preferring the caller's) decides in `planPolicy.ts`,
+  as the pure `triageLookup` and `triageChoice` beside `triageVerdict`, since run 3155 (`w8-triage-l1`) moved it out of
+  `planRoutes.ts`, where it had stayed as a stated bend of the rings rule while `planPolicy.ts` was held by another wave; the
+  route reads and acts only, and the verdict still requires the chosen row's owner to be the caller. The migration lane (wave 7's code) and the plan-map route resolve a team through the project row's
+  workspace since run 3027 built `w8-migration-workspace` (reviews 2997 and 3038). The start, open-issue read and console
+  state never select the first workspace holding a key. Reshape returns the routing refusal before checking migration state:
+  a shared key on a row with no workspace is `team-ambiguous`, even when another workspace has already migrated it. For a
+  known workspace, the inbound and migration lanes use one owner rule: `teamOwnerProject` answers an owner with its
+  project, measured none, or unmeasured. A pinned row counts in its own workspace; an unpinned row counts only where its
+  key routes uniquely, and in neither workspace when two hold it. `measuredTeamRoutes` distinguishes a failed listing or a
+  configured slot without a current team record from a measured absence. A holder pinned to the workspace that outranks every
+  row naming the key there, pinned or not, is the owner whatever the routing, so a failed listing and an unreadable slot
+  answer alike; the answer is unmeasured only when an unpinned row outranks it and that row's routing cannot be read (review
+  3073 F8).
+  Possible owners are refusal evidence only.
+  Plan triage (including Close and Raise) and plan-map refuse `unreachable` before an issue read or write when ownership is
+  unmeasured; a key-only diagnostic never authorizes either. Plan-map uses the same snapshot for authorization and its
+  read outside the coordination hold. Inbound routing, answered-item delivery and close notices send and stamp nothing
+  on an unmeasured owner. The close step re-reads a closed, unacted row by id before it decides ownership, so while routing
+  stays unmeasured it spends one governed read per such row a beat and makes no progress: accepted as the lane's retry
+  pattern (review 3073 F7). Waiting work stays retryable; `plan take` refuses `unreachable` before effects, for Close as well
+  as Return, when the handed row's owner cannot be measured (F9), and it reads the store even for a programme that names no
+  project, so a readable store is never left unread there (F10).
+  The doors' two other `unreachable` arms are workspace measurements (review 3121 F1, recorded here at review 3144 F5; take's scope as ruled at review 3205 F3): a take
+  into an epic, and a triage hand to the caller's own programme, refuse when the workspace of the epic cannot be measured
+  (`destinationRefusal`), and a take into an epic or a close of an issue with no handed row refuses when the programme home's
+  workspace cannot be measured (`upkeepLookupOf`), before the issue is looked up: either the Linear store could not be read,
+  where a retry helps, or no slot routes the home's team, where the project's linking needs one. Drift Hand refuses `unreachable`
+  when it needs the team owner and cannot measure it. The hierarchy card says both the owner and the migration state are not measured whenever the row's team owner cannot be
+  measured (an unpinned row's routing unread, with no listing at all as well, or a pinned row outranked by such a row), and
+  offers no Reshape then (F1). A pinned row whose own workspace cannot be measured (its slot unreadable or its listing
+  failed, the measurement Reshape makes) shows its measured owner and a migration state of not measured, with no Reshape
+  (review 3087 F1; any pinned row, not only the top one, as built: review 3096 F1); Upkeep suppresses the notice;
+  the project's own-coordinator fallback applies only to measured none. A Name a Linear owner item settles only on a live,
+  workspace-qualified owner with no issues for that team still waiting. The one measured none that waited silently (review 3048 F5) now raises an
+  item: when the owner rule answers `team-ambiguous` for a waiting issue (the holders that could serve its workspace are rows
+  naming no workspace, and two readable workspaces hold the key), the inbound lane's route step raises one *Choose the Linear
+  workspace of team KEY* item per team key while none is open, naming those projects and the settings page whose Workspace
+  routes the team, and settles it once no waiting issue of the key measures ambiguous or unmeasured, never while the
+  Linear store cannot be listed (`sharedKeyItemVerdict` decides, beside `ownerItemReady`). Unmeasured routing raises nothing. The wire's
+  item action gains one verb, `linear-team-workspace` with its `teamKey`, which takes no act (`LINEAR_ITEM_ACTS` gives it
+  none) and which the console draws as the step and a link to Settings, Security; the stored action column is unchanged
+  (its JSON reads the new verb, and a reader that does not know a verb reads no action, so an older console draws a plain
+  item), and there is no migration (the coordinator's answer to the departure question, run 3187). After a rollback to a
+  build that does not know the verb, an open item of it reads as a plain item no lane settles: the operator dismisses it.
+  Map Return refuses `unreachable` on unmeasured ownership, `team-ambiguous` on measured unpinned ambiguity, and
+  `no-linear-owner` when otherwise there is no recipient. It settles only with recipient mail in the same transaction;
+  refusals leave the item, map and note retry intact. The console's item act path says a Return sentence for
+  `no-linear-owner` and `team-ambiguous` (the map and the note are kept), and one sentence for `unreachable` on Hand and
+  Return alike (review 3073 F5, F6). Migration completion waits rather than dropping an unnamed declared
+  programme whose membership cannot be measured. Ambiguous inbound with no owner waits, counts in the console and, since run
+  3187, raises the shared-key item above. Follow-ups this wave leaves:
+  `w8-attached-wire` and `w8-confirm-unmeasured` (the confirm route answers `unavailable` when the pair is unmeasured);
+  `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
+  `w8-triage-l1` by run 3155, `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
+  coordinator's call, since it only adds an item, `w8-call-anchor` by run 3209, `w8-folded-pin` by run 3230 (#3172),
+  and `w8-skill-section` (Task 8.6's skill step, which the review judge's rules-mixed rule moved to a PR of its own) by
+  run 3238, `w8-overlord-skill` by run 3251, and `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
+  suggest and confirm doors and the call record) by run 3264. Record: the
+  wave 8 note.
+- **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
+  act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
+  with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`
+  `auto` plus a nullable `teamCallId`, because migration 64's CHECK admits only `manual` and `auto` and cannot widen
+  without a table rebuild; exactly one function, `linkSourceOf`, derives the wire's `overlord` source from the pair, and a
+  single-definition test fails on any other read. The link and its big call are one transaction, under the automatic
+  link's own statement, after the chosen candidate's pair is re-checked against the live Linear store (`team-unknown`,
+  `team-ambiguous`, or `unavailable` when the store cannot be read). The call is filed under `linear-sync` (design call 19 as amended), names the project, the team and
+  the workspace by display name and the evidence, and shows in "calls made for you"; the operator overturns it by a key
+  write on the card, which makes the key `manual`. The door process gains a `link_team` tool row. A call has an address on the
+  Waiting on you screen since run 3209: `/waiting?call=<id>`, a query on the list's route as its filter is (`callPath`,
+  `callParamOf`), because a call has no page of its own, as an item does, only a place in the list. The card's line for the
+  link opens its call there; a link the wire carries without a readable call id opens the screen, as before. The landing
+  says only what the list draws (review 3217): `callTargetOf` answers open, cleared (inside the trail's own 48-hour window),
+  hidden (the side rail's filter hides it), gone, or not yet heard (only on the device's saved list), and the page scrolls
+  once per address. A cleared call's notice never outlives its row (review 3222): Show all opens its group and the folded
+  trail keeps its row. Record: the wave 8 note.
 
 ## Global Constraints
 
@@ -1072,7 +1293,7 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
 - Produces routes (box token, then the identity pair from the query, then attribution, then the caller check):
   - `POST /api/programmes/:slug/plan` (`plan put`) → `{ ok: true, plan: PlanView }`. The slug `LINEAR_SYNC_PROGRAMME`
     is refused `reserved-programme` (409, its run status). On a slug with no `programs` row (a new programme, which
-    clause 21 declares before its first run), `home` is required and the row is inserted in the same transaction as
+    clause 22 declares before its first run), `home` is required and the row is inserted in the same transaction as
     the plan (`applyPlanChanges`'s `newRow`: `active`, `homeProject`, `planRequired` 1); the later `runs open` keeps it
     (its INSERT is `ON CONFLICT DO NOTHING`). A put after `plan close` is `plan-closed`.
   - `GET /api/programmes/:slug/plan` (`plan show`), EXEMPT-BUT-AUTHENTICATED (a session cookie or the box token, the
@@ -1123,7 +1344,7 @@ line each; `plan-missing`'s points at
 `plan met`, `plan ticket-add`, `plan ticket-move`, `plan epic-drop`, `plan close`, each with its body and refusals.
 Verbs are named as `ccrc-api plan <verb>` commands, never as raw `POST /api/...` paths, because
 `coordinator-skill.test.ts`'s route census reads only `coord/routes.ts` and `reviewRoundsRoute.ts`. Wave 6 adds
-clause 21 and the later verbs, and wave 7 adds `plan map-propose`);
+clause 22 and the later verbs, and wave 7 adds `plan map-propose`);
 Test `server/test/open-run-preconditions.test.ts` (gate-order rows, and its facts builder's default `plan` fact),
 `server/test/run-routes.test.ts`, `server/test/plan-run-attach.test.ts` (new), `server/test/coordinator-skill.test.ts`,
 `server/test/ccrc-api-closed.test.ts` (the pinned list of client commands the skill corpora run gains each `plan.*`
@@ -1161,13 +1382,15 @@ every file found. The fix:
   `OpenRunTicket = { kind: 'existing'; id: number; epicId: number; reproject: string | null } | { kind: 'new'; epicId: number; project: string; title: string }`.
   Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-closed` (the plan reads `ended`: `runs open`
   after `plan close`, which the sync would otherwise answer by closing the initiative under a live run);
-  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (no live epic lists the wave, and the run names a
-  ticket that is not of a live epic that lists no waves, or names none in a plan where every live epic lists waves; or the
-  named ticket's epic lists waves and is not the wave's; or the named ticket is an open ticket of a dropped epic that lists no
-  waves, which only live epics take); `ticket-required`
+  `plan-missing` (no live epic and `planRequired` 1); `wave-epic-mismatch` (a live epic exists, and: no live epic lists the
+  wave, and the run names a ticket that is not of a live epic that lists no waves, or names none in a plan where every live
+  epic lists waves; or the named ticket is available and its epic lists waves and is not the wave's, since at a wave a live
+  epic lists an unavailable ticket answers `ticket-unavailable` first); `ticket-required`
   (programme work map WM6, D-8780, with WM1's word: a run that names no ticket, at a wave no live epic lists, in a plan where
-  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
-  or an Upkeep ticket). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
+  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is unknown, `done`, `dropped`, held by another run (`started`,
+  or `open` with a run attached, a planned run included, as `ticketIsHeld` decides; amended by review 2960 A3), or an
+  Upkeep ticket; or the plan has no live epic, does not require one, and the run names a ticket); with no live epic,
+  no `planRequired` and no named ticket, the run opens with none (`planGate`, amended by review 2929 F5). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
   run attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's
   project, the run's title, key `run-<runId>`, which `UNIQUE (program, key)` needs and a retry derives again) in the
   wave's epic; a named ticket in another project takes the run's project.
@@ -1823,19 +2046,19 @@ The drift item's *Hand to the coordinator* uses the existing door word (`ITEM_DO
 ### Task 6.1: The coordinator skill
 
 **Files:** Modify `ccd/coordinator-skill/references/plan.md` (Task 2.5 created it), `ccd/coordinator-skill/SKILL.md`
-(contract clause 21, the map's pointer line, §Linear trimmed to a pointer),
+(contract clause 22, the map's pointer line, §Linear trimmed to a pointer),
 `ccd/coordinator-skill/references/wave-lifecycle-1-open.md`, `ccd/coordinator-skill/references/ledger-template.md`
-(the waves table's epic column), `server/test/skill-size-caps.json` (raised by clause 21's bytes only); Test
+(the waves table's epic column), `server/test/skill-size-caps.json` (raised by clause 22's bytes only); Test
 `server/test/coordinator-skill.test.ts`, `server/test/skill-size-ratchet.test.ts`, `server/test/ccrc-api-closed.test.ts`
 (its pinned list of the commands the skill corpora run, references included, gains every `plan.*` key a new
 executable block runs).
 
 **Interfaces:**
-- Produces clause 21: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
+- Produces clause 22: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
   plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
   is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files a hierarchy object or a ticket in a managed
-  team with `linear create`." The count word above the contract becomes twenty-one; §Linear shrinks so the file grows
-  by the clause line alone. (Clause 21's wording was amended on 2026-11-16 by the operator's answer to desktop-polish item 359:
+  team with `linear create`." The count word above the contract becomes twenty-two; §Linear shrinks so the file grows
+  by the clause line alone. (Clause 22's wording was amended on 2026-11-16 by the operator's answer to desktop-polish item 359:
   an epic may list no waves, built by the work-map plan's Task WM6. Wave 6 writes the clause as amended here, and
   `references/plan.md` names `ticket-required` once WM6 has landed.)
 - `references/plan.md` gains: the run's `ticket` key, handed issues and `plan take`, and the Linear owner's duty
@@ -1845,14 +2068,15 @@ executable block runs).
 
 Built in part by #3040 (wave 6): `references/plan.md` and SKILL.md's §Linear pointer. The clause, its count word, the
 cap raise and the rest of this task's files are the follow-up ticket `w6-clause` (D-8739). The Overlord's autonomy
-clause (D-8126) takes number 21, so this clause lands as 22.
+clause (D-8126) takes number 21, so this clause lands as 22; this task's text said 21 when it was planned (amended by
+review 2929 F4).
 
-- [ ] **Step 1: Write the failing tests** — `clause 21 is pinned`; `plan.md names every plan verb registered by wave 6 and every PLAN_REFUSALS word a coordinator meets`;
+- [x] **Step 1: Write the failing tests** — `clause 22 is pinned`; `plan.md names every plan verb registered by wave 6 and every PLAN_REFUSALS word a coordinator meets`;
   `the ledger template's waves table has an epic column`; the ratchet's R4/R6 hold.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
-- [ ] **Step 3: Write** the text.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `docs(skills): the coordinator declares and keeps its plan (D-8185)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
+- [x] **Step 3: Write** the text.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `docs(skills): the coordinator declares and keeps its plan (D-8185)`.
 
 ### Task 6.2: The worker and Linear skills
 
@@ -2061,7 +2285,7 @@ Test `server/test/migration-putback.test.ts`.
 
 ---
 
-## Wave 8 — team and workspace mapping
+## Wave 8 — team and workspace mapping (D-8808)
 
 Spec §3.1, the operator's ruling of 2026-11-19 (item 489): coordinators suggest a team, and the Overlord may link one as
 a call made in the operator's name. It runs alongside wave 7's pilot and never blocks it. Its deviation numbers are

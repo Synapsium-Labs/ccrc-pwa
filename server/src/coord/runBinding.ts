@@ -190,9 +190,16 @@ export const parentOf = (binding: SessionBinding): string | null => binding.open
  *  claimant is the minting run's own, so it cannot be a ghost of another programme. Undecided runs of other claimants stay
  *  excluded (#746, D6 of D-5920). */
 export function parentOrMinter(binding: SessionBinding, minter: string | null): string | null {
-  const proven = parentOf(binding);
-  if (proven !== null || minter === null) return proven;
-  return binding.undecided.find((r) => isOpen(r) && r.claimedBy === minter)?.claimedBy ?? null;
+  return parentRunOf(binding, minter)?.claimedBy ?? null;
+}
+
+/** The run `parentOrMinter`'s parent is read from: the open binding when it has a claimant, else the UNDECIDED open run
+ *  `minter` claims, else none. The same decision, so a caller that keys on the run (the approvals park, review 2889 F2: a
+ *  resumed child's mark still names wave 1) and a caller that reads the parent always agree. */
+export function parentRunOf(binding: SessionBinding, minter: string | null): BindingRun | null {
+  if (binding.open !== null && binding.open.claimedBy !== null) return binding.open;
+  if (minter === null) return null;
+  return binding.undecided.find((r) => isOpen(r) && r.claimedBy === minter) ?? null;
 }
 
 /** Whether the series holds an OPEN run that names the session but that the binding cannot place (`undecided`) and that

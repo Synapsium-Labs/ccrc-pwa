@@ -219,16 +219,16 @@ describe('the models op over a real agent, with a recording port', () => {
     });
   });
 
-  it('the ready frame lists the eleven fixed words with models eleventh, then overlord-history when servable', async () => {
+  it('the ready frame lists the twelve fixed words with models eleventh and testbox-capture twelfth, then overlord-history when servable', async () => {
     await up(recorder());
     const c = new TestClient(agent!.port);
     clients.push(c);
     const ops = (await c.hello() as AgentReady).ops!;
-    expect(ops.slice(0, 11)).toEqual(['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync',
-      'testbox-admin', 'backup', 'readdir-mtimes', 'models']);
+    expect(ops.slice(0, 12)).toEqual(['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync',
+      'testbox-admin', 'backup', 'readdir-mtimes', 'models', 'testbox-capture']);
     expect(ops[10]).toBe(MODELS_OP);
-    expect(ops.slice(11)).toEqual(['overlord-history']);
-    // an older server's one reader (`readReadyOps`) takes the twelve words whole: each on CAP_WORD, within MAX_CAP_WORDS
+    expect(ops.slice(12)).toEqual(['overlord-history']);
+    // an older server's one reader (`readReadyOps`) takes the thirteen words whole: each on CAP_WORD, within MAX_CAP_WORDS
     expect(ops.length).toBeLessThanOrEqual(MAX_CAP_WORDS);
     expect(ops.filter((w) => !CAP_WORD.test(w))).toEqual([]);
   });

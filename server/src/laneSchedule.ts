@@ -193,6 +193,10 @@ export const RUN_UNTOLD_SWEEP_MS = 60_000;
 /** The run-close lane's pass (D-8077, rows E1 and E1r): a minute, the dead-coordinator lane's own sibling cadence. DERIVED from
  *  it by reference (`CHILD_RECLAIM_SWEEP_MS`), never a second literal: R7's budget is "per pass" and a pass is that throttle. */
 export const RUN_CLOSE_SWEEP_MS = CHILD_RECLAIM_SWEEP_MS;
+/** The admission wake's lane (D-6095): a coordinator the concurrency cap refused is mailed when the cap has room, at most
+ *  `WAKE_BURST` a window. Its cadence IS the wake budget's window (`WAKE_WINDOW_MS`, `coord/wakeBudget.ts`), declared here for
+ *  the reason `STOP_DONE_SWEEP_MS` is (the L0 table imports no L1 file); `admission-wake.test.ts` pins the two equal. */
+export const ADMISSION_WAKE_SWEEP_MS = 60_000;
 
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
@@ -205,10 +209,10 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
-  | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'idleNudge' | 'mail' | 'mailHold' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors' | 'skillInstall';
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -288,6 +292,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'blockWakes', cadenceMs: STALL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'STALL_SWEEP_MS', reason: 'a block wake needs no finer beat than the sweep it was split from' },
   },
+  // The admission wake (D-6095): mails refused coordinators when the cap has room. One pass at a time; it catches its own
+  // failure with its own sentence, so no warnKey. Its beat is the wake budget's window (pinned equal in admission-wake.test.ts):
+  // the lane wakes at most WAKE_BURST coordinators a window, so a finer beat buys nothing.
+  { name: 'admissionWake', cadenceMs: ADMISSION_WAKE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   // The mailhold projection (mid-turn mail spec §3.4, plan Task 4.3; `coord/mailHoldLane.ts`): one pass at a time at the mail
@@ -420,11 +428,17 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // is a handful of reads and one restore flight per programme met, bounded by `staleAfterMs`; a tick the runner restarts as
   // stuck finds the first still running (`DriftPass` returns at once) and never starts a second pass.
   { name: 'linearDrift', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear drift pass failed' },
+  // D-8186: the per-team migration (Linear hierarchy design §10): mails for a map, applies an approved map, runs a put back asked for.
+  { name: 'linearMigration', cadenceMs: 30_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear migration failed' },
   // The worker skill's self-install (D-8126, wave A7-5; `coord/skillInstallLane.ts`): one pass at a time, every 15 s, so an
   // install follows its dispatch's `skill-preflight:absent` within one beat. A pass runs at most `SKILL_INSTALL_PER_PASS`
   // verbs, each under `SKILL_ENSURE_DEADLINE_MS` (60 s), which `staleAfterMs` stays above, and never two on one home at once
   // (an overdue call holds its account until it settles); a thrown pass is caught here.
   { name: 'skillInstall', cadenceMs: 15_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 300_000, warnKey: 'ccrc-server: the skill self-install lane failed' },
+  // The coordinator skill's rollout mail (D-8126, wave A9-3; `coord/skillRolloutLane.ts`): one pass at a time, every 30 s,
+  // until a pass settles (every running coordinator told once, durably), then each beat returns at once. A pass is a few
+  // synchronous reads and mails per claimant, far inside `staleAfterMs`; a thrown pass is caught here.
+  { name: 'skillRollout', cadenceMs: 30_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: the skill rollout lane failed' },
   // The forecast lane (Overlord W2 forecasts A; spec Table 11.1d; plan `w2-forecasts-health.md` Task 4): one pass at a time,
   // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
   // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.

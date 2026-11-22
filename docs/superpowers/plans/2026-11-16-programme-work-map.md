@@ -546,16 +546,16 @@ revert: nothing mounts the card yet.
 | 360, 390 | Goals, Work, Waiting on you, Runs |
 | 1280, 1470, 1920 | Left: Goals, Work. Right: Waiting on you, Runs |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `the Work card sits below Goals`, `Waiting on you heads the right
+- [x] **Step 1: Write the failing tests** — jsdom: `the Work card sits below Goals`, `Waiting on you heads the right
   column`, `a run moving re-reads the plan`, `an answer with no work draws no card`, `a failed read keeps the last
   view`, `a failed first read says the work could not be read`; browser: the table above in both skins and both themes,
   no sideways scroll, no clipped phase title or epic tag.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** (red taken after the code, D-8823 `step-2-red-after-the-code`) —
   `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/programme-screen.test.tsx`,
   then `cd pwa && ~/.local/bin/ccrc test -- npm run test:browser -- programme-page.browser.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, both commands again, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
-- [ ] **Step 5: Commit** — `feat(console): the programme page shows its work below Goals`.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to pass**, both commands again, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
+- [x] **Step 5: Commit** — `feat(console): the programme page shows its work below Goals`.
 
 **Acceptance.** On the live console, one programme with a stored plan and one without each match `plan show` and the
 runs list. **Rollback.** A plain revert; the server field stays and is unread.
@@ -565,12 +565,15 @@ runs list. **Rollback.** A plain revert; the server field stays and is unread.
 **R132:** each live programme's coordinator declares its plan at its next wave boundary, which is the first one after
 WM0, WM1, WM3 and WM4 have landed. So this task merges after WM4, and its Step 2 is the act.
 
-**Files:** Modify `ccd/coordinator-skill/references/plan.md` and `ccd/coordinator-skill/references/api.md`. The skill's
-`SKILL.md` clauses are pinned verbatim by
-`server/test/coordinator-skill.test.ts`, so this task changes the reference file only, and names only verbs whose
-client row and route exist when it merges (the rule the hierarchy's Task 6.1 pins).
+**Files:** Modify `ccd/coordinator-skill/references/plan.md` and `ccd/coordinator-skill/references/api.md`; Test (modify)
+`server/test/coordinator-plan-reference.test.ts`, which Step 1b edits (review 2740 F6), and
+`server/test/ccrc-api-closed.test.ts`, whose list of the corpus's client commands gains the two verbs the section runs;
+Create `server/test/coordinator-plan-examples.test.ts`, which runs the section's examples through the real plan routes
+(D-8844). The skill's `SKILL.md` clauses are pinned verbatim by `server/test/coordinator-skill.test.ts`, so this task
+changes the two reference files only, and names only verbs whose client row and route exist when it merges (the rule the
+hierarchy's Task 6.1 pins).
 
-- [ ] **Step 1:** Add a section to `references/plan.md`: the programme page's Work card is drawn from this plan. A
+- [x] **Step 1:** Add a section to `references/plan.md`: the programme page's Work card is drawn from this plan. A
   coordinator declares its epics and tickets (the work) and its phases (the sequence), each phase referencing the epics
   and tickets it takes on; records a slip with `plan phase-ref` and `op: 'carry'`; adds a ticket (`plan ticket-add`) in
   the same act that adds the task to its plan file; names the ticket at `runs open` (`ticket-required` in a phased plan,
@@ -579,7 +582,7 @@ client row and route exist when it merges (the rule the hierarchy's Task 6.1 pin
   `evidence-unverified`, each with its recovery, and adds `ticket-required` with its recovery to `references/api.md`, so
   `coordinator-skill.test.ts`'s pin of the plan-added run refusals in both files goes from five to six (F8 of review
   2268); Files gains `ccd/coordinator-skill/references/api.md`.
-- [ ] **Step 1b:** In the same act that names `evidence-unverified` in `references/plan.md`, delete WM1's `NOT_MET` row
+- [x] **Step 1b:** In the same act that names `evidence-unverified` in `references/plan.md`, delete WM1's `NOT_MET` row
   for `evidence-unverified` in `server/test/coordinator-plan-reference.test.ts` (and `ticket-done` from its
   `WORK_MAP_VERBS` once the verb is documented), so the test checks the word and the verb from then on; the row does not
   go red by itself when the word is named (D-8727, `evidence-unverified-not-met-until-wm5`).
@@ -590,9 +593,9 @@ client row and route exist when it merges (the rule the hierarchy's Task 6.1 pin
   that did it, as `references/plan.md` now says. The run that did it verifies when its own ticket is that ticket, an
   auto ticket or none (spec §4.1, review 2375 F2). Each coordinator's declaration and back-fill is its own act, not a
   PR, recorded in its own ledger note; a ticket whose evidence does not verify stays open (spec §4.1).
-- [ ] **Step 3:** Run
+- [x] **Step 3:** Run
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
-- [ ] **Step 4: Commit** — `docs(coordinator): declare and keep the plan, so the programme page shows what remains`.
+- [x] **Step 4: Commit** — `docs(coordinator): declare and keep the plan, so the programme page shows what remains`.
 
 **Acceptance.** The skill tests pass. **Rollback.** A plain revert.
 
@@ -624,6 +627,44 @@ its plan's clause 21), on the operator's yes.
 
 **Acceptance.** Every stored plan opens runs exactly as before. **Rollback.** A plain revert, once no stored epic lacks
 waves.
+
+### Task WM7: the carried findings of WM1 to WM4 (D-8845)
+
+The reviews of WM1 (2740), WM2 (2815), WM3 (2873) and WM4 (2956) each left findings graded safe to carry. This task closes them, so the work
+map the operator sees holds up against what a newer server, a narrow window or a malformed row can send. Its note is
+`docs/superpowers/programs/desktop-polish/wm7.md` (every claim labelled measured or inferred, with the mutation table).
+
+**Files:** Modify `pwa/src/ledgers/workRead.ts`, `workMapWords.ts`, `ledgers.css`, `server/src/coord/planRoutes.ts` (two warning lines);
+Test `pwa/test/programme-screen.test.tsx`, `pwa/test/work-card.test.tsx`, `pwa/browser/programme-work-page.browser.test.ts`,
+`server/test/plan-routes.test.ts`, `workMapCases.ts`, `plan-ticket-done.test.ts`, `planTicketDoneCases.ts`; Create
+`server/test/plan-work-wiring.test.ts`; Records `wm1.md`, `wm2.md`, `wm4.md`, `wm7.md`, and the pictures of `wm3` and `wm4`.
+
+**Taken, each red first and red under its mutant:**
+- WM4 (2956): F1, the work read's shape check covers `end`, `beforePlan` and `runs`; F2, the three-column step moves to 43rem, so a title keeps its
+  phone room (measured in Chrome at windows 690, 700, 715, 719, 725, 731 and 740); F3, `wm4.md`'s claim about 1920 corrected (no desktop width
+  draws the one-row layout); F4, t-5's epic and the pictures re-taken; F5, the facts' third-track placement pinned in jsdom and in Chrome. M1 to M5 are
+  corrected in `wm4.md`; M1's twin in D-8823's entry ("17 of 89", it was 18 of 90) and M3 (D-8823's list of edits under another's claim omits the contrast
+  gate's claim 5825 and the coordinator-badge test's 5976, which `wm4.md` §10 records) are named here, since that entry is not edited.
+- WM3 (2873): F15, every lookup of a server word in the card's words falls back to the word.
+- WM2 (2815): F1 to F5 and M2 to M7 as cases (an answered checkpoint item; a foreign-programme and a review evidence run; `doneAt` and a phase finish; a
+  carry on a folded auto key; the last failed run with a second open ticket; the landing line's project; malformed evidence; a run id that differs
+  from its holder key), M3 as a recorded reason with a parity case, M4 as two warnings, M7 as a case that builds the real server; M8 and F6 in `wm2.md`.
+- WM1 (2740): F1 and F2 as cases, F3, F5, F7, F9 to F12 as records (`wm1.md` §7).
+
+**F3 is a record (WM1):** one stored evidence that reads `malformed` makes every `plan ticket-done` in its programme refuse `evidence-unverified`,
+whichever kind is named, and nothing repairs the row (only a hand edit of `coord.db` can make one: the two writers of the column store typed
+evidence). It fails closed, as review 2712 F3 ruled.
+
+**Left:** WM1 F4 (its own direction says later: an `unreadable` arm on `run`, decided in the verdict), F6 (WM5's), F8 (the coordinator's); WM2 M1
+(needs a ruling) and M9 to M11; WM4 M7 to M9. **Closed at main already:** none found; each gap was open.
+
+- **D-8845** — the departures of Task WM7, by slug. `three-column-step-43rem`: the three-column row starts at 43rem, not 40rem (review 2956 F2), so a title
+  keeps at least its phone room; D-8823's entry still names 40rem, and this supersedes it (the spec rules the switch on the card's width, not the figure).
+  `m3-reason-and-parity-case`: M3 is a recorded reason and a parity case, with no comment in `store.ts`, which another wave holds. `f7-recorded-not-edited`:
+  the auth-gate tally comment is left as it is and said so in `wm1.md`. `wm1-f4-left`: left, as its direction says. `wiring-pin-through-the-real-server`: M7 is
+  pinned by a case that builds the real server, not a text scan. `shape-fixtures-widened`: a pure fixture gained `end`, `beforePlan` and `runs`.
+  `fallback-is-the-word`: an unknown server word is drawn as written. Co-edits: `planRoutes.ts`'s two lines and this section, each by the holder's consent of
+  2026-11-20.
 
 ## Carried to other plans
 
@@ -834,6 +875,91 @@ Task WM3 departs under its own number:
   `carriedOut` in `WorkPhaseView`.
   The task note (`docs/superpowers/programs/desktop-polish/wm3.md`) gives each case, the mutants, the test runs and what was seen
   at 360 and 1280.
+
+Task WM4 departs under its own number:
+
+- **D-8823** — `work-map-wm4-build`: Task WM4 (desktop polish run 2903), issued on 2026-11-20. The programme page mounts WM3's card below Goals and
+  Waiting on you heads the right column. The build departs from the plan's text in these ways, each named by slug: `page-decides-in-l1`, the page's
+  decisions about an answer (a view, an absent `work`, an unreadable `work`, a failed read; what the last view and its time do on each; the key that
+  moves a re-read) are `pwa/src/ledgers/workRead.ts` (L1, pure), the page's state is the hook `useWorkRead.ts` (L4), and `ProgrammeScreen.tsx` only
+  mounts it, where the plan names `ProgrammeScreen.tsx` alone; `failed-read-arm`, the card's one `work` prop gains a third arm,
+  `{ readFailed: string; last? }`, because the page's failed read speaks in the refusal's own word, which the server's `{ unreadable }` has no place
+  for (D-8806 `unreadable-carries-the-last-view` made the card's prop type its own; this widens the same type), and `WorkCardAnswer` moves from
+  `WorkCard.tsx` to `workMapWords.ts` so the page's decider reads it without importing a component; `first-read-draws-nothing`, while the first read is
+  pending the page draws no card and no "Reading" line, because an older server draws no card and a card that came and went would shift the column;
+  `not-ok-is-failed`, an answer that is not `ok`, or whose `work` is neither a view nor `{ unreadable }`, reads as a failed read ("unreadable answer"
+  when it has no `error` word); `work-card-in-pv-card`, the page seats the card in a `.pv-card` like Goals, because the card paints its own ground and
+  has no border or padding (seen in the first look at the page in Chrome: its heading sat flush with the column's edge); `pv-side-column`, the right
+  column is a new `.pv-side` holding Waiting on you then Runs, beside `.pv-main` holding Goals then Work, one grid order, so a phone reads Goals, Work,
+  Waiting on you, Runs with no second layout; `card-width-steps`, the card's one container step at 34rem (D-8806 `layout-by-the-cards-width`) is two, and the
+  narrow one is not the plan's one-row layout: the left column measured in Chrome is a 451px card at a 1280 window and 532px at 1470, so the plan's "1280
+  and up: one row" held at 1920 only (the first run of the new browser file was red at 1280 and 1470 at 34rem), and the first fix, three tracks from 26rem
+  with a 10rem facts column, left a title about 146px of room at 1280 against about 280px on a phone (review 2922 F2). So from 26rem a row is two
+  columns, a 6.75rem status track beside the title with its tag, and the facts on a row of their own under the title, which leaves a title more room than a
+  phone gives it; the three-column row, status | title | facts as the plan words it, starts at 40rem, with 7.5rem and 14rem tracks. Pinned in Chrome by the
+  title track at every sampled width being at least the 360 one, by a plain-name epic tag staying on one line, and by one sampled width between 690 and 900
+  (800, where the page is one column and the card as wide as the page, so the 40rem step is measured and not only read as CSS, review 2922 A7);
+  `work-read-checks-its-words`, review 2922 F3, the page's decider checks the server's unreadable word against the words the card can word
+  (`UNREADABLE_WORDS`, the keys of the card's own table, kept in `workMapWords.ts` and not in `shared/plan.ts`, where a home for it is a carry) and checks
+  that every list the card walks is a list and `counts` an object, and an answer that is less falls to the failed-read arm ("unreadable answer");
+  `key-chosen-in-l1`, review 2922 A5, `planKey(slug, runs, waiting)` chooses which items count (the list's open and cleared ones), and the screen only
+  calls it; `browser-file-exists`, the plan says Create `pwa/browser/programme-page.browser.test.ts`, but that file exists
+  (the Runs section and Resume at every width, D-8075), so its columns pin is updated to the new order and the Work card's cases are the new
+  `pwa/browser/programme-work-page.browser.test.ts`; the three other browser fixtures that open the programme page (`run-tally`, `phone-bar`,
+  `one-waiting-page`) answer its plan read, as a server does, so the page does not draw a failed read in them; `phase-line-writes-every-apart-group`, review
+  2891 F5: the headline's and the phase line's apart counts are one function over `WORK_APART_GROUPS` less `dropped`, keyed so a group added there is a
+  compile error, so the phase line now also writes "· N failed" (a count that is zero in a phase today, `failed` being the no-plan fallback's alone);
+  `head-icon-not-word`, the page head's visible "Programme" kicker is removed and the programme icon the programme box draws (`RoleBadge`, icon
+  "workflow", label and title "Programme", `pv-ico`) stands before the title, in one box with it (`pv-name`) so it adds no line to the head, sized to the title's
+  text and in the programme's hue. The operator's note of 2026-11-19 reads "We don't need to write the word "Programme" when we use the programme icon and colours
+  and also the wave timer." The head already carries two of its three cues, the programme's colour and its wave line, and the operator ruled on 2026-11-20, weighing
+  compactness and usability, that the word goes there too and the icon takes its place, so the head and the box speak one language and a screen reader still hears
+  "Programme" (the coordinator's amendment of fix round 1, F1, replacing his first ruling that kept the word, and the first push's `kicker-left`). The contrast
+  audit's kicker row is the icon's now (one row per hue, as the box's badge is pinned). The coordinator-badge task (run 2883, #3111) did not edit
+  `ProgrammeScreen.tsx` (measured: `git diff` of its branch against `main`, empty for that file, on 2026-11-20 before and after its PR merged); the badge it added
+  reached this branch by `absorbs-main-once`: on the coordinator's word in the amendment's mail, one `git merge` of `origin/main` (no rebase, no force; the probe
+  was clean) as its own commit with `Ledger-Edit: D-8823`, because `RoleBadge` and the box's badge rows live only on main, and the head's icon and the contrast row
+  need them; `step-2-red-after-the-code`, Step 2 is
+  ticked, though the red was taken after the code was written, not before: the jsdom cases were written first and run only once the page was built, then
+  run against the old `ProgrammeScreen.tsx` (21 of 96 red at fix round 1's tip, 17 of 89 at the first push), and the browser file's red is its first run at 34rem (1280 and 1470 red). Edits under
+  another's claim: `pwa/src/lib/api.ts`, claim 5826 (the Docs reader's range wave, run 2743), with that
+  worker's consent by mail on 2026-11-20 for the `plan(slug)` lines only (its return type gains `work?: WorkAnswer`); the plan itself, whose
+  holder at the start (WM3's worker, claim 5806) had no session left to answer (mail refused `unknown-recipient`) and whose claim lapsed from the
+  list before this task edited it, then this task's own claim 5899.
+  The task note (`docs/superpowers/programs/desktop-polish/wm4.md`) gives each case, the mutants, the test runs, what was seen in Chrome and the
+  carries from review 2891.
+
+Task WM5 departs under its own number:
+
+- **D-8844** — `work-map-wm5-build`: Task WM5 (desktop polish run 2969), issued on 2026-11-20. The coordinator reference declares and keeps the
+  plan, so the programme page shows what remains. A rules-and-docs task: the new last section of `references/plan.md` ("Keep the plan: the
+  programme page shows what remains"), WM1's `evidence-unverified` row and the work-map verbs out of the reference test's skip lists, and no product
+  code. The build departs from the plan's text in these ways, each named by slug: `api-md-already-six`, Step 1 asks for `ticket-required` in
+  `references/api.md` and the pin of the plan-added run refusals to go from five to six, and both were already true on `main` (`ticket-required` is
+  WM1's word, D-8727, and its epic-of-no-waves case WM6's, D-8780, both carried into `api.md` by the Linear hierarchy's wave-4 follow-ups, #3088, and
+  the pin reads six), so the carried wording of `api.md`'s "`runs open` also answers six refusals" list and of `plan.md`'s lead paragraph, ticket
+  sentence and refusal list was read against `planGate` and `epicForOpen` and found true, but for one clause on the ticket sentence ("unless
+  `ticket-required` refuses it (below)", since a run with no ticket is not always given an auto ticket); `api-md-ticket-wording` (review 2975 F4), two clauses of that list are brought to what the code does after all:
+  `ticket-required` says "an open ticket with no run attached that is not an auto ticket" (`runMustNameTicket`), in `plan.md` too, and `ticket-unavailable`
+  says "open with none unless `ticket-required` refuses that" and lists what `planGate` refuses with that word (done, dropped, held by another run, started or
+  attached to one not yet dispatched, not in this programme's plan, or an Upkeep ticket), in the section of `plan.md` and in `api.md` (the refusal-list bullet keeps #3151's wording; review 3112 F4, review 3143 F1); `work-map-verbs-empty`, the brief removes `ticket-done` from `WORK_MAP_VERBS`, and
+  `phase-ref`, whose row is on `main` and which the same section documents, leaves it too, so the set is empty and the verb check covers both;
+  `closed-table-pin`, `server/test/ccrc-api-closed.test.ts` is named by WM0's and WM1's Test lines and by this task's Step 3, and by its Files line since fix round 1:
+  the sorted list of the corpus's client commands gains `plan.phase-ref` and `plan.ticket-done`, which the new section is the first to run;
+  `examples-run-through-the-routes` (review 2975 F1, F2, F6), a parse of an example is not an acceptance of it (the first examples parsed and the
+  server refused the `plan put`), so the new `server/test/coordinator-plan-examples.test.ts` sends the section's examples, in order, on the plan the `plan put`
+  example under `## plan put` leaves, to the real plan routes over a real coord.db, and each must answer 200; the section states that rule, that a put
+  restates what it keeps, before its examples; `section-words-pinned` (F6; review 3112 F3), `coordinator-plan-reference.test.ts` pins the section's refusal words, its
+  recovery bullets and their remedies, the evidence rule and the capability sentences inside the section itself, not by a whole-file substring, and parses the
+  one body the back-fill line gives (`plan ticket-move` with a drop); `examples-keep-their-shape` (review 3112 F2, F5), the examples test replaces only the run
+  number inside the `ticket-done` example and refuses a changed shape, refuses a `"$API" plan` line it cannot parse as an example instead of skipping it, and runs
+  the back-fill's drop body on the final plan; `section-without-list-indents` (F14), the section's examples sit outside list items so that a heredoc's closing
+  `JSON` is at the start of a line when copied; `evidence-read-refusal` (F1), the `evidence-unverified` list names the refusal the route makes before the verdict
+  when a run cannot be read, and the "never record it again" sentence is narrowed to a refusal about a fact; and `step-2-left-open`, Step 2 (the notice to every live coordinator) is the desktop-polish coordinator's after
+  this merges, and stays unticked. Held by another's claim, each with that worker's consent by mail on 2026-11-20 for exactly this task's lines:
+  `plan.md`, `coordinator-plan-reference.test.ts` and `ccrc-api-closed.test.ts`, claims 5967 and 5954 (Linear hierarchy wave 7, run 2846). In fix round 2, `plan.md` and the reference test were held by claim 6298 (Linear hierarchy wave 6, run 3102), whose holder consented on 2026-11-21 and asked that the `ticket-unavailable` bullet take its wording, which it does. The plan was
+  held by the ended WM4 session's claim 5899, which lapsed at 15:40Z, then this task's claim 6032. The task note
+  (`docs/superpowers/programs/desktop-polish/wm5.md`) gives each carried wording read against the code, the mutants and the test runs.
 
 ## Where things stand
 

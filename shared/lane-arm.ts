@@ -27,6 +27,10 @@ export const LAUNCH_PROFILE_LANE = 'launch-profile';
  *  anchor, which the hook prints in its first slot at every start of a session that is not a child, a fork's one refusal
  *  line, and the anchor once after an automatic compaction that brought no start. */
 export const ANCHOR_SLOT_LANE = 'anchor-slot';
+/** The park's row (approvals plan 2026-11-18, §3.3.3 F10): a child's permission prompt whose window ends unruled is parked
+ *  (the hook prints a deny that says so, and the row reaches Waiting on you) instead of left to its pane's menu. In shadow
+ *  the request route stores `shadow` at mint and a lapse records `wouldPark`; live, it stores `live` while sign-in is armed. */
+export const APPROVAL_PARK_LANE = 'approval-park';
 /** The waiting workers' row (D-8790; waiting workers spec 2026-11-19, Part 2): the run-done sleep's
  *  case for a dispatched worker on a `working` run whose turn marker has been quiet 30 minutes. In shadow the sleep lane
  *  logs the worker it would put to sleep; live, it puts it to sleep and mails the run's coordinator once. */
@@ -39,7 +43,7 @@ export const WORKING_IDLE_SLEEP_LANE = 'working-idle-sleep';
 export const CAP_COUNTS_WORKING_LANE = 'cap-counts-working';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
 export const LANE_ARM_LANES = [
-  ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, WORKING_IDLE_SLEEP_LANE, CAP_COUNTS_WORKING_LANE,
+  ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE, WORKING_IDLE_SLEEP_LANE, CAP_COUNTS_WORKING_LANE,
 ] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
@@ -130,14 +134,37 @@ export function isLaneArmQuizState(v: unknown): v is LaneArmQuizState {
   return typeof v === 'string' && (LANE_ARM_QUIZ_STATES as readonly string[]).includes(v);
 }
 
-/** The card's quiz block: the baseline (recorded with its date, not yet, or a read that failed, never folded into "not yet")
- *  and the pending runs, oldest first (or why they could not be read). */
+/** The weekly unattended run's tick outcomes (run 3212; `deploy/history-quiz-unattended.mjs`): advanced or done, a stop
+ *  that the next tick resumes, a stop that waits for attention (its word says why), and an internal failure. */
+export const QUIZ_TICK_OUTCOMES = ['ok', 'waiting', 'refused', 'failed'] as const;
+export type QuizTickOutcome = (typeof QUIZ_TICK_OUTCOMES)[number];
+export function isQuizTickOutcome(v: unknown): v is QuizTickOutcome {
+  return typeof v === 'string' && (QUIZ_TICK_OUTCOMES as readonly string[]).includes(v);
+}
+/** The unattended run's last tick as the server stored it (`POST /api/continuity/quiz-status`): the ISO week, the act it
+ *  reached, its outcome and word, one line of detail, the setup's account id, and when the tick ran. */
+export interface LaneArmQuizTick {
+  week: string | null;
+  act: string;
+  outcome: QuizTickOutcome;
+  word: string | null;
+  detail: string | null;
+  account: string | null;
+  at: number;
+}
+/** The unattended block's three states on the card: no tick reported yet, the last tick, or a read that failed. */
+export const LANE_ARM_QUIZ_TICK_STATES = ['none', 'reported', 'unreadable'] as const;
+
+/** The card's quiz block: the baseline (recorded with its date, not yet, or a read that failed, never folded into "not yet"),
+ *  the pending runs, oldest first (or why they could not be read), and the unattended run's last tick (run 3212; additive:
+ *  an older server sends none, and the card then shows no tick line). */
 export interface LaneArmQuizView {
   baseline:
-    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number }
+    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number; id?: number }
     | { state: Extract<LaneArmQuizState, 'not-yet'> }
     | { state: Extract<LaneArmQuizState, 'unreadable'>; detail: string };
   pending: { ok: true; runs: LaneArmQuizPending[] } | { ok: false; detail: string };
+  unattended?: { state: 'none' } | ({ state: 'reported' } & LaneArmQuizTick) | { state: 'unreadable'; detail: string };
 }
 
 /** `GET /api/coord/lane-arm`'s answer (and a POST's, read after the write): every row, in `LANE_ARM_LANES` order, and the
@@ -225,6 +252,17 @@ export const LANE_ARM_TEXT = {
         + 'prompt after an automatic compaction carries the anchor once.',
       gate: null,
     },
+    [APPROVAL_PARK_LANE]: {
+      legend: 'Park permission prompts',
+      shadowNote: 'A child\'s permission prompt whose coordinator does not rule it in time stays in the child\'s pane as '
+        + 'today; each one that would have been parked is recorded on its approval row.',
+      liveNote: 'A child\'s permission prompt whose coordinator does not rule it in time is parked: the child is told the '
+        + 'command did not run and to wait, the prompt is listed on Waiting on you, and a later ruling (its coordinator\'s, '
+        + 'or yours) is met by the child\'s retry of the same command.',
+      // INERT UNTIL PR 3v (the coordinator's rulings of 2026-11-19): the route hunks are in this build (item 486's
+      // packet), but the fleet box's verifier does not yet read the operator's signed ruling, so Live is refused here.
+      gate: 'This lane goes live once the fleet box\'s verifier reads a ruling signed for you; until then nothing parks.',
+    },
     [WORKING_IDLE_SLEEP_LANE]: {
       legend: 'Sleep waiting workers',
       shadowNote: 'A worker on a working run whose last turn ended 30 minutes ago, with nothing running, scheduled, unread '
@@ -234,7 +272,8 @@ export const LANE_ARM_TEXT = {
         + 'or open on a screen, is put to sleep, and its coordinator is mailed once for that sleep. Its session ends; its '
         + 'workspace, branch and transcript are kept, and mail or a send-back starts it again. A worker holding a live '
         + 'claim, or named by a second active run, keeps running. While mail is switched off (mail-disabled), no waiting '
-        + 'worker is put to sleep, because its coordinator could not be told.',
+        + 'worker is put to sleep, because its coordinator could not be told. Every waiting worker is measured on the '
+        + 'first pass after this is set Live, including one the shadow log named minutes before.',
       gate: null,
     },
     [CAP_COUNTS_WORKING_LANE]: {
@@ -246,7 +285,8 @@ export const LANE_ARM_TEXT = {
       liveNote: 'A run whose worker is waiting or asleep holds no slot under the workers cap; the slots this frees are handed '
         + 'out a few at a time, and a send-back to a live or sleeping worker, or a resume of a live one, is never refused at '
         + 'the cap. A worker '
-        + 'that wakes counts again at once.',
+        + 'that wakes counts again at once. A coordinator the cap refused is told of a freed slot only when one can be handed '
+        + 'out, so it is not told again every minute.',
       gate: null,
     },
   },
@@ -283,7 +323,23 @@ export const LANE_ARM_TEXT = {
   quizPendingUnreadable: 'The server could not read the replay quiz runs waiting for you',
   quizConfirm: 'Confirm',
   quizDiscard: 'Discard',
+  /** Review 3232 F1e: the operator's undo of a wrong baseline. Optional; nothing asks for it. */
+  quizWithdraw: 'Withdraw the baseline',
+  quizWithdrawNote: 'Withdraw only a baseline you know is wrong: the run is kept and never counts again. Live on a W1a lane is '
+    + 'then refused until a fresh run is recorded and confirmed while every W1a lane is in shadow; a run confirmed earlier is '
+    + 'never promoted. A lane already live stays live.',
+  /** Review 3254 F4: the withdraw cannot be undone, so it takes a second tap. */
+  quizWithdrawTitle: 'Withdraw this baseline?',
+  quizWithdrawLabel: 'Withdraw',
+  quizWithdrawLines: ['The run is kept and never counts again; no door reinstates it.',
+    'Live on a W1a lane is refused until a fresh run is confirmed. A lane already live stays live.'],
   quizRuleNote: 'Before you confirm, match the run\'s report sha with the one report and ccrc quiz-record printed, and '
     + 'discard any run you did not record. Confirm counts the run; the first one confirmed while every W1a lane is in shadow '
     + 'becomes the baseline. Discard keeps the row and never counts it.',
+  quizTick: {
+    none: 'Weekly unattended run: no run reported yet',
+    unreadable: 'Weekly unattended run: its last report could not be read',
+    reported: (date: string, t: LaneArmQuizTick): string => `Weekly unattended run, ${t.week ?? 'setup'}: ${t.act}, `
+      + `${t.outcome}${t.word === null ? '' : ` (${t.word})`}, ${date}${t.account === null ? '' : `, account ${t.account}`}`,
+  },
 } as const;

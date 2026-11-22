@@ -2,8 +2,8 @@
 // It draws `WorkMapView`, which `workMapOf` decided on the server, and decides nothing: every count, status, carry and finish
 // date is read off the view, and every word comes from `workMapWords.ts`. Props only: it reads no store and no route, keeps ONE
 // piece of local state (the epic filter) and keeps no last view. The page (WM4) keeps the last `WorkMapView` it drew and passes
-// it beside the failure's word in an `unreadable` answer, so the note draws over it (review 2268 F15). Nothing mounts the card
-// yet; WM4 puts it on the programme page.
+// it beside the failure's word in an `unreadable` or `readFailed` answer, so the note draws over it (review 2268 F15). The page
+// mounts it (WM4, `ProgrammeScreen`).
 //
 // The links are given: `runHref` and `itemHref` are functions of an id (the page knows the routes and what its list still
 // holds), and `epicHref` is the page's `epicPath(slug, key)`. A `null` from `itemHref` draws the item's number as text.
@@ -12,19 +12,14 @@
 // "coordinator" word: a coordinator is shown by the badge another task adds (the operator's tidying notes of 2026-11-19).
 import { useId, useState, type ReactNode } from 'react';
 import { Button, TextLink, useNow } from '@ccrc/ui';
-import { WORK_COUNTED_GROUPS, type WorkEpicView, type WorkGroup, type WorkItemView, type WorkMapView, type WorkPhaseView, type WorkUnreadable } from '../../../shared/plan';
+import { WORK_COUNTED_GROUPS, type WorkEpicView, type WorkGroup, type WorkItemView, type WorkMapView, type WorkPhaseView } from '../../../shared/plan';
 import { inAppClick } from '../fleet/settingsText';
 import {
   LAST_RUN_FAILED, NOTES, NOT_IN_PHASE_WORD, NOT_PROVED_WORD, OPEN_EPIC, OPEN_IN_LINEAR, PROVED_WORD, WORK_TITLE, beforePlanLine,
   carriedTargetsOf, carriedWords, checkpointFacts, checkpointsLabel, doneOnWords, doneWhenLine, epicChip, foldLabel, headline,
   initiativeNote, itemLinkWord, movedWords, outstandingLine, phaseHeading, phaseLine, runLinkWord, sourceLine, statusWord,
-  unreadableNote, untitledWords, wholeEpicLine,
+  readFailedNote, unreadableNote, untitledWords, wholeEpicLine, type WorkCardAnswer,
 } from './workMapWords';
-
-/** The card's answer: the server's `WorkAnswer` (`WorkMapView`, or `{ unreadable }`), widened so the unreadable arm may also
- *  carry the last view the page drew. The shipped `WorkAnswer` has no `last`; this prop type is the card's own (D-8806,
- *  `unreadable-carries-the-last-view`). */
-export type WorkCardAnswer = WorkMapView | { unreadable: WorkUnreadable; last?: WorkMapView | null };
 
 export interface WorkCardProps {
   work: WorkCardAnswer;
@@ -303,14 +298,15 @@ export function WorkCard({ work, readAt, runHref, itemHref, epicHref }: WorkCard
   const now = useNow(30_000);
   const headingId = useId();
   const [epicFilter, setEpicFilter] = useState<string | null>(null);
-  const unreadable = 'unreadable' in work ? work.unreadable : null;
-  const view = 'unreadable' in work ? (work.last ?? null) : work;
+  // `{ unreadable }` is the server's word, `{ readFailed }` the page's: each draws the note over the last view the page holds.
+  const note = 'unreadable' in work ? unreadableNote(work.unreadable) : 'readFailed' in work ? readFailedNote(work.readFailed) : null;
+  const view = 'unreadable' in work || 'readFailed' in work ? (work.last ?? null) : work;
   // A filter naming an epic the view no longer holds filters nothing.
   const filter = view !== null && view.epics.some((e) => e.key === epicFilter) ? epicFilter : null;
   return (
     <section className="wk-card" aria-labelledby={headingId}>
       <h2 id={headingId} className="wk-heading">{WORK_TITLE}</h2>
-      {unreadable !== null && <p className="wk-note wk-unreadable" role="alert">{unreadableNote(unreadable)}</p>}
+      {note !== null && <p className="wk-note wk-unreadable" role="alert">{note}</p>}
       {view !== null && (
         <Body view={view} readAt={readAt} now={now} filter={filter} onFilter={setEpicFilter} runHref={runHref} itemHref={itemHref} epicHref={epicHref} />
       )}

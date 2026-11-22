@@ -85,6 +85,7 @@ const RECORDED_DOCUMENT = {
   changedInitiatives: 'read-changed-initiatives', changedProjects: 'read-changed-projects-constructed',
   changedMilestones: 'read-changed-milestones-constructed', changedIssues: 'read-changed-issues-constructed',
   teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned',
+  attachmentsForUrl: 'read-attachments-for-url-constructed',
   initiativeCreate: 'mutation-initiative-create', initiativeUpdate: 'mutation-initiative-update-status-canceled',
   initiativeToProjectCreate: 'mutation-initiative-to-project-create',
   initiativeToProjectDelete: 'mutation-initiative-to-project-delete-constructed',

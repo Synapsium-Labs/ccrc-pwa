@@ -46,6 +46,7 @@ describe('the roster card has one builder (D4, R-5a, D-8201)', () => {
     expect(holders('open run(s) you claim')).toEqual(['ccd/lib/roster-card.jq']);
     expect(holders('awaiting you: ')).toEqual(['ccd/lib/roster-card.jq']);
     expect(holders('more open runs: ccrc-api runs list')).toEqual(['ccd/lib/roster-card.jq']);
+    expect(holders('ccrc-autonomy: '), 'D-8126: the autonomy line').toEqual(['ccd/lib/roster-card.jq']);
   });
 
   it('`roster_card` is defined once, and the hook loads it at exactly one site', () => {

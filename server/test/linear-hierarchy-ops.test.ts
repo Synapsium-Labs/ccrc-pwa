@@ -21,6 +21,7 @@ const FIXTURE: Readonly<Record<CcrcOpName, string>> = {
   changedInitiatives: 'read-changed-initiatives', changedProjects: 'read-changed-projects-constructed',
   changedMilestones: 'read-changed-milestones-constructed', changedIssues: 'read-changed-issues-constructed',
   teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned',
+  attachmentsForUrl: 'read-attachments-for-url-constructed',
   initiativeCreate: 'mutation-initiative-create', initiativeUpdate: 'mutation-initiative-update-status-canceled',
   initiativeToProjectCreate: 'mutation-initiative-to-project-create',
   initiativeToProjectDelete: 'mutation-initiative-to-project-delete-constructed',
@@ -79,6 +80,27 @@ describe('the rows shape their answers', () => {
     const r = linearRecord(FIXTURE[op as CcrcOpName]);
     expect(r.document, op).toBe(LINEAR_CCRC_OPS[op as CcrcOpName].document);
     expect(LINEAR_CCRC_OPS[op as CcrcOpName].shape(r.body).ok).toBe(true);
+  });
+
+  it('attachmentsForUrl (D-8808) reads each attached issue as its id, identifier and team key only, and an answer out of shape is malformed', () => {
+    const r = linearRecord(FIXTURE.attachmentsForUrl);
+    expect(r.variables).toEqual({ url: 'https://github.com/owner/repo/pull/1' });
+    const shaped = LINEAR_CCRC_OPS.attachmentsForUrl.shape(r.body);
+    expect(shaped).toEqual({
+      ok: true, created: null,
+      value: { nodes: [
+        { issueId: '00000000-0006-4000-8000-000000000001', identifier: 'AAA-1', teamKey: 'AAA' },
+        { issueId: '00000000-0006-4000-8000-000000000002', identifier: 'BBB-1', teamKey: 'BBB' },
+      ] },
+    });
+    expect(LINEAR_CCRC_OPS.attachmentsForUrl.variables({ url: 'u', extra: 'x' })).toEqual({ url: 'u' });
+    expect(LINEAR_HIERARCHY_DOCUMENTS.attachmentsForUrl).not.toMatch(/title|description|body/);
+    for (const bad of [
+      { data: { attachmentsForURL: { nodes: [{ issue: { id: 'nope', identifier: 'AAA-1', team: { key: 'AAA' } } }] } } },
+      { data: { attachmentsForURL: { nodes: [{ issue: null }] } } },
+      { data: { attachmentsForURL: { nodes: [{ issue: { id: '00000000-0006-4000-8000-000000000001', identifier: 'AAA-1', team: null } }] } } },
+      { data: { attachmentsForURL: null } }, { data: {} },
+    ]) expect(LINEAR_CCRC_OPS.attachmentsForUrl.shape(bad)).toEqual({ ok: false, word: 'malformed' });
   });
 
   it('the recorded comment on an initiative and on a project shape ok through the new rows (D-8183)', () => {

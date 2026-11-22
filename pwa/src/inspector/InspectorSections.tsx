@@ -5,6 +5,7 @@
 // A section with nothing to show renders nothing (desktop polish T3d, D-6334), so with no content the rail holds
 // History alone.
 import type { ReactNode } from 'react';
+import { HelpersSection } from './HelpersSection';
 import { HistorySection } from './HistorySection';
 import { LaneSection } from './LaneSection';
 import { MailSection } from './MailSection';
@@ -13,7 +14,7 @@ import { RoutingSection } from './RoutingSection';
 import { TasksSection } from './TasksSection';
 import './inspector.css';
 
-export { HistorySection, LaneSection, MailSection, PrSection, RoutingSection, TasksSection };
+export { HelpersSection, HistorySection, LaneSection, MailSection, PrSection, RoutingSection, TasksSection };
 
 /** Every section, in the spec's order. */
 export function InspectorSections(): ReactNode {
@@ -21,6 +22,7 @@ export function InspectorSections(): ReactNode {
     <>
       <TasksSection />
       <MailSection />
+      <HelpersSection />
       <PrSection />
       <RoutingSection />
       <LaneSection />

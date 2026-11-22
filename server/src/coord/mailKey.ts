@@ -15,7 +15,8 @@ import { LONE_SURROGATE } from '../canonical.js';
 /** The fields of a send that make it the same mail. The route passes the request's, the store the stored row's; `toId` is
  *  the address as SENT (a role word stays a role word), which is what `mail.toId` records, and `inReplyTo` is the delivery
  *  id the send named, as sent (review 2725 F1: a different reply target under one key is a different mail, never a silent
- *  merge), which is what `mail.inReplyTo` records. */
+ *  merge), which is what `mail.inReplyTo` records. `urgent` (mid-turn mail, ruling N10) is whether the send marked the mail
+ *  urgent, which the store reads as `mail.urgentAs` being set: a retry that adds or drops the mark is a different mail. */
 export interface KeyedSend {
   readonly toId: string;
   readonly runId: number | null;
@@ -24,6 +25,7 @@ export interface KeyedSend {
   readonly body: string;
   readonly artifacts: readonly string[];
   readonly inReplyTo: number | null;
+  readonly urgent: boolean;
 }
 
 /** A stored mail under a key: its id and the fields above. */
@@ -32,12 +34,12 @@ export interface KeyedMail extends KeyedSend {
 }
 
 /** The fields compared, in the order a conflict names them. */
-export const KEYED_FIELDS = ['toId', 'runId', 'kind', 'subject', 'body', 'artifacts', 'inReplyTo'] as const;
+export const KEYED_FIELDS = ['toId', 'runId', 'kind', 'subject', 'body', 'artifacts', 'inReplyTo', 'urgent'] as const;
 export type KeyedField = (typeof KEYED_FIELDS)[number];
 
 export type MailKeyVerdict =
   | { readonly verdict: 'new' }
-  | { readonly verdict: 'same'; readonly id: number }
+  | { readonly verdict: 'same'; readonly id: number; readonly urgent: boolean }
   | { readonly verdict: 'conflict'; readonly id: number; readonly fields: readonly KeyedField[]; readonly detail: string };
 
 /** Text as the store keeps it (review 2725 F4): SQLite stores TEXT as UTF-8, which cannot carry a lone surrogate, so one
@@ -58,7 +60,8 @@ export function mailKeyVerdict(request: KeyedSend, prior: KeyedMail | null): Mai
     const a = request[f], b = prior[f];
     return typeof a === 'string' && typeof b === 'string' ? !sameText(a, b) : a !== b;
   });
-  if (fields.length === 0) return { verdict: 'same', id: prior.id };
+  // `urgent` is the STORED mark, so the route's replay echoes what the mail is (ruling N10).
+  if (fields.length === 0) return { verdict: 'same', id: prior.id, urgent: prior.urgent };
   return {
     verdict: 'conflict', id: prior.id, fields,
     detail: `this clientKey already names mail ${prior.id} from this sender, which differs in ${fields.join(', ')}; ` +

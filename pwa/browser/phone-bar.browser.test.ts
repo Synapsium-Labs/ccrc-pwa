@@ -62,6 +62,7 @@ const FIXTURE: AppFixture = (() => {
       '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
       '/api/runs': RUNS, '/api/claims': [], '/api/waiting': { ok: true, waiting },
       '/api/programmes/prog-a/goals': { ok: true, goals: GOALS },
+      '/api/programmes/prog-a/plan': { ok: true, plan: { program: 'prog-a', planned: false, initiatives: [], epics: [], doneWhen: [] } },
     },
     fleetFrames: [
       { type: 'fleet', sessions: withRunBinding(SESSIONS as never[], RUNS as never[]) }, { type: 'runs', runs: RUNS },

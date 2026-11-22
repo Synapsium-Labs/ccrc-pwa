@@ -51,6 +51,7 @@ const FIXTURE: AppFixture = {
     },
     '/api/runs/find': { ok: true, exact: null, runs: [], reviewsOf: [], next: null },
     '/api/programmes/prog-a/goals': { ok: true, goals: { program: 'prog-a', specPath: null, inShort: null, inShortAt: null, modifications: [] } },
+    '/api/programmes/prog-a/plan': { ok: true, plan: { program: 'prog-a', planned: false, initiatives: [], epics: [], doneWhen: [] } },
     '/api/programmes/prog-a/secrets': { ok: true, program: 'prog-a', slots: [] },
     '/api/runs/1801/record': { ok: true, run: RUN, events: [], reviewedBy: [], olderEvents: 0 },
     '/api/runs/1801': { ok: true, run: RUN, spend: { measured: false, reason: 'no-sweep' } },

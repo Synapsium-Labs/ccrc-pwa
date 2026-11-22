@@ -113,7 +113,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twenty clauses, verbatim. Kept as a literal array rather than a regex per
+// The twenty-two clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -163,10 +163,13 @@ const CONTRACT = [
   // Coordinator autonomy default, clause 21 (D-8126; the operator approved these words 2026-11-09). Its one apostrophe is
   // straight, in `programme's`; it names the SAFETY rule class, never a destructive verb, and the client verbs, never a route.
   "This session decides by default and keeps going. It stops a thread of work only for a decision or act only the operator can make — an irreversible or outward-facing act (a SAFETY-listed destructive or live-box act, publishing, messaging people), spend beyond plan (usage credits, paid services, new accounts), a change to the programme's goals, scope or definition of done, or credentials and access — or when it is physically blocked after its self-healing has been tried: no account has room, the box is out of disk or memory after its own cleanup and the memory gate, an external service is down after retries with backoff, or a repository or tool is beyond its rights. Before asking the operator anything else, it reads the programme's goals and definition of done (`ccrc-api goals show <slug>`, the ledger, the spec), decides, records the call with `ccrc-api calls record` — a design-level call as `big`, which the operator sees and may overturn, every other call as `routine` — and continues in the same turn. A parked thread never parks the programme: it raises the item and works every unblocked thread, and ends its turn only when none is left or its children hold the work. It never opens an AskUserQuestion dialog on a pinned programme, never guesses an operator-only answer, and never relaxes a SAFETY rule.",
+  // Linear hierarchy wave 6 (D-8185, plan Task 6.1 as amended; D-8739's follow-up): the plan clause, with the console rule
+  // review 2580 ruled into it. Its one apostrophe is straight, in `programme's`; no quote.
+  "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files or edits a hierarchy object, and never files a ticket in a managed team with `linear create`. The operator acts on hierarchy items in the console: this session never answers a drift, inbound, initiatives, owner, map or report item, and never asks for those approvals in its turn text.",
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twenty clauses verbatim', () => {
+  it('carries all twenty-two clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -236,7 +239,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty', 'twenty-one'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -651,7 +654,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(21);
+    expect(CONTRACT).toHaveLength(22);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
@@ -4594,11 +4597,27 @@ describe('the plan reference (D-8181)', () => {
     expect(plan(), 'plan.md names a raw /api/ path').not.toMatch(/\/api\//);
   });
 
-  it('names the five run refusals the plan adds, each with its recovery', () => {
-    for (const code of ['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']) {
+  it('names the six run refusals the plan adds, each with its recovery', () => {
+    // `ticket-required` is programme work map WM6's (D-8780), carried here from #3088 (review 2885).
+    for (const code of ['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed', 'ticket-required']) {
       expect(plan(), `plan.md does not name ${code}`).toContain(`\`${code}\``);
       expect(refs('api.md'), `api.md does not name ${code}`).toContain(`\`${code}\``);
     }
+  });
+});
+
+// Linear hierarchy wave 6 (D-8185, plan Task 6.1; the follow-up of D-8739): clause 22, the plan clause. What the plan
+// reference, the open step and the ledger template say is pinned in `coordinator-plan-reference.test.ts`.
+describe('the coordinator skill: clause 22, the plan (D-8185)', () => {
+  const CLAUSE_22 = CONTRACT[21]!;
+
+  it('is the twenty-second clause, SKILL.md numbers it so, and every verb it names has a client row', () => {
+    expect(skill).toContain(`\n22. ${CLAUSE_22}\n`);
+    const keys = clientRoutes().map((r) => r.key);
+    for (const verb of ['plan.put', 'plan.met', 'plan.close', 'linear.create']) expect(keys, verb).toContain(verb);
+    for (const word of ['drift', 'inbound', 'initiatives', 'owner', 'map', 'report']) expect(CLAUSE_22).toContain(word);
+    expect(CLAUSE_22).toContain('in the console');
+    expect(CLAUSE_22).toContain('never asks for those approvals in its turn text');
   });
 });
 

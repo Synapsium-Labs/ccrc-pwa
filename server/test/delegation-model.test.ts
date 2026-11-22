@@ -781,7 +781,7 @@ describe('the row codecs — checkpoint shapes to table columns and back, with t
     ]);
     expect(delegationActivityCodec.columns).toEqual([
       'activityId', 'parentId', 'parentIncarnation', 'sourceKind', 'upstreamId', 'identityJournalId', 'displayName',
-      'executionState', 'openedAt', 'endedAt', 'lastEventAt',
+      'executionState', 'openedAt', 'endedAt', 'lastEventAt', 'endBasis',   // endBasis: the ALTER of S1's migration entry (D-8830)
     ]);
     expect(delegationLeaseCodec.columns).toEqual([
       'leaseId', 'generation', 'creatingJournalSequence', 'currentJournalSequence', 'activityId', 'parentId', 'parentIncarnation',

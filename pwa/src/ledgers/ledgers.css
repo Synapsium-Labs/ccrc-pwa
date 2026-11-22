@@ -316,11 +316,12 @@
 .wl-beside .wl-acts { justify-content: flex-start; }
 .wl-beside .wl-capitem { grid-template-columns: minmax(0, 1fr); }
 .wl-beside .wl-capitem .wl-meta { justify-items: start; }
-.wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }
+/* The open item, and (`?call=`, D-8808) the call a link names, in its group or on the trail, carry the same ring. */
+.wl-beside .wl-item[aria-current='page'], .wl-call[data-target='true'], .wl-cleared-row[data-target='true'] { box-shadow: inset 0 0 0 2px var(--accent); }
 
 /* The programme view (desktop-polish PL5b, D-7713; the prototype's view 2): the programme's head, Goals on one side and its
    share of the list on the other. GROUNDS, as above: the head and each card state their own ground and ink, so the audit
-   measures every pair through the stylesheet. The programme's hue paints its non-text rule on the head, and its NAME ("Programme")
+   measures every pair through the stylesheet. The programme's hue paints its non-text rule on the head, and its ICON
    in the hue on the card surface, the pair the lane hues are gated on. A pending change says "spec update pending" in
    words on the attention tint; nothing is read out of colour. */
 .pv { --pg: var(--edge-strong); }
@@ -337,14 +338,20 @@
 .pv-head[data-hue='violet'] { --pg: var(--prog-violet); --pg-ink: var(--prog-violet); }
 .pv-head[data-hue='magenta'] { --pg: var(--prog-magenta); --pg-ink: var(--prog-magenta); }
 .pv-head[data-hue='blue'] { --pg: var(--prog-blue); --pg-ink: var(--prog-blue); }
-.pv-head .pv-kicker { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); }
+/* The programme icon before the title (WM4 fix round 1 amendment, D-8823 `head-icon-not-word`): sized to the title's text, in the programme's
+   hue on the head's surface (the pair the lane hues are gated on), in one box with the title so it adds no line to the head. */
+.pv-head .pv-name { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.pv-head .pv-ico { font-size: var(--fs-base); color: var(--pg-ink); }
+.pv-head .pv-ico svg { width: 1em; height: 1em; }
 .pv-head .pv-title { margin: 0; font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); overflow-wrap: anywhere; }
 .pv-head .pv-sub { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .pv-two { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }
 @media (max-width: 900px) { .pv-two { grid-template-columns: minmax(0, 1fr); } }
-/* The Goals page's columns (the runs rebuild, Task 19, o8): Goals, Waiting on you and Stored secrets stack in the first, and the
-   Runs section is the other. Under 900 everything stacks in that order. */
-.pv-main { display: grid; gap: var(--sp-3); min-width: 0; align-content: start; }
+/* The Goals page's columns (the runs rebuild, Task 19, o8; the Work card, WM4): Goals and the Work card stack in the first, and
+   Waiting on you (with Stored secrets) and Runs in the other, so a long list never pushes Waiting on you out of view. Under 900
+   everything stacks in that order: Goals, Work, Waiting on you, Runs. */
+.pv-main,
+.pv-side { display: grid; gap: var(--sp-3); min-width: 0; align-content: start; }
 /* The head's run facts (spec §8.5): the card's elements, the coordinator, the wave counts, a pending-close line per reason and
    Resume. A full-width row of the head, wrapping; the controls keep the tap floor. */
 .pv-head .pv-facts { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-3); min-width: 0; }
@@ -484,8 +491,9 @@
   .wm-table { display: table; }
 }
 @media (max-width: 899.98px) {
-  /* Stuck above the phone bar (`--phone-bar-h`, shell.css, on the root only while the bar is mounted), never under it. */
-  .wi-act[data-sticky='foot'] { position: sticky; bottom: var(--phone-bar-h, 0px); z-index: var(--z-header); }
+  /* Stuck above the phone bar and the safe-area inset (`--safe-bottom`, shell.css: the inset plus the bar while it is mounted,
+     the inset alone without it), never under either (D-8186, wave 5's review run 2491 F1). */
+  .wi-act[data-sticky='foot'] { position: sticky; bottom: var(--safe-bottom, 0px); z-index: var(--z-header); }
 }
 
 /* Calls made for you (D-8126): a collapsed group below a programme's rows. Seen is a plain button on each call, a refusal is said
@@ -513,7 +521,7 @@
    cell, and the stripe on the row's left edge and the bar's segments are non-text marks that repeat it, so no status is read
    out of colour alone. Layout follows the plan's table, by the CARD's own width (a container query, so the page may put it in
    either column): one column up to a phone, where a row stacks status, title with its tag, then facts and the strip wraps; one
-   row from the card's wide layout, where the tag wraps under the title before the facts do. Every width holds with no
+   row from the card's 26rem, where the tag wraps under the title before the facts do. Every width holds with no
    horizontal scroll: the tracks are `minmax(0, 1fr)` and the words wrap anywhere. */
 .wk-card { container: work / inline-size; display: grid; gap: var(--sp-2); min-width: 0; overflow-wrap: anywhere; background: var(--bg-surface); color: var(--ink-primary); }
 .wk-card .wk-heading { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
@@ -580,9 +588,22 @@
 .wk-card .wk-epic { font: var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm); background: var(--bg-surface); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wk-card .wk-facts { display: flex; flex-wrap: wrap; gap: 2px var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wk-card .wk-fact { min-width: 0; overflow-wrap: anywhere; }
-@container work (min-width: 34rem) {
-  .wk-card .wk-row { grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 14rem); align-items: start; }
-  .wk-card .wk-facts { justify-content: flex-end; text-align: right; }
+/* Two steps, measured on the programme page (WM4, D-8823 `card-width-steps`, as fix round 1 changed it). The left column is a 451px
+   card at a 1280 window and 532px at 1470, and a ticket's title must never have less room there than on a phone. So from 26rem a
+   row is two columns, the status beside the title with its tag, and the facts on a row of their own under the title (the title keeps
+   the card's width less one 6.75rem status track); the three-column row, status | title | facts, waits for 43rem.
+   The step is 43rem and not 40rem because the three tracks leave the title the card's width less 381px (21 of chrome, 16 of gaps, a 120px
+   status track, a 224px facts track): at 40rem, 640px, that is 259px, under the 297px a phone gives it, and a one-column window of about 690
+   to 719px drew exactly such a card (review 2956 F2). At 43rem, 688px, the title keeps 307px, more than the phone's 297, and every wider card
+   more. An empty facts row draws nothing. */
+@container work (min-width: 26rem) {
+  .wk-card .wk-row { grid-template-columns: 6.75rem minmax(0, 1fr); align-items: start; }
+  .wk-card .wk-facts { grid-column: 2; }
+  .wk-card .wk-facts:empty { display: none; }
+}
+@container work (min-width: 43rem) {
+  .wk-card .wk-row { grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 14rem); }
+  .wk-card .wk-facts { grid-column: auto; justify-content: flex-end; text-align: right; }
 }
 
 /* A folded group: done tickets under a phase, the Done when line. The summary is a tap target at the floor. */
