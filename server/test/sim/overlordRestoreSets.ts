@@ -170,7 +170,7 @@ export function confirmRestorePlanCases(m: Pick<Restore, 'confirmRestorePlan'>):
       }));
       expect(pn.kind === 'confirm' && pn.entry.operatorRung).toBe('chat');
       expect(pn.kind === 'confirm' && pn.expectHead).toEqual(pos(narrowed[2]!));
-      expect(pn.kind === 'confirm' && pn.cutWhole).toBe(false);
+      expect(pn.kind === 'confirm' && pn.cutTail).toBeNull();
     },
     'a told state narrows the rung and joins its latches at the lower cap; null changes nothing (told-narrowings-survive-confirm)': () => {
       const AF = chain([designate(1, S1), rungTo('chat', 'full')]);
@@ -213,31 +213,45 @@ export function confirmRestorePlanCases(m: Pick<Restore, 'confirmRestorePlan'>):
       expect(p.entry.operatorRung).toBe('off');
       expect(p.expectHead).toBeNull();
     },
-    'a malformed file is cut whole, read as the narrowest side, and bounded by its lines and the head row': () => {
+    'a malformed file refuses, whatever a witness holds: its lines bound its sequences, not the values it issued (review 3334 F2)': () => {
+      for (const head of [pos(A[1]!), null]) {
+        const p = m.confirmRestorePlan(facts({
+          file: { kind: 'malformed', code: 'bad-chain', detail: 'x', lines: 6 }, rows: { kind: 'measured', head, anyAuthorityRow: true },
+          witnesses: { kind: 'measured', epoch: 20, restoreGeneration: 9 },
+        }));
+        expect(p).toEqual({ kind: 'refuse', detail: expect.stringContaining('malformed') });
+      }
+    },
+    'records that do not reach the head row refuse, a high witness or not: missing, behind and diverged (review 3334 F1)': () => {
+      const high = { kind: 'measured' as const, epoch: 50, restoreGeneration: 9 };
+      const other = chain([designate(1, S2), rungTo('chat', 'advise')]);
+      const lost = [
+        { kind: 'absent' as const },
+        { kind: 'records' as const, records: A.slice(0, 1), tail: null },
+        { kind: 'records' as const, records: other, tail: null },
+      ];
+      for (const file of lost) {
+        for (const witnesses of [facts({}).witnesses, high]) {
+          const p = m.confirmRestorePlan(facts({ file, rows: { kind: 'measured', head: pos(A[1]!), anyAuthorityRow: true }, witnesses }));
+          expect(p).toEqual({ kind: 'refuse', detail: expect.stringContaining('head row attests') });
+        }
+      }
+    },
+    'a torn tail after records that reach the head row is set aside, never the file; the journal side is the records\' fold': () => {
+      const C = chain([designate(1, S1), confirmRec({ term: 2, epochAtConfirm: 30, restoreGeneration: 12 })]);
       const p = m.confirmRestorePlan(facts({
-        file: { kind: 'malformed', code: 'bad-chain', detail: 'x', lines: 6 }, rows: { kind: 'measured', head: pos(A[1]!), anyAuthorityRow: true },
-        epoch: { kind: 'unmeasured', why: 'the file cannot be folded' }, witnesses: { kind: 'measured', epoch: 3, restoreGeneration: 2 },
+        file: { kind: 'records', records: C, tail: TAIL }, rows: { kind: 'measured', head: pos(C[0]!), anyAuthorityRow: true },
+        epoch: { kind: 'measured', n: 30 },
       }));
       expect(p.kind).toBe('confirm');
       if (p.kind !== 'confirm') return;
-      expect(p.cutWhole).toBe(true);
-      expect(p.expectHead).toBeNull();
-      expect(p.entry).toMatchObject({ newChain: true, epochAtConfirm: 7, restoreGeneration: 7, operatorRung: 'off', modelClass: 'opus' });
-      expect(p.entry.binding).toEqual({ kind: 'cleared' });
-      expect(p.entry.accountSet).toEqual({ pools: [], untagged: false });
-      const above = m.confirmRestorePlan(facts({ file: { kind: 'malformed', code: 'bad-chain', detail: 'x', lines: 2 }, witnesses: { kind: 'measured', epoch: 20, restoreGeneration: 9 } }));
-      expect(above.kind === 'confirm' && [above.entry.epochAtConfirm, above.entry.restoreGeneration]).toEqual([21, 10]);
-    },
-    'a record behind a torn tail the heal refused is cut whole, bounded by the records plus the tail and what they carried': () => {
-      const C = chain([designate(1, S1), confirmRec({ term: 2, epochAtConfirm: 30, restoreGeneration: 12 })]);
-      const p = m.confirmRestorePlan(facts({ file: { kind: 'records', records: C, tail: TAIL }, rows: { kind: 'measured', head: pos(C[0]!), anyAuthorityRow: true } }));
-      expect(p.kind).toBe('confirm');
-      if (p.kind !== 'confirm') return;
-      expect(p.cutWhole).toBe(true);
-      expect(p.entry).toMatchObject({ newChain: true, epochAtConfirm: 31, restoreGeneration: 31 });
-      const bare = chain([designate(1, S1)]);
-      const q = m.confirmRestorePlan(facts({ file: { kind: 'records', records: bare, tail: TAIL }, rows: { kind: 'measured', head: null, anyAuthorityRow: true } }));
-      expect(q.kind === 'confirm' && [q.entry.epochAtConfirm, q.entry.restoreGeneration]).toEqual([3, 3]);
+      expect(p.cutTail).toEqual({ offset: 9, bytes: 3, sha256: 'a'.repeat(64), code: 'torn-tail', name: `9-${'a'.repeat(64)}.tail` });
+      expect(p.expectHead).toEqual(pos(C[1]!));
+      expect(p.entry).toMatchObject({ newChain: false, epochAtConfirm: 31, restoreGeneration: 13, operatorRung: 'chat', term: 3 });
+      const behind = m.confirmRestorePlan(facts({
+        file: { kind: 'records', records: C.slice(0, 1), tail: TAIL }, rows: { kind: 'measured', head: pos(C[1]!), anyAuthorityRow: true },
+      }));
+      expect(behind.kind).toBe('refuse');
     },
   };
 }
@@ -246,20 +260,21 @@ const PLAN_SET: MutantSet<Restore> = {
   modulePath: RESTORE_TS,
   mutants: [
     { id: 'P1 nothing waits from the guard alone', old: "if (f.guard.kind === 'coherent' && verdict.kind === 'coherent') return { kind: 'unchanged' };", new: "if (f.guard.kind === 'coherent') return { kind: 'unchanged' };" },
-    { id: 'P2 epoch at the server\'s own', old: 'epochAtConfirm: Math.max(epochBase, f.witnesses.epoch) + 1,', new: 'epochAtConfirm: epochBase + 1,' },
+    { id: 'P2 epoch at the server\'s own', old: 'epochAtConfirm: Math.max(f.epoch.n, f.witnesses.epoch) + 1,', new: 'epochAtConfirm: f.epoch.n + 1,' },
     { id: 'P3 witnesses\' generation ignored', old: 'restoreGeneration: Math.max(generationBase, f.witnesses.restoreGeneration) + 1,', new: 'restoreGeneration: generationBase + 1,' },
-    { id: 'P4 an unmeasured guard proceeds', old: "if (f.guard.kind === 'unmeasured') return { kind: 'refuse', detail: `the authority guard reads unmeasured: ${f.guard.why}` };", new: '' },
-    { id: 'P5 an unmeasured epoch proceeds', old: "if (f.epoch.kind === 'unmeasured') return { kind: 'refuse', detail: `the authority epoch could not be read: ${f.epoch.why}` };", new: "if (f.epoch.kind === 'unmeasured') return { kind: 'unchanged' };" },
-    { id: 'P6 a tail is not cut', old: "const cutWhole = f.file.kind === 'malformed' || (f.file.kind === 'records' && f.file.tail !== null);", new: "const cutWhole = f.file.kind === 'malformed';" },
-    { id: 'P7 no line bound', old: "if (f.file.kind === 'malformed') lines = Math.max(lines, f.file.lines);", new: '' },
-    { id: 'P8 the journal\'s fold over a malformed file', old: '    journalSide = NARROWEST_RESTORE_SIDE;\n    expectHead = null;', new: '    journalSide = { ...NARROWEST_RESTORE_SIDE, operatorRung: \'full\', modelClass: \'fable\', accountSet: { pools: [\'pool-a\'], untagged: true } };\n    expectHead = null;' },
-    { id: 'P9 the journal\'s generation ignored', old: 'generationBase = view.lastConfirm === null ? 0 : view.lastConfirm.restoreGeneration;', new: 'generationBase = 0;' },
-    { id: 'P10 the carried bound ignored', old: 'epochBase = Math.max(lines, carried);', new: 'epochBase = lines;' },
-    { id: 'P12 told ignored', old: 'const stricter = toldNarrowed(restoreStricter(f.dbSide, journalSide), f.told.told);', new: 'const stricter = restoreStricter(f.dbSide, journalSide);' },
+    { id: 'P4 an unmeasured guard proceeds', old: "if (f.guard.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.guard };", new: '' },
+    { id: 'P5 an unmeasured epoch proceeds', old: "if (f.epoch.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.epoch };", new: "if (f.epoch.kind === 'unmeasured') return { kind: 'unchanged' };" },
+    { id: 'P6 a torn tail is left for the append', old: "const cutTail = f.file.kind === 'records' ? chainedTailHealPlan(f.file.tail, true) : null;", new: 'const cutTail = null;' },
+    { id: 'P7 a malformed file proceeds', old: "if (f.file.kind === 'malformed') return { kind: 'refuse', detail: CONFIRM_REFUSED.malformed };", new: '' },
+    { id: 'P8 lost records proceed', old: "if (head !== null && (atHead === undefined || !samePosition(atHead, head))) return { kind: 'refuse', detail: CONFIRM_REFUSED.lost };", new: '' },
+    { id: 'P9 the journal\'s generation ignored', old: 'const generationBase = view.lastConfirm === null ? 0 : view.lastConfirm.restoreGeneration;', new: 'const generationBase = 0;' },
+    { id: 'P10 a diverged head reads as reached', old: '(atHead === undefined || !samePosition(atHead, head))', new: '(atHead === undefined)' },
+    { id: 'P11 an unmeasured witness proceeds', old: "if (f.witnesses.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.witnesses };", new: "if (f.witnesses.kind === 'unmeasured') return { kind: 'unchanged' };" },
+    { id: 'P12 told ignored', old: 'const stricter = toldNarrowed(restoreStricter(f.dbSide, journalSideOf(view)), f.told.told);', new: 'const stricter = restoreStricter(f.dbSide, journalSideOf(view));' },
     { id: 'P13 told widens the rung', old: 'operatorRung: told.operatorRung === null ? s.operatorRung : lower(s.operatorRung, told.operatorRung),', new: 'operatorRung: told.operatorRung === null ? s.operatorRung : told.operatorRung,' },
     { id: 'P14 told latches replace', old: 'caps.set(l.cause, had === undefined ? l.cap : lower(had, l.cap));\n  }\n  return {\n    ...s,', new: 'caps.set(l.cause, l.cap);\n  }\n  return {\n    ...s,' },
-    { id: 'P15 an unmeasured told proceeds', old: "if (f.told.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses' told state could not be read: ${f.told.why}` };", new: "if (f.told.kind === 'unmeasured') return { kind: 'unchanged' };" },
-    { id: 'P11 an unmeasured witness proceeds', old: "if (f.witnesses.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses could not be read: ${f.witnesses.why}` };", new: "if (f.witnesses.kind === 'unmeasured') return { kind: 'unchanged' };" },
+    { id: 'P15 an unmeasured told proceeds', old: "if (f.told.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.told };", new: "if (f.told.kind === 'unmeasured') return { kind: 'unchanged' };" },
+    { id: 'P16 every record starts a new chain', old: 'newChain: expectHead === null,', new: 'newChain: true,' },
   ],
   suite: (mod) => confirmRestorePlanCases(mod),
 };

@@ -6,10 +6,10 @@ import { describe, expect, it } from 'vitest';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { registerOverlordRoutes, type OverlordRouteDeps } from '../src/coord/overlordRoutes.js';
 import { refuseRoute } from '../src/refuse.js';
-import { designationRead, stopDone } from '../src/coord/overlordDesignationStore.js';
+import { designationRead, retire, stopDone } from '../src/coord/overlordDesignationStore.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
-import { GEN1, S1, designateLive, restoreRigHooks, rig, type Rig } from './overlordRestoreRig.js';
+import { GEN1, GEN2, NOW, OPERATOR, S1, S2, designateLive, restoreRigHooks, rig, type Rig } from './overlordRestoreRig.js';
 
 restoreRigHooks();
 
@@ -47,6 +47,15 @@ describe('GET /api/overlord/restore', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, authority: { kind: 'rolled-back', cause: 'witness-epoch' } });
     expect(asks).toEqual([{ cap: null }]);
+  });
+
+  it('measures a guard left unmeasured by a transient read again before it answers (the guard\'s remeasure contract)', async () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    r.guard.writerFailed('journal-unreadable');
+    expect(r.guard.state().kind).toBe('unmeasured');
+    const res = await app(r, 'pass', []).inject({ method: 'GET', url: '/api/overlord/restore' });
+    expect(res.json()).toEqual({ ok: true, authority: { kind: 'coherent' } });
   });
 
   it('with sign-in dark the gate\'s auth-off stands, and with no authority journal the read is unavailable', async () => {
@@ -88,29 +97,36 @@ describe('POST /api/overlord/restore/confirm', () => {
     expect(read.json()).toEqual({ ok: true, authority: { kind: 'coherent' } });
   });
 
-  it('an unmeasured guard refuses journal-unreadable (503)', async () => {
+  it('a malformed journal refuses journal-unreadable (503) with a fixed sentence, and writes nothing', async () => {
     const r = rig();
     designateLive(r, S1, GEN1);
-    r.guard.writerFailed('journal-unreadable');
-    const res = await app(r, 'pass', []).inject({ method: 'POST', url: '/api/overlord/restore/confirm' });
+    const { appendFileSync } = await import('node:fs');
+    const path = (await import('node:path')).default;
+    appendFileSync(path.join(r.dir, 'overlord-authority.jsonl'), 'not a record\n');
+    r.restart();
+    const before = r.lines();
+    const stops: string[] = [];
+    const res = await app(r, 'pass', [], stops).inject({ method: 'POST', url: '/api/overlord/restore/confirm' });
     expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ error: 'journal-unreadable' });
+    expect(res.json()).toMatchObject({ error: 'journal-unreadable', detail: expect.stringContaining('malformed') });
+    expect(r.lines()).toEqual(before);
+    expect(stops).toEqual([]);
   });
 
-  it('a binding Confirm clears has its owed stop drained, as the retire door drains one', async () => {
+  it('the bodies a cleared binding names on either side have their owed stops drained once each, as the retire door drains one', async () => {
     const r = rig();
     designateLive(r, S1, GEN1);
-    // A malformed journal: its side is the narrowest, so the row's binding is cleared.
-    const { writeFileSync } = await import('node:fs');
-    const path = (await import('node:path')).default;
-    writeFileSync(path.join(r.dir, 'overlord-authority.jsonl'), 'not a record\n');
-    r.restart();
+    const restore = r.snapshot(false);
+    expect(retire(r.db, r.journal, { actor: OPERATOR, at: NOW, opKey: 'retire-1' })).toMatchObject({ ok: true });
+    designateLive(r, S2, GEN2);
+    restore();
     const stops: string[] = [];
     const res = await app(r, 'pass', [], stops).inject({ method: 'POST', url: '/api/overlord/restore/confirm' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, changed: true, binding: 'cleared', newChain: true });
-    expect(stops).toEqual([S1]);
-    expect(res.json()).toMatchObject({ stopped: [S1], owed: [] });
+    expect(res.json()).toMatchObject({ ok: true, changed: true, binding: 'cleared', newChain: false });
+    // S2 is bound by the journal alone (review 3334 F4); S1 by the restored row.
+    expect(stops).toEqual([S1, S2]);
+    expect(res.json()).toMatchObject({ stopped: [S1, S2], owed: [] });
     const d = designationRead(r.db);
     expect(d.kind).toBe('not-designated');
     expect(d.kind !== 'unmeasured' && d.row?.stopsOwed).toEqual([]);

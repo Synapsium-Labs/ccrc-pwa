@@ -5,11 +5,13 @@
 // guard; the Confirm door (`overlordRoutes.ts`) calls `confirm`, the response stamp (`responses/stamp.ts`) reads
 // `restoreGeneration()`, and the renewal readings read `termRaised()`.
 //
-// THE TRANSACTION (Task 8), inside one `tx()`, on the coordination serialiser (the door's):
-//   1. gather the facts (the guard, the verified file, the head row, the designation and ladder rows, and the witness facts) and
-//      ask `confirmRestorePlan`; a refusal or "nothing waits" writes nothing;
-//   2-3. `appendConfirmInTx`: over a file that cannot be folded it sets the whole file aside first, then appends the Confirm record
-//      (ruling F5: before any table writes) and moves the head row to it;
+// THE TRANSACTION (Task 8), on the coordination serialiser (the door's):
+//   0. before it, an `unmeasured` guard is measured again (`remeasure`, its contract), and the torn-tail heal runs through its
+//      owner (`healTornTail`, the kernel's rule), so a tail the boot would have healed is healed, never read as a cut;
+//   1. inside one `tx()`, gather the facts (the guard, the verified file, the head row, the designation and ladder rows, and the
+//      witness facts) and ask `confirmRestorePlan`; a refusal or "nothing waits" writes nothing;
+//   2-3. `appendConfirmInTx`: a torn tail the heal refused, after records that reach the head row, is set aside first; then the
+//      Confirm record is appended (ruling F5: before any table writes) and the head row moves to it;
 //   4. each table writes its stricter value through its inner, unjournalled writer (X3): the designation's
 //      (`applyDesignationRestoreInTx`) and the ladder's (`applyRestoreInTx`, with the record's sequence);
 //   5. after the commit, `guard.confirmed()`, then the witness exchange offers the new tuple at once. The `restore-detected` latch
@@ -46,17 +48,18 @@ export interface RestoreWitnessFacts {
   offerNow(): void;
 }
 
-/** The witness facts before the witness exchange exists (PR B): no witness has answered, so the highest is 0 and 0 and nothing
- *  was told; the privacy
- *  head is not wired (`absent`, question 11); and the server's epoch is question 7's formula over the authority journal alone,
- *  the last Confirm's `epochAtConfirm` plus the records after it (the sequence, with no Confirm). PR B's `authorityEpoch` is the
+/** The witness facts before the witness exchange exists (PR B): no witness has answered, so the highest is 0 and 0 (which only
+ *  ever raises Confirm's bound, never proves one) and nothing was told; the privacy head is not wired (`absent`, question 11);
+ *  and the server's epoch is question 7's formula over the authority journal's verified records alone, the last Confirm's
+ *  `epochAtConfirm` plus the records after it (the sequence, with no Confirm). A torn tail is not a record, so it does not
+ *  count (question 7: the heal never lowers the epoch); a malformed file reads `unmeasured`. PR B's `authorityEpoch` is the
  *  owner of that formula: whichever of PR B and this piece lands second replaces this adapter with PR B's in `index.ts`. */
 export function preWitnessFacts(journal: Pick<OverlordAuthorityJournal, 'readVerified'>): RestoreWitnessFacts {
   return {
     epoch: () => {
       const f = journal.readVerified();
       if (f.kind === 'absent') return { kind: 'measured', n: 0 };
-      if (f.kind !== 'records' || f.tail !== null) return { kind: 'unmeasured', why: `the authority journal reads ${f.kind === 'records' ? 'a torn tail' : f.kind}` };
+      if (f.kind !== 'records') return { kind: 'unmeasured', why: 'the authority journal cannot be folded' };
       const lc = authorityFold(f.records).lastConfirm;
       return { kind: 'measured', n: lc === null ? f.records.length : lc.epochAtConfirm + (f.records.length - lc.sequence) };
     },
@@ -73,8 +76,10 @@ export type ConfirmAnswer =
     readonly ok: true; readonly changed: true; readonly sequence: number; readonly term: number; readonly epochAtConfirm: number;
     readonly restoreGeneration: number; readonly newChain: boolean; readonly binding: 'kept' | 'cleared'; readonly owed: readonly string[];
   }
-  /** `journal-unreadable`: a fact could not be read (nothing written). `conflict`: the file moved under the plan. `journal-unwritable`:
-   *  the append or a table write failed, and the record may stand trailing. */
+  /** `journal-unreadable`: a fact could not be read, or no bound on what the journal issued could be (nothing written; a torn tail
+   *  Confirm set aside before a failed read stays aside, and the detail says so). `conflict`: the file moved under the plan.
+   *  `journal-unwritable`: the tail's cut failed after it began (nothing appended), or the append or a table write failed and the
+   *  record may stand trailing. Every detail is a fixed sentence with closed words, never an exception's text. */
   | { readonly ok: false; readonly refusal: 'journal-unreadable' | 'conflict' | 'journal-unwritable'; readonly detail: string };
 
 /** The restore generation's accessor (Task 9; question 13): the last Confirm record's value, 0 with none, `unmeasured` (never 0)
@@ -83,12 +88,10 @@ export type RestoreGenerationRead = { readonly kind: 'measured'; readonly n: num
 
 export interface OverlordRestoreDeps {
   readonly db: DatabaseSync;
-  readonly journal: Pick<OverlordAuthorityJournal, 'readVerified' | 'readRows' | 'appendConfirmInTx'>;
-  readonly guard: Pick<OverlordAuthorityGuard, 'state' | 'confirmed' | 'writerFailed'>;
+  readonly journal: Pick<OverlordAuthorityJournal, 'readVerified' | 'readRows' | 'appendConfirmInTx' | 'healTornTail'>;
+  readonly guard: Pick<OverlordAuthorityGuard, 'state' | 'confirmed' | 'writerFailed' | 'remeasure'>;
   readonly witness: RestoreWitnessFacts;
 }
-
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** The rows' side (the database's), read in the transaction: an absent designation row binds nothing at term 0, `opus`, the
  *  empty set; an absent ladder row reads `off` (ruling F8); each standing latch at its cap. */
@@ -119,6 +122,10 @@ export class OverlordRestoreState {
   /** Confirm the restore, as the operator the account gate passed with its step-up. Never throws. */
   confirm(actor: RecordedActor, opKey: string, at: number): ConfirmAnswer {
     const { db, journal, guard, witness } = this.deps;
+    try {
+      guard.remeasure();
+      journal.healTornTail(db);
+    } catch { /* the plan reads the file and the guard as they now stand */ }
     let appended: number | null = null;
     let answer: ConfirmAnswer;
     try {
@@ -129,9 +136,10 @@ export class OverlordRestoreState {
         });
         if (plan.kind === 'refuse') return { ok: false, refusal: 'journal-unreadable', detail: plan.detail };
         if (plan.kind === 'unchanged') return { ok: true, changed: false };
-        const a = journal.appendConfirmInTx(db, plan.entry, { cutWhole: plan.cutWhole, head: plan.expectHead });
+        const a = journal.appendConfirmInTx(db, plan.entry, { cutTail: plan.cutTail, head: plan.expectHead });
         if (!a.ok) {
-          const refusal = a.error === 'changed' ? 'conflict' : a.error === 'journal-append' ? 'journal-unwritable' : 'journal-unreadable';
+          const refusal = a.error === 'changed' ? 'conflict'
+            : a.error === 'journal-append' || a.error === 'cut-failed' ? 'journal-unwritable' : 'journal-unreadable';
           return { ok: false, refusal, detail: a.detail };
         }
         appended = a.record.sequence;
@@ -146,11 +154,13 @@ export class OverlordRestoreState {
           restoreGeneration: plan.entry.restoreGeneration, newChain: plan.entry.newChain, binding: s.binding.kind, owed,
         };
       });
-    } catch (e) {
+    } catch {
       // A throw before the append wrote nothing. One after it (a table writer, or the commit) leaves the record trailing with
       // its head row rolled back: the guard reads it so at once (`writer-failure-fences-trailing`).
       if (appended !== null) guard.writerFailed('trailing');
-      return { ok: false, refusal: appended === null ? 'journal-unreadable' : 'journal-unwritable', detail: errorText(e) };
+      return appended === null
+        ? { ok: false, refusal: 'journal-unreadable', detail: 'a fact or a step before the append failed; no record was appended' }
+        : { ok: false, refusal: 'journal-unwritable', detail: 'a table write or the commit failed after the append; the record may stand trailing' };
     }
     if (answer.ok && answer.changed) {
       guard.confirmed();
@@ -174,7 +184,7 @@ export class OverlordRestoreState {
     }
   }
 
-  /** The renewal readings' input (Task 8): `raised` when the designation's term is above the term its bound session's live
+  /** The renewal readings' input (Task 8; the renewal readings piece wires it, so nothing calls it yet): `raised` when the designation's term is above the term its bound session's live
    *  `overlord` generation was stamped with, `not-raised` when equal or when nothing is bound (no generation to renew), and
    *  `unmeasured` when either read fails or the bound session has no live `overlord` generation yet (no term stamp). */
   termRaised(): TermRaised {
@@ -189,8 +199,10 @@ export class OverlordRestoreState {
     return d.term > gen.term ? 'raised' : 'not-raised';
   }
 
-  /** The guard's state, for the door's answer and the banner's read. */
+  /** The guard's state, for the door's answer and the banner's read: an `unmeasured` guard is measured again first (its
+   *  `remeasure` contract), so a transient read error at boot clears without a restart. */
   authority(): AuthorityState {
+    try { this.deps.guard.remeasure(); } catch { /* the state stands as it was */ }
     return this.deps.guard.state();
   }
 }

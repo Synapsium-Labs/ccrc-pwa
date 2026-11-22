@@ -3,20 +3,34 @@
 // a fixture `coord.db` from the real migrations, a fixture `~/.ccrc` stand-in holding the real journal file, the real guard and
 // the real writers. Never the live HOME.
 import { describe, expect, it } from 'vitest';
-import { readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import * as restoreModule from '../src/coord/overlordRestore.js';
 import { tx } from '../src/coord/tx.js';
 import { OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_TORN_DIR } from '../src/coord/overlordAuthority.js';
 import { OverlordRestoreState, preWitnessFacts } from '../src/coord/overlordRestoreState.js';
-import { designationRead, retire } from '../src/coord/overlordDesignationStore.js';
+import { applyDesignationRestoreInTx, designationRead, retire } from '../src/coord/overlordDesignationStore.js';
 import { ladderRows, raiseLatchInTx } from '../src/coord/overlordLadderStore.js';
+import { insertStart, mintGeneration, type MintInput } from '../src/continuity/continuityStore.js';
 import { confirmRestorePlanCases, restoreStricterCases } from './sim/overlordRestoreSets.js';
 import {
   GEN1, GEN2, OPERATOR, NOW, S1, S2, confirm, designateLive, headRow, lastEntry, restoreRigHooks, rig, rung,
 } from './overlordRestoreRig.js';
 
 restoreRigHooks();
+
+/** The body's live generation, minted under its own session id at term 0, as a start mints it before the designate arm
+ *  re-stamps it `overlord` at the designation's term (`goLive`). */
+function mintBody(r: ReturnType<typeof rig>, sessionId: string): void {
+  const start = insertStart(r.db, { sessionId, reportId: `report-${sessionId}`, uuid: '0123abcd-0000-4000-8000-000000000001', source: 'startup',
+    model: null, rowIncarnation: null, reportedAt: NOW, receivedAt: NOW });
+  if (!start.ok) throw new Error('insertStart');
+  const input: MintInput = { identity: sessionId, sessionId, role: 'worker', term: 0, rowIncarnation: null, startId: start.id, startReportedAt: NOW,
+    resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'renewed', mono: 1, proc: 'p', now: NOW };
+  expect(mintGeneration(r.db, input, null, false)).toMatchObject({ ok: true });
+}
+const liveOverlordGenerations = (r: ReturnType<typeof rig>) =>
+  r.db.prepare("SELECT sessionId FROM continuity_generations WHERE identity = 'overlord' AND state <> 'ended'").all();
 
 describe('restoreStricter (Task 8\'s table)', () => {
   for (const [title, run] of Object.entries(restoreStricterCases(restoreModule))) it(title, run);
@@ -37,13 +51,24 @@ describe('Confirm the restore: the transaction', () => {
     expect(r.offers).toBe(0);
   });
 
-  it('an unmeasured guard refuses journal-unreadable and writes nothing', () => {
+  it('a guard left unmeasured by a transient read is measured again first (its remeasure contract), here coherent: nothing waits', () => {
     const r = rig();
     designateLive(r, S1, GEN1);
     r.guard.writerFailed('journal-unreadable');
     expect(r.guard.state().kind).toBe('unmeasured');
     const before = r.lines();
-    expect(confirm(r)).toMatchObject({ ok: false, refusal: 'journal-unreadable' });
+    expect(confirm(r)).toEqual({ ok: true, changed: false });
+    expect(r.guard.state()).toEqual({ kind: 'coherent' });
+    expect(r.lines()).toEqual(before);
+  });
+
+  it('a guard that stays unmeasured refuses journal-unreadable and writes nothing', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const guard = { state: () => ({ kind: 'unmeasured', why: 'journal' }) as const, confirmed: () => {}, writerFailed: () => {}, remeasure: () => {} };
+    const state = new OverlordRestoreState({ db: r.db, journal: r.journal, guard, witness: preWitnessFacts(r.journal) });
+    const before = r.lines();
+    expect(state.confirm(OPERATOR, 'c', NOW)).toEqual({ ok: false, refusal: 'journal-unreadable', detail: 'the authority guard reads unmeasured' });
     expect(r.lines()).toEqual(before);
   });
 
@@ -199,25 +224,173 @@ describe('Confirm the restore: the transaction', () => {
     expect(confirm(r)).toEqual({ ok: true, changed: false });
   });
 
-  it('over a malformed file: the file is set aside, record 1 of a new chain, the narrowest journal side, above the bound', () => {
+  it('a malformed journal refuses, keeps every byte and writes nothing, however often it is tried and whatever a witness holds (review 3334 F2)', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    r.guard.witnessRefused('witness-epoch');
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, restoreGeneration: 1 });
+    const leaf = path.join(r.dir, OVERLORD_AUTHORITY_BASENAME);
+    appendFileSync(leaf, 'not a record\n');
+    r.restart();
+    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'malformed' });
+    const bytes = readFileSync(leaf);
+    const head = headRow(r);
+    for (const held of [{ epoch: 0, restoreGeneration: 0 }, { epoch: 90, restoreGeneration: 40 }]) {
+      r.held = held;
+      expect(confirm(r)).toEqual({ ok: false, refusal: 'journal-unreadable', detail: expect.stringContaining('malformed') });
+      expect(readFileSync(leaf)).toEqual(bytes);
+      expect(headRow(r)).toEqual(head);
+      expect(existsSync(path.join(r.dir, OVERLORD_AUTHORITY_TORN_DIR))).toBe(false);
+      expect(r.state.restoreGeneration()).toEqual({ kind: 'unmeasured', why: 'journal' });
+    }
+    expect(r.offers).toBe(1);
+  });
+
+  it('a journal missing under its head row refuses and creates nothing (review 3334 F1)', () => {
     const r = rig();
     designateLive(r, S1, GEN1);
     const leaf = path.join(r.dir, OVERLORD_AUTHORITY_BASENAME);
-    const lines = r.lines();
-    writeFileSync(leaf, `${lines.join('\n')}\nnot a record\n`);
+    rmSync(leaf);
+    r.restart();
+    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'missing' });
+    const head = headRow(r);
+    r.held = { epoch: 90, restoreGeneration: 40 };
+    expect(confirm(r)).toEqual({ ok: false, refusal: 'journal-unreadable', detail: expect.stringContaining('head row attests') });
+    expect(existsSync(leaf)).toBe(false);
+    expect(headRow(r)).toEqual(head);
+    expect(designationRead(r.db)).toMatchObject({ kind: 'designated', sessionId: S1, term: 1 });
+  });
+
+  it('a journal behind its head row refuses, a high witness or not, and keeps its bytes (review 3334 F1)', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const leaf = path.join(r.dir, OVERLORD_AUTHORITY_BASENAME);
+    const older = readFileSync(leaf);
+    expect(rung(r, 'chat', 'advise')).toMatchObject({ ok: true, journalled: true });
+    writeFileSync(leaf, older);
+    r.restart();
+    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'behind' });
+    for (const held of [{ epoch: 0, restoreGeneration: 0 }, { epoch: 90, restoreGeneration: 40 }]) {
+      r.held = held;
+      expect(confirm(r)).toMatchObject({ ok: false, refusal: 'journal-unreadable' });
+      expect(readFileSync(leaf)).toEqual(older);
+    }
+  });
+
+  it('a healable torn tail is healed through its owner first: Confirm folds the records, keeps the binding and cuts no file', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    r.guard.witnessRefused('witness-epoch');
+    const before = r.lines();
+    appendFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), '{"partial');
+    const a = confirm(r);
+    expect(a).toMatchObject({ ok: true, changed: true, binding: 'kept', newChain: false, sequence: before.length + 1 });
+    expect(r.lines().slice(0, before.length)).toEqual(before);
+    const kept = readdirSync(path.join(r.dir, OVERLORD_AUTHORITY_TORN_DIR));
+    expect(kept.some((n) => n.endsWith('.tail'))).toBe(true);
+    expect(kept.some((n) => n.endsWith('.whole'))).toBe(false);
+  });
+
+  it('over a coherent guard, a healable torn tail is healed first, so nothing waits and nothing is appended', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const before = r.lines();
+    appendFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), '{"partial');
+    expect(confirm(r)).toEqual({ ok: true, changed: false });
+    expect(r.lines()).toEqual(before);
+    expect(readFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), 'utf8').endsWith('\n')).toBe(true);
+  });
+
+  it('a torn tail after records that reach an older head row is set aside, never the file: the journal\'s later retire is kept', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const restore = r.snapshot(false);
+    expect(retire(r.db, r.journal, { actor: OPERATOR, at: NOW, opKey: 'retire-1' })).toMatchObject({ ok: true, term: 2 });
+    restore();
+    const before = r.lines();
+    appendFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), '{"partial');
     r.restart();
     expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'malformed' });
-    r.held = { epoch: 2, restoreGeneration: 1 };
     const a = confirm(r);
-    expect(a).toMatchObject({ ok: true, changed: true, sequence: 1, newChain: true, binding: 'cleared', epochAtConfirm: lines.length + 2, restoreGeneration: lines.length + 2 });
-    expect(r.lines().length).toBe(1);
-    expect(readdirSync(path.join(r.dir, OVERLORD_AUTHORITY_TORN_DIR)).some((n) => n.endsWith('.whole'))).toBe(true);
-    // The journal side is the narrowest: the row's fable and its two pools narrow to opus and the empty set.
-    const d = designationRead(r.db);
-    expect(d.kind !== 'unmeasured' && d.row).toMatchObject({ model: 'opus', accountPools: { pools: [], untagged: false }, pastIds: [S1] });
-    expect(r.guard.state()).toEqual({ kind: 'coherent' });
+    expect(a).toMatchObject({ ok: true, changed: true, binding: 'cleared', term: 3, newChain: false, sequence: before.length + 1 });
+    expect(r.lines().slice(0, before.length)).toEqual(before);
+    const kept = readdirSync(path.join(r.dir, OVERLORD_AUTHORITY_TORN_DIR));
+    expect(kept.some((n) => n.endsWith('.tail'))).toBe(true);
+    expect(kept.some((n) => n.endsWith('.whole'))).toBe(false);
     r.restart();
     expect(r.guard.state()).toEqual({ kind: 'coherent' });
+  });
+
+  it('an append that fails after the tail cut appends nothing; the retry confirms above the journal\'s last generation', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    r.guard.witnessRefused('witness-epoch');
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, restoreGeneration: 1 });
+    const restore = r.snapshot(false);
+    // Confirm wrote the rung its absent ladder row read (`off`, ruling F8).
+    expect(rung(r, 'off', 'chat')).toMatchObject({ ok: true, journalled: true });
+    restore();
+    const before = r.lines();
+    const head = headRow(r);
+    appendFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), '{"partial');
+    r.restart();
+    r.failAppends = 1;
+    expect(confirm(r)).toMatchObject({ ok: false, refusal: 'journal-unwritable' });
+    expect(r.lines()).toEqual(before);
+    expect(readFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), 'utf8').endsWith('\n')).toBe(true);
+    expect(headRow(r)).toEqual(head);
+    expect(r.guard.state().kind).toBe('rolled-back');
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, restoreGeneration: 2, newChain: false, sequence: before.length + 1 });
+  });
+
+  it('a tail cut that fails after it began appends nothing and says so; the retry confirms', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const restore = r.snapshot(false);
+    expect(retire(r.db, r.journal, { actor: OPERATOR, at: NOW, opKey: 'retire-1' })).toMatchObject({ ok: true });
+    restore();
+    const before = r.lines();
+    appendFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), '{"partial');
+    r.restart();
+    r.failTruncates = 1;
+    expect(confirm(r)).toEqual({ ok: false, refusal: 'journal-unwritable', detail: expect.stringContaining('nothing was appended') });
+    // The truncation failed, so the tail stands (its bytes are also kept aside); no record was appended.
+    expect(r.lines()).toEqual([...before, '{"partial']);
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, binding: 'cleared', sequence: before.length + 1 });
+  });
+
+  it('an append that fails over a coherent guard and a trailing file tells the guard trailing', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    expect(rung(r, 'chat', 'advise')).toMatchObject({ ok: true });
+    const restore = r.snapshot(false);
+    expect(rung(r, 'advise', 'full')).toMatchObject({ ok: true });
+    restore();
+    r.guard.confirmed();
+    r.failAppends = 1;
+    expect(confirm(r)).toMatchObject({ ok: false, refusal: 'journal-unwritable', detail: expect.stringContaining('may stand') });
+    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+  });
+
+  it('a high measured witness raises the epoch and the generation above its own', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    r.guard.witnessRefused('witness-epoch');
+    r.held = { epoch: 50, restoreGeneration: 9 };
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, epochAtConfirm: 51, restoreGeneration: 10 });
+    expect(lastEntry(r)).toMatchObject({ epochAtConfirm: 51, restoreGeneration: 10 });
+  });
+
+  it('a narrower rung and latch a witness was told reach the rows through the transaction (told-narrowings-survive-confirm)', () => {
+    const r = rig({ told: () => ({ kind: 'measured', told: { operatorRung: 'chat', latches: [{ cause: 'restore-detected', cap: 'off' }] } }) });
+    designateLive(r, S1, GEN1);
+    expect(rung(r, 'chat', 'full')).toMatchObject({ ok: true, journalled: true });
+    r.guard.witnessRefused('witness-epoch');
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true });
+    const rows = ladderRows(r.db);
+    expect(rows).toMatchObject({ kind: 'measured', rung: { operatorRung: 'chat' } });
+    expect(rows.kind === 'measured' && rows.standing.map((l) => [l.cause, l.cap])).toEqual([['restore-detected', 'off']]);
+    expect(lastEntry(r)).toMatchObject({ operatorRung: 'chat', latches: [{ cause: 'restore-detected', cap: 'off' }] });
   });
 
   it('after a whole-volume restore, with a console holding a higher epoch and generation, Confirm goes above both (F6)', () => {
@@ -238,15 +411,62 @@ describe('Confirm the restore: the transaction', () => {
 
   it('a binding cleared by Confirm owes its body\'s stop, as a retire does', () => {
     const r = rig();
+    mintBody(r, S1);
     designateLive(r, S1, GEN1);
     const restore = r.snapshot(false);
     expect(retire(r.db, r.journal, { actor: OPERATOR, at: NOW, opKey: 'retire-1' })).toMatchObject({ ok: true });
     designateLive(r, S2, GEN2);
     restore();
+    expect(liveOverlordGenerations(r)).toEqual([{ sessionId: S1 }]);
+    const a = confirm(r);
+    // S2 is bound by the journal alone (review 3334 F4): its body is owed its stop too, once, and both generations end.
+    expect(a).toMatchObject({ ok: true, changed: true, binding: 'cleared', owed: [S1, S2] });
+    const d = designationRead(r.db);
+    expect(d.kind !== 'unmeasured' && d.row).toMatchObject({ pastIds: [S1, S2], stopsOwed: [S1, S2] });
+    expect(liveOverlordGenerations(r)).toEqual([]);
+  });
+
+  it('with no designation row (a lost coord.db), a body only the journal binds is owed its stop', () => {
+    const r = rig();
+    const fresh = r.snapshot(false);
+    designateLive(r, S1, GEN1);
+    fresh();
+    expect(r.guard.state().kind).toBe('rolled-back');
     const a = confirm(r);
     expect(a).toMatchObject({ ok: true, changed: true, binding: 'cleared', owed: [S1] });
     const d = designationRead(r.db);
-    expect(d.kind !== 'unmeasured' && d.row).toMatchObject({ pastIds: [S1, S2], stopsOwed: [S1] });
+    expect(d.kind !== 'unmeasured' && d.row).toMatchObject({ pastIds: [S1], stopsOwed: [S1], term: 2 });
+  });
+});
+
+describe('applyDesignationRestoreInTx, the designation\'s inner writer', () => {
+  it('refuses to keep a binding the row does not hold, so the transaction rolls back', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const kept = { binding: { kind: 'kept' as const, sessionId: S2 }, pastIdsJoin: [], term: 2, model: 'opus' as const, accountPools: { pools: [], untagged: false } };
+    expect(() => tx(r.db, () => applyDesignationRestoreInTx(r.db, kept, OPERATOR, NOW))).toThrow('a binding the row does not hold');
+    expect(designationRead(r.db)).toMatchObject({ kind: 'designated', sessionId: S1, term: 1 });
+  });
+});
+
+describe('termRaised (the renewal readings\' input; the renewal readings piece wires it)', () => {
+  it('reads not-raised with nothing designated, and while the term is the one the live generation was launched under', () => {
+    const r = rig();
+    expect(r.state.termRaised()).toBe('not-raised');
+    mintBody(r, S1);
+    designateLive(r, S1, GEN1);
+    expect(r.state.termRaised()).toBe('not-raised');
+  });
+
+  it('reads raised once a kept Confirm raises the term, and unmeasured when the bound session has no live generation', () => {
+    const r = rig();
+    mintBody(r, S1);
+    designateLive(r, S1, GEN1);
+    r.guard.witnessRefused('witness-heads');
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, binding: 'kept', term: 2 });
+    expect(r.state.termRaised()).toBe('raised');
+    r.db.prepare("UPDATE continuity_generations SET state = 'ended' WHERE identity = 'overlord'").run();
+    expect(r.state.termRaised()).toBe('unmeasured');
   });
 });
 
@@ -264,9 +484,9 @@ describe('appendConfirmInTx (Task 8, step 3)', () => {
     const r = rig();
     designateLive(r, S1, GEN1);
     const before = r.lines();
-    expect(r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: headOf(r) })).toMatchObject({ ok: false, error: 'not-in-transaction' });
+    expect(r.journal.appendConfirmInTx(r.db, ENTRY, { cutTail: null, head: headOf(r) })).toMatchObject({ ok: false, error: 'not-in-transaction' });
     const rungMove = { kind: 'authority-rung', opKey: 'x', from: 'chat', to: 'off' } as never;
-    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, rungMove, { cutWhole: false, head: headOf(r) }))).toMatchObject({ ok: false, error: 'bad-entry' });
+    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, rungMove, { cutTail: null, head: headOf(r) }))).toMatchObject({ ok: false, error: 'bad-entry' });
     expect(r.lines()).toEqual(before);
   });
 
@@ -275,8 +495,8 @@ describe('appendConfirmInTx (Task 8, step 3)', () => {
     designateLive(r, S1, GEN1);
     const before = r.lines();
     const stale = { ...headOf(r), sequence: headOf(r).sequence - 1 };
-    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: stale }))).toMatchObject({ ok: false, error: 'changed' });
-    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: null }))).toMatchObject({ ok: false, error: 'changed' });
+    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutTail: null, head: stale }))).toMatchObject({ ok: false, error: 'changed' });
+    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutTail: null, head: null }))).toMatchObject({ ok: false, error: 'changed' });
     expect(r.lines()).toEqual(before);
   });
 
@@ -284,7 +504,7 @@ describe('appendConfirmInTx (Task 8, step 3)', () => {
     const r = rig();
     designateLive(r, S1, GEN1);
     r.guard.witnessRefused('witness-epoch');
-    const a = tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: headOf(r) }));
+    const a = tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutTail: null, head: headOf(r) }));
     expect(a).toMatchObject({ ok: true, record: { sequence: 4 } });
     expect(headRow(r)?.sequence).toBe(4);
   });

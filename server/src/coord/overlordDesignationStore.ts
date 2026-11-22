@@ -312,9 +312,11 @@ export interface DesignationRestore {
  *  writers): called ONLY in Confirm's transaction, AFTER `appendConfirmInTx`, and it appends nothing (the Confirm record carries
  *  these values). It writes the raised term (never `designatedTerm`), the stricter account set and class, and the binding:
  *  kept, the row's own session and generation stay (§3.1: a renewal is then due, `termRaised`); cleared, the row binds no
- *  session, both sides' ids join `pastIds`, and a bound or pending body is ended and owed its stop as a retire does (its pending
- *  attempt `retired`), so the operator starts the Overlord again. With no row, it inserts one holding the term. A row it cannot
- *  read throws, so the caller's transaction rolls back. `owed` is the ids this call put on `stopsOwed`. */
+ *  session, both sides' ids join `pastIds`, and every body either side binds (the row's bound and pending sessions, and the
+ *  session the journal's verified fold binds, which `pastIdsJoin` carries) is ended and owed its stop once, as a retire does (its
+ *  pending attempt `retired`), so the operator starts the Overlord again (review 3334 F4). With no row, it inserts one holding
+ *  the term, owing the stop of a body only the journal binds. A row it cannot read throws, so the caller's transaction rolls
+ *  back. `owed` is the ids this call put on `stopsOwed`. */
 export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRestore, actor: RecordedActor, at: number): { owed: string[] } {
   if (actorRefused(actor)) throw new Error('Confirm the restore writes the designation only as the account-gate operator');
   const h = held(db);
@@ -322,10 +324,13 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
   const row = h.row;
   const pools = JSON.stringify({ pools: r.accountPools.pools, untagged: r.accountPools.untagged });
   if (row === null) {
-    db.prepare('INSERT INTO overlord_designation (id, term, designatedTerm, model, accountPools, pastIds, actor, actorKind, actorIssuer, '
-      + 'actorStrength, updatedAt) VALUES (1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(r.term, r.model, pools, JSON.stringify(r.pastIdsJoin.reduce<string[]>(withId, [])), ...actorCols(actor), at);
-    return { owed: [] };
+    const journalOnly = r.binding.kind === 'cleared' ? r.pastIdsJoin.reduce<string[]>(withId, []) : [];
+    for (const bodyId of journalOnly) endOverlordGeneration(db, bodyId);
+    db.prepare('INSERT INTO overlord_designation (id, term, designatedTerm, model, accountPools, pastIds, stopsOwed, actor, actorKind, '
+      + 'actorIssuer, actorStrength, updatedAt) VALUES (1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(r.term, r.model, pools, JSON.stringify(r.pastIdsJoin.reduce<string[]>(withId, [])), JSON.stringify(journalOnly),
+        ...actorCols(actor), at);
+    return { owed: journalOnly };
   }
   if (r.binding.kind === 'kept') {
     if (row.bound === null || row.bound.sessionId !== r.binding.sessionId) throw new Error('Confirm keeps a binding the row does not hold');
@@ -335,7 +340,7 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
   }
   const p = row.pending;
   const owed: string[] = [];
-  for (const id of [row.bound?.sessionId, p?.sessionId]) if (id !== undefined && !owed.includes(id)) owed.push(id);
+  for (const id of [row.bound?.sessionId, p?.sessionId, ...r.pastIdsJoin]) if (id !== undefined && !owed.includes(id)) owed.push(id);
   for (const owedId of owed) endOverlordGeneration(db, owedId);
   const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at };
   db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, sessionId = NULL, generation = NULL, term = ?, model = ?, accountPools = ?, `

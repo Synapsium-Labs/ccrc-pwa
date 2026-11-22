@@ -13,7 +13,7 @@
 // account set without `untagged`, `opus`, and term 0. An absent ladder row is such a side and reads `off` (ruling F8), never the
 // ladder's default `chat`, which belongs to an ordinary read of a box that never had a row.
 import { RUNGS, rungRank, type Rung } from '../../../shared/overlord-ladder.js';
-import type { ChainedPosition } from '../chainedJournal.js';
+import { chainedTailHealPlan, type ChainedPosition, type ChainedTailHealPlan } from '../chainedJournal.js';
 import {
   authorityFold,
   type AuthorityView, type OverlordAccountSet, type OverlordAuthorityEntry, type OverlordAuthorityModelClass,
@@ -127,7 +127,8 @@ export function toldNarrowed(s: RestoreStricter, told: { readonly operatorRung: 
 export type ConfirmEpochRead = { readonly kind: 'measured'; readonly n: number } | { readonly kind: 'unmeasured'; readonly why: string };
 /** The privacy journal's sequence now: `null` while the privacy head is not wired (`absent`, question 11). */
 export type ConfirmPrivacyRead = { readonly kind: 'measured'; readonly sequence: number | null } | { readonly kind: 'unmeasured'; readonly why: string };
-/** The highest epoch and restore generation any witness answered with since boot; 0 and 0 when none has (question 13). */
+/** The highest epoch and restore generation any witness answered with since boot; 0 and 0 when none has (question 13). It only
+ *  raises Confirm's bound: it never proves that nothing higher was issued (`confirmRestorePlan`'s THE BOUND). */
 export type ConfirmWitnessRead =
   | { readonly kind: 'measured'; readonly epoch: number; readonly restoreGeneration: number }
   | { readonly kind: 'unmeasured'; readonly why: string };
@@ -154,82 +155,89 @@ export interface ConfirmFacts {
 
 export type ConfirmEntry = Extract<OverlordAuthorityEntry, { kind: 'authority-restore-confirmed' }>;
 
-/** What the transaction does: refuse (and write nothing), nothing (nothing waits), or confirm. `cutWhole` sets the whole file
- *  aside first (question 17); `expectHead` is the head the append must still find (null: an empty or new chain). */
+/** What the transaction does: refuse (and write nothing), nothing (nothing waits), or confirm. `cutTail` sets a torn tail aside
+ *  first (the kernel's tail cut, over complete records that reach the head row); `expectHead` is the head the append must still
+ *  find (null: an empty file, so the record is record 1). */
 export type ConfirmPlan =
   | { readonly kind: 'refuse'; readonly detail: string }
   | { readonly kind: 'unchanged' }
   | {
-    readonly kind: 'confirm'; readonly cutWhole: boolean; readonly expectHead: ChainedPosition | null;
+    readonly kind: 'confirm'; readonly cutTail: ChainedTailHealPlan | null; readonly expectHead: ChainedPosition | null;
     readonly entry: ConfirmEntry; readonly stricter: RestoreStricter;
   };
 
 const positionOf = (r: { sequence: number; journalId: string; digest: string }): ChainedPosition =>
   ({ sequence: r.sequence, journalId: r.journalId, digest: r.digest });
+const samePosition = (a: ChainedPosition, b: ChainedPosition): boolean =>
+  a.sequence === b.sequence && a.journalId === b.journalId && a.digest === b.digest;
+
+/** The refusals' details: fixed sentences, each naming only what could not be read or bounded, never a read's own text. */
+export const CONFIRM_REFUSED = {
+  guard: 'the authority guard reads unmeasured',
+  journal: 'the authority journal could not be read',
+  head: 'the authority head row could not be read',
+  rows: 'the authority rows could not be read',
+  privacy: 'the privacy head could not be read',
+  witnesses: 'the witnesses could not be read',
+  told: 'the witnesses\' told state could not be read',
+  epoch: 'the authority epoch could not be read',
+  malformed: 'the authority journal is malformed, so no epoch or generation it issued is bounded; nothing was written',
+  lost: 'the authority journal lacks records its head row attests, so no epoch or generation it issued is bounded; nothing was written',
+} as const;
 
 /**
- * Confirm the restore's plan (Task 8's transaction, step 1), first match:
+ * Confirm the restore's plan (Task 8's transaction, step 1), first match. The door's state module runs the torn-tail heal
+ * (`overlordAuthorityJournal.ts#healTornTail`, the kernel's rule) before it reads these facts.
  *
  * | # | the facts | plan |
  * |---|---|---|
- * | 1 | the guard reads `unmeasured`, or the file, the head row or the rows' side cannot be read | refuse (`journal-unreadable`) |
+ * | 1 | the guard reads `unmeasured`, or the file, the head row or the rows' side cannot be read | refuse |
  * | 2 | the guard reads `coherent` and the file is `coherent` against the head row | unchanged: nothing waits (a coherent guard over a trailing file waits, review F1) |
  * | 3 | the privacy head, the witnesses or their told state cannot be read | refuse |
- * | 4 | the file is `malformed`, or ends in a tail the heal refused | confirm over a new chain: cut the whole file aside, read the journal side as the narrowest value, and set the epoch and the generation above the file's bound and every witness's (question 17) |
- * | 5 | the server's epoch cannot be read | refuse |
- * | 6 | otherwise | confirm after the file's head: the journal side is its fold (a trailing record folded in), the epoch above the server's and every witness's, the generation above the journal's last and every witness's (question 13) |
+ * | 4 | the file is `malformed` | refuse: no upper bound on what it issued (review 3334 F2) |
+ * | 5 | the file's verified records do not reach the head row (`missing` with a head row, `behind`, `diverged`) | refuse: the records the head row attests are lost, and their values with them (review 3334 F1) |
+ * | 6 | the server's epoch cannot be read | refuse |
+ * | 7 | otherwise | confirm after the last verified record: a torn tail after it (one the heal refused) is set aside first; the journal side is the records' fold (a trailing record folded in), the epoch above the server's and every witness's, the generation above the journal's last and every witness's (question 13) |
  *
- * In both confirms, a told state a counting witness holds narrows the stricter rung and latches further (`toldNarrowed`).
+ * THE BOUND. Every value the journal issued is in its verified records when they reach the head row: the head row moves only
+ * after its record's LF is durable, so nothing past the records was ever acknowledged, and a tail never was a record. A malformed
+ * file, or one that lost records the head row attests, holds no such bound: its count of lines bounds its sequences, not the
+ * epochs and generations its Confirm records carried, which Confirm itself sets above the sequence. A witness's highest only
+ * raises the bound, never proves it (the stand-in's 0 and 0 least of all), so those refuse and write nothing, keeping every byte.
+ * The residual of question 13 stands as it was: a whole-volume restore whose older journal agrees with its rows is bounded by
+ * the witnesses that answered since boot.
  *
- * The bound of a file that cannot be folded is its line count (a tail holds no LF, so one more line at most), never below the
- * head row's sequence, and never below what its verified records' last Confirm carried. It bounds every sequence the file held.
+ * In a confirm, a told state a counting witness holds narrows the stricter rung and latches further (`toldNarrowed`).
  */
 export function confirmRestorePlan(f: ConfirmFacts): ConfirmPlan {
-  if (f.guard.kind === 'unmeasured') return { kind: 'refuse', detail: `the authority guard reads unmeasured: ${f.guard.why}` };
-  if (f.file.kind === 'unmeasured') return { kind: 'refuse', detail: 'the authority journal could not be read' };
-  if (f.rows.kind === 'unmeasured') return { kind: 'refuse', detail: 'the authority head row could not be read' };
-  if ('kind' in f.dbSide) return { kind: 'refuse', detail: `the authority rows could not be read: ${f.dbSide.why}` };
+  if (f.guard.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.guard };
+  if (f.file.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.journal };
+  if (f.rows.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.head };
+  if ('kind' in f.dbSide) return { kind: 'refuse', detail: CONFIRM_REFUSED.rows };
   const verdict = authorityCoherence(f.file, f.rows);
   if (f.guard.kind === 'coherent' && verdict.kind === 'coherent') return { kind: 'unchanged' };
-  if (f.privacy.kind === 'unmeasured') return { kind: 'refuse', detail: `the privacy head could not be read: ${f.privacy.why}` };
-  if (f.witnesses.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses could not be read: ${f.witnesses.why}` };
-  if (f.told.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses' told state could not be read: ${f.told.why}` };
+  if (f.privacy.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.privacy };
+  if (f.witnesses.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.witnesses };
+  if (f.told.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.told };
+  if (f.file.kind === 'malformed') return { kind: 'refuse', detail: CONFIRM_REFUSED.malformed };
 
-  const headSeq = f.rows.head === null ? 0 : f.rows.head.sequence;
-  const cutWhole = f.file.kind === 'malformed' || (f.file.kind === 'records' && f.file.tail !== null);
-  let journalSide: RestoreSide;
-  let epochBase: number;
-  let generationBase: number;
-  let expectHead: ChainedPosition | null;
-  if (cutWhole) {
-    journalSide = NARROWEST_RESTORE_SIDE;
-    expectHead = null;
-    let lines = headSeq;
-    let carried = 0;
-    if (f.file.kind === 'malformed') lines = Math.max(lines, f.file.lines);
-    if (f.file.kind === 'records') {
-      lines = Math.max(lines, f.file.records.length + 1);
-      const lc = authorityFold(f.file.records).lastConfirm;
-      if (lc !== null) carried = Math.max(lc.epochAtConfirm + (f.file.records.length - lc.sequence), lc.restoreGeneration);
-    }
-    epochBase = Math.max(lines, carried);
-    generationBase = Math.max(lines, carried);
-  } else {
-    if (f.epoch.kind === 'unmeasured') return { kind: 'refuse', detail: `the authority epoch could not be read: ${f.epoch.why}` };
-    const records = f.file.kind === 'records' ? f.file.records : [];
-    const view = authorityFold(records);
-    journalSide = journalSideOf(view);
-    epochBase = f.epoch.n;
-    generationBase = view.lastConfirm === null ? 0 : view.lastConfirm.restoreGeneration;
-    const last = records[records.length - 1];
-    expectHead = last === undefined ? null : positionOf(last);
-  }
-  const stricter = toldNarrowed(restoreStricter(f.dbSide, journalSide), f.told.told);
+  const records = f.file.kind === 'records' ? f.file.records : [];
+  const head = f.rows.head;
+  const atHead = head === null ? undefined : records[head.sequence - 1];
+  if (head !== null && (atHead === undefined || !samePosition(atHead, head))) return { kind: 'refuse', detail: CONFIRM_REFUSED.lost };
+  if (f.epoch.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.epoch };
+
+  const view = authorityFold(records);
+  const last = records[records.length - 1];
+  const expectHead = last === undefined ? null : positionOf(last);
+  const cutTail = f.file.kind === 'records' ? chainedTailHealPlan(f.file.tail, true) : null;
+  const generationBase = view.lastConfirm === null ? 0 : view.lastConfirm.restoreGeneration;
+  const stricter = toldNarrowed(restoreStricter(f.dbSide, journalSideOf(view)), f.told.told);
   return {
-    kind: 'confirm', cutWhole, expectHead, stricter,
+    kind: 'confirm', cutTail, expectHead, stricter,
     entry: {
       kind: 'authority-restore-confirmed', opKey: f.opKey, term: stricter.term,
-      epochAtConfirm: Math.max(epochBase, f.witnesses.epoch) + 1,
+      epochAtConfirm: Math.max(f.epoch.n, f.witnesses.epoch) + 1,
       privacySequenceAtConfirm: f.privacy.sequence,
       restoreGeneration: Math.max(generationBase, f.witnesses.restoreGeneration) + 1,
       newChain: expectHead === null,

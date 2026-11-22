@@ -1,6 +1,7 @@
 // Overlord W1, authority journal plan Tasks 8 and 9 (PR C): the fixture Confirm the restore's suites share. A fixture `coord.db`
 // from the real migrations (one migrated template copied per rig), a fixture `~/.ccrc` stand-in holding the real journal file,
-// the real guard booted over them, the real writers, and witness facts a test sets. Never the live HOME.
+// the real guard booted over them, the real writers, and witness facts a test sets. A test may fail the journal's next appends
+// (`failAppends`: the port's write to the journal file throws) and override the witness facts. Never the live HOME.
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -9,6 +10,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { tx } from '../src/coord/tx.js';
 import { OVERLORD_AUTHORITY_BASENAME } from '../src/coord/overlordAuthority.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from '../src/coord/overlordAuthorityJournal.js';
+import { NODE_APPEND_ONLY_FS, type AppendOnlyFsOps } from '../src/appendOnlyFile.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from '../src/coord/overlordAuthorityGuard.js';
 import { OverlordRestoreState, preWitnessFacts, type RestoreWitnessFacts } from '../src/coord/overlordRestoreState.js';
 import { bindPendingGeneration, designatePending, goLive } from '../src/coord/overlordDesignationStore.js';
@@ -41,28 +43,49 @@ export function restoreRigHooks(): void {
 export interface Rig {
   dir: string; dbPath: string; db: DatabaseSync; journal: OverlordAuthorityJournal; guard: OverlordAuthorityGuard;
   state: OverlordRestoreState; held: { epoch: number; restoreGeneration: number }; offers: number;
+  /** How many of the next writes to the journal file throw (the append's own write; a cut writes elsewhere). */
+  failAppends: number;
+  /** How many of the next truncations of the journal file throw (a cut's last step, after its bytes are kept aside). */
+  failTruncates: number;
+  /** The witness facts the next open composes over the stand-in (`held` and `offers` stay the rig's). */
+  witness: Partial<RestoreWitnessFacts>;
   /** Close and open again (a restart): a new journal, guard and boot over the same files. */
   restart(): void;
   snapshot(withJournal: boolean): () => void;
   lines(): string[];
 }
 
-export function rig(): Rig {
+export function rig(witnessOver: Partial<RestoreWitnessFacts> = {}): Rig {
   const dir = mkTmp('ccrc-overlord-restore-');
   const dbPath = path.join(dir, 'coord.db');
   copyFileSync(template, dbPath);
   const time = fakeTime({ wallMs: NOW });
-  const r = { dir, dbPath, held: { epoch: 0, restoreGeneration: 0 }, offers: 0 } as Rig;
+  const r = { dir, dbPath, held: { epoch: 0, restoreGeneration: 0 }, offers: 0, failAppends: 0, failTruncates: 0, witness: witnessOver } as Rig;
+  const leafPath = path.join(dir, OVERLORD_AUTHORITY_BASENAME);
+  const leafFds = new Set<number>();
+  const ops: AppendOnlyFsOps = {
+    ...NODE_APPEND_ONLY_FS,
+    openSync: (p, flags, mode) => { const fd = NODE_APPEND_ONLY_FS.openSync(p, flags, mode); if (p === leafPath) leafFds.add(fd); else leafFds.delete(fd); return fd; },
+    closeSync: (fd) => { leafFds.delete(fd); NODE_APPEND_ONLY_FS.closeSync(fd); },
+    ftruncateSync: (fd, len) => {
+      if (leafFds.has(fd) && r.failTruncates > 0) { r.failTruncates -= 1; throw Object.assign(new Error('a fixture truncate failure'), { code: 'EIO' }); }
+      NODE_APPEND_ONLY_FS.ftruncateSync(fd, len);
+    },
+    writeSync: (fd, b, o, l) => {
+      if (leafFds.has(fd) && r.failAppends > 0) { r.failAppends -= 1; throw Object.assign(new Error('a fixture write failure'), { code: 'EIO' }); }
+      return NODE_APPEND_ONLY_FS.writeSync(fd, b, o, l);
+    },
+  };
   const open = (): void => {
     const db = openCoordDb(dbPath);
     opened.push(db);
     const port: AuthorityBootPort = { healTornTail: () => journal.healTornTail(db), measure: () => journal.measure(db) };
     const guard = new OverlordAuthorityGuard(port);
-    const journal = new OverlordAuthorityJournal(overlordAuthorityFileAt(dir), { clock: time.ports.clock }, guard);
+    const journal = new OverlordAuthorityJournal(overlordAuthorityFileAt(dir, ops), { clock: time.ports.clock }, guard);
     runOverlordAuthorityBoot(port, guard, () => { /* quiet */ });
     const pre = preWitnessFacts(journal);
     const witness: RestoreWitnessFacts = {
-      ...pre, highest: () => ({ kind: 'measured', ...r.held }), offerNow: () => { r.offers += 1; },
+      ...pre, highest: () => ({ kind: 'measured', ...r.held }), offerNow: () => { r.offers += 1; }, ...r.witness,
     };
     Object.assign(r, { db, journal, guard, state: new OverlordRestoreState({ db, journal, guard, witness }) });
   };
