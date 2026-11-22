@@ -60,6 +60,22 @@ the coordinator can allocate numbers when it folds them into the plan.
 - `door-unmeasured-maps-to-rolled-back`: the console door answers 503 `authority-rolled-back` with cause `unmeasured: <why>` when no
   tuple can be offered (X2's door mapping).
 
+- `server-actor-is-attributed`: the `restore-detected` raise needs an actor, and a server lane has none, so the attribution adapter
+  gains its one server mint, `serverActorOf(lane)` (`CallerIdentity.server`), kind and issuer `server`, strength `attributed`: the three
+  strengths describe a caller, and the server holds no credential. A brake accepts it; a widening refuses it.
+- `restore-latch-raised-once`: measured, `raiseLatchInTx` answers `changed: false` for a cause that already stands, so a raise at each
+  boot over the same rollback leaves one standing row, and the listener adds no skip of its own.
+- `restore-raise-deferred-in-transaction`: the guard leaves `coherent` from inside the writer's open transaction (its `writerFailed`),
+  where a raise would open a nested transaction; the raise runs at once at boot and waits past an open transaction otherwise.
+- `restore-raise-in-own-file`: the raise is `coord/overlordRestoreLatch.ts` (L4), which `index.ts` registers on the guard's
+  `onRefusing` before the boot step runs, so a refusing boot verdict raises too.
+- `no-witness-input-absent-is-unmeasured`: the ladder's input table reads `unmeasured` when no exchange is wired (a test server, a
+  build without the exchange), so the `advise` cap applies, failing closed.
+- `witness-door-is-view`: the door table's row for `POST /api/overlord/witness` is an operator door of verb class `view`: it records
+  no row and changes no authority; what it can do is make the server refuse.
+- Not covered here, PR C's: Confirm leaves `restore-detected` standing, stamped with the Confirm record's sequence. A latch raised
+  row-only over an incoherent journal can be cleared only once Confirm makes the journal coherent.
+
 ## Seams with peers
 
 - PR C (Confirm the restore) declares its consumer port `RestoreWitnessFacts` (`epoch()`, `highest()`, `offerNow()`, `told()`) with a
