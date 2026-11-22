@@ -423,10 +423,11 @@ describe('buildServer review sweep', () => {
   });
 
   it('keeps review unavailable without opening a store when a manually assembled server has no time port', async () => {
-    const { time: _time, ...base } = testDeps();
     const mkdir = vi.fn(nodeReviewFs.mkdir);
-    // Ordinary narrow route fixtures predate the required time port and pass only the deps they use.
-    const app = await buildServer({ ...base, review: { fs: { ...nodeReviewFs, mkdir } } } as Deps);
+    const deps: Deps = { ...testDeps(), review: { fs: { ...nodeReviewFs, mkdir } } };
+    // Model a narrow legacy fixture by removing the required port at runtime.
+    expect(Reflect.deleteProperty(deps, 'time')).toBe(true);
+    const app = await buildServer(deps);
     try {
       expect.soft(mkdir).not.toHaveBeenCalled();
       expect.soft(app.reviewSweep).toBeNull();
