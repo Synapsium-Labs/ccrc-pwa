@@ -84,7 +84,7 @@ The plan's "Deviations found" carries both entries in full. In short:
   live capture; update `linking-attached-off.test.ts` deliberately in that commit.
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
   by the packet the README's holding run approved; the ticket can close with the PR.
-- `w8-overlord-skill`: the Overlord skill's door table gains `link_team`, and says when it suggests instead (below `full`).
+- `w8-overlord-skill`: built by run 3251 (below). The Overlord skill's door table gains `link team`, and says what it does below `full`.
 - `w8-call-anchor`: built by run 3209 (below).
 - `w8-triage-l1`: built by run 3155 (below). It moved the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`)
   into `planPolicy.ts` beside `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It had stayed in the route because
@@ -258,3 +258,21 @@ door gains). It parses the example as written, with the client's pair added, and
 `plan.md` without the section all seven new cases and the corpus list are red; with it they pass; the word pin is red against
 the section without `write-failed`. A rules file and the tests that pin it, landed as one PR, as ruled for #3151, #3155 and
 #3163. No code change and no new deviation number (D-8808, D-8809).
+
+## Run 3251 (`w8-overlord-skill`): what was built
+
+The Overlord skill's `starting.md` gains a `link team` door row and one paragraph, each sentence checked against the code it follows:
+
+| Change | The code it follows |
+|---|---|
+| The door row `link team`, with the word `overlord-v1` | `OVERLORD_DOORS['link-team'].word` in `overlordDoors.ts` |
+| The rung sentence: `full` may confirm, `chat` and `advise` get `rung-below` and leave the candidate for the Project linking card | `RUNG_CELLS['link-team']` (`refuse`, `refuse`, `allow`); a refused cell is the gate's `rung-below` |
+| Each door refusal: `team-set`, `team-unknown`, `team-ambiguous`, `no-project`, `unavailable`, `write-failed` | the confirm route's refusals in `linking/routes.ts`; `team-unknown` is its candidate check's and, with `team-ambiguous`, the live check's, from `teamPairVerdict` through `pair.error` |
+| `DOOR_ONLY_TOOLS` loses `link_team` | `door-tools.test.ts` demands a tool in the skill's table is not in that list |
+| The pin's `OUTSIDE_SPEC` carve-out for `link team`: its word is read from `OVERLORD_DOORS`, not the spec | Table 11.1e has no link door |
+
+Measured: with the row and paragraph in place and the `link_team` entry kept, `door-tools.test.ts` is red on "drop it from
+`DOOR_ONLY_TOOLS`" and green after the deletion. Removing the row, removing the paragraph, changing the row's word and deleting
+`team-ambiguous` from the paragraph each turn the matching pin red, and restoring turns it green. A rules file and the index
+entry and pins that hold it in step, landed as one PR, as ruled for #3151, #3155, #3163 and #3174. No new deviation number
+(D-8808, D-8809).
