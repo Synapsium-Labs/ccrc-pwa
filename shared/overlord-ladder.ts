@@ -68,7 +68,7 @@ export const LADDER_CAUSE_MAP = {
   },
   'shared-user': {
     kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
-    spec: '`server-isolation` is `shared-user` (Table 7.5a, §7.4)',
+    spec: '`server-isolation` is `shared-user` or `unmeasured` (Table 7.5a, §7.4)',
   },
   'unwitnessed-third': {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'push',

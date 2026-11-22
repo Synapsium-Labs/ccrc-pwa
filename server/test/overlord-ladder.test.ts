@@ -82,7 +82,7 @@ describe('the cause table', () => {
     expect(L0.LADDER_CAUSE_MAP['rung-word-missing']).toMatchObject({ kind: 'condition', effect: { kind: 'server-words' }, notice: 'none' });
     expect(L0.LADDER_CAUSE_MAP['rung-word-missing'].spec).toContain('RV8');
     // The isolation word's row (Overlord W1, Table 7.5a): one condition capping advise, notice none.
-    expect(L0.LADDER_CAUSE_MAP['shared-user']).toEqual({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none', spec: '`server-isolation` is `shared-user` (Table 7.5a, §7.4)' });
+    expect(L0.LADDER_CAUSE_MAP['shared-user']).toEqual({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none', spec: '`server-isolation` is `shared-user` or `unmeasured` (Table 7.5a, §7.4)' });
   });
   it('the cause key shape is the authority journal\'s: kebab words, at most 64 bytes', () => {
     expect(L0.LADDER_CAUSE_MAX).toBe(64);
