@@ -164,6 +164,19 @@ describe('Confirm the restore: the transaction', () => {
     expect(r.lines().length).toBe(before + 2);
   });
 
+  it('a table writer that throws over a coherent guard leaves the record trailing and moves the guard to rolled-back: trailing', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    expect(rung(r, 'chat', 'advise')).toMatchObject({ ok: true });
+    const restore = r.snapshot(false);
+    expect(rung(r, 'advise', 'full')).toMatchObject({ ok: true });
+    restore();
+    r.guard.confirmed();
+    r.db.exec("CREATE TEMP TRIGGER no_write BEFORE UPDATE ON overlord_designation BEGIN SELECT RAISE(ABORT, 'refused'); END");
+    expect(confirm(r)).toMatchObject({ ok: false, refusal: 'journal-unwritable' });
+    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+  });
+
   it('a failure before the append leaves the file without the record and the guard rolled-back', () => {
     const r = rig();
     designateLive(r, S1, GEN1);
@@ -234,5 +247,45 @@ describe('Confirm the restore: the transaction', () => {
     expect(a).toMatchObject({ ok: true, changed: true, binding: 'cleared', owed: [S1] });
     const d = designationRead(r.db);
     expect(d.kind !== 'unmeasured' && d.row).toMatchObject({ pastIds: [S1, S2], stopsOwed: [S1] });
+  });
+});
+
+describe('appendConfirmInTx (Task 8, step 3)', () => {
+  const ENTRY = {
+    kind: 'authority-restore-confirmed', opKey: 'op-c', term: 2, epochAtConfirm: 4, privacySequenceAtConfirm: null, restoreGeneration: 1,
+    newChain: false, binding: { kind: 'cleared' }, operatorRung: 'off', latches: [], accountSet: { pools: [], untagged: false }, modelClass: 'opus',
+  } as const;
+  const headOf = (r: ReturnType<typeof rig>) => {
+    const last = JSON.parse(r.lines().at(-1)!) as { sequence: number; journalId: string; digest: string };
+    return { sequence: last.sequence, journalId: last.journalId, digest: last.digest };
+  };
+
+  it('refuses outside a transaction and refuses any entry but the Confirm record, writing nothing', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const before = r.lines();
+    expect(r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: headOf(r) })).toMatchObject({ ok: false, error: 'not-in-transaction' });
+    const rungMove = { kind: 'authority-rung', opKey: 'x', from: 'chat', to: 'off' } as never;
+    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, rungMove, { cutWhole: false, head: headOf(r) }))).toMatchObject({ ok: false, error: 'bad-entry' });
+    expect(r.lines()).toEqual(before);
+  });
+
+  it('refuses changed, writing nothing, when the file\'s head is not the one the plan read', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const before = r.lines();
+    const stale = { ...headOf(r), sequence: headOf(r).sequence - 1 };
+    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: stale }))).toMatchObject({ ok: false, error: 'changed' });
+    expect(tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: null }))).toMatchObject({ ok: false, error: 'changed' });
+    expect(r.lines()).toEqual(before);
+  });
+
+  it('appends after the head it read and moves the head row to the record, over an incoherent guard', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    r.guard.witnessRefused('witness-epoch');
+    const a = tx(r.db, () => r.journal.appendConfirmInTx(r.db, ENTRY, { cutWhole: false, head: headOf(r) }));
+    expect(a).toMatchObject({ ok: true, record: { sequence: 4 } });
+    expect(headRow(r)?.sequence).toBe(4);
   });
 });

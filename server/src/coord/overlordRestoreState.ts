@@ -24,7 +24,7 @@ import type { OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './overlordAuthorityGuard.js';
 import {
   confirmRestorePlan, NARROWEST_RESTORE_SIDE,
-  type ConfirmEpochRead, type ConfirmPrivacyRead, type ConfirmWitnessRead, type RestoreSide, type TermRaised,
+  type ConfirmEpochRead, type ConfirmPrivacyRead, type ConfirmToldRead, type ConfirmWitnessRead, type RestoreSide, type TermRaised,
 } from './overlordRestore.js';
 import { applyDesignationRestoreInTx, designationRead } from './overlordDesignationStore.js';
 import { applyRestoreInTx, ladderRows } from './overlordLadderStore.js';
@@ -40,11 +40,14 @@ export interface RestoreWitnessFacts {
   epoch(): ConfirmEpochRead;
   privacy(): ConfirmPrivacyRead;
   highest(): ConfirmWitnessRead;
+  /** The narrowest told state over the counting witnesses that answered since boot (`null`: none has). */
+  told(): ConfirmToldRead;
   /** After a Confirm commits: offer the new tuple to every witness at once. Never throws. */
   offerNow(): void;
 }
 
-/** The witness facts before the witness exchange exists (PR B): no witness has answered, so the highest is 0 and 0; the privacy
+/** The witness facts before the witness exchange exists (PR B): no witness has answered, so the highest is 0 and 0 and nothing
+ *  was told; the privacy
  *  head is not wired (`absent`, question 11); and the server's epoch is question 7's formula over the authority journal alone,
  *  the last Confirm's `epochAtConfirm` plus the records after it (the sequence, with no Confirm). PR B's `authorityEpoch` is the
  *  owner of that formula: whichever of PR B and this piece lands second replaces this adapter with PR B's in `index.ts`. */
@@ -59,6 +62,7 @@ export function preWitnessFacts(journal: Pick<OverlordAuthorityJournal, 'readVer
     },
     privacy: () => ({ kind: 'measured', sequence: null }),
     highest: () => ({ kind: 'measured', epoch: 0, restoreGeneration: 0 }),
+    told: () => ({ kind: 'measured', told: null }),
     offerNow: () => { /* no witness exchange yet */ },
   };
 }
@@ -121,7 +125,7 @@ export class OverlordRestoreState {
       answer = tx(db, (): ConfirmAnswer => {
         const plan = confirmRestorePlan({
           guard: guard.state(), file: journal.readVerified(), rows: journal.readRows(db), dbSide: rowsSide(db),
-          epoch: witness.epoch(), privacy: witness.privacy(), witnesses: witness.highest(), opKey,
+          epoch: witness.epoch(), privacy: witness.privacy(), witnesses: witness.highest(), told: witness.told(), opKey,
         });
         if (plan.kind === 'refuse') return { ok: false, refusal: 'journal-unreadable', detail: plan.detail };
         if (plan.kind === 'unchanged') return { ok: true, changed: false };

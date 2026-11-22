@@ -112,7 +112,7 @@ const STRICTER_SET: MutantSet<Restore> = {
     { id: 'S5 untagged either', old: 'untagged: db.accountSet.untagged && journal.accountSet.untagged,', new: 'untagged: db.accountSet.untagged || journal.accountSet.untagged,' },
     { id: 'S6 fable either', old: "modelClass: db.modelClass === 'fable' && journal.modelClass === 'fable' ? 'fable' : 'opus',", new: "modelClass: db.modelClass === 'fable' || journal.modelClass === 'fable' ? 'fable' : 'opus'," },
     { id: 'S7 the journal\'s latches only', old: 'for (const l of [...db.latches, ...journal.latches]) {', new: 'for (const l of [...journal.latches]) {' },
-    { id: 'S8 the latest cap', old: 'caps.set(l.cause, had === undefined ? l.cap : lower(had, l.cap));', new: 'caps.set(l.cause, l.cap);' },
+    { id: 'S8 the latest cap', old: '...journal.latches]) {\n    const had = caps.get(l.cause);\n    caps.set(l.cause, had === undefined ? l.cap : lower(had, l.cap));', new: '...journal.latches]) {\n    const had = caps.get(l.cause);\n    caps.set(l.cause, l.cap);' },
     { id: 'S9 no past ids', old: 'if (!kept) {', new: 'if (false) {' },
   ],
   suite: (mod) => restoreStricterCases(mod),
@@ -125,7 +125,7 @@ function facts(o: Partial<ConfirmFacts>): ConfirmFacts {
   return {
     guard: { kind: 'rolled-back', cause: 'behind' }, file: { kind: 'absent' }, rows: { kind: 'measured', head: null, anyAuthorityRow: true },
     dbSide: DB, epoch: { kind: 'measured', n: 0 }, privacy: { kind: 'measured', sequence: null },
-    witnesses: { kind: 'measured', epoch: 0, restoreGeneration: 0 }, opKey: 'op-confirm', ...o,
+    witnesses: { kind: 'measured', epoch: 0, restoreGeneration: 0 }, told: { kind: 'measured', told: null }, opKey: 'op-confirm', ...o,
   };
 }
 
@@ -144,6 +144,7 @@ export function confirmRestorePlanCases(m: Pick<Restore, 'confirmRestorePlan'>):
       expect(refuse(facts({ ...coherent, guard: { kind: 'rolled-back', cause: 'witness-epoch' }, epoch: { kind: 'unmeasured', why: 'x' } }))).toBe('refuse');
       expect(refuse(facts({ ...coherent, guard: { kind: 'rolled-back', cause: 'witness-epoch' }, privacy: { kind: 'unmeasured', why: 'x' } }))).toBe('refuse');
       expect(refuse(facts({ ...coherent, guard: { kind: 'rolled-back', cause: 'witness-epoch' }, witnesses: { kind: 'unmeasured', why: 'x' } }))).toBe('refuse');
+      expect(refuse(facts({ ...coherent, guard: { kind: 'rolled-back', cause: 'witness-epoch' }, told: { kind: 'unmeasured', why: 'x' } }))).toBe('refuse');
     },
     'a coherent guard over a coherent file is unchanged: nothing waits': () => {
       expect(m.confirmRestorePlan(facts({ ...coherent, guard: { kind: 'coherent' } }))).toEqual({ kind: 'unchanged' });
@@ -170,6 +171,21 @@ export function confirmRestorePlanCases(m: Pick<Restore, 'confirmRestorePlan'>):
       expect(pn.kind === 'confirm' && pn.entry.operatorRung).toBe('chat');
       expect(pn.kind === 'confirm' && pn.expectHead).toEqual(pos(narrowed[2]!));
       expect(pn.kind === 'confirm' && pn.cutWhole).toBe(false);
+    },
+    'a told state narrows the rung and joins its latches at the lower cap; null changes nothing (told-narrowings-survive-confirm)': () => {
+      const AF = chain([designate(1, S1), rungTo('chat', 'full')]);
+      const base = { file: { kind: 'records' as const, records: AF, tail: null }, rows: { kind: 'measured' as const, head: pos(AF[1]!), anyAuthorityRow: true },
+        dbSide: side({ ...DB, latches: [{ cause: 'restore-detected', cap: 'chat' }] }) };
+      const told = m.confirmRestorePlan(facts({ ...base, told: { kind: 'measured', told: { operatorRung: 'advise', latches: [{ cause: 'alpha-cause', cap: 'off' }, { cause: 'restore-detected', cap: 'off' }] } } }));
+      expect(told.kind === 'confirm' && told.entry.operatorRung).toBe('advise');
+      expect(told.kind === 'confirm' && told.entry.latches).toEqual([{ cause: 'alpha-cause', cap: 'off' }, { cause: 'restore-detected', cap: 'off' }]);
+      const wider = m.confirmRestorePlan(facts({ ...base, dbSide: side({ ...base.dbSide, operatorRung: 'advise' }),
+        told: { kind: 'measured', told: { operatorRung: 'full', latches: [{ cause: 'restore-detected', cap: 'advise' }] } } }));
+      expect(wider.kind === 'confirm' && [wider.entry.operatorRung, wider.entry.latches]).toEqual(['advise', [{ cause: 'restore-detected', cap: 'chat' }]]);
+      const none = m.confirmRestorePlan(facts({ ...base, told: { kind: 'measured', told: { operatorRung: null, latches: [] } } }));
+      expect(none.kind === 'confirm' && none.entry.operatorRung).toBe('full');
+      const nul = m.confirmRestorePlan(facts(base));
+      expect(nul.kind === 'confirm' && [nul.entry.operatorRung, nul.entry.latches]).toEqual(['full', [{ cause: 'restore-detected', cap: 'chat' }]]);
     },
     'a later retire in the journal clears the row\'s binding': () => {
       const R = chain([designate(1, S1), retire(2, S1)]);
@@ -239,6 +255,10 @@ const PLAN_SET: MutantSet<Restore> = {
     { id: 'P8 the journal\'s fold over a malformed file', old: '    journalSide = NARROWEST_RESTORE_SIDE;\n    expectHead = null;', new: '    journalSide = { ...NARROWEST_RESTORE_SIDE, operatorRung: \'full\', modelClass: \'fable\', accountSet: { pools: [\'pool-a\'], untagged: true } };\n    expectHead = null;' },
     { id: 'P9 the journal\'s generation ignored', old: 'generationBase = view.lastConfirm === null ? 0 : view.lastConfirm.restoreGeneration;', new: 'generationBase = 0;' },
     { id: 'P10 the carried bound ignored', old: 'epochBase = Math.max(lines, carried);', new: 'epochBase = lines;' },
+    { id: 'P12 told ignored', old: 'const stricter = toldNarrowed(restoreStricter(f.dbSide, journalSide), f.told.told);', new: 'const stricter = restoreStricter(f.dbSide, journalSide);' },
+    { id: 'P13 told widens the rung', old: 'operatorRung: told.operatorRung === null ? s.operatorRung : lower(s.operatorRung, told.operatorRung),', new: 'operatorRung: told.operatorRung === null ? s.operatorRung : told.operatorRung,' },
+    { id: 'P14 told latches replace', old: 'caps.set(l.cause, had === undefined ? l.cap : lower(had, l.cap));\n  }\n  return {\n    ...s,', new: 'caps.set(l.cause, l.cap);\n  }\n  return {\n    ...s,' },
+    { id: 'P15 an unmeasured told proceeds', old: "if (f.told.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses' told state could not be read: ${f.told.why}` };", new: "if (f.told.kind === 'unmeasured') return { kind: 'unchanged' };" },
     { id: 'P11 an unmeasured witness proceeds', old: "if (f.witnesses.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses could not be read: ${f.witnesses.why}` };", new: "if (f.witnesses.kind === 'unmeasured') return { kind: 'unchanged' };" },
   ],
   suite: (mod) => confirmRestorePlanCases(mod),

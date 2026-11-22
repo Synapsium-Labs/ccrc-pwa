@@ -107,6 +107,22 @@ export function restoreStricter(db: RestoreSide, journal: RestoreSide): RestoreS
 export type TermRaised = 'raised' | 'not-raised' | 'unmeasured';
 export const TERM_RAISED_WORDS: Readonly<Record<TermRaised, true>> = { raised: true, 'not-raised': true, unmeasured: true };
 
+/** The told state folded into the stricter values: the lower rung, and each told latch joined at the lower cap. A told state
+ *  only ever narrows (a narrowing a witness was told survives a restore that lost it); `null` changes nothing. */
+export function toldNarrowed(s: RestoreStricter, told: { readonly operatorRung: Rung | null; readonly latches: readonly OverlordLatchPair[] } | null): RestoreStricter {
+  if (told === null) return s;
+  const caps = new Map<string, Rung>(s.latches.map((l) => [l.cause, l.cap]));
+  for (const l of told.latches) {
+    const had = caps.get(l.cause);
+    caps.set(l.cause, had === undefined ? l.cap : lower(had, l.cap));
+  }
+  return {
+    ...s,
+    operatorRung: told.operatorRung === null ? s.operatorRung : lower(s.operatorRung, told.operatorRung),
+    latches: [...caps].map(([cause, cap]) => ({ cause, cap })).sort(byCause),
+  };
+}
+
 /** The server's epoch now (PR B's `authorityEpoch` total), read through the L4 module's port. */
 export type ConfirmEpochRead = { readonly kind: 'measured'; readonly n: number } | { readonly kind: 'unmeasured'; readonly why: string };
 /** The privacy journal's sequence now: `null` while the privacy head is not wired (`absent`, question 11). */
@@ -114,6 +130,12 @@ export type ConfirmPrivacyRead = { readonly kind: 'measured'; readonly sequence:
 /** The highest epoch and restore generation any witness answered with since boot; 0 and 0 when none has (question 13). */
 export type ConfirmWitnessRead =
   | { readonly kind: 'measured'; readonly epoch: number; readonly restoreGeneration: number }
+  | { readonly kind: 'unmeasured'; readonly why: string };
+
+/** The narrowing state a counting witness was told (PR B's tuple `told`, the coordinator's ruling `told-narrowings-survive-confirm`):
+ *  the narrowest rung and latches over every counting witness that answered since boot, or `null` when none has. */
+export type ConfirmToldRead =
+  | { readonly kind: 'measured'; readonly told: { readonly operatorRung: Rung | null; readonly latches: readonly OverlordLatchPair[] } | null }
   | { readonly kind: 'unmeasured'; readonly why: string };
 
 /** Everything `confirmRestorePlan` reads, gathered in the door's one transaction. `dbSide` is the rows' side, or why it could
@@ -126,6 +148,7 @@ export interface ConfirmFacts {
   readonly epoch: ConfirmEpochRead;
   readonly privacy: ConfirmPrivacyRead;
   readonly witnesses: ConfirmWitnessRead;
+  readonly told: ConfirmToldRead;
   readonly opKey: string;
 }
 
@@ -151,10 +174,12 @@ const positionOf = (r: { sequence: number; journalId: string; digest: string }):
  * |---|---|---|
  * | 1 | the guard reads `unmeasured`, or the file, the head row or the rows' side cannot be read | refuse (`journal-unreadable`) |
  * | 2 | the guard reads `coherent` and the file is `coherent` against the head row | unchanged: nothing waits (a coherent guard over a trailing file waits, review F1) |
- * | 3 | the privacy head or the witnesses cannot be read | refuse |
+ * | 3 | the privacy head, the witnesses or their told state cannot be read | refuse |
  * | 4 | the file is `malformed`, or ends in a tail the heal refused | confirm over a new chain: cut the whole file aside, read the journal side as the narrowest value, and set the epoch and the generation above the file's bound and every witness's (question 17) |
  * | 5 | the server's epoch cannot be read | refuse |
  * | 6 | otherwise | confirm after the file's head: the journal side is its fold (a trailing record folded in), the epoch above the server's and every witness's, the generation above the journal's last and every witness's (question 13) |
+ *
+ * In both confirms, a told state a counting witness holds narrows the stricter rung and latches further (`toldNarrowed`).
  *
  * The bound of a file that cannot be folded is its line count (a tail holds no LF, so one more line at most), never below the
  * head row's sequence, and never below what its verified records' last Confirm carried. It bounds every sequence the file held.
@@ -168,6 +193,7 @@ export function confirmRestorePlan(f: ConfirmFacts): ConfirmPlan {
   if (f.guard.kind === 'coherent' && verdict.kind === 'coherent') return { kind: 'unchanged' };
   if (f.privacy.kind === 'unmeasured') return { kind: 'refuse', detail: `the privacy head could not be read: ${f.privacy.why}` };
   if (f.witnesses.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses could not be read: ${f.witnesses.why}` };
+  if (f.told.kind === 'unmeasured') return { kind: 'refuse', detail: `the witnesses' told state could not be read: ${f.told.why}` };
 
   const headSeq = f.rows.head === null ? 0 : f.rows.head.sequence;
   const cutWhole = f.file.kind === 'malformed' || (f.file.kind === 'records' && f.file.tail !== null);
@@ -198,7 +224,7 @@ export function confirmRestorePlan(f: ConfirmFacts): ConfirmPlan {
     const last = records[records.length - 1];
     expectHead = last === undefined ? null : positionOf(last);
   }
-  const stricter = restoreStricter(f.dbSide, journalSide);
+  const stricter = toldNarrowed(restoreStricter(f.dbSide, journalSide), f.told.told);
   return {
     kind: 'confirm', cutWhole, expectHead, stricter,
     entry: {
