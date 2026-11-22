@@ -8064,7 +8064,8 @@ The managed entry is one command, `bash "$HOME/.cc-sessions/session-hook.sh"`,
 registered under every event the hook's `case` block handles — `PreToolUse`
 (matcher `*`), `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`,
 `StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
-`SessionStart` and `SessionEnd`; `Notification` is not among them. Every managed entry but
+`SessionStart`, `SessionEnd`, `PreModelSwitch` and `PostModelSwitch` (the model events: report-only, never refused);
+`Notification` is not among them. Every managed entry but
 `SessionEnd`'s carries `"timeout": 600` (the installer's `HOOK_TIMEOUT_S`, Claude Code's own default
 for a command hook, so it moves no path's fail-open point and bounds the open above); `SessionEnd`'s
 carries none, because Claude Code runs `SessionEnd` hooks under its own 1.5 s budget, which a

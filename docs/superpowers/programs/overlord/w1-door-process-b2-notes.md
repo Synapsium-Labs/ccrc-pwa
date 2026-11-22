@@ -41,8 +41,8 @@ typed-model arms. Each departure is named by a plain-words slug; no number is ta
   not on `CCRC_DOOR_NONCE_SHA256`, since only a session with a door serves those tools. The three-reader arm and the typed
   `/model` arm do key on the door hash, as the plan says.
 - **`reader-arms-before-the-fan-out-arm`**: the arms sit just before the D-6798 fan-out arm. Sandbox PR B's surface arm sits
-  just after it (agreed with run 3294, mail 30780), so the two hunks stay apart. A later deny from the fan-out arm or the
-  surface arm replaces this arm's reason, and the call is denied either way.
+  after the role-skill deny (D-4934) block instead (agreed with run 3294, mails 30780 and 30787), so the two hunks stay apart.
+  A later deny from another arm replaces this arm's reason, and the call is denied either way.
 - **`model-names-printable-ascii`**: the hook sends a model name as printable ASCII only, cut to `REPORT_MODEL_MAX`, and an
   empty result as null. The report door's narrowing counts UTF-16 units, so ASCII keeps the two counts equal. Model ids are
   ASCII.
@@ -58,7 +58,8 @@ typed-model arms. Each departure is named by a plain-words slug; no number is ta
     rows with no new code. The runner gains a case for the broken build.
   - Capture PR 3 lowers the step budget so the extra step fits its deadline pin (its mail 30775).
 - **`readme-event-list`**: README's hook section lists the registered events, so it needs the two names. README is held by run
-  1850's landing work, so this went as one packet (mail 30835). If that holder says no, the line carries.
+  1850's landing work, so this went as one packet (mail 30835), and run 1850's coordinator said yes to that exact hunk
+  (mail 30850, packet sha256 `2b3f8c36dec4e383906a909b38fb3934a13a1fe41b34958096ffb209fae0b16c`, checked before applying).
 
 ## Residuals (stated, not hidden)
 
