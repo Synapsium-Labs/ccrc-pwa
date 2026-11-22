@@ -56,7 +56,7 @@ describe('a build not yet trusted is routed, but never allowed (slug untrusted-b
     const words = Object.fromEntries(BUILD_UNTRUSTED_REASONS.map((reason) => [reason, approvalBuildRoute({ kind: 'untrusted', reason }).kind]));
     expect(words).toEqual({
       unread: 'refused', 'record-unreadable': 'refused',
-      'not-captured': 'held-escalate', 'capture-queued': 'held-escalate', 'capture-failed': 'held-escalate',
+      'not-captured': 'held', 'capture-queued': 'held', 'capture-failed': 'held',
     });
   });
   it('classOnBuild: ordinary is escalate on a build not yet trusted; forbidden and escalate stay; a trusted build keeps every class', () => {

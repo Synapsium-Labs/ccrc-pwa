@@ -110,9 +110,9 @@ export const ITEM_OF_SET: MutantSet<UntrustedBuildItemModule> = {
   modulePath: ITEM_TS,
   mutants: [
     { id: 'UB-1 THE KEY dropped: an open item raises again', old: ' || openBuilds.has(version)) return null;', new: ') return null;' },
-    { id: 'UB-2 a build ccrc still handles raises', old: " || captureStandingOf(row).kind !== 'given-up'", new: '' },
+    { id: 'UB-2 a build ccrc still handles raises', old: ' || !captureGivenUp(row)', new: '' },
     { id: 'UB-3 no build to key it by raises', old: 'if (!isClaudeVersion(version) || ', new: 'if (' },
-    { id: 'UB-4 a build being captured again raises', old: "captureStandingOf(row).kind !== 'given-up'", new: "captureStandingOf(row).kind === 'trusted'" },
+    { id: 'UB-4 a build being captured again raises', old: ' || !captureGivenUp(row)', new: " || captureStandingOf(row).kind === 'trusted'" },
     { id: 'UB-5 the action carries no key', old: 'action: { verb: UNTRUSTED_BUILD_VERB, build: version },', new: 'action: null,' },
     { id: 'UB-6 another programme', old: 'export const UNTRUSTED_BUILD_ITEM_PROGRAMME = OVERLORD_PROJECT;', new: "export const UNTRUSTED_BUILD_ITEM_PROGRAMME = 'linear-sync';" },
     { id: 'UB-7 the item blocks', old: "neededBy: 'soon'", new: "neededBy: 'now'" },
@@ -128,10 +128,10 @@ export const ITEMS_TO_SETTLE_SET: MutantSet<UntrustedBuildItemModule> = {
   modulePath: ITEM_TS,
   mutants: [
     { id: 'ST-1 an unreadable record settles every item', old: 'if (records === null) return [];', new: "if (records === null) return open.map((i) => ({ ...i, note: '' }));" },
-    { id: 'ST-2 every item settles', old: "    if (standing === 'given-up') return [];\n", new: '' },
-    { id: 'ST-3 only a captured build settles (the old rule)', old: "if (standing === 'given-up') return [];", new: "if (standing !== 'trusted') return [];" },
-    { id: 'ST-4 one note for both', old: "note: standing === 'trusted' ? UNTRUSTED_BUILD_SETTLED_NOTES.captured : UNTRUSTED_BUILD_SETTLED_NOTES.handled", new: 'note: UNTRUSTED_BUILD_SETTLED_NOTES.captured' },
-    { id: 'ST-5 an unrecorded build is given up', old: 'const standing = row === undefined ? null : captureStandingOf(row).kind;', new: "const standing = row === undefined ? 'given-up' : captureStandingOf(row).kind;" },
+    { id: 'ST-2 every item settles', old: '    if (row !== undefined && captureGivenUp(row)) return [];\n', new: '' },
+    { id: 'ST-3 only a captured build settles (the old rule)', old: 'if (row !== undefined && captureGivenUp(row)) return [];', new: "if (row === undefined || captureStandingOf(row).kind !== 'trusted') return [];" },
+    { id: 'ST-4 one note for both', old: 'note: captured ? UNTRUSTED_BUILD_SETTLED_NOTES.captured : UNTRUSTED_BUILD_SETTLED_NOTES.handled', new: 'note: UNTRUSTED_BUILD_SETTLED_NOTES.captured' },
+    { id: 'ST-5 an unrecorded build is given up', old: 'if (row !== undefined && captureGivenUp(row)) return [];', new: 'if (row === undefined || captureGivenUp(row)) return [];' },
   ],
   suite: itemSuite,
 };

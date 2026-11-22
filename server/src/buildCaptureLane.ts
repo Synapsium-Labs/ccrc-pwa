@@ -9,7 +9,7 @@
 // `docs/superpowers/programs/overlord/claude-release-unattended.md`, slug capture-retry-ceiling). Each pass first puts every
 // failed build whose time has come back in the queue (`capturesToRetry`: an hour after its first failure, two after its
 // second), through the same writer as the operator's Capture again. Only the failed verdict that reaches the ceiling
-// (`captureStandingOf` answers `given-up`) tells the operator: one push, and one Waiting on you item naming the act only they
+// (`captureGivenUp`) tells the operator: one push, and one Waiting on you item naming the act only they
 // can do (`untrustedBuildItemOf`). Every other open item settles on the next pass (`untrustedBuildItemsToSettle`).
 //
 // NO VERDICT IS NOT A FAILURE. A box that is not there, a runner that is not built, a throw or an answer off its shape keeps
@@ -21,7 +21,7 @@
 //
 // `watch.ts` owns one of these and calls `sweep()` from its tick beside the roll, never awaited.
 import {
-  BUILD_CAPTURE_OUTPUT_MAX, captureStandingOf, capturesToRetry, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds,
+  BUILD_CAPTURE_OUTPUT_MAX, captureGivenUp, capturesToRetry, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds,
   type BuildCaptureJob, type BuildCaptureNotSent, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 import type { WatcherCoordPort } from './coord/ports.js';
@@ -125,7 +125,7 @@ export class BuildCaptureLane {
     if (!coord.recordClaudeBuildVerdict(result, this.now()) || result.pass) return;
     // A failure ccrc will capture again tells nobody: only the verdict that gives up does.
     const row = coord.claudeBuilds().find((r) => r.build === build);
-    if (row === undefined || captureStandingOf(row).kind !== 'given-up') return;
+    if (row === undefined || !captureGivenUp(row)) return;
     this.raiseGivenUp(d, coord, row, at);
   }
 

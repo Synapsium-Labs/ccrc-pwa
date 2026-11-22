@@ -141,6 +141,11 @@ export function captureStandingOf(r: ClaudeBuildRecord): CaptureStanding {
   return { kind: 'retrying', fails: r.fails, at: (r.verdictAt ?? 0) + captureRetryAfterMs(r.fails) };
 }
 
+/** Whether ccrc has stopped capturing the build by itself: only the operator's Capture again sends it now. */
+export function captureGivenUp(r: ClaudeBuildRecord): boolean {
+  return captureStandingOf(r).kind === 'given-up';
+}
+
 /** The failed builds ccrc captures again at `now` by itself: each `retrying` one whose time has come, newest first. */
 export function capturesToRetry(records: readonly ClaudeBuildRecord[], now: number): string[] {
   return records.filter((r) => { const s = captureStandingOf(r); return s.kind === 'retrying' && now >= s.at; })

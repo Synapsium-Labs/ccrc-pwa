@@ -4,13 +4,13 @@
 //
 // A build that is queued, being captured or being captured again after a failure is ccrc's own work: the Test box card shows
 // where it stands, and nothing waits on the operator. So this raises ONE Waiting on you item per build only when ccrc has
-// given up on it (`captureStandingOf` answers `given-up`: its capture failed {@link BUILD_CAPTURE_FAIL_CEILING} times), keyed
+// given up on it (`captureGivenUp`: its capture failed {@link BUILD_CAPTURE_FAIL_CEILING} times), keyed
 // by the build (the item's `untrusted-build` action), and names the act only the operator can do: Capture again, the
 // session-gated door, once the cause is fixed. The capture lane raises it on the failed verdict that gives up, and settles
 // every open one whose build is no longer given up (`untrustedBuildItemsToSettle`): trusted, or back in ccrc's hands.
 //
 // The capture lane raises and settles; it acts on these answers only.
-import { BUILD_CAPTURE_FAIL_CEILING, captureStandingOf, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_FAIL_CEILING, captureGivenUp, captureStandingOf, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import { isClaudeVersion } from '../../../shared/claudeVersion.js';
 import { isUntrustedBuildAction, UNTRUSTED_BUILD_SETTINGS_PATH, UNTRUSTED_BUILD_VERB, type ItemAction } from '../../../shared/ledgers.js';
 import { OVERLORD_PROJECT } from '../../../shared/overlord-designation.js';
@@ -33,7 +33,7 @@ const times = (n: number): string => (n === 1 ? 'once' : `${n} times`);
  *  Code version, and none for a build whose item is already open (`openBuilds`, the key). */
 export function untrustedBuildItemOf(openBuilds: ReadonlySet<string>, row: ClaudeBuildRecord): RaiseItemInput | null {
   const version = row.build;
-  if (!isClaudeVersion(version) || captureStandingOf(row).kind !== 'given-up' || openBuilds.has(version)) return null;
+  if (!isClaudeVersion(version) || !captureGivenUp(row) || openBuilds.has(version)) return null;
   return {
     program: UNTRUSTED_BUILD_ITEM_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do',
     title: `Claude Code ${version} failed its capture ${times(row.fails)}, and ccrc has stopped retrying`,
@@ -68,8 +68,8 @@ export function untrustedBuildItemsToSettle(
   if (records === null) return [];
   return open.flatMap((i) => {
     const row = records.find((r) => r.build === i.build);
-    const standing = row === undefined ? null : captureStandingOf(row).kind;
-    if (standing === 'given-up') return [];
-    return [{ id: i.id, build: i.build, note: standing === 'trusted' ? UNTRUSTED_BUILD_SETTLED_NOTES.captured : UNTRUSTED_BUILD_SETTLED_NOTES.handled }];
+    if (row !== undefined && captureGivenUp(row)) return [];
+    const captured = row !== undefined && captureStandingOf(row).kind === 'trusted';
+    return [{ id: i.id, build: i.build, note: captured ? UNTRUSTED_BUILD_SETTLED_NOTES.captured : UNTRUSTED_BUILD_SETTLED_NOTES.handled }];
   });
 }

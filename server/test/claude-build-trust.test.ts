@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILD_CAPTURE_FAIL_CEILING, BUILD_CAPTURE_OUTPUT_MAX, BUILD_CAPTURE_RETRY_MS, BUILD_UNTRUSTED_REASONS, buildTrustOf, buildUntrustedSentence,
-  captureBlockedBy, captureRetryAfterMs, captureStandingOf, capturesToRetry, nextCaptureJob, readBuildCaptureResult, readClaudeBuildRecords,
+  captureBlockedBy, captureGivenUp, captureRetryAfterMs, captureStandingOf, capturesToRetry, nextCaptureJob, readBuildCaptureResult, readClaudeBuildRecords,
   unrecordedBuilds, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 
@@ -150,6 +150,11 @@ describe('a failed capture is captured again before anyone is told (slug capture
     expect(captureStandingOf(failed('2.1.321', 3))).toEqual({ kind: 'given-up', fails: 3 });
     expect(captureStandingOf(failed('2.1.321', 4)), 'a Capture again past the ceiling that failed again').toEqual({ kind: 'given-up', fails: 4 });
     expect(captureStandingOf(failed('2.1.321', 0)), 'an older server, which retries nothing').toEqual({ kind: 'given-up', fails: 0 });
+  });
+
+  it('captureGivenUp: true exactly when the standing is given up', () => {
+    expect([rec('2.1.302', { capture: 'pass' }), rec('2.1.320'), failed('2.1.321', 2), failed('2.1.321', 3), failed('2.1.321', 0)].map(captureGivenUp))
+      .toEqual([false, false, false, true, true]);
   });
 
   it('capturesToRetry: each retrying build whose time has come, newest first; never a given-up, queued or trusted one', () => {

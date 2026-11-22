@@ -682,7 +682,8 @@ describe('POST /api/approvals — the raise ladder and its input map (W3 Q3e cha
     });
     await run(() => requestBody(ORDINARY, DUNE));
     await run((fx) => { fx.child(CHILD, fx.runId as number, { deny: null }); return requestBody(ORDINARY); });
-    await run((fx) => { fx.seed(CHILD, 'project-a', '2.1.299'); return requestBody(ORDINARY); });
+    // Slug untrusted-build-routes-escalate: rung 10 refuses a build that cannot be read; one with no capture is minted.
+    await run((fx) => { fx.seed(CHILD, 'project-a', null); return requestBody(ORDINARY); });
     await run(() => ({ ...requestBody(ORDINARY), digest: 'a'.repeat(64) }));
     await run((fx) => {
       vi.spyOn(fx.coord, 'run').mockReturnValue({ ok: false, detail: 'fixture: the runs table is unreadable' } as never);
