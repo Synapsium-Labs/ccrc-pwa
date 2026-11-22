@@ -470,6 +470,17 @@ Each row ships with the task that owns it; the row is red when the guard is remo
     - P5.5's pin reads "3 tasks · 21 steps".
   - The coordinator ruled it on 2026-11-21 (early). Issued to run 3007 in its block 8867 to 8869; 8867 and 8869 are unspent so far.
 
+- **D-8881 (2026-11-22)** — guided-layers-share-the-folds-field. Wave L2, the library's landing B2 (Task 13): the `guided` layout keeps its layers in the existing per-doc `folds` field, so `DOC_FIELDS` and the bootstrap do not grow.
+  - **It departs from one sentence,** §6's State line: "as per-doc fields named per layout".
+  - **Why.** The bootstrap stands at 32 740 of its 32 768 bytes, and its budget is never raised. A field named per layout would add to the bootstrap's field list, and LX6 is still to land in the same library line. Folds are per-doc reading state, so one shared field is the same fact in every layout.
+  - **What a reader sees.** A section folded, or a layer closed, in one layout shows the same way in another layout for the same document.
+  - **The library's pins:**
+    - each layout reads the shared field safely whatever another layout wrote: an unknown or out-of-range entry is ignored, never thrown and never rewritten;
+    - a mutation row for each direction (guided to default, default to guided) reds when that tolerance is removed;
+    - `review` adds no state of its own.
+  - **What changes here:** §6's State line is amended in place.
+  - The coordinator ruled it on 2026-11-22 (early). Issued to run 3249 in its block 8881 to 8883; 8882 and 8883 are unspent so far.
+
 ## Results
 
 ### What was read and measured (2026-11-18)
