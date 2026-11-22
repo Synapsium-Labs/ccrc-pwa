@@ -9,9 +9,11 @@ import type {
 } from '../../shared/isolation.js';
 import type { ConditionReading } from '../../shared/overlord-ladder.js';
 
-/** One element of a held path's chain, as `lstat` measured it. A symbolic link (`link`) counts by its owner only: its own
- *  mode grants nothing, and the directory that holds it is an element of its own. */
-export interface PathStat { readonly uid: number; readonly mode: number; readonly dir: boolean; readonly link?: boolean }
+/** One element of a held path's chain. `onResolvedPath` marks the resolved leaf and its actual ancestors, not directories
+ *  visited only on the way to a link. A link counts by its owner only: its own mode grants nothing. */
+export interface PathStat {
+  readonly uid: number; readonly mode: number; readonly dir: boolean; readonly link?: boolean; readonly onResolvedPath: boolean;
+}
 /** A held path's chain: its leaf first (the path as resolved, or its nearest existing ancestor for a store not yet
  *  created), then every other element the resolution passed through: each directory, and each symbolic link met on the
  *  way, link after link. `unmeasured` when the whole chain could not be established. */
@@ -30,8 +32,8 @@ const GROUP_OTHER_ANY = 0o077;
 const STICKY = 0o1000;
 
 /** Question 11's rule. Write exposure: a directory of the chain writable by group or others without the sticky bit, or
- *  the leaf writable by group or others. Read exposure (`secret` only): no element is owner-only and owned by the server
- *  or root. Owners: every uid owning an element, other than root and the server. */
+ *  the leaf writable by group or others. Read exposure (`secret` only): no candidate on the resolved path is owner-only
+ *  and owned by the server or root. Owners: every uid owning an element, other than root and any measured server uid. */
 export function holdingExposure(chain: HoldingChain, serverUid: Measured<number>): Holding {
   const { name, elements } = chain;
   if (elements === 'unmeasured') return { name, owners: 'unmeasured', exposure: 'unmeasured' };
@@ -43,9 +45,11 @@ export function holdingExposure(chain: HoldingChain, serverUid: Measured<number>
   const writable = dirs.some((e, i) => (e.mode & GROUP_OTHER_WRITE) !== 0 && (i === 0 || (e.mode & STICKY) === 0));
   if (writable) return { name, owners, exposure: 'exposed' };
   if (chain.concern === 'control') return { name, owners, exposure: 'owner-only' };
-  const guarded = dirs.some((e) => (e.mode & GROUP_OTHER_ANY) === 0 && (e.uid === 0 || e.uid === serverUid));
+  const guardCandidates = dirs.filter((e) => e.onResolvedPath && (e.mode & GROUP_OTHER_ANY) === 0);
+  const guarded = guardCandidates.some((e) => (e.uid === 0 || e.uid === serverUid));
   if (guarded) return { name, owners, exposure: 'owner-only' };
-  return { name, owners, exposure: serverUid === 'unmeasured' ? 'unmeasured' : 'exposed' };
+  // An unknown uid matters only if learning it could establish a guard.
+  return { name, owners, exposure: serverUid === 'unmeasured' && guardCandidates.length > 0 ? 'unmeasured' : 'exposed' };
 }
 
 /** What the server measured of itself, once at boot. Its raw host ids stay in the reader's memory, never here. */

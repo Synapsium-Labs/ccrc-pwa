@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { HostReport, IsolationRead, Measured, PeerFacts } from '../../../shared/isolation.js';
-import type { Holding, LinkFacts, ServerDigests, ServerFacts } from '../../src/isolationWord.js';
+import type { Holding, LinkFacts, PathStat, ServerDigests, ServerFacts } from '../../src/isolationWord.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -96,10 +96,10 @@ export function blinded(c: Cell): Cell[] {
 // ------------------------------------------------------------------------------------------------------------- suites
 
 export function holdingExposureSuite(mod: Pick<WordModule, 'holdingExposure'>): Record<string, SuiteCase> {
-  const f = (uid: number, mode: number, dir = true) => ({ uid, mode, dir });
-  const lnk = (uid: number) => ({ uid, mode: 0o777, dir: false, link: true });
-  const chain = (elements: Measured<readonly { uid: number; mode: number; dir: boolean; link?: boolean }[]>, concern: 'secret' | 'control' = 'secret') =>
-    mod.holdingExposure({ name: 'x', concern, elements }, SERVER_UID);
+  const f = (uid: number, mode: number, dir = true, onResolvedPath = true): PathStat => ({ uid, mode, dir, onResolvedPath });
+  const lnk = (uid: number): PathStat => ({ uid, mode: 0o777, dir: false, link: true, onResolvedPath: false });
+  const chain = (elements: Measured<readonly PathStat[]>, concern: 'secret' | 'control' = 'secret', uid: Measured<number> = SERVER_UID) =>
+    mod.holdingExposure({ name: 'x', concern, elements }, uid);
   return {
     'an owner-only leaf owned by the server': () => eq(chain([f(SERVER_UID, 0o600, false), f(SERVER_UID, 0o755), f(0, 0o755)]), { name: 'x', owners: [], exposure: 'owner-only' }),
     'an owner-only ancestor owned by the server guards a 0644 leaf': () => eq(chain([f(SERVER_UID, 0o644, false), f(SERVER_UID, 0o700), f(0, 0o755)]).exposure, 'owner-only'),
@@ -127,11 +127,15 @@ export function holdingExposureSuite(mod: Pick<WordModule, 'holdingExposure'>): 
       eq(chain([f(SERVER_UID, 0o600, false), lnk(OWNER_UID), f(0, 0o1777)]).owners, [OWNER_UID]),
     'a link is never the guard of a secret': () => eq(chain([f(SERVER_UID, 0o644, false), { ...lnk(SERVER_UID), mode: 0o700 }, f(0, 0o755)]).exposure, 'exposed'),
     'a chain of links only reads unmeasured': () => eq(chain([lnk(SERVER_UID)], 'control').exposure, 'unmeasured'),
+    'a directory outside the resolved ancestry cannot guard a secret': () =>
+      eq(chain([f(SERVER_UID, 0o644, false), f(SERVER_UID, 0o700, true, false), f(0, 0o755)]).exposure, 'exposed'),
     'an unmeasured server uid cannot prove a server-owned guard': () => {
-      eq(mod.holdingExposure({ name: 'x', concern: 'secret', elements: [f(SERVER_UID, 0o600, false), f(SERVER_UID, 0o755)] }, 'unmeasured').exposure, 'unmeasured');
-      eq(mod.holdingExposure({ name: 'x', concern: 'secret', elements: [f(SERVER_UID, 0o600, false), f(0, 0o700)] }, 'unmeasured').exposure, 'owner-only');
-      eq(mod.holdingExposure({ name: 'x', concern: 'secret', elements: [f(SERVER_UID, 0o600, false)] }, 'unmeasured').owners, [SERVER_UID]);
+      eq(chain([f(SERVER_UID, 0o600, false), f(SERVER_UID, 0o755)], 'secret', 'unmeasured').exposure, 'unmeasured');
+      eq(chain([f(SERVER_UID, 0o600, false), f(0, 0o700)], 'secret', 'unmeasured').exposure, 'owner-only');
+      eq(chain([f(SERVER_UID, 0o600, false)], 'secret', 'unmeasured').owners, [SERVER_UID]);
     },
+    'a measured exposed path remains exposed even with an unmeasured server uid': () =>
+      eq(chain([f(SERVER_UID, 0o644, false), f(SERVER_UID, 0o700, true, false), f(0, 0o755)], 'secret', 'unmeasured').exposure, 'exposed'),
   };
 }
 
@@ -170,7 +174,7 @@ export function linkIsolationSuite(mod: Pick<WordModule, 'linkIsolation'>): Reco
     'F1: a container at its bridge address forging both digests different': () => eq(v(ready(notLocal, report(THIRD_UID, OTHER.machine, OTHER.boot))), blind('kernel-unproven')),
     'F1: a NAT or hairpin peer reporting nothing of its kernel': () => eq(v(ready(notLocal, report(THIRD_UID, 'unmeasured', 'unmeasured'))), blind('kernel-unproven')),
     'F1: an AnyIP address routed to this host but on no interface': () => eq(v(ready(notLocal, report(THIRD_UID, OTHER.machine, 'unmeasured'))), blind('kernel-unproven')),
-    'F1: a proxy at a non-local address in front of a local agent': () => eq(v(ready(notLocal, report(THIRD_UID, OTHER.machine, OTHER.boot))), blind('kernel-unproven')),
+    'F1: a non-local proxy in front of an agent reporting both local digests': () => eq(v(ready(notLocal, report(THIRD_UID))), blind('other-namespace')),
     'an older agent at a non-local peer, and a malformed one': () => {
       eq(v(ready(notLocal, 'absent')), blind('agent-older')); eq(v(ready(notLocal, 'malformed')), blind('report-malformed'));
     },
@@ -388,11 +392,13 @@ export const ISOLATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'H8 group read ignored', old: 'const GROUP_OTHER_ANY = 0o077;', new: 'const GROUP_OTHER_ANY = 0o007;' },
     { id: 'H9 any owner guards', old: '(e.uid === 0 || e.uid === serverUid)', new: 'true' },
     { id: 'H10 root does not guard', old: '(e.uid === 0 || e.uid === serverUid)', new: '(e.uid === serverUid)' },
-    { id: 'H11 unmeasured server reads exposed', old: "exposure: serverUid === 'unmeasured' ? 'unmeasured' : 'exposed'", new: "exposure: 'exposed'" },
-    { id: 'H12 unmeasured server reads owner-only', old: "exposure: serverUid === 'unmeasured' ? 'unmeasured' : 'exposed'", new: "exposure: serverUid === 'unmeasured' ? 'owner-only' : 'exposed'" },
+    { id: 'H11 unmeasured server reads exposed', old: "exposure: serverUid === 'unmeasured' && guardCandidates.length > 0 ? 'unmeasured' : 'exposed'", new: "exposure: 'exposed'" },
+    { id: 'H12 unmeasured server reads owner-only', old: "guardCandidates.length > 0 ? 'unmeasured' : 'exposed'", new: "guardCandidates.length > 0 ? 'owner-only' : 'exposed'" },
     { id: "H13 a link's mode read", old: 'const dirs = elements.filter((e) => e.link !== true);', new: 'const dirs = elements;' },
     { id: "H14 a link's owner dropped", old: 'const owners = [...new Set(elements.map(', new: 'const owners = [...new Set(elements.filter((e) => e.link !== true).map(' },
     { id: 'H15 a links-only chain measured', old: "if (dirs.length === 0) return { name, owners: 'unmeasured', exposure: 'unmeasured' };", new: '' },
+    { id: 'H16 a directory only visited can guard', old: 'e.onResolvedPath && (e.mode & GROUP_OTHER_ANY) === 0', new: '(e.mode & GROUP_OTHER_ANY) === 0' },
+    { id: 'H17 unmeasured uid hides measured exposure', old: "serverUid === 'unmeasured' && guardCandidates.length > 0 ?", new: "serverUid === 'unmeasured' ?" },
   ], holdingExposureSuite),
   'server/src/isolationWord.ts#linkKernel': set<WordModule>(WORD_TS, [
     { id: 'K1 one differing digest forwards', old: "differMeasured(report.machine, s.machine) && differMeasured(report.boot, s.boot) ? 'forwarded'", new: "(differMeasured(report.machine, s.machine) || differMeasured(report.boot, s.boot)) ? 'forwarded'" },

@@ -2,7 +2,7 @@
 // Ring L3, context C1: it measures, and decides nothing. `measurePeer` is the one writer of the link's peer facts, called
 // only by the client's ready handler, on the socket that delivered the ready. No address, uid or id is logged here.
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { hostDigest, readHostIds, type HostIds } from '../../shared/host-identity.mjs';
@@ -146,15 +146,16 @@ export const NOT_HELD: Readonly<Record<string, string>> = {
   installedCcrcPath: 'the install record the server reports: it holds no secret and chooses no code',
 };
 
-export interface HeldPath { readonly name: string; readonly path: string; readonly concern: 'secret' | 'control' }
+/** A null path is a named holding whose location could not be established. */
+export interface HeldPath { readonly name: string; readonly path: string | null; readonly concern: 'secret' | 'control' }
 
 /** Every path the server holds, from the configuration, in one place (plan question 11, ruled F3). `secret`: a read or
  *  a write reaches what it holds. `control`: a write changes what the server runs. */
-export function serverHoldings(cfg: CcrcConfig, codeRoot: string, env: NodeJS.ProcessEnv, platform: string = process.platform): readonly HeldPath[] {
+export function serverHoldings(cfg: CcrcConfig, codeRoot: Measured<string>, env: NodeJS.ProcessEnv, platform: string = process.platform): readonly HeldPath[] {
   const home = cfg.home;
   const unitDir = path.join(home, platform === 'darwin' ? SERVER_UNIT_DIR_DARWIN : SERVER_UNIT_DIR_LINUX);
   const secret = (name: string, p: string): HeldPath => ({ name, path: p, concern: 'secret' });
-  const control = (name: string, p: string): HeldPath => ({ name, path: p, concern: 'control' });
+  const control = (name: string, p: string | null): HeldPath => ({ name, path: p, concern: 'control' });
   return [
     secret('ccrcDir', cfg.ccrcDir),
     secret('coordDbPath', cfg.coordDbPath),
@@ -164,7 +165,7 @@ export function serverHoldings(cfg: CcrcConfig, codeRoot: string, env: NodeJS.Pr
     secret('sessionsPath', cfg.sessionsPath),
     secret('passkeysPath', cfg.passkeysPath),
     secret('accountsPath', cfg.accountsPath),
-    control('codeRoot', codeRoot),
+    control('codeRoot', codeRoot === 'unmeasured' ? null : codeRoot),
     control('unit', platform === 'darwin' ? unitDir : path.join(unitDir, SERVER_UNIT_NAME)),
     control('unitDropIns', path.join(unitDir, `${SERVER_UNIT_NAME}.d`)),
     control('envFile', path.join(home, SERVER_ENV_FILE)),
@@ -172,17 +173,21 @@ export function serverHoldings(cfg: CcrcConfig, codeRoot: string, env: NodeJS.Pr
   ];
 }
 
-/** The tree the running entry was loaded from: the parent of the first directory above `entryFile` that holds a
- *  `package.json` (the server package), so the code tree is measured, never guessed. */
-export function codeRootOf(entryFile: string): string {
+/** The tree the running entry was loaded from: the parent of the first directory above `entryFile` with a regular
+ *  `package.json` (the server package marker). Only absence permits looking higher; no marker means no measured root. */
+export function codeRootOf(entryFile: string): Measured<string> {
   let dir = path.dirname(entryFile);
   for (let i = 0; i < 8; i++) {
-    if (existsSync(path.join(dir, 'package.json'))) return path.dirname(dir);
+    try {
+      return lstatSync(path.join(dir, 'package.json')).isFile() ? path.dirname(dir) : 'unmeasured';
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 'unmeasured';
+    }
     const up = path.dirname(dir);
     if (up === dir) break;
     dir = up;
   }
-  return path.dirname(entryFile);
+  return 'unmeasured';
 }
 
 // ----------------------------------------------------------------------------------------------- the server's own facts
@@ -232,9 +237,10 @@ export const CHAIN_STEPS_MAX = 256;
 function chainOf(p: string, seams: ServerSeams): Measured<readonly PathStat[]> {
   const root = seams.lstat('/');
   if (root === 'absent' || root === 'unmeasured' || !root.dir) return 'unmeasured';
-  const seen = new Map<string, PathStat>([['/', { uid: root.uid, mode: root.mode, dir: true }]]);
+  const seen = new Map<string, Omit<PathStat, 'onResolvedPath'>>([['/', { uid: root.uid, mode: root.mode, dir: true }]]);
   let cur = '/';
-  let todo = path.resolve(p).split('/').filter((c) => c !== '');
+  // Lexical normalization would cross a `..` before following any link in the preceding component.
+  let todo = (path.isAbsolute(p) ? p : `${process.cwd()}/${p}`).split('/').filter((c) => c !== '');
   for (let steps = 0; todo.length > 0; steps++) {
     if (steps >= CHAIN_STEPS_MAX) return 'unmeasured';
     const c = todo.shift()!;
@@ -258,7 +264,12 @@ function chainOf(p: string, seams: ServerSeams): Measured<readonly PathStat[]> {
   }
   const leaf = seen.get(cur);
   if (leaf === undefined) return 'unmeasured';
-  return [leaf, ...[...seen].filter(([k]) => k !== cur).map(([, v]) => v)];
+  return [
+    { ...leaf, onResolvedPath: true },
+    ...[...seen].filter(([k]) => k !== cur).map(([k, stat]) => ({
+      ...stat, onResolvedPath: stat.link !== true && (k === '/' || cur.startsWith(`${k}/`)),
+    })),
+  ];
 }
 
 function uidMapIsIdentity(text: string): boolean {
@@ -272,7 +283,7 @@ export interface MeasuredServer { readonly facts: ServerFacts; readonly ids: Hos
 
 /** The server's own facts, measured once at boot over the one list `serverHoldings`. Each fact is a value or
  *  `'unmeasured'`, field by field (plan question 15). */
-export function measureServerFacts(cfg: CcrcConfig, codeRoot: string, env: NodeJS.ProcessEnv = process.env, seams: ServerSeams = realServerSeams()): MeasuredServer {
+export function measureServerFacts(cfg: CcrcConfig, codeRoot: Measured<string>, env: NodeJS.ProcessEnv = process.env, seams: ServerSeams = realServerSeams()): MeasuredServer {
   const raw = seams.uid();
   const uid: Measured<number> = typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? raw : 'unmeasured';
   let initialNamespace: Measured<boolean> = 'unmeasured';
@@ -284,7 +295,7 @@ export function measureServerFacts(cfg: CcrcConfig, codeRoot: string, env: NodeJ
     if (ov !== 'unmeasured' && /^\d+$/.test(ov.trim())) overflowUid = Number(ov.trim());
   }
   const holdings = serverHoldings(cfg, codeRoot, env, seams.platform)
-    .map((h) => holdingExposure({ name: h.name, concern: h.concern, elements: chainOf(h.path, seams) }, uid));
+    .map((h) => holdingExposure({ name: h.name, concern: h.concern, elements: h.path === null ? 'unmeasured' : chainOf(h.path, seams) }, uid));
   let ids: HostIds;
   try { ids = seams.hostIds(); } catch { ids = { machine: 'unmeasured', boot: 'unmeasured' }; }
   return { facts: { uid, initialNamespace, overflowUid, holdings }, ids };

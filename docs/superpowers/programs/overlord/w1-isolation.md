@@ -18,6 +18,9 @@ below are this build's, from the plan or from main as it stood at `b33a9ae137` o
 | `held-chain-resolved-link-by-link` | A held path's chain is "its leaf and its directories, and for a path that is a symbolic link, the link's own location and its chain too" | The review (F1) found the first build measured one hop only: a link met while resolving a link's target, its holding directory and its owner, were never seen. The chain is now resolved one component at a time from `/`, through a `readlink` seam, recording every directory and every link (by its owner only; a link's mode grants nothing and never guards a secret). An unreadable element or target, a component below a non-directory, or more than `CHAIN_STEPS_MAX` (256) steps reads `unmeasured`, never a partial chain. |
 | `no-peer-seams-reads-unmeasured` | The peer is measured over the real interfaces and TCP tables, through a seam tests replace | A `FleetClient` given no peer seams measures no peer and reads `unmeasured`; only the composition root passes `realPeerSeams()`, pinned by a call-site guard (review F7). So no link test, older ones included, reads the live host, whatever it passes. |
 | `isolation-wiring-is-one-seam` | The composition root builds the reader and the log, notes once at boot, and subscribes the log to the link | The wiring is one function, `wireIsolation` (isolationLog.ts, L4), which index.ts calls once, so its test pins the live state object and both listeners (review F5). It adds no writer. |
+| `only-resolved-ancestry-guards-reads` | Question 11 names the leaf and its directories, including the resolution through links | Only the resolved leaf and its actual ancestors can guard reads. A directory that only hosted a link still contributes ownership and write exposure, but never read protection. A parent step is followed after any preceding link. If no resolved component could guard reads, the holding is exposed even with an unmeasured server UID; if that UID could establish the guard, exposure remains unmeasured. |
+| `code-root-without-marker-is-unmeasured` | Question 11 holds the root the running entry loaded from, never a guessed path | The bounded search requires a regular package marker. Only a missing marker lets the search continue. Without an established root, the named code holding remains in the list with ownership and exposure both unmeasured; the entry directory is not a fallback. |
+| `non-local-proxy-with-equal-digests` | The Task 3 proxy case is `kernel-unproven` | The distinct proxy fixture has an agent reporting both local digests. The peer itself is not local, so the reading is `unmeasured: other-namespace`. The bridge case with no equal digest remains `unmeasured: kernel-unproven`. Neither widens isolation; the runtime rule did not change. |
 
 ## Measured, not assumed
 
@@ -31,9 +34,11 @@ below are this build's, from the plan or from main as it stood at `b33a9ae137` o
   each add rows to the same table, in any order.
 - **Every `LadderConditionInputs` literal in the tests gains `'shared-user'`.** That includes eleven in the ladder actor
   and route test files, which run 3296 holds; they were edited under the coordinator's ruling of mail 30748.
-- **README.md's hunk** (the agent security model's "Host report" bullet) was applied exactly as approved. The
-  corrected wording says that no report cannot prove isolation, but a separate measured fact can still establish
-  `shared-user`; it changes only the last line of the original addition.
+- **README.md's hunk** (the agent security model's "Host report" bullet) matches the acknowledged holder consent for
+  the corrected packet, SHA-256 `5637df479c3bfe68c6ff33a1ade7ad79e14ce2e6bdb6f6b6d13703411b8ee96a`.
+  The approved branch delta, SHA-256 `9c358e5c8a97cd2e1bd490ccbd97fb6c05819cd641230583a41f5cd8a44d2e40`,
+  also matches the hunk by reverse-apply check. With no report, isolation cannot be proven, but another measured fact
+  can still establish `shared-user`. The second fix round did not edit README.md or change claim ownership.
 - **No live host reads in link tests.** The shared harness supplies synthetic peer seams and host roots. Existing
   direct link tests also inject the shared peer fixture wherever they can receive a ready. The deliberate no-seam
   control verifies that the client measures nothing in its absence.
@@ -41,6 +46,7 @@ below are this build's, from the plan or from main as it stood at `b33a9ae137` o
   `measurePeer` only in the client's ready handler, `measureServerFacts` once at boot, `isolationWord` only in the reader,
   `IsolationWordLog` made only by `wireIsolation`, which index.ts calls once, and `realPeerSeams` only in the composition
   root. Each was proved by a stray second caller added from a saved copy.
-- **Mutation floors.** Eight sets in `server/test/sim/isolationSets.ts`, 70 mutants (67, plus H13 to H15 on the link rule in the fix round), every one killed (floor 1). The
-  hand mutants the plan names for the agent seam, the client's ready stanza and the ladder input were each run from a
-  saved copy and each reds its case.
+- **Mutation floors.** Eight sets in `server/test/sim/isolationSets.ts`, 72 mutants, every one killed (floor 1). H16
+  removes the resolved-ancestry guard; H17 hides measured exposure behind an unmeasured UID. Fixture-only adapter
+  checks fail if absence and measurement errors are collapsed in either direction, or if code-root discovery skips a
+  failed marker measurement. The agent, ready-handler and ladder mutations from the plan each failed their own checks.

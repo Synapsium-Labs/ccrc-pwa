@@ -1,9 +1,11 @@
 // The server's own facts and the reader (Overlord W1, plan `w1-isolation.md` Task 3): `measureServerFacts` over a
 // synthetic tree of stats (no live path, mode or uid is read), and `makeIsolationReader` over a live `FleetState` object.
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import type { FleetState } from '../src/fleetstate.js';
-import { makeIsolationReader, measureServerFacts, type MeasuredServer, type ServerSeams } from '../src/isolationFacts.js';
+import { codeRootOf, makeIsolationReader, measureServerFacts, realServerSeams, type MeasuredServer, type ServerSeams } from '../src/isolationFacts.js';
 import { hostDigest } from '../../shared/host-identity.mjs';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -46,6 +48,21 @@ const CFG: CcrcConfig = (() => {
 })();
 const facts = (s: ServerSeams) => measureServerFacts(CFG, '/code', {}, s).facts;
 const exposureOf = (s: ServerSeams, name: string) => facts(s).holdings.find((h) => h.name === name);
+const BEARER = 'link-bearer';
+const sd = { machine: hostDigest(BEARER, 'machine', MACHINE), boot: hostDigest(BEARER, 'boot', BOOT) };
+const remoteRead = (measured: MeasuredServer) => makeIsolationReader('remote', measured, BEARER, {
+  connected: true, hostReport: { uid: 3000, ...sd }, peer: { locality: 'local', uid: 3000 }, readySerial: 1,
+}).read();
+
+function codeTree(): { root: string; entry: string; packageDir: string } {
+  const root = mkTmp('ccrc-isocode-');
+  // All eight search levels stay inside the fixture, even with no package marker.
+  const packageDir = path.join(root, 'server');
+  const entry = path.join(packageDir, 'a/b/c/d/e/f/g/index.js');
+  mkdirSync(path.dirname(entry), { recursive: true });
+  writeFileSync(entry, '');
+  return { root, entry, packageDir };
+}
 
 describe('measureServerFacts', () => {
   it('an owner-only home measures every holding owner-only, and the server facts measured', () => {
@@ -92,7 +109,41 @@ describe('measureServerFacts', () => {
     expect(exposureOf(seams({ ...base, '/data': dir(0o755, 2000) }, { links }), 'ccrcDir')!.owners).toEqual([2000]);
   });
 
-  // F1 of the review: the chain is established whole, link after link, or it is unmeasured. Synthetic trees only.
+  it.each([
+    ['absolute target', '/data/ccrc', '/data'],
+    ['relative target above the link directory', '../store/ccrc', '/h/store'],
+  ])('only the resolved ancestry guards a secret: %s', (_label, target, parent) => {
+    const holding = `${parent}/ccrc`;
+    const links = { [`${HOME}/.ccrc`]: target };
+    const t = tree({ [`${HOME}/.ccrc`]: link(), [parent]: dir(0o755, 0), [holding]: dir(0o755), [`${holding}/coord.db`]: file(0o644) });
+    const measured = (mode: number) => measureServerFacts(CFG, '/code', {}, seams({ ...t, [parent]: dir(mode, 0) }, { links }));
+    const open = measured(0o755);
+    expect(open.facts.holdings.find((h) => h.name === 'coordDbPath')).toEqual({ name: 'coordDbPath', owners: [], exposure: 'exposed' });
+    expect(remoteRead(open)).toEqual({ kind: 'measured', word: 'shared-user', cause: 'store-mode' });
+    const guarded = measured(0o700);
+    expect(guarded.facts.holdings.find((h) => h.name === 'coordDbPath')).toEqual({ name: 'coordDbPath', owners: [], exposure: 'owner-only' });
+    expect(remoteRead(guarded)).toEqual({ kind: 'measured', word: 'separate-user', cause: 'other-user' });
+  });
+
+  it('resolves a parent step after an input-path link, not before it', () => {
+    const alias = `${HOME}/alias`;
+    const t = tree({ [alias]: link(), '/data': dir(0o755, 0), '/data/child': dir(0o755),
+      '/data/store': dir(0o755), '/data/store/coord.db': file(0o644) });
+    const measured = measureServerFacts({ ...CFG, coordDbPath: `${alias}/../store/coord.db` }, '/code', {},
+      seams(t, { links: { [alias]: '/data/child' } }));
+    expect(measured.facts.holdings.find((h) => h.name === 'coordDbPath')?.exposure).toBe('exposed');
+    expect(remoteRead(measured)).toEqual({ kind: 'measured', word: 'shared-user', cause: 'store-mode' });
+  });
+
+  it('retains measured read exposure when the server uid is unmeasured', () => {
+    const s = seams(tree({ [HOME]: dir(0o755), [`${HOME}/.ccrc`]: dir(0o755) }), { uid: undefined });
+    const measured = measureServerFacts(CFG, '/code', {}, s);
+    expect(measured.facts.uid).toBe('unmeasured');
+    expect(measured.facts.holdings.find((h) => h.name === 'ccrcDir')?.exposure).toBe('exposed');
+    expect(remoteRead(measured)).toEqual({ kind: 'measured', word: 'shared-user', cause: 'store-mode' });
+  });
+
+  // F1 of the first review: the chain is established whole, link after link, or it is unmeasured. Synthetic trees only.
   describe('a chain through more than one link', () => {
     const links = { [`${HOME}/.ccrc`]: '/srv/x/ccrc', '/srv/x': '/vol/x' };
     const base = tree({ [`${HOME}/.ccrc`]: link(), '/srv': dir(0o755, 0), '/srv/x': link(), '/vol': dir(0o755, 0), '/vol/x': dir(0o755, 0), '/vol/x/ccrc': dir(0o700) });
@@ -148,10 +199,90 @@ describe('measureServerFacts', () => {
   });
 });
 
+describe('realServerSeams over fixture paths', () => {
+  it('measures file mode and kind, reads link targets and bounded text, and distinguishes failure from absence', () => {
+    const root = mkTmp('ccrc-isoadapter-');
+    const plain = path.join(root, 'plain');
+    const alias = path.join(root, 'alias');
+    const absent = path.join(root, 'absent');
+    const tooLong = path.join(root, 'x'.repeat(4096));
+    writeFileSync(plain, 'fixture text', { mode: 0o600 });
+    symlinkSync('plain', alias);
+    const io = realServerSeams();
+    expect(io.lstat(plain)).toMatchObject({ mode: 0o600, dir: false, link: false });
+    expect(io.lstat(root)).toMatchObject({ dir: true, link: false });
+    expect(io.lstat(alias)).toMatchObject({ dir: false, link: true });
+    expect(io.readlink(alias)).toBe('plain');
+    expect(io.readlink(plain)).toBe('unmeasured');
+    expect(io.readText(plain)).toBe('fixture text');
+    expect(io.readText(absent)).toBe('unmeasured');
+    expect(io.readText(tooLong)).toBe('unmeasured');
+    writeFileSync(plain, 'x'.repeat(64 * 1024 + 1));
+    expect(io.readText(plain)).toBe('unmeasured');
+    expect(io.lstat(absent)).toBe('absent');
+    expect(io.lstat(path.join(plain, 'child'))).toBe('absent');
+    expect(io.lstat(tooLong)).toBe('unmeasured');
+  });
+
+  it('an adapter error does not prove isolation at its otherwise guarded parent', () => {
+    const root = mkTmp('ccrc-isoerror-');
+    const io = realServerSeams();
+    const synthetic = seams(tree());
+    const measure = (leaf: string) => {
+      const coordDbPath = `${HOME}/.ccrc/${leaf}`;
+      // Only the selected leaf uses real I/O, under the fixture root. Host identity and every ancestor are synthetic.
+      return measureServerFacts({ ...CFG, coordDbPath }, '/code', {}, {
+        ...synthetic, lstat: (p) => p === coordDbPath ? io.lstat(path.join(root, leaf)) : synthetic.lstat(p),
+      });
+    };
+    const failed = measure('x'.repeat(4096));
+    expect(failed.facts.holdings.find((h) => h.name === 'coordDbPath')).toEqual({ name: 'coordDbPath', owners: 'unmeasured', exposure: 'unmeasured' });
+    expect(remoteRead(failed)).toEqual({ kind: 'unmeasured', why: 'server-facts' });
+    const absent = measure('absent');
+    expect(absent.facts.holdings.find((h) => h.name === 'coordDbPath')).toEqual({ name: 'coordDbPath', owners: [], exposure: 'owner-only' });
+    expect(remoteRead(absent)).toEqual({ kind: 'measured', word: 'separate-user', cause: 'other-user' });
+  });
+});
+
+describe('codeRootOf', () => {
+  it('uses the parent of the established server package, not the entry directory', () => {
+    const { root, entry, packageDir } = codeTree();
+    writeFileSync(path.join(packageDir, 'package.json'), '{}');
+    expect(codeRootOf(entry)).toBe(root);
+  });
+
+  it('no established package leaves the code holding and composed verdict unmeasured', () => {
+    const { entry } = codeTree();
+    const root = codeRootOf(entry);
+    expect(root).toBe('unmeasured');
+    const measured = measureServerFacts(CFG, root, {}, seams(tree()));
+    expect(measured.facts.holdings.find((h) => h.name === 'codeRoot')).toEqual({ name: 'codeRoot', owners: 'unmeasured', exposure: 'unmeasured' });
+    expect(remoteRead(measured)).toEqual({ kind: 'unmeasured', why: 'server-facts' });
+  });
+
+  it('does not follow a symlink marker or skip it to use a higher package', () => {
+    const { entry, packageDir } = codeTree();
+    writeFileSync(path.join(packageDir, 'package.json'), '{}');
+    symlinkSync('package.json', path.join(path.dirname(entry), 'package.json'));
+    expect(codeRootOf(entry)).toBe('unmeasured');
+  });
+
+  it('does not treat a failed marker measurement as absence', () => {
+    const { packageDir } = codeTree();
+    writeFileSync(path.join(packageDir, 'package.json'), '{}');
+    symlinkSync('blocked', path.join(packageDir, 'blocked'));
+    expect(codeRootOf(path.join(packageDir, 'blocked/index.js'))).toBe('unmeasured');
+  });
+
+  it('does not treat a directory with the marker name as a server package', () => {
+    const { entry, packageDir } = codeTree();
+    mkdirSync(path.join(packageDir, 'package.json'));
+    expect(codeRootOf(entry)).toBe('unmeasured');
+  });
+});
+
 describe('makeIsolationReader', () => {
   const measured = (): MeasuredServer => measureServerFacts(CFG, '/code', {}, seams(tree()));
-  const BEARER = 'link-bearer';
-  const sd = { machine: hostDigest(BEARER, 'machine', MACHINE), boot: hostDigest(BEARER, 'boot', BOOT) };
 
   it('local mode reads shared-user, local-mode', () => {
     expect(makeIsolationReader('local', measured(), null, null).read()).toEqual({ kind: 'measured', word: 'shared-user', cause: 'local-mode' });
