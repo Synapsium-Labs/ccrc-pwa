@@ -276,3 +276,21 @@ Measured: with the row and paragraph in place and the `link_team` entry kept, `d
 `team-ambiguous` from the paragraph each turn the matching pin red, and restoring turns it green. A rules file and the index
 entry and pins that hold it in step, landed as one PR, as ruled for #3151, #3155, #3163 and #3174. No new deviation number
 (D-8808, D-8809).
+
+The refusal pin reads the confirm route through `scan/symbols.ts` (parsed calls of `registerLinkingRoutes`, and
+`teamPairVerdict`'s declared error words for `pair.error`): the first push read the files as text, and the single-definition
+ratchet (ARCH-06) refused it in CI. Fix round 1 (review 3253, as the coordinator ruled):
+
+- F1: the `team-unknown` sentence now says what the route measures. The pair is not a current candidate, or is not held in
+  a workspace the door could read now. The route folds an unreadable slot, or no connected workspace, into that word. So
+  the Overlord leaves the candidate on the card for the operator, names it in its brief and does not retry it in a loop.
+  Making the route answer `unavailable` when the pair is unmeasured is the follow-up `w8-confirm-unmeasured`.
+- F2: the rung pin is exact. `full` alone allows, and no refused rung is named in the paragraph's first sentence. Measured:
+  narrowing `full` to `refuse` turns it red.
+- A1: a `refuseRoute` whose word the pin cannot read, anything but a literal or `pair.error`, fails the pin. Measured: a
+  variable word turns it red.
+- A2: the paragraph's listed refusals, each a word before a colon, must equal the door's. Measured: an invented `team-gone`
+  turns it red.
+- A3: the carve-out's `toThrow` expects the no-row message.
+
+The remedies are not pinned word for word, as before.

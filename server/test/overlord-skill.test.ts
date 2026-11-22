@@ -332,7 +332,7 @@ describe('the Overlord skill: its references', () => {
 
   it('names outside the spec only doors the spec lacks, each in the door table', () => {
     for (const door of Object.keys(OUTSIDE_SPEC)) {
-      expect(() => waveOf(door), `Table 11.1e now names ${door}; drop it from OUTSIDE_SPEC`).toThrow();
+      expect(() => waveOf(door), `Table 11.1e now names ${door}; drop it from OUTSIDE_SPEC`).toThrow(`Table 11.1e has no row for the door ${door}`);
       expect(doorRows().some((r) => r.file === 'starting.md' && r.door === door), `${door} is not in starting.md's door table`).toBe(true);
     }
   });
@@ -394,9 +394,15 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
   it("follows the gate's rung cells", () => {
     const p = paragraph();
     const first = p.slice(0, p.indexOf('. ') + 1);
+    // Exact both ways (review 3253 F2): the paragraph says `full` may confirm and every rung below it is refused.
+    expect(Object.keys(cellsOf).filter((r) => cellsOf[r] === 'allow'), 'the gate allows link-team at a rung other than full alone')
+      .toEqual(['full']);
     for (const [rung, cell] of Object.entries(cellsOf)) {
       if (cell === 'allow') expect(first, `the first sentence omits \`${rung}\``).toContain(`\`${rung}\``);
-      if (cell === 'refuse') expect(p, `the paragraph omits \`${rung}\``).toContain(`\`${rung}\``);
+      if (cell === 'refuse') {
+        expect(p, `the paragraph omits \`${rung}\``).toContain(`\`${rung}\``);
+        expect(first, `the first sentence names the refused rung \`${rung}\``).not.toContain(`\`${rung}\``);
+      }
     }
     for (const w of ['`rung-below`', 'Project linking card', 'decision brief', 'never by another route']) expect(p).toContain(w);
   });
@@ -408,6 +414,9 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
     expect(confirm, 'registerLinkingRoutes registers the confirm route once').toHaveLength(1);
     const refusals = calls.filter((c) => c.start > confirm[0]!.start && c.end <= confirm[0]!.end && c.name === 'refuseRoute');
     const words = new Set(refusals.flatMap((c) => (c.args[1]?.kind === 'string' ? [c.args[1].text] : [])));
+    // A word the pin cannot resolve fails it rather than being skipped (review 3253 A1): only `pair.error` is read.
+    expect(refusals.filter((c) => c.args[1]?.kind !== 'string' && c.args[1]?.text !== 'pair.error').map((c) => c.args[1]?.text),
+      'a refuseRoute in the confirm route whose word the pin cannot read').toEqual([]);
     // `pair.error` is `teamPairVerdict`'s word: the ones its declared return type names.
     if (refusals.some((c) => c.args[1]?.text === 'pair.error')) {
       const pairType = /error: ((?:'[a-z-]+'(?: \| )?)+)/.exec(sourceOfSymbol('server/src/linking/policy.ts', 'teamPairVerdict'));
@@ -420,5 +429,8 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
       .toEqual(['no-project', 'team-ambiguous', 'team-set', 'team-unknown', 'unavailable', 'write-failed']);
     const p = paragraph();
     for (const w of words) expect(p, `the paragraph omits \`${w}\``).toContain(`\`${w}\``);
+    // And the other way (review 3253 A2): each refusal the paragraph lists, a word followed by a colon, is one the door answers.
+    const listed = [...p.slice(p.indexOf("the door's own refusals")).matchAll(/`([a-z-]+)`:/g)].map((m) => m[1]!);
+    expect(listed.sort(), "the paragraph lists a refusal the door does not answer, or misses one").toEqual([...words].sort());
   });
 });
