@@ -3,12 +3,13 @@
 # tick-diet wave is measured against. `ccd-tick-diet-equivalence.test.ts` sources this file over the tree's `ccd/ccd`
 # and compares each converted helper (its stdout, stderr, rc, out-var and registry bytes) with its legacy twin here.
 #
-# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The eighteen are
+# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The nineteen are
 # `_reg_get`, `_reg_read`, `_authdead`, `_cfg_dir`, `_limit_json_num`, `_limit_field`, `_share_pct`, `_home_measured`,
 # `_route_peek`, `_route_effort_for`, `_route_applied_get`, `_route_wanted`, `_route_pending_word`,
 # `_route_apply_pending`, `_limit_score`, `_avail` (those two vendored by W2 Task 9, for its callers' rows, by
 # the remedy below), `_route_valid` (vendored by D-8121, which adds its `browser` arm) and `_route_any` (vendored by
-# D-8121's fix, which leaves `browser` out of it). Every occurrence of those
+# D-8121's fix, which leaves `browser` out of it) and `_route_pair_note` (vendored by the model-class arm's A3.3, which gives
+# the live note a subject argument so a refusal can name the model). Every occurrence of those
 # names below, code and comments alike, carries the prefix, so a call from one vendored body to another stays inside
 # this file. Every other call (`_route_get`,
 # `_route_inert_has`, `_id_wrapper`, `_authdead_expired`, `_ccrc_cfg_dir`, …) reaches the LIVE function
@@ -242,7 +243,7 @@ _legacy_route_effort_for() {   # id class [quiet] -> stdout the effort to apply.
   if [[ "$cls" == haiku && "$e" == auto ]]; then
     e=""
   elif [[ "$cls" == haiku && -n "$e" ]]; then
-    [[ "$quiet" == quiet ]] || _route_pair_note "$id"
+    [[ "$quiet" == quiet ]] || _legacy_route_pair_note "$id"
     e=""
   fi
   printf '%s' "$e"
@@ -503,4 +504,10 @@ _legacy_route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1
   local f
   for f in "${ROUTE_FIELDS[@]}"; do [[ -e "$REG/$1.$f" ]] && return 0; done
   return 1
+}
+
+_legacy_route_pair_note() {   # id — the haiku+effort PAIR: both values are valid, the pairing is not
+  _route_note_floored "$1" routenotepair && return 0
+  echo "$(date '+%F %T') route-refuse $1: class haiku takes no effort level — the effort field is ignored" >> "$REG/swap.log"
+  return 0
 }

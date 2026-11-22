@@ -214,7 +214,8 @@ const stampedCcd = (dir: string): Buffer => {
     .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${digestOf(path.join(dir, 'lib', 'delegation-lease.sh'))}`)
     .replace(/^__CCD_LIB_POOLSET_SHA256=stamp-at-install$/m, `__CCD_LIB_POOLSET_SHA256=${digestOf(path.join(dir, 'lib', 'pool-set.sh'))}`)
     .replace(/^__CCD_LIB_LONGLIVED_SHA256=stamp-at-install$/m, `__CCD_LIB_LONGLIVED_SHA256=${digestOf(path.join(dir, 'lib', 'long-lived.sh'))}`)
-    .replace(/^__CCD_LIB_DOOR_SHA256=stamp-at-install$/m, `__CCD_LIB_DOOR_SHA256=${digestOf(path.join(dir, 'lib', 'door.sh'))}`).split('\n');
+    .replace(/^__CCD_LIB_DOOR_SHA256=stamp-at-install$/m, `__CCD_LIB_DOOR_SHA256=${digestOf(path.join(dir, 'lib', 'door.sh'))}`)
+    .replace(/^__CCD_LIB_ALIASES_SHA256=stamp-at-install$/m, `__CCD_LIB_ALIASES_SHA256=${digestOf(path.join(dir, 'lib', 'model-aliases.sh'))}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return Buffer.from(markGenerated(lines.join('\n')));
 };
@@ -700,6 +701,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The fleet limit watchdog's pair (D-8123), shipped the same way; it runs `ccd limit-watchdog`, so no bin of its own.
       'systemd/ccd-limit-watchdog.service',
       'systemd/ccd-limit-watchdog.timer',
+      // The weekly replay quiz's pair (Overlord W1a), shipped the same way; it runs a file of the tree through node, so no bin.
+      'systemd/ccd-quiz-weekly.service',
+      'systemd/ccd-quiz-weekly.timer',
       // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins.
       'systemd/tmux-spawn-.scope.d/50-oom-continue.conf',
       'systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf',
@@ -810,6 +814,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The fleet limit watchdog's pair (D-8123), installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.service ~/.config/systemd/user/ccd-limit-watchdog.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.timer ~/.config/systemd/user/ccd-limit-watchdog.timer',
+      // The weekly replay quiz's pair (Overlord W1a), installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.service ~/.config/systemd/user/ccd-quiz-weekly.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.timer ~/.config/systemd/user/ccd-quiz-weekly.timer',
       // D-5241: the two scope drop-ins, the pane one in systemd's PREFIX form (trailing hyphen).
       'mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d',
       '_unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf',
@@ -887,6 +894,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const limitWatchdogAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-limit-watchdog.timer'));
     expect(limitWatchdogAt, 'the limit watchdog timer is never enabled').toBeGreaterThan(reloadAt);
     expect(limitWatchdogAt, 'the limit watchdog timer is enabled after the agent restart')
+      .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
+    // The weekly replay quiz's timer (Overlord W1a), on the same daemon-reload and before the agent restart.
+    const quizWeeklyAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-quiz-weekly.timer'));
+    expect(quizWeeklyAt, 'the weekly quiz timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(quizWeeklyAt, 'the weekly quiz timer is enabled after the agent restart')
       .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
@@ -1825,6 +1837,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'cp -a ~/.local/libexec/ccrc/lib/pool-set.sh ~/ccrc-backups/$TS/ccd-lib-pool-set.sh;',
       'cp -a ~/.local/libexec/ccrc/lib/long-lived.sh ~/ccrc-backups/$TS/ccd-lib-long-lived.sh;',
       'cp -a ~/.local/libexec/ccrc/lib/door.sh ~/ccrc-backups/$TS/ccd-lib-door.sh;',
+      'cp -a ~/.local/libexec/ccrc/lib/model-aliases.sh ~/ccrc-backups/$TS/ccd-lib-model-aliases.sh;',
       // The docs redactor's two files (D-7077), in the library's guarded form.
       'cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs;',
       'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;',
@@ -1849,7 +1862,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
       // The libraries the body pins and the publisher places first (D-6913, D-7463).
       mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
-      for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh', 'long-lived.sh', 'door.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
+      for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh', 'long-lived.sh', 'door.sh', 'model-aliases.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
       // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
       mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
       for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
@@ -1878,6 +1891,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
         'the fifth library is the tree\'s').toBe(true);
       expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'door.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'door.sh'))),
         'the sixth library is the tree\'s').toBe(true);
+      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'model-aliases.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'model-aliases.sh'))),
+        'the seventh library is the tree\'s').toBe(true);
       const entry = path.join(home, '.local', 'bin', 'ccd');
       const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;

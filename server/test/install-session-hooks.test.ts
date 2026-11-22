@@ -54,11 +54,12 @@ describe('install-session-hooks', () => {
   // after confirming the red. Main found the same gap independently (D-306 (was D-B8-10))
   // and made the pairing a mechanism: the derived-set test below fails on any
   // divergence between EVENTS_JSON and the hook's own case arms.
-  it('registers the twelve measured events and preserves existing entries byte-identically', () => {
+  it('registers the fourteen measured events and preserves existing entries byte-identically', () => {
     run();
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     for (const ev of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest',
-      'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd']) {
+      'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd',
+      'PreModelSwitch', 'PostModelSwitch']) {   // the model events, report-only (door process B2)
       const entries = s.hooks[ev] as any[];
       expect(entries.some((e) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))),
         ev).toBe(true);

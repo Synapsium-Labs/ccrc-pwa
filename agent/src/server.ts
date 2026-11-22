@@ -47,13 +47,13 @@ import {
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { measureDisk, type DiskSeams } from './disk.js';
-import { measureHeadroom, measurePressure, type PressureSeams } from './pressure.js';
+import { measurePressure, measureSessions, type PressureSeams } from './pressure.js';
 import { measureBackup, type BackupSeams } from './backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools, type TestboxCaptureSeams, type TestboxOpSeams } from './testboxOp.js';
 import { isClaudeVersion } from '../../shared/claudeVersion.js';
 import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
 import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
-import { OVERLORD_HISTORY_OP, type OverlordHistoryReq } from '../../shared/agent-protocol.js';
+import { OVERLORD_HISTORY_OP, type OverlordHistoryReq, type PressureOpReply, type PressureOpSizeOnly } from '../../shared/agent-protocol.js';
 import {
   MODELS_OP, buildModelsArgv, type ModelsArgvRefusal, type ModelsOpAnswer, type ModelsReq,
 } from '../../shared/agent-protocol.js';
@@ -747,10 +747,19 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       return;
     }
     case 'pressure': {
-      // #1170. No argument (`validateReq` refuses a frame that carries one); two fixed kernel files. A file that cannot
-      // be read or parsed throws into the envelope's `.catch`, an error the server reads as unmeasured, never as calm.
-      // D-8122: the session slice's headroom beside it, `null` when unreadable (never a throw: the PSI stands alone).
-      send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams), headroomBytes: measureHeadroom(ctx.pressureSeams) }));
+      // #1170. No argument (`validateReq` refuses a frame that carries one); fixed kernel files only.
+      // D-8122: the session slice's headroom beside the PSI, `null` when unreadable (never a throw: the PSI stands alone).
+      // D-8920: the machine's size beside them, `null` when unmeasured (never a throw either), and it
+      // answers WITHOUT the PSI too. A box with no PSI (the two files unreadable or unparsed) still has memory and
+      // cores, so it answers the size alone (`PressureOpSizeOnly`): a reply with no PSI is no reading to every server
+      // (`readHostPsi`), never calm, exactly as the error this arm answered before was.
+      const sessions = measureSessions(ctx.pressureSeams);
+      let psi: PressureOpReply;
+      try { psi = measurePressure(ctx.pressureSeams); } catch {
+        send(ws, ok(req.id, { machine: sessions.machine } satisfies PressureOpSizeOnly));
+        return;
+      }
+      send(ws, ok(req.id, { ...psi, ...sessions }));
       return;
     }
     case 'backup': {

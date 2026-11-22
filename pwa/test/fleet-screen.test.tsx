@@ -2339,7 +2339,7 @@ describe('the head count', () => {
       sessions: [session({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, bucket: 'dead' })],
     });
 
-    expect(screen.getByText('1 session')).toBeInTheDocument(); // not '1 session · 1 waiting'
+    expect(screen.getByText('0 sessions')).toBeInTheDocument(); // an exited session is not counted, and nothing waits
     expect(screen.getByText('Exited')).toBeInTheDocument();
     expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText(/waiting/)).not.toBeInTheDocument();

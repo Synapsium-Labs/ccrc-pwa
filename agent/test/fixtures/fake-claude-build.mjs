@@ -7,7 +7,8 @@
 // It reads its VERSION from its own file name. Broken variants are chosen by that name (the environment is built from
 // empty, so no switch can ride in it): a patch of 999 never raises SubagentStop; a patch of 998 hangs at step two, never
 // answering that prompt; a patch of 997 raises everything but never exits on `/exit`; a patch of 996 ends step two's turn
-// with no Stop (its subagent runs, so only a Stop counted from step one could make that step look done).
+// with no Stop (its subagent runs, so only a Stop counted from step one could make that step look done); a patch of 995
+// raises PreModelSwitch on a typed `/model` but never PostModelSwitch.
 // It is written as CommonJS on purpose: the copy has no extension (its name is the version), and Node reads such a file as
 // CommonJS; it is only ever run from that copy.
 const { spawnSync } = require('node:child_process');
@@ -115,6 +116,10 @@ for await (const raw of readline.createInterface({ input: process.stdin })) {
     rmSync(statusFile, { force: true });
     if (patch === '997') { await new Promise(() => {}); }
     process.exit(0);
+  } else if (line === '/model' || line.startsWith('/model ')) {
+    const to = { from_model: 'fake-model', to_model: line.slice(6).trim() || 'fake-model' };
+    hook('PreModelSwitch', to);
+    if (patch !== '995') hook('PostModelSwitch', to);
   } else if (line === '/compact') await compact();
   else if (line.includes('step two') && patch === '998') continue;
   else if (line.includes('ccrc capture step')) await turn(line);

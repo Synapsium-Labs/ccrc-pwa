@@ -14,6 +14,7 @@ import { parsePlanTake, parsePlanTriage } from '../src/coord/planPolicy.js';
 import { parseMapProposal } from '../src/linear/migrationPolicy.js';
 import { clientRoutes } from './ccrcApiTable.js';
 import { parsePlanTicketMove } from '../src/coord/planPolicy.js';
+import { parseTeamSuggestion } from '../src/linking/policy.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -320,6 +321,73 @@ describe('the plan reference after wave 6 (D-8185)', () => {
 
   it('a managed team is defined as the code decides it, a team whose migration is applied (review 2580 F3)', () => {
     expect(flat(plan())).toContain('a managed team (a team whose migration is applied)');
+  });
+});
+
+// Linear hierarchy wave 8's carried `w8-skill-section` (D-8808, D-8809; run 3238): the coordinator's team suggestion, the
+// `linking suggest` section of `references/plan.md`. Its load-bearing sentences are pinned inside the section: who may suggest,
+// one suggestion each, the identity the client fills, and the suggest door's own refusal words, from a list kept by hand that
+// reads the section, never the route (review 3242 F1, 3245 F1). The attribution and token words the door passes through are the
+// ones api.md lists for the mail routes, with the stale-uuid remedy in SKILL.md; no-body and bad-body are the client's own, and
+// the section's identity sentence describes bad-body's cause. Nothing here checks either.
+describe('the linking suggest section (D-8808, D-8809)', () => {
+  /** The section, from its heading to the next one, whitespace flattened (raw when `raw`). */
+  const suggestSection = (raw = false): string => {
+    const text = plan();
+    const at = text.indexOf('\n## linking suggest\n');
+    expect(at, 'no "linking suggest" section').toBeGreaterThanOrEqual(0);
+    const next = text.indexOf('\n## ', at + 1);
+    const section = text.slice(at, next === -1 ? undefined : next);
+    return raw ? section : flat(section);
+  };
+
+  it('comes after plan take, and its one example is the client verb with a body that names no identity', () => {
+    const text = plan();
+    expect(text.indexOf('\n## plan take\n'), 'no "plan take" section').toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('\n## linking suggest\n')).toBeGreaterThan(text.indexOf('\n## plan take\n'));
+    const bodies = [...suggestSection(true).matchAll(/"\$API" linking suggest --json - <<JSON\n(\{[^\n]+\})\nJSON/g)].map((m) => m[1]!);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).not.toMatch(/"byId"|"byUuid"/);
+  });
+
+  it('its example, as written, parses as the route parses it once the client adds the pane\'s pair, and with a workspace added (review 3242 A3)', () => {
+    const body = JSON.parse(/--json - <<JSON\n(\{[^\n]+\})\nJSON/.exec(suggestSection(true))![1]!.replace('<reason>', 'the team that owns this work')) as Record<string, unknown>;
+    const pair = { byId: 'lane-a-project-a', byUuid: '00000000-0000-4000-8000-000000000001' };
+    const asWritten = { ...body, ...pair };
+    expect(parseTeamSuggestion(asWritten).ok, JSON.stringify(asWritten)).toBe(true);
+    const named = { ...body, ...pair, workspace: '00000000-0000-4000-8000-000000000002' };
+    expect(parseTeamSuggestion(named).ok, JSON.stringify(named)).toBe(true);
+  });
+
+  it('says who may suggest: a session that claims an open run, a programme\'s coordinator', () => {
+    expect(suggestSection()).toContain('`not-a-coordinator` (the session claims no open run: only a programme\'s coordinator suggests)');
+    expect(suggestSection()).toContain('`run-unreadable` (the open run claimants could not be read: try again)');
+  });
+
+  it('says one suggestion each: a resend replaces the session\'s earlier one', () => {
+    expect(suggestSection()).toContain('Each session keeps one suggestion per project: sending again replaces your earlier one.');
+  });
+
+  it('says the client fills the identity and refuses a body that names it', () => {
+    expect(suggestSection()).toContain('Never put `byId` or `byUuid` in the body: the client adds the pane\'s own pair and refuses a body that names either.');
+  });
+
+  it('says a suggestion is a candidate, never a link, and its reason stays in the console', () => {
+    const section = suggestSection();
+    expect(section).toContain('A suggestion is a candidate and never a link');
+    expect(section).toContain('The reason is shown in the console only, never written to Linear');
+  });
+
+  it('names the suggest door\'s own refusal words, team-ambiguous and write-failed with their remedies (review 3242 F1, 3245 F1)', () => {
+    const section = suggestSection();
+    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'not-configured', 'write-failed',
+      'no-project', 'linear-text-public', 'bad-request']) {
+      expect(section, `the section does not name ${word}`).toContain(`\`${word}\``);
+    }
+    expect(section).toContain('`team-ambiguous` (no workspace named and the key is in more than one connected workspace: send it again with `workspace`)');
+    expect(section).toContain('`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions)');
+    expect(section).toContain('`unavailable` (the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the operator)');
+    expect(section).toContain('`write-failed` (the store write failed: try once more; if it is refused again, stop and tell the operator)');
   });
 });
 

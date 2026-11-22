@@ -211,6 +211,15 @@ type Body = Record<string, unknown>;
 const isObject = (v: unknown): v is Body => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v: unknown, max: number): string | null =>
   typeof v === 'string' && v.trim() !== '' && v.length <= max ? v.trim() : null;
+/** A text the body may leave out (D-8931; a do item's note). Three answers, told apart: no text (absent, `null`,
+ *  or a text that is empty once trimmed), the text itself, trimmed, or a refusal (not a text, or longer than `max`, counted
+ *  before the trim as `text` counts it). */
+const optionalText = (v: unknown, max: number): { ok: true; text: string | null } | { ok: false } => {
+  if (v === undefined || v === null) return { ok: true, text: null };
+  if (typeof v !== 'string' || v.length > max) return { ok: false };
+  const trimmed = v.trim();
+  return { ok: true, text: trimmed === '' ? null : trimmed };
+};
 const posInt = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 1 ? v : null);
 
 /** The attribution pair, from a body or a query. Both must be non-empty strings. */
@@ -915,7 +924,12 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const given = body['answer'];
     let answer: string | null = null;
     if (item.kind === 'do') {
-      if (given !== undefined && given !== null) return bad(reply, 'a do item takes no answer');
+      // D-8931: a do item's tick may carry the operator's note, because a coordinator may ask for one in the
+      // item's steps (who did a step, and when). It is optional, and it is the tick's `answer` from here on: the mail and the
+      // stored answer are the ones a decide or value answer takes. No note is `null`, which clears an earlier tick's.
+      const note = optionalText(given, ANSWER_MAX);
+      if (!note.ok) return bad(reply, `a do item's note is a text of at most ${ANSWER_MAX} characters`);
+      answer = note.text;
     } else {
       answer = text(given, ANSWER_MAX);
       if (answer === null) return bad(reply, `a ${item.kind} item needs an answer of 1 to ${ANSWER_MAX} characters`);

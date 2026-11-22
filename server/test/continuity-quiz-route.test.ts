@@ -19,6 +19,7 @@ import { SETTINGS_MODES, TREATMENT_ARM } from '../../deploy/history-replay.mjs';
 import { canonicalJson } from '../../ccd/history/lib.mjs';
 import {
   QUIZ_PENDING_CAP, QUIZ_PILOT_SKIPPED, QUIZ_SETTINGS_MODES, QUIZ_SINGLE_REPORT_KEYS, QUIZ_SINGLE_REPORT_KIND, QUIZ_TREATMENT_ARM,
+  W1A_ARM_ROWS,
 } from '../src/continuity/quiz.js';
 import { QUIZ_RECORD_BODY_LIMIT } from '../src/continuity/quizRoutes.js';
 import { ruleQuizRun } from '../src/continuity/quizStore.js';
@@ -272,6 +273,63 @@ describe('POST /api/continuity/quiz-runs/:id/rule (the rule door, session and st
     r.coord.setLaneArm('continuity', 'live', 5);
     await r.stepUp();
     expect(json(await rule(r, a, 'confirm'))).toEqual({ ok: true, id: a, state: 'confirmed', baseline: false });
+  });
+});
+
+describe('POST /api/continuity/quiz-runs/:id/withdraw (the operator\'s withdraw of the baseline, session, no step-up; review 3232 F1e)', () => {
+  const withdraw = (r: Rig, id: number | string, o: { cookie?: boolean; headers?: Record<string, string> } = {}) =>
+    r.send({ url: `/api/continuity/quiz-runs/${id}/withdraw`, payload: {}, ...o });
+  const baseline = async (r: Rig): Promise<number> => {
+    const id = json(await record(r, bodyOf(r)))['id'] as number;
+    expect(ruleQuizRun(r.coord.db, { id, action: 'confirm', at: 1, by: 'device-a' }, (l) => r.coord.laneArmSetting(l))).toMatchObject({ baseline: true });
+    return id;
+  };
+
+  it('refuses while sign-in is dark, and without a session, the box token alone included', async () => {
+    const dark = await rig();
+    const id = await baseline(dark);
+    expect(json(await withdraw(dark, id))).toMatchObject({ ok: false, error: 'auth-off' });
+    // The card names the baseline's run, so its Withdraw can.
+    const card = await app!.inject({ method: 'GET', url: '/api/coord/lane-arm' });
+    expect(json(card)['quizBaseline']).toMatchObject({ baseline: { state: 'recorded', id } });
+    await app!.close();
+    const r = await rig({ armed: true });
+    const id2 = await baseline(r);
+    expect(json(await withdraw(r, id2, { cookie: false }))).toMatchObject({ ok: false, error: 'unauthenticated' });
+    expect((await withdraw(r, id2, { cookie: false, headers: TOKEN })).statusCode).toBeGreaterThanOrEqual(400);
+    expect(quizBaselineRead(r.coord.db)).toMatchObject({ ok: true, exists: true });
+  });
+
+  it('with a session and no step-up: the baseline is withdrawn, once', async () => {
+    const r = await rig({ armed: true });
+    const id = await baseline(r);
+    const res = await withdraw(r, id);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(json(res)).toEqual({ ok: true, id, state: 'withdrawn', baseline: false });
+    expect(quizBaselineRead(r.coord.db)).toEqual({ ok: true, exists: false, at: null });
+    const again = await withdraw(r, id);
+    expect(again.statusCode).toBe(400);
+    expect(json(again)).toMatchObject({ ok: false, error: 'bad-request', detail: `run ${id} is withdrawn, not a confirmed baseline` });
+    expect(json(await withdraw(r, 999))).toEqual({ ok: false, error: 'bad-request', detail: 'no quiz run 999' });
+    expect(json(await withdraw(r, 'x'))).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  // Review 3254 F6: end to end, a withdrawn baseline stops both Live doors, the card's and the coordinator's.
+  it('after the withdraw, the card\'s Live and the coordinator\'s Live both answer baseline-missing, and no lane moves', async () => {
+    const r = await rig({ armed: true });
+    r.coord.openRun({ program: 'overlord', title: 'OVERLORD', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    const lane = W1A_ARM_ROWS[0];
+    const card = () => r.send({ url: '/api/coord/lane-arm', payload: { lane, choice: 'live' } });
+    const coordLive = () => r.send({ url: '/api/continuity/quiz-baseline/live', payload: { fromId: 'lane-a', fromUuid: 'u-lane-a', lane }, headers: TOKEN, cookie: false });
+    const id = await baseline(r);
+    // With the baseline the card's Live reaches its confirm: the baseline is not what stops it.
+    expect(json(await card())).toMatchObject({ ok: false, error: 'confirm-required' });
+    expect((await withdraw(r, id)).statusCode).toBe(200);
+    for (const [door, res] of [['card', await card()], ['coordinator', await coordLive()]] as const) {
+      expect(res.statusCode, `${door}: ${res.body}`).toBe(409);
+      expect(json(res), door).toMatchObject({ ok: false, error: 'baseline-missing' });
+    }
+    expect(r.coord.laneArmSetting(lane)).not.toMatchObject({ choice: 'live' });
   });
 });
 

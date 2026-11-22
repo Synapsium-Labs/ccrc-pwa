@@ -21,6 +21,7 @@ const NO_SUBAGENT_STOP = '2.1.999';
 const HANGS = '2.1.998';
 const NEVER_EXITS = '2.1.997';
 const NO_SECOND_STOP = '2.1.996';
+const NO_POST_MODEL_SWITCH = '2.1.995';
 
 /** The test launcher: the build as a child with the spec's env as its WHOLE environment, stdin piped. */
 const pipeLauncher: CaptureLauncher = {
@@ -89,6 +90,17 @@ describe('a build that started but stalled FAILS, naming what was never recorded
     expect(r.result?.pass).toBe(false);
     expect(r.result?.output).toContain('SubagentStop');
     expect(gone(root, 'nosub', NO_SUBAGENT_STOP)).toBe(true);
+  }, 120_000);
+
+  it('one that raises PreModelSwitch on the typed /model but never PostModelSwitch fails, naming it (door process B2)', async () => {
+    const root = freshRoot();
+    place(root, NO_POST_MODEL_SWITCH);
+    const r = await runner(root, { stepTimeoutMs: 8000 }).run('nomodel', NO_POST_MODEL_SWITCH);
+    expect(r.detail).toBeNull();
+    expect(r.result?.pass).toBe(false);
+    expect(r.result?.output).toContain('PostModelSwitch');
+    expect(r.result?.output).not.toContain('event PreModelSwitch: never recorded');
+    expect(gone(root, 'nomodel', NO_POST_MODEL_SWITCH)).toBe(true);
   }, 120_000);
 
   it('one that hangs at a step fails within the short deadline, the drive not finished', async () => {

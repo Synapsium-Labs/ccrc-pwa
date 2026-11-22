@@ -43,7 +43,8 @@ const QUIET = buttonVariants({ variant: 'quiet', size: 'fit' });
 const SITES = [
   { file: ['fleet', 'CoordBanner.tsx'], hook: 'coord-toggle', flex: true },
   { file: ['fleet', 'ChildReclaimBanner.tsx'], hook: 'child-reclaim-toggle', flex: true },
-  { file: ['fleet', 'CapsControl.tsx'], hook: 'caps-save', flex: true },
+  // Two since D-8920: `save` (the hook held here) and `use automatic` (`caps-auto`), the same variant.
+  { file: ['fleet', 'CapsControl.tsx'], hook: 'caps-save', flex: true, uses: 2 },
   // The board's one quiet control since the programme cards (D-8075): the door above. Finished's Show more left with its run list.
   { file: ['screens', 'RunsScreen.tsx'], hook: 'program-start-door', flex: false },
   // The fifth, found BY this file on the day the other four were folded —

@@ -1,0 +1,16 @@
+# ccd-quiz-weekly.timer - fires ccd-quiz-weekly.service: first thirty minutes after the timer is armed, then six hours
+# after the end of each run. The runner does the week's one act per tick (or nothing, when the week is already
+# confirmed), so the cadence only bounds how soon a stopped week is resumed.
+[Unit]
+Description=Run the weekly replay quiz unattended, six hours after the last run ended
+[Timer]
+# `OnActiveSec=`, NOT `OnBootSec=`, for ccd-land-probe.timer's reason (D-1981): this timer is first armed by
+# an install or a deploy on a box that has been up for days, where a boot-relative elapse point is already past and the
+# first run would start AT ONCE, on top of the deploy's supervisor sweep. Thirty minutes lets the box settle first.
+OnActiveSec=30min
+# `OnUnitInactiveSec=`, NOT `OnUnitActiveSec=`: counted from the END of the last run, so a run that takes
+# hours never stacks a second one behind it, and a tick that finds nothing to do costs a six-hour wait, not a busy loop.
+OnUnitInactiveSec=6h
+AccuracySec=5min
+[Install]
+WantedBy=timers.target

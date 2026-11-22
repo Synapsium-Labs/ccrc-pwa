@@ -900,6 +900,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       '--user enable --now ccd-limit-watchdog.timer',
       // landing order wave 3b: the conflict radar's timer, on the sweeps' gate and degrade-rather-than-die idiom.
       '--user enable --now ccd-land-probe.timer',
+      // Overlord W1a: the weekly replay quiz's timer, `!= server` like the radar, so `both` enables it.
+      '--user enable --now ccd-quiz-weekly.timer',
       // test box TB11 (D-7413): the durations timer, on the radar's gate and idiom.
       '--user enable --now ccd-testbox-times.timer',
       // D-7857: the carry dedupe timer, on the radar's gate and idiom.

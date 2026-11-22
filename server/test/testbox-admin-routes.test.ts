@@ -472,6 +472,21 @@ describe('the ledger: one closed row per short act (spec §2.10, T10)', () => {
     expect(r.rows().map((x) => [x['act'], x['outcome'], x['code']])).toEqual([['connect', 'refused', 'busy']]);
   });
 
+  it('a busy refusal carries the holder the verb named, held to its shape, and drops one that is off it (D-8899)', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    const holder = { sub: 'parity', startedAt: 1_700_000_000_000, deadlineAt: 1_700_003_600_000 };
+    r.stub('repair', { out: { ok: false, code: 'busy', holder: { ...holder, address: 'testbox.invalid' } } });
+    const named = await post(r, 'repair', { fields: {} }, cookie);
+    expect(named.statusCode, named.body).toBe(409);
+    expect(named.json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'busy', holder });
+    r.stub('repair', { out: { ok: false, code: 'busy', holder: { sub: '/home/x', startedAt: 1, deadlineAt: 2 } } });
+    expect((await post(r, 'repair', { fields: {} }, cookie)).json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'busy' });
+    // only `busy` names one
+    r.stub('repair', { out: { ok: false, code: 'unreachable', holder } });
+    expect((await post(r, 'repair', { fields: {} }, cookie)).json()).toEqual({ ok: false, error: 'testbox-admin-refused', code: 'unreachable' });
+  });
+
   it('a failed ledger write still answers the act', async () => {
     const r = await openApp({ breakAudit: true });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

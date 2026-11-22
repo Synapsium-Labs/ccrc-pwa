@@ -2,8 +2,9 @@
 // renewal lane, the weekly replay quiz"; W1a, the replay quiz piece, plan `w1a-replay-quiz.md` Task 4; W0-28 ruled B). Its
 // rule is L1 (`quiz.ts#quizLaneVerdict`); this file reads the facts through its port, asks the rule and raises.
 //
-// THE LANE REMINDS, IT NEVER RUNS (slug quiz-lane-reminds-not-runs). History's quiz driver refuses inside a pane and the
-// ruling's condition 3 makes it the operator's by hand, so the lane's one effect is one operator item a week, through the
+// THE LANE REMINDS, IT NEVER RUNS (slug quiz-lane-reminds-not-runs). History's quiz driver refuses inside a pane; ccrc's own
+// weekly timer runs it (`deploy/history-quiz-unattended.mjs`, run 3212), never this lane, so the lane's one effect is one
+// operator item a week, raised only once the unattended run's grace has passed with no confirmed run, through the
 // ledger's existing server raise (`raiseItem`, actor `ccrc`). It runs no process, reads no history file, writes no marker
 // and records no run: `continuity-quiz-lane.test.ts` pins its imports. While the record path is absent
 // (`QUIZ_RECORD_READY`, ask 434) it raises nothing.
@@ -35,7 +36,7 @@ export function runQuizLane(port: QuizLanePort, now: number, log: (line: string)
   const pendingWaits = port.pendingWaits();
   const baseline = port.baseline();
   const itemRaised = port.itemRaised([quizItemText(week.key, false).title, quizItemText(week.key, true).title]);
-  const verdict = quizLaneVerdict({ recordReady: port.recordReady, week, recordedAts, pendingWaits, baseline, itemRaised });
+  const verdict = quizLaneVerdict({ recordReady: port.recordReady, now, week, recordedAts, pendingWaits, baseline, itemRaised });
   if (verdict.kind === 'hold') {
     if (verdict.why === 'unmeasured') {
       const failed = ([['recorded runs', recordedAts], ['pending runs', pendingWaits], ['baseline', baseline], ['raised items', itemRaised]] as const)

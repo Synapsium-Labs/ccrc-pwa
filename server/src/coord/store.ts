@@ -61,6 +61,7 @@ import type { Invitation } from './peerBound.js';
 import type { KeyedMail } from './mailKey.js';
 import { urgentSenderVerdict, type UrgentFacts, type UrgentRole, type UrgentRunIds, type UrgentVerdict } from './urgentMail.js';
 import type { ChildMark } from '../../../shared/api.js';
+import type { CapMode } from '../../../shared/runCap.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -6216,10 +6217,23 @@ export class CoordStore {
    *  `coord.setCaps` call site. Nothing moves into `caps.ts`, so its purity scan
    *  is untouched; the red that scan warns about is for a DEFAULTED clock
    *  parameter inside `decideCaps`, which this is not. */
-  setCaps(next: CoordCaps, at: number = Date.now()): void {
+  /** D-8920: `mode` is written in the same statement, so this stays the ONE writer of the stored number
+   *  and of what it is (`coordinator_state.capMode`, migration 121). `override`: `next` is the operator's number, and it
+   *  is the cap. `automatic`: the cap is derived from the fleet host, and `next` is only the number used while the host
+   *  is unmeasured. It defaults to `override` because writing a number IS setting one: the route always says which
+   *  (`decideCaps`'s `mode`), and the default is what a fixture that sets a cap means. */
+  setCaps(next: CoordCaps, at: number = Date.now(), mode: CapMode = 'override'): void {
     this.db.prepare(
-      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, updatedAt = ? WHERE id = 1',
-    ).run(next.maxConcurrentWorkers, at);
+      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, capMode = ?, updatedAt = ? WHERE id = 1',
+    ).run(next.maxConcurrentWorkers, mode, at);
+  }
+
+  /** D-8920: what the stored number is, `coordinator_state.capMode`'s ONE reader. The column's CHECK
+   *  holds it to the two words; migration 121 made a row somebody had set `override` and left an untouched seed
+   *  `automatic`. Read beside `caps()` by `dispatch.ts#capNow` alone. */
+  capMode(): CapMode {
+    const row = this.db.prepare('SELECT capMode FROM coordinator_state WHERE id = 1').get() as { capMode: CapMode };
+    return row.capMode;
   }
 
   /** D-1169's read half. `coordinator_state.updatedAt` has been written since
@@ -6417,7 +6431,7 @@ export class CoordStore {
   /** A capture's verdict, on a `queued` row only. */
   recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
   /** The operator's **Capture again** on a failed build. */
-  requeueClaudeBuild(build: string): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build); }
+  requeueClaudeBuild(build: string, opts?: builds.ClaudeBuildRequeueOptions): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build, opts); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 

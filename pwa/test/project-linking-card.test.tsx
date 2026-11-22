@@ -1053,7 +1053,7 @@ describe('the candidates (D-8808)', () => {
     fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
     const sentence = await within(rowOf('project-a')).findByRole('status');
     expect(sentence.textContent).toBe(KEY_WRITE_WORDS.unavailable);
-    expect(sentence.textContent).toMatch(/Linear keys .*could not be read, so nothing was changed/);
+    expect(sentence.textContent).toMatch(/Linear keys, or a Linear workspace, could not be read, so nothing was changed\. Try again later\./);
     expect(document.body.textContent).not.toContain('the Linear store could not be read');
     // A refusal before any write: the row is not locked behind a re-read.
     expect(keyField('project-a')).not.toBeDisabled();

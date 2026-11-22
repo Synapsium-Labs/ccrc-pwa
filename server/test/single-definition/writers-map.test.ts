@@ -319,7 +319,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
-  'continuity_hook_reports', 'continuity_witness_checks'] as const;
+  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -467,6 +467,11 @@ describe(TABLES_PIN, () => {
       continuity_hook_reports: ['server/src/continuity/hookReportStore.ts#insertHookReport'],
       // The witness checks (Overlord W1 door process B1, plan w1-door-process.md Task 9): one writer, which also prunes its rows past 7 days.
       continuity_witness_checks: ['server/src/continuity/hookReportStore.ts#recordWitnessCheck'],
+      // The run cap's stored number and what it is (D-8920): ONE writer of `maxConcurrentWorkers`, `capMode`
+      // and `updatedAt`, in one statement, reached only from the caps door (`coord-caps-route.test.ts` holds the one
+      // caller). A second method that writes the mode reds here. The seed row and migration 121's upgrade rule are SQL in
+      // MIGRATIONS' string, so the scanner names its module.
+      coordinator_state: ['server/src/coord/schema.ts#(module)', `${S}setCaps`],
     });
   });
 
