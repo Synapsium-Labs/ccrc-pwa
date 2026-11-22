@@ -326,8 +326,10 @@ describe('the plan reference after wave 6 (D-8185)', () => {
 
 // Linear hierarchy wave 8's carried `w8-skill-section` (D-8808, D-8809; run 3238): the coordinator's team suggestion, the
 // `linking suggest` section of `references/plan.md`. Its load-bearing sentences are pinned inside the section: who may suggest,
-// one suggestion each, the identity the client fills, and the suggest door's own refusal words (the attribution and token words
-// are in api.md, for every door; the list below is kept by hand and reads the section, never the route: review 3242 F1).
+// one suggestion each, the identity the client fills, and the suggest door's own refusal words, from a list kept by hand that
+// reads the section, never the route (review 3242 F1, 3245 F1). The attribution and token words the door passes through are the
+// ones api.md lists for the mail routes, with the stale-uuid remedy in SKILL.md; no-body and bad-body are the client's own, and
+// the section's identity sentence describes bad-body's cause. Nothing here checks either.
 describe('the linking suggest section (D-8808, D-8809)', () => {
   /** The section, from its heading to the next one, whitespace flattened (raw when `raw`). */
   const suggestSection = (raw = false): string => {
@@ -376,7 +378,7 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
     expect(section).toContain('The reason is shown in the console only, never written to Linear');
   });
 
-  it('names the suggest door\'s own refusal words (the attribution and token words are in api.md), team-ambiguous and write-failed with their remedies (review 3242 F1)', () => {
+  it('names the suggest door\'s own refusal words, team-ambiguous and write-failed with their remedies (review 3242 F1, 3245 F1)', () => {
     const section = suggestSection();
     for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'write-failed',
       'no-project', 'linear-text-public', 'bad-request']) {

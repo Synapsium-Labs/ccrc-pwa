@@ -256,7 +256,8 @@ no open run: only a programme's coordinator suggests), `run-unreadable` (the ope
 `unavailable` (the Linear store could not be read: try again later), `write-failed` (the store write failed: try once more;
 if it is refused again, stop and tell the operator), `no-project`, `linear-text-public` and `bad-request` (a body with a key
 other than these, or a field missing or malformed: the project, the team key, a `workspace` that is present but not a Linear
-id, or a reason that is empty, over 280 characters or not one plain line; the detail names the field).
+id, or a reason that is empty, over 280 characters (an emoji counts as two) or not one plain line; the detail names the
+field).
 
 ## Keep the plan: the programme page shows what remains
 

@@ -233,7 +233,7 @@ on the committed code. A test only; no code and no ledger entry change (D-8809).
 Task 8.6 and the final fixes, checked sentence by sentence against the suggest door (`POST /api/linking/suggest` in
 `server/src/linking/routes.ts`, its deciders `parseTeamSuggestion`, `suggesterVerdict`, `teamPairVerdict` and
 `suggestionReasonVerdict` in `linking/policy.ts`, the store's `recordTeamSuggestion`) and the client's `linking.suggest` row.
-The changes, each where the code says more than the carried text did (round 1 and its fix round, review 3242):
+The changes, each where the code says more than the carried text did (round 1 and its fix rounds, reviews 3242 and 3245):
 
 | Change | The code it follows |
 |---|---|
@@ -241,12 +241,14 @@ The changes, each where the code says more than the carried text did (round 1 an
 | Added: a project keeps at most eight suggestions, so one can drop off when other sessions suggest, and setting the key clears them all (review 3242 A1) | `TEAM_SUGGESTIONS_MAX` and its eviction of the oldest of the other sessions' suggestions in `recordTeamSuggestion`; a key write clears the cell (`setLinking`, and the automatic and Overlord links) |
 | Added the refusal `unavailable` (the Linear store could not be read: try again later) | the route refuses `unavailable` when the Linear store is not listed, before the pair is checked |
 | Added the refusal `write-failed` (the store write failed: try once more, then tell the operator; review 3242 F1) | the route refuses `write-failed` when the store write throws |
-| `bad-request`: "a body that is not exactly these keys, or a reason over its length" became a body with another key, or a field missing or malformed (the project, the team key, a `workspace` present but not a Linear id, a reason that is empty, over 280 characters or not one plain line; the detail names the field), and `workspace` is said to be optional (review 3242 A2) | `parseTeamSuggestion` checks each field in turn and names the one it refuses; `TEAM_SUGGESTION_WHY_MAX` is 280 |
+| `bad-request`: "a body that is not exactly these keys, or a reason over its length" became a body with another key, or a field missing or malformed (the project, the team key, a `workspace` present but not a Linear id, a reason that is empty, over 280 characters (an emoji counts as two) or not one plain line; the detail names the field), and `workspace` is said to be optional (review 3242 A2, 3245 A1) | `parseTeamSuggestion` checks each field in turn and names the one it refuses; `TEAM_SUGGESTION_WHY_MAX` is 280, compared with the string's length, which counts an emoji as two |
 | The example drops its `"workspace":"<id, optional>"` placeholder, which copied as written is refused, so it can be sent as it stands (review 3242 A3) | `parseTeamSuggestion` refuses a `workspace` that is present but not a Linear id |
 
-The section names the suggest door's own refusal words, as `## plan take` does for its door; the attribution and token words
-(`stale-uuid`, `unknown-sender`, `registry-unmeasurable`, `unauthenticated`) and the client's `no-body` and `bad-body` are in
-`references/api.md` for every door (the coordinator's ruling on review 3242 F1).
+The section names the suggest door's own refusal words, as `## plan take` does for its door (the coordinator's ruling on
+review 3242 F1). The other words a suggestion can meet (review 3245 F1): the attribution and token words the
+door passes through (`stale-uuid`, `unknown-sender`, `registry-unmeasurable`, `unauthenticated`) are the ones
+`references/api.md` lists for the mail routes, with the `stale-uuid` remedy in `SKILL.md`; `no-body` and `bad-body` are the
+client's own, and the section's identity sentence describes `bad-body`'s cause. No pin checks either.
 
 `'linking.suggest'` joined the executable-corpus list of `server/test/ccrc-api-closed.test.ts`, a census that maps the
 section's client command to a row of the client's route table (it does not run the example). `server/test/coordinator-plan-reference.test.ts`
