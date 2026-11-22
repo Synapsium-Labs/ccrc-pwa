@@ -13,7 +13,7 @@ records what the wave built and every departure, for the coordinator to fold int
 | 8.3 | A fixed read `attachmentsForUrl` (constructed fixture), the reader `readAttachedIssues` (L4, pass `team-link`), the pure tally and completeness rule in `teamLink.ts`, and evidence `pr-attachments` weighed beside ticket ids. Off: nothing wires the reader. | `linking-attached-issues`, `linking-attached-off`, `linking-team-link`, `linear-fixtures`, `linear-ops`, `linear-hierarchy-ops`, `rings/outward-edges` |
 | 8.4 | `POST /api/linking/suggest` (box token, attribution) and `ccrc-api linking suggest`; suggestions stored in `teamSuggestions`, shown as `suggested` candidates, never linked, cleared when a key is set. | `linking-routes`, `linking-store`, `auth-gate`, `box-token-census`, `ccrc-api`, `ccrc-api-closed`, `mail-routes` |
 | 8.5 | `POST /api/linking/confirm`, an Overlord door (act `link-team`, `full` only) through the one gate; the link and one big call under `linear-sync` in one transaction; `teamCallId` and `linkSourceOf`; a `link_team` row in the door process. | `linking-overlord-confirm`, `single-definition/team-link-source`, the Overlord ladder, door and gate censuses, `door-tools`, `door-tools-argv`, `door-process` |
-| 8.6 | The project linking card: a workspace picker for a key two workspaces hold, candidates with workspace, evidence and source, an Overlord link shown as a call made for the operator. The skill section is carried (`w8-skill-section`, below). | `project-linking-card` (unit and browser), `linking-words` |
+| 8.6 | The project linking card: a workspace picker for a key two workspaces hold, candidates with workspace, evidence and source, an Overlord link shown as a call made for the operator. The skill section was carried (`w8-skill-section`, built by run 3238, below). | `project-linking-card` (unit and browser), `linking-words` |
 
 ## Departures (D-8808, D-8809)
 
@@ -89,35 +89,10 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-triage-l1`: built by run 3155 (below). It moved the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`)
   into `planPolicy.ts` beside `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It had stayed in the route because
   `planPolicy.ts` was held by another wave; D-8808 stated it as a bend.
-- `w8-skill-section`: the coordinator skill's plan reference gains the section below, in a PR of its own: the review
-  judge refuses a PR that changes a rules file and anything else (`rules-mixed`), so it left this one. Its text, as built
-  and reviewed in Task 8.6 and the final fixes, to append after `## plan take` in `ccd/coordinator-skill/references/plan.md`
-  (with `'linking.suggest'` added to the executable-corpus list of `server/test/ccrc-api-closed.test.ts`):
-
-````markdown
-## linking suggest
-
-A project with no Linear team key, whose programme files into it, has nowhere for its tickets to go. A coordinator that knows
-which team it should be suggests one, with exactly one body:
-
-```bash
-"$API" linking suggest --json - <<JSON
-{"project":"project-a","team":"AAA","workspace":"<id, optional>","why":"<reason>"}
-JSON
-```
-
-`workspace` is needed only when the key exists in more than one connected workspace; without it, the one workspace that
-holds the key is recorded. Never put `byId` or `byUuid` in the
-body: the client adds the pane's own pair and refuses a body that names either. A suggestion is a candidate and never a
-link: it appears on the console's Project linking card, under the project, with the workspace and your reason, and the
-operator taps it, or the Overlord confirms it within its authority. The reason is shown in the console only, never written
-to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
-`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
-`team-unknown` (no connected workspace has that team, or the named workspace does not), `team-ambiguous` (no workspace named
-and the key is in more than one connected workspace: send it again with `workspace`), `not-a-coordinator` (the session claims
-no open run: only a programme's coordinator suggests), `run-unreadable` (the open run claimants could not be read: try again),
-`no-project`, `linear-text-public` and `bad-request` (a body that is not exactly these keys, or a reason over its length).
-````
+- `w8-skill-section`: built by run 3238 (below). The coordinator skill's plan reference gained its `## linking suggest`
+  section after `## plan take`, in a PR of its own: the review judge refuses a PR that changes a rules file and anything else
+  (`rules-mixed`), so wave 8's PR left it.
+- `w8-folded-pin`: built by run 3230 (#3172, below).
 
 ## For the merge
 
@@ -251,3 +226,24 @@ deleted every suite stayed green and the trail held the call twice under one Rea
 `waiting-screen.test.tsx` ("Show all with a shown target keeps its row drawn and marked") now asserts, before its Show all click,
 that the call's cleared row is drawn exactly once. Measured: with the check deleted it reds (`expected 2 to be 1`), and it passes
 on the committed code. A test only; no code and no ledger entry change (D-8809).
+
+## Run 3238 (`w8-skill-section`): what was built
+
+`ccd/coordinator-skill/references/plan.md` gains `## linking suggest` after `## plan take`: the text this note carried from
+Task 8.6 and the final fixes, checked sentence by sentence against the suggest door (`POST /api/linking/suggest` in
+`server/src/linking/routes.ts`, its deciders `parseTeamSuggestion`, `suggesterVerdict`, `teamPairVerdict` and
+`suggestionReasonVerdict` in `linking/policy.ts`, the store's `recordTeamSuggestion`) and the client's `linking.suggest` row.
+Three changes, each where the code says more than the carried text did:
+
+| Change | The code it follows |
+|---|---|
+| Added: "Each session keeps one suggestion per project: sending again replaces your earlier one." | `recordTeamSuggestion` keeps one element per suggesting session (a resend replaces it) |
+| Added the refusal `unavailable` (the Linear store could not be read: try again later) | the route refuses `unavailable` when the Linear store is not listed, before the pair is checked |
+| `bad-request`: "a reason over its length" became "a reason that is empty, over its length or not one line" | `parseTeamSuggestion` refuses `why` when empty, over `TEAM_SUGGESTION_WHY_MAX` or holding a control or line-separator character |
+
+`'linking.suggest'` joined the executable-corpus list of `server/test/ccrc-api-closed.test.ts`, so the section's example maps
+to the client's route table. `server/test/coordinator-plan-reference.test.ts` pins, inside the section, who may suggest, one
+suggestion each, the identity the client fills, the candidate rule and every refusal word, and parses the example as the route
+parses it with the client's pair added, with a workspace and without one. Measured: against `plan.md` without the section
+all seven new cases and the corpus list are red; with it they pass. A rules file and the tests that pin it, landed as one PR,
+as ruled for #3151, #3155 and #3163. No code change and no new deviation number (D-8808, D-8809).
