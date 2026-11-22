@@ -28,31 +28,47 @@ type a `/model` re-pick into a running session; make "behind its class's id" one
   `telemetry: anthropic`, the rule `isAnthropicLane` uses), a readable routing class that is one of the four (`default`
   and an unknown word are none), and a usage reading whose model is of that class's family. A row that fails any of
   these is `none` and its lane is never read for it.
+- **Only a reading rendered after the current pane started counts** (fix round 1). The reading's time (`ts`, seconds)
+  must be strictly after the live start the roll already reads. An unknown start is no candidate. A reading from before
+  the start describes the process a relaunch replaced. A session relaunched by any other path (a build or release roll, a
+  swap, a wake) comes up on its class's current id and has not rendered since, so that reading would roll it for nothing.
+  **There is no freshness rule beyond that, by the coordinator's answer in round 1.** A reading is marked stale 30
+  minutes after its render (`USAGE_FRESH_S`), and the roll takes a session only after 90 quiet minutes. Claude Code
+  does not re-render an idle session's status line: on the fleet box, 103 of 157 usage readings were over 90 minutes old
+  (median 142 minutes), and ccrc configures no periodic refresh. So every reading the roll could act on is stale, and a
+  stale rule would roll nothing. A case pins a stale but post-start reading as a candidate.
 - **The lane side** comes from the lane-models read (`readLaneModels`, the `ccrc models <lane> show` op the Models sheet
   reads), whose Anthropic answer #3221 added. A read that is not `read` (unreadable, busy, absent, unsupported, refused,
   not started, or a thrown call) is `unmeasured`. So is a read whose advance file is not `ok` or `absent`, because then
   the holds are unknown. Neither is ever behind.
 - **No loop.** `RollSweepMemory.modelFor` keeps the target each session was last rolled for, as `builtFor` does for the
   build. A session whose relaunch kept the old id (a hand pick, or a class the relaunch does not carry) is rolled once per
-  target. A newer target rolls it again. The memo is in-process and pruned with ids the pass no longer sees: a server
-  restart costs at most one more roll per session and target.
-- **Wiring** (`server/src/watch.ts`, three lines, with the consent of the holder of that file's claim): the
-  `readLaneModels` import, `modelFor` in the roll's memory, and the two deps `laneModels` and `anthropicLane`. With
-  either dep absent, no session is behind on its model.
+  target. A newer target rolls it again. The memo is in-process and pruned with ids the pass no longer sees. So a session
+  whose relaunch kept the old id is rolled once more per server restart. One whose relaunch reached the target is not:
+  its reading from before the relaunch is no candidate, and its next reading shows the target.
+- **Wiring** (`server/src/watch.ts`, with the consent of the holder of that file's claim each time): the
+  `readLaneModels` import, `modelFor` and `laneReads` in the roll's memory, and the two deps `laneModels` and
+  `anthropicLane`. With either dep absent, no session is behind on its model.
 
 ## What the read costs
 
 The lane's models are read only in the pass's measured step, and only when `autoRollVerdict` answers `read-models`.
-That happens for a session that is behind on nothing else, has a model candidate, and passes every other gate (the
-setting and role, the Overlord, `.no-roll`, the idle gate with its 90-minute quiet window, hibernation due, and the
-compaction window). A session held at any gate is `current`, not a skip, because it may not be behind at all. Each
-Anthropic lane is read at most once a pass (`Pass.models`). The act's re-check runs on the coordination serialiser and
-reads the pass's answer. It never starts an op there. A read is one `ccrc models <lane> show` on the fleet box, which reads
-that lane's aliases and advance files. The roll's cadence is hibernation's beat. In the steady state, one read per pass
-per Anthropic lane that has an idle routed session. That includes a session already rolled for the current target,
-because its target is known only from the read. A plain read joins a `show` already in flight for the same lane
-(`showOnce`). An act's fresh read that meets the roll's read on the agent arm answers `busy`, and the sheet's next read
-recovers it.
+That happens for a session that is behind on nothing else, has a model candidate (rendered since its pane started), and
+passes every other gate (the setting and role, the Overlord, `.no-roll`, the idle gate with its 90-minute quiet window,
+hibernation due, and the compaction window). A session held at any gate is `current`, not a skip, because it may not be
+behind at all. Each Anthropic lane is read at most once a pass (`Pass.models`). The act's re-check runs on the
+coordination serialiser and reads the pass's answer; it never starts an op there.
+
+**A successful read is kept for an hour** (fix round 1; `LANE_MODELS_KEEP_MS`, `server/src/rollLane.ts`). The hour is
+the period of the refresh that writes the aliases file the read reports: `deploy/systemd/ccrc-models.timer`'s
+`OnUnitActiveSec=60min`. An unread, busy or unreadable answer is never kept, so the next pass asks again. A read is one
+`ccrc models <lane> show` on the fleet box, which reads that lane's aliases and advance files. In the steady state an
+Anthropic lane with an idle routed session past the gates is read about once an hour, about 24 reads a day. Before the
+round it was once a pass, about 288 a day. That includes a lane whose sessions are all on their target, since a target is
+known only from the read. A class's move reaches idle sessions within about two hours: up to an hour for the refresh
+to write it, and up to an hour for the kept read to expire. That is well inside doctor's day. The fewer reads also make
+it rarer for a Models sheet act's fresh read to meet the roll's read and answer `busy`. A plain read joins a `show`
+already in flight for the same lane (`showOnce`).
 
 ## Departures and gaps
 
@@ -80,9 +96,13 @@ recovers it.
 Cases: a session on the old id after a move is rolled once at idle, with its line naming the class, the old id and the
 target. It is not rolled when it is on the new id, at its held id while held, unrouted or `default`, on an unlaunchable
 or unseen target, with an unreadable read or unknown holds, on a lane that is not Anthropic, or held at a gate. A
-relaunch that keeps the old id is not rolled again for that target, and a newer target rolls it again. The lane is read
-once a pass for two sessions on it. Doctor's pinned outputs are unchanged.
+relaunch that keeps the old id is not rolled again for that target, and a newer target rolls it again once the kept read
+has had its hour. The lane is read once a pass for two sessions on it. A reading rendered before the pane started, or at
+the same second, and an unknown start, are no candidate, and no lane is read for them. A stale reading rendered after the
+start is a candidate. A second pass within the hour reads nothing; one after it reads again; an answer that is not a read
+is never kept. Doctor's pinned outputs are unchanged.
 
-Mutation rows, each in its own `git archive` copy of the tip, each red alone (killed): the term removed; the memo
-ignored in the verdict; the memo never written (rolls again); an unreadable read read as behind; unknown holds read as
-none; the held id ignored, in the lane view and in the predicate; the seen rule dropped.
+Mutation rows, each in its own `git archive` copy of the tip, each red alone (killed by an assertion, not a timeout):
+the term removed; the memo ignored in the verdict; the memo never written (rolls again); an unreadable read read as
+behind; unknown holds read as none; the held id ignored, in the lane view and in the predicate; the seen rule dropped;
+the after-start guard dropped; the kept read never expiring; a failed answer kept.

@@ -22,7 +22,9 @@
  * also asks, here with the seen rule and without doctor's day). Every spawn composes `--model <class>` (and the held id's
  * variable while a hold stands), so a roll's resume lands on the class's current or held id. The lane's models are read
  * only for a session that passes every other gate and is behind on nothing else (`read-models`), at most once per lane per
- * pass. An unread, unmeasured or unreadable answer is never behind. A session already rolled for a target
+ * pass, and a successful read stands for an hour (`LANE_MODELS_KEEP_MS`, `server/src/rollLane.ts`). Only a usage reading
+ * rendered after the session's current pane started counts (`modelCandidateOf`). An unread, unmeasured or unreadable
+ * answer is never behind. A session already rolled for a target
  * (`rolledModelFor`) is not rolled for it again: its relaunch kept the old id (a hand pick, say), so another would too.
  *
  * IDLE is hibernation's gate (`hibernateVerdict`, the one ladder `decideSleep` runs), with its quiet window set to the
@@ -165,10 +167,17 @@ export type ModelFact =
 
 /** The session's side of the model term, from the row the pass already holds: its lane is an Anthropic one, its routing
  *  record names a class (readable, and one of the four: `default` and an unknown word are no class), and its usage sidecar
- *  names a main-loop model of that class's family. Null: it cannot be behind on its model, and its lane is not read for it. */
-export function modelCandidateOf(row: Pick<FleetSession, 'route' | 'usage'>, anthropicLane: boolean):
+ *  names a main-loop model of that class's family, RENDERED AFTER ITS CURRENT PANE STARTED (`startedAt`, the live start the
+ *  roll reads; fix round 1 on #3238). A reading from before the start describes the process a relaunch replaced: a session
+ *  relaunched by any other path (a build or release roll, a swap, a wake) comes up on its class's current id and has not
+ *  rendered since, so that reading would roll it for nothing. An unknown start is no candidate. No freshness rule beyond
+ *  that: a session sits idle 90 minutes before a roll, and Claude Code does not re-render an idle session's status line,
+ *  so every reading the roll could act on is past `USAGE_FRESH_S` and marked stale. Null: it cannot be behind on its
+ *  model, and its lane is not read for it. */
+export function modelCandidateOf(row: Pick<FleetSession, 'route' | 'usage'>, anthropicLane: boolean, startedAt: number | null):
   { readonly cls: ModelClass; readonly model: string } | null {
   if (!anthropicLane || row.route === null || row.route.unreadable.includes('class')) return null;
+  if (startedAt === null || row.usage === null || !(row.usage.ts * 1000 > startedAt)) return null;
   const word = row.route.fields.class;
   const cls = (CLASSES as readonly string[]).includes(word ?? '') ? word as ModelClass : null;
   const model = row.usage?.model ?? null;

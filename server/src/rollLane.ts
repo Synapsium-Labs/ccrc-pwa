@@ -61,8 +61,9 @@ import { claudeBuildOf, fleetClaudeLatest, laneClaudeLatest, type ClaudeRollTarg
  *
  * BEHIND ITS CLASS'S MODEL (typed-repick): the lane's models (`laneModels`, the `ccrc models <lane> show` op the Models sheet
  * reads) are read only when `autoRollVerdict` answers `read-models` for a row: an Anthropic lane's session with a routed
- * class and a main-loop model of its family, behind on nothing else, past every other gate. One read per lane per pass, in
- * the measured step (never on the serialiser); the act's re-ask reads the pass's answer and never the op again. A roll for
+ * class and a main-loop model of its family rendered since its pane started, behind on nothing else, past every other
+ * gate. At most one read per lane per pass, in the measured step (never on the serialiser), and a successful read stands
+ * for `LANE_MODELS_KEEP_MS` (the models refresh's hour); the act's re-ask reads the pass's answer and never the op again. A roll for
  * the model names the class, the id it ran and the target in its line, and the target is kept (`modelFor`), so a session
  * whose relaunch kept the old id is rolled once per target.
  */
@@ -74,6 +75,11 @@ export const ROLL_LINE_MS = 60 * 60_000;
 /** D-7552: a row ccd refused, that failed, or that was held at the act is not asked again for this long, so a
  *  coordinator that will not roll (a lasting draft, an attached terminal) never takes every pass's one act. */
 export const ROLL_HOLD_OFF_MS = 60 * 60_000;
+/** Typed-repick (fix round 1 on #3238): a lane's successful models read is kept this long between passes, so a lane is
+ *  read at most about once an hour, not once a pass. The hour is the period of the refresh that writes the aliases file
+ *  the read reports: `deploy/systemd/ccrc-models.timer`'s `OnUnitActiveSec=60min`. A read kept longer could only repeat
+ *  that file; a class's move then reaches idle sessions within about two refresh periods, well inside doctor's day. */
+export const LANE_MODELS_KEEP_MS = 60 * 60_000;
 
 export interface RollSweepDeps {
   readonly coord: IdleHoursCoordPort | undefined;
@@ -129,8 +135,12 @@ export interface RollSweepMemory {
   readonly builtFor: Map<string, string>;
   /** Typed-repick: the model target each id was last rolled for (`AutoRollInput.rolledModelFor`), so a session whose
    *  relaunch kept the old id is not rolled for that target again. Pruned and held as `builtFor` is: a server restart
-   *  forgets it, which costs at most one more roll per session and target. */
+   *  forgets it, so such a session is rolled once more per server restart. A session whose relaunch reached the target
+   *  is not: its reading from before the relaunch is no candidate (`modelCandidateOf`), and its next one shows the target. */
   readonly modelFor: Map<string, string>;
+  /** Typed-repick: each lane's last SUCCESSFUL models read (`kind: 'read'`) and when, kept for `LANE_MODELS_KEEP_MS`. An
+   *  unread, busy or unreadable answer is never kept, so the next pass asks again. In-process, like the maps above. */
+  readonly laneReads: Map<string, { readonly read: LaneModelsRead; readonly at: number }>;
 }
 
 export type RollOutcome =
@@ -188,6 +198,8 @@ interface Pass {
    *  and the target each id was last rolled for (`RollSweepMemory.modelFor`). */
   readonly models: Map<string, LaneModelsRead>;
   readonly modelFor: ReadonlyMap<string, string>;
+  /** `RollSweepMemory.laneReads`: a successful read made this pass is kept there for the next. */
+  readonly laneReads: Map<string, { readonly read: LaneModelsRead; readonly at: number }>;
 }
 
 /** The hand-off's facts for one pass: the `continuity` row as the generations lane reads it, and, only while it is live, each
@@ -234,7 +246,7 @@ async function liveOf(deps: RollSweepDeps, rec: SessionRecord): Promise<{ live: 
 function verdictOf(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetSession, store: HibernateStoreRead,
   live: HibernateLive, startedAt: number | null, now: number): AutoRollVerdict {
   const overlord = overlordOf(p.designation, row.id);
-  const candidate = deps.laneModels === undefined ? null : modelCandidateOf(row, deps.anthropicLane?.(row.wrapper) ?? false);
+  const candidate = deps.laneModels === undefined ? null : modelCandidateOf(row, deps.anthropicLane?.(row.wrapper) ?? false, startedAt);
   return autoRollVerdict({
     targets: p.targets, role: row.role, longLived: p.longLived.get(row.id) ?? null, continuityLive: p.continuityLive, release: p.release, startedAt,
     overlord: overlord ?? 'unmeasured',
@@ -252,12 +264,14 @@ function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetS
   return answerOf(verdictOf(deps, p, names, row, store, live, startedAt, now));
 }
 
-/** One lane's models for this pass, read once: a read that throws is `unreadable` (never behind). */
+/** One lane's models for this pass, read once: a read that throws is `unreadable` (never behind). A successful read is
+ *  kept for the passes of the next `LANE_MODELS_KEEP_MS`; any other answer only for this pass. */
 async function readModelsOnce(deps: RollSweepDeps, p: Pass, lane: string): Promise<void> {
   if (p.models.has(lane) || deps.laneModels === undefined) return;
   let read: LaneModelsRead;
   try { read = await deps.laneModels(lane); } catch { read = { kind: 'unreadable' }; }
   p.models.set(lane, read);
+  if (read.kind === 'read') p.laneReads.set(lane, { read, at: deps.now() });
 }
 
 /** The roll's row of the sleep executor. Its policy row is hibernation's (`IDLE_HOURS_POLICY`): the roll's idle gate
@@ -390,8 +404,15 @@ export async function rollPass(
   const lanes = new Map<string, string | null>();
   for (const s of sessions) if (!lanes.has(s.wrapper)) lanes.set(s.wrapper, laneClaudeLatest(sessions, s.wrapper));
   const designation = designationOfCoord(deps.coord);
+  // Typed-repick: a lane read within the hour stands for this pass; an older one is dropped, so the lane is read again.
+  const models = new Map<string, LaneModelsRead>();
+  const passAt = deps.now();
+  for (const [lane, kept] of [...mem.laneReads]) {
+    if (passAt - kept.at < LANE_MODELS_KEEP_MS) models.set(lane, kept.read);
+    else mem.laneReads.delete(lane);
+  }
   const pass: Pass = { targets, release, designation, hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor,
-    models: new Map(), modelFor: mem.modelFor, ...handoffOf(deps.continuity, records, designation) };
+    models, modelFor: mem.modelFor, laneReads: mem.laneReads, ...handoffOf(deps.continuity, records, designation) };
   mem.lastAt.delete('*');
   const actArmed = deps.act !== null && deps.act.serial !== null && laneVerb(ROLL_LANE.then, deps.act.fleetState);
   const out = (await sleepPass(ROLL_LANE, { ...deps, pass }, mem, sessions, records, names))

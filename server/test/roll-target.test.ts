@@ -446,20 +446,34 @@ describe('the model term (typed-repick)', () => {
   };
   const cand = { cls: 'opus' as const, model: X1 };
 
+  /** The pane started three hours ago; its last render, a minute after the turn it ended, 100 minutes ago. */
+  const START = NOW - 3 * HOUR;
+  const RENDER_S = Math.floor((NOW - 100 * MIN) / 1000);
+  const r = (cls: string | undefined, model: string | null, o: { unreadable?: string[]; route?: null; ts?: number; stale?: boolean } = {}) => ({
+    route: o.route === null ? null : { fields: cls === undefined ? {} : { class: cls }, degraded: null, inert: [], unreadable: o.unreadable ?? [] },
+    usage: model === null ? null : { ts: o.ts ?? RENDER_S, model, class: model.includes('-opus-') ? 'opus' : model.includes('-sonnet-') ? 'sonnet' : null,
+      effort: null, ctxPct: null, cost: null, stale: o.stale ?? false },
+  }) as unknown as Pick<FleetSession, 'route' | 'usage'>;
+
   it('the session side: an Anthropic lane, a routed class, a main-loop model of its family; anything else is none', () => {
-    const r = (cls: string | undefined, model: string | null, o: { unreadable?: string[]; route?: null } = {}) => ({
-      route: o.route === null ? null : { fields: cls === undefined ? {} : { class: cls }, degraded: null, inert: [], unreadable: o.unreadable ?? [] },
-      usage: model === null ? null : { ts: 1, model, class: model.includes('-opus-') ? 'opus' : model.includes('-sonnet-') ? 'sonnet' : null,
-        effort: null, ctxPct: null, cost: null, stale: true },
-    }) as unknown as Pick<FleetSession, 'route' | 'usage'>;
-    expect(modelCandidateOf(r('opus', X1), true)).toEqual({ cls: 'opus', model: X1 });
-    expect(modelCandidateOf(r('opus', X1), false), 'not an Anthropic lane').toBeNull();
-    expect(modelCandidateOf(r('default', X1), true), 'default is no class').toBeNull();
-    expect(modelCandidateOf(r(undefined, X1), true), 'unrouted').toBeNull();
-    expect(modelCandidateOf(r('opus', X1, { route: null }), true), 'never routed').toBeNull();
-    expect(modelCandidateOf(r('opus', X1, { unreadable: ['class'] }), true), 'class unreadable').toBeNull();
-    expect(modelCandidateOf(r('opus', null), true), 'no usage reading').toBeNull();
-    expect(modelCandidateOf(r('opus', S1), true), 'a hand pick of another class').toBeNull();
+    expect(modelCandidateOf(r('opus', X1), true, START)).toEqual({ cls: 'opus', model: X1 });
+    expect(modelCandidateOf(r('opus', X1), false, START), 'not an Anthropic lane').toBeNull();
+    expect(modelCandidateOf(r('default', X1), true, START), 'default is no class').toBeNull();
+    expect(modelCandidateOf(r(undefined, X1), true, START), 'unrouted').toBeNull();
+    expect(modelCandidateOf(r('opus', X1, { route: null }), true, START), 'never routed').toBeNull();
+    expect(modelCandidateOf(r('opus', X1, { unreadable: ['class'] }), true, START), 'class unreadable').toBeNull();
+    expect(modelCandidateOf(r('opus', null), true, START), 'no usage reading').toBeNull();
+    expect(modelCandidateOf(r('opus', S1), true, START), 'a hand pick of another class').toBeNull();
+  });
+
+  it('only a reading rendered after the current pane started is a candidate; an unknown start is none (fix round 1)', () => {
+    // A session relaunched by another path (a build roll, a swap, a wake) keeps its old reading until it renders again.
+    expect(modelCandidateOf(r('opus', X1, { ts: Math.floor((START - MIN) / 1000) }), true, START), 'rendered before the start').toBeNull();
+    expect(modelCandidateOf(r('opus', X1, { ts: Math.floor(START / 1000) }), true, START), 'rendered at the start').toBeNull();
+    expect(modelCandidateOf(r('opus', X1), true, null), 'start unknown').toBeNull();
+    // An idle session's status line does not render again, so a reading the roll could act on is past the freshness
+    // window: stale after its start is still a candidate.
+    expect(modelCandidateOf(r('opus', X1, { stale: true }), true, START)).toEqual({ cls: 'opus', model: X1 });
   });
 
   it('the lane side: on the old id after a move is behind; on the new id, unlaunchable or unseen it is not', () => {
