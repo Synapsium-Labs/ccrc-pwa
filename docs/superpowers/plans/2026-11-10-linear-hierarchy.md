@@ -466,9 +466,12 @@ number from `POST /api/ledger/deviations`.
   `shared/linking.ts` first, as a move commit with characterization pins; `shared/api.ts` gains one type-only import line
   for `ProjectLinkingWire` (the L0 import pins move with it). The row's workspace is `project_linking.teamWorkspace`, in the
   wave's one migration with `teamSuggestions` and `teamCallId`. The operator's write body's `workspace` is optional:
-  a named one must hold the key (`team-unknown`). With none named (absent or null), a key reads the Linear store: the one
-  connected workspace that holds it is stored, two holders are refused `team-ambiguous`, an unreadable store is
-  `unavailable`, and a key no connected workspace holds is stored with none. A cleared key reads no store. Saving the
+  a named one must hold the key (`team-unknown`), and a named one whose slot cannot be read is `unavailable`. With none named
+  (absent or null), a key reads the Linear store: the one connected workspace that holds it is stored, two holders are
+  refused `team-ambiguous`, an unreadable store, or any connected workspace that cannot be read while two readable ones do
+  not already hold the key, is `unavailable` (since run 3279), and a key no connected workspace holds, every one read, or a
+  key with no workspace connected, is stored with none. The unchanged key sent back naming a workspace that holds it keeps a
+  stored none, even while another workspace cannot be read (review 3286 F1). A cleared key reads no store. Saving the
   unchanged key with the workspace absent keeps the stored workspace, a row written before this wave's migration keeping its
   none, without reading the store: nothing new is stored, and a later use resolves the key and refuses `team-ambiguous`
   if two workspaces hold it. An explicit `workspace: null` with the unchanged key reads the store like any other write with

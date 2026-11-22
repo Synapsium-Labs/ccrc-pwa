@@ -364,9 +364,10 @@ slot with no teams.
 
 - `teamPairVerdict` (`server/src/linking/policy.ts`) takes the measured answer: `unavailable` when a slot the answer depends
   on could not be read, `not-configured` (the router's existing word, 501) when no Linear workspace is connected,
-  `team-ambiguous` as before, and `team-unknown` only when every workspace was read and none holds the pair. Each refusal
+  `team-ambiguous` as before, and `team-unknown` only when the workspace the pair depends on was read and does not hold it
+  (for a named workspace, that one alone; with none named, every one). Each refusal
   carries its fixed detail, decided there. `measuredPairRoute` beside `PairRoute` hands the operator's write the same
-  measured route; `workspaceAfterWrite` itself is unchanged.
+  measured route. `workspaceAfterWrite` decides as before, except its keep of a stored none (fix round 1, F1, below).
 - The suggest and confirm doors answer `unavailable` for an unread workspace and `not-configured` for none. The operator's
   write answers `unavailable` when a slot the answer depends on cannot be read (it stored the key with none, or with the one
   readable holder, before). With no workspace connected it keeps its answers, as the coordinator ruled: a named workspace is
@@ -375,8 +376,25 @@ slot with no teams.
 - An intended change on all three doors: a key one readable slot holds, while another slot is unreadable and no workspace is
   named, answers `unavailable`, because the unread slot could hold it too (the measured resolver's fail-closed reading).
 - Characterization pins (`linking-routes.test.ts` for the write and the suggestion, `linking-overlord-confirm.test.ts` for
-  the confirm) were green on `main` first; each door's changed cells moved in that door's own commit and were measured red
-  before it.
+  the confirm) were green on `main` first, and every changed cell was measured red before its change. Each door's cells moved
+  in that door's own commit, with one exception: the suggest door's `not-configured` cells moved in the confirm commit,
+  because the two doors share `teamPairVerdict` (fix round 1, F5).
 - The Overlord skill's team candidate paragraph and the coordinator plan reference's `## linking suggest` say what each word
   now means: `unavailable`, try once more later, then tell the operator; `not-configured`, do not retry, tell the operator
   that no Linear workspace is connected. Their pins name `not-configured` beside the other words.
+
+Fix round 1 (review 3286, as the coordinator ruled):
+
+- F1: the operator's write of a row stored with no workspace, its unchanged key sent back naming a workspace whose own slot
+  holds it, keeps the stored none and its source, evidence and call, whether or not another slot is unread (review 2971 F2).
+  The measured route answered unmeasured for the unnamed ask whenever any slot was unread, so the keep was lost and the row
+  became the operator's. `workspaceAfterWrite` now decides the keep from what the write measures: the key is unchanged and
+  the named slot holds it; only two readable holders undo it. Three cells seed a stored-none row: every slot read (kept),
+  another slot unread (kept; measured red at the round's base), the named slot unread (`unavailable`).
+- F2: `team-unknown` says the workspace the pair depends on was read, not that every workspace was: for a named workspace
+  the resolver reads that one alone (`policy.ts`, the Overlord skill's paragraph, the coordinator plan reference, this note).
+- F3: D-8808's sentence on the write gives its answers as ruled: `unavailable` for a named slot that cannot be read, and
+  with none named for any unread workspace unless two readable ones already hold the key; the no-workspace case unchanged.
+- F4: the card's sentence for the write's `unavailable` names the keys or a workspace and says to try later, because an
+  unread workspace stays unread until its key is checked. No new word; both pins measured red first.
+- F5: the sentence on commits above names the suggest door's exception.
