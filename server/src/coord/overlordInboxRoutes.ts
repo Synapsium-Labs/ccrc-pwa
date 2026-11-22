@@ -67,6 +67,7 @@ function overlordRow(key: string): OverlordDoorRow {
 }
 
 const NO_STORE = 'the private store is not open';
+const UNKNOWN_STATE = 'the message is in a state this build does not know';
 const NO_COORD = 'no coordination store';
 
 export function registerOverlordInboxRoutes(app: FastifyInstance, deps: OverlordInboxRoutesDeps): void {
@@ -153,7 +154,8 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
    * `POST /api/overlord/messages/:id/acknowledge { byId, byUuid }` (question 11, 12, 19): the Overlord settles one operator message.
    * The token, the body's shape, THE GATE with the fence and the witness, the id after it; then the message's text-free facts and
    * `acknowledgeVerdict`: an id that is no message is 409 `said-not-operator`, one already settled or spent 200 `changed: false`
-   * (a retried call is harmless), else the one writer moves it. A move the store refuses is re-read: a row settled or spent
+   * (a retried call is harmless), one in a state this build does not know 501 `unsupported` (the store never moves it, so the
+   * answer is not a success and a retry cannot settle it), else the one writer moves it. A move the store refuses is re-read: a row settled or spent
    * meanwhile is the same 200, one gone the same 409. It writes no read-ledger line: it is not a read.
    */
   app.post('/api/overlord/messages/:id/acknowledge', {
@@ -178,6 +180,7 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
     const verdict = acknowledgeVerdict(before.value);
     if (verdict.kind === 'absent') return refuseRoute(reply, 'said-not-operator', { detail: 'no operator message has this id' });
     if (verdict.kind === 'already') return { ok: true, changed: false, state: verdict.state };
+    if (verdict.kind === 'unknown') return refuseRoute(reply, 'unsupported', { detail: UNKNOWN_STATE });
     const moved = store.moveMessage(id.id, 'settle', 'acknowledge', deps.now());
     if (moved.ok) {
       // The sequence line (the plan's question 19) is written here, in a `coord.db` transaction of its own after this commit,
@@ -192,6 +195,7 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
     const again = acknowledgeVerdict(after.value);
     if (again.kind === 'absent') return refuseRoute(reply, 'said-not-operator', { detail: 'no operator message has this id' });
     if (again.kind === 'already') return { ok: true, changed: false, state: again.state };
+    if (again.kind === 'unknown') return refuseRoute(reply, 'unsupported', { detail: UNKNOWN_STATE });
     return refuseRoute(reply, 'write-failed', { detail: 'the message could not be settled' });
   });
 }

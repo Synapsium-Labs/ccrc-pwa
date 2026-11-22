@@ -114,6 +114,9 @@ const factsOf = (r: RawFacts): MessageFacts => ({ id: r.id, at: r.at, term: r.te
 /** Every state before `settled`, in the vocabulary's order: what the card and the inbox list as unsettled. */
 const UNSETTLED_STATES = MESSAGE_STATES.slice(0, MESSAGE_STATES.indexOf('settled'));
 const UNSETTLED_SQL = UNSETTLED_STATES.map((s) => `'${s}'`).join(', ');
+/** The states from `settled` on: every row NOT in one of them is unsettled to the inbox, a state this build does not know included
+ *  (review 3389 F5). */
+const SETTLED_SQL = MESSAGE_STATES.slice(MESSAGE_STATES.indexOf('settled')).map((s) => `'${s}'`).join(', ');
 
 const OUTCOME_WORD = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
@@ -331,9 +334,10 @@ export class OperatorModelStore {
       .all() as unknown as RawRow[]).map(revive));
   }
 
-  /** Every unsettled message as facts, never its text or hash: id order, never trimmed (the inbox plan, question 20). */
+  /** Every unsettled message as facts, never its text or hash: id order, never trimmed (the inbox plan, question 20). A row whose
+   *  state this build does not know is kept, as an `unknown` fact, never dropped (review 3389 F5). */
   unsettledFacts(): StoreRead<readonly MessageFacts[]> {
-    return this.read(() => (this.db.prepare(`SELECT ${FACT_COLUMNS} FROM operator_messages WHERE state IN (${UNSETTLED_SQL}) ORDER BY id`)
+    return this.read(() => (this.db.prepare(`SELECT ${FACT_COLUMNS} FROM operator_messages WHERE state NOT IN (${SETTLED_SQL}) ORDER BY id`)
       .all() as unknown as RawFacts[]).map(factsOf));
   }
 

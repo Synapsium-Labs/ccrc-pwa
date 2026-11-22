@@ -124,20 +124,28 @@ export interface ReadLedgerCount {
  *  to whether `server/src` has such a caller, so a build that removes the last caller turns it false and the designated session's
  *  spot probes answer `unmeasured` again, never `closed` on a count nobody wrote (review 2870 F1). */
 export const READ_LEDGER_WRITTEN = true;
+/** Whether every read the designated session can make leaves evidence closed-book reads: a read-ledger line, or the card's and
+ *  notes' read stamps (C41's measured evidence). False: the timer list (`GET /api/sessions/:id/timers`, which answers a timer's
+ *  note to its own session) writes neither, so a ledger count of 0 does not prove the session read nothing (review 3389 F2). While
+ *  it is false a counted read still makes the book `open`, and no count makes it `closed`: incomplete coverage answers
+ *  `unmeasured`. The change that gives the timer list its evidence turns it true, with its pin in `probeDoorSets.ts`. */
+export const READ_LEDGER_COMPLETE = false;
 /** The ledger's caller words that are the designated session's own reads: itself and the readers it starts. */
 export const LEDGER_SESSION_CALLERS: readonly ReadCaller[] = ['overlord', 'reader'];
 
-/** Who the ledger covers, and what its count was (`ReadLedgerCount`'s answer, or `null` when it was not asked). Covered only
+/** Who the ledger covers, and what its count was (`ReadLedgerCount`'s answer, or `null` when it was not asked). Counted only
  *  for the designated session (`identityOf` names it `overlord`), and only while a read door writes the ledger
- *  (`ledgerWritten`, `READ_LEDGER_WRITTEN` at the route); an unreadable designation or count is unmeasured. For a session the
- *  ledger does not cover, the ledger attributes nothing to it, so `reads` is 0 by construction and `covered: false` is what
- *  keeps `bookOf` from answering `closed`. */
-export function ledgerFactsOf(i: { designation: DesignationFact | 'unmeasured'; callerId: string; ledgerWritten: boolean; reads: ReturnType<ReadLedgerCount['readsBetween']> | null }): LedgerFacts {
+ *  (`ledgerWritten`, `READ_LEDGER_WRITTEN` at the route); covered only when, besides, every read the session can make leaves
+ *  evidence (`ledgerComplete`, `READ_LEDGER_COMPLETE` unless the caller says otherwise). An unreadable designation or count is
+ *  unmeasured. For a session the ledger does not count, the ledger attributes nothing to it, so `reads` is 0 by construction and
+ *  `covered: false` is what keeps `bookOf` from answering `closed`; an incomplete ledger still counts, so a read it holds is `open`. */
+export function ledgerFactsOf(i: { designation: DesignationFact | 'unmeasured'; callerId: string; ledgerWritten: boolean; ledgerComplete?: boolean; reads: ReturnType<ReadLedgerCount['readsBetween']> | null }): LedgerFacts {
   if (i.designation === 'unmeasured') return { ok: false, detail: 'the designation could not be read' };
   if (identityOf(i.callerId, i.designation) !== 'overlord') return { ok: true, value: { covered: false, reads: 0 } };
   if (!i.ledgerWritten) return { ok: true, value: { covered: false, reads: 0 } };
   if (i.reads === null) return { ok: false, detail: 'the read ledger was not asked' };
-  return i.reads.kind === 'measured' ? { ok: true, value: { covered: true, reads: i.reads.value } } : { ok: false, detail: i.reads.why };
+  const covered = i.ledgerComplete ?? READ_LEDGER_COMPLETE;
+  return i.reads.kind === 'measured' ? { ok: true, value: { covered, reads: i.reads.value } } : { ok: false, detail: i.reads.why };
 }
 
 /** Closed-book, recorded honestly (Review Focus 3; C41). `open` when the session read its card or notes at or after the round

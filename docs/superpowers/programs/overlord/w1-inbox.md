@@ -70,6 +70,24 @@ The plan's own slugs are built as its "Deviations found" section states them: `r
 - `acknowledge-body-is-the-pane-pair`: `ccrc-api overlord acknowledge <id>` takes no body; the client builds
   `{"byId":…,"byUuid":…}` and refuses any `--json`.
 
+## Fix round 1 (review 3389)
+
+- `fixed-line-replay-acks-only` (F1): a wake or a spot-probe notice is acked on its first delivery. When the process stops between
+  `markDelivered` and that ack, the row stays outstanding and comes back as a replay. `coord/envelope.ts#fixedLineReplayOf` answers
+  `ack-only` for it, and `operatorModel/nudgeLane.ts#finishFixedLineAck` acks it before the mail pass would type, so the
+  recipient is never told twice and the wake's `outstanding` hold clears. To keep the mail pass at its 150-line cap, the stranded
+  `/clear` read moved into the send's own options.
+- `ledger-coverage-is-incomplete` (F2): `READ_LEDGER_WRITTEN` says that a read door writes the ledger, which makes a counted read
+  `open`. It never said that every read leaves evidence. The timer list (`GET /api/sessions/:id/timers`) answers a timer's note
+  with no ledger line and no read stamp. `continuity/probeDoor.ts#READ_LEDGER_COMPLETE` (false) keeps the designated session
+  uncovered, so a zero count answers `unmeasured`, never `closed`, while a counted read is still `open`. The change that gives the
+  timer list its evidence turns it true. No continuity route changed.
+- `acknowledge-unknown-is-unsupported` (F4): a message in a state this build does not know is `unknown` to `acknowledgeVerdict`.
+  The private store's move refuses it (`messageMove`), so the door answers 501 `unsupported`, writes nothing and is not retried.
+  It used to report that the message could be settled and then answer `write-failed`.
+- `inbox-keeps-unknown-rows` (F5): `unsettledFacts` keeps every row not in a settled state, so a row in a state this build does
+  not know stays in the inbox as a text-free `unknown` fact.
+
 ## Index changes this piece asks for
 
 As the plan's "Index changes" section lists them, with these measured notes:

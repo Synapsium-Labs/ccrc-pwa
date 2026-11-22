@@ -305,6 +305,19 @@ export function mailNudgeOf(
   return row.firstDelivery === 'message-delivered' ? { line, operatorMessageId: operatorMessageIdOf(origin.subject) } : { line, operatorMessageId: null, firstDelivery: row.firstDelivery };
 }
 
+/** One due delivery of a fixed line whose first delivery moves nothing but the ack (`firstDelivery: 'none'`), already delivered
+ *  once: the line was typed and its ack did not land (the process stopped between `markDelivered` and the ack, review 3389 F1). Its
+ *  replay finishes the ack and types nothing, so the recipient is never told twice. Every other delivery is typed as before. */
+const FIXED_LINE_REPLAY_MAP = {
+  'ack-only': 'the line was typed once and its ack never landed: ack it and type nothing',
+  type: 'type the line',
+} as const;
+export type FixedLineReplay = keyof typeof FIXED_LINE_REPLAY_MAP;
+export const FIXED_LINE_REPLAYS = Object.keys(FIXED_LINE_REPLAY_MAP) as FixedLineReplay[];
+export function fixedLineReplayOf(nudge: Pick<MailNudge, 'firstDelivery'>, deliveredAt: number | null): FixedLineReplay {
+  return nudge.firstDelivery === 'none' && deliveredAt !== null ? 'ack-only' : 'type';
+}
+
 /** `sendPrompt`'s resume rule for a nudge, given what the box holds now (`null`: unread). The generic nudge is id-agnostic, so any
  *  leftover nudge may be resumed (`true`, the prefix mode). An operator message's line names its id, so only THIS delivery's own
  *  line may be: `'whole'` presses Enter on a box that renders exactly the line and NEVER types (an empty box is

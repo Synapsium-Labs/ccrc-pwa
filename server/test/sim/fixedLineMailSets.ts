@@ -162,8 +162,46 @@ const SWEEP_DESIGNATION_OF_SET: MutantSet<EnvelopeModule> = {
   suite: sweepDesignationOfCases,
 };
 
+// ---------------------------------------------------------------------------------------------------- fixedLineReplayOf
+
+export function fixedLineReplayOfCases(m: EnvelopeModule): Record<string, SuiteCase> {
+  const nudge = (toId: string, fromId: string, subject: string) => m.mailNudgeOf(toId, { fromId, subject, body: '' }, designated, 0);
+  const spot = nudge(OVERLORD, 'operator', SPOT_PROBE_SUBJECT);
+  const generic = nudge(OVERLORD, OTHER, 'status');
+  const message = nudge(OVERLORD, 'operator', operatorMessageSubject(7));
+  return {
+    'a fixed line delivered once and not acked is ack-only (review 3389 F1)': () => {
+      expect(m.fixedLineReplayOf(spot, 1)).toBe('ack-only');
+      expect(m.fixedLineReplayOf({ firstDelivery: 'none' }, 0)).toBe('ack-only');
+    },
+    'a first delivery is typed': () => {
+      expect(m.fixedLineReplayOf(spot, null)).toBe('type');
+    },
+    'a generic nudge and an operator message are typed, replayed or not': () => {
+      for (const n of [generic, message]) {
+        expect(m.fixedLineReplayOf(n, 1)).toBe('type');
+        expect(m.fixedLineReplayOf(n, null)).toBe('type');
+      }
+    },
+  };
+}
+
+const FIXED_LINE_REPLAY_OF_SET: MutantSet<EnvelopeModule> = {
+  modulePath: L1,
+  mutants: [
+    { id: 'R1 every replay typed', old: "nudge.firstDelivery === 'none' && deliveredAt !== null ? 'ack-only' : 'type'", new: "'type'" },
+    { id: 'R2 every delivery ack-only', old: "nudge.firstDelivery === 'none' && deliveredAt !== null ? 'ack-only' : 'type'", new: "'ack-only'" },
+    { id: 'R3 a first delivery ack-only', old: "nudge.firstDelivery === 'none' && deliveredAt !== null ?", new: "nudge.firstDelivery === 'none' ?" },
+    { id: 'R4 any replay ack-only', old: "nudge.firstDelivery === 'none' && deliveredAt !== null ?", new: 'deliveredAt !== null ?' },
+    { id: 'R5 the delivery test inverted', old: 'deliveredAt !== null ?', new: 'deliveredAt === null ?' },
+    { id: 'R6 a delivery at time zero read as never delivered', old: 'deliveredAt !== null ?', new: 'deliveredAt ?' },
+  ],
+  suite: fixedLineReplayOfCases,
+};
+
 /** This piece's sets, keyed as `mutation-floors.json` keys them (`<file>#<decider>`). */
 export const FIXED_LINE_MAIL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/envelope.ts#fixedLineMailOf': FIXED_LINE_MAIL_OF_SET as MutantSet<never>,
   'server/src/coord/envelope.ts#sweepDesignationOf': SWEEP_DESIGNATION_OF_SET as MutantSet<never>,
+  'server/src/coord/envelope.ts#fixedLineReplayOf': FIXED_LINE_REPLAY_OF_SET as MutantSet<never>,
 };

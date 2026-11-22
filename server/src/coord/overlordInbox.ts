@@ -11,7 +11,7 @@
 //     (the handler's two facts; only an `active` generation reads the round, question 6).
 //   - `inboxOrder`, `rowNudgeOf`: the one order, and the nudge a row has besides the wake (question 7).
 //   - `readCeilingVerdict`: a door's ceiling over a rolling hour (question 1), and whether the refusal's line is written.
-//   - `acknowledgeVerdict`: settle, already, or absent (questions 11 and 12).
+//   - `acknowledgeVerdict`: settle, already, unknown, or absent (questions 11 and 12).
 //   - `inboxWakeVerdict`: the wake's holds in their order, then whether a row with no nudge of its own is new (question 16).
 import {
   INBOX_BEHIND_KINDS, INBOX_KIND_MAP, INBOX_KINDS, INBOX_PAGE_ROWS, INBOX_WAKE_SUBJECT, MESSAGE_NUDGE, PROBE_ROUND_NUDGE, READ_CEILINGS,
@@ -23,7 +23,7 @@ import type {
 import type { MessageState, ReadDoor } from '../../../shared/operatorMessages.js';
 import type { GenerationState, ProbeRoundKind } from '../../../shared/continuity.js';
 import type { GateVerdict, GateWord } from './overlordGate.js';
-import { FIXED_LINE_MAIL } from './envelope.js';
+import { FIXED_LINE_MAIL, FIXED_LINE_REPLAYS } from './envelope.js';
 
 export type Source<T> = { readonly kind: 'measured'; readonly value: T } | { readonly kind: 'unmeasured'; readonly why: string };
 export interface OpenRound { readonly roundId: string; readonly kind: ProbeRoundKind; readonly questions: number; readonly askedAt: number }
@@ -146,11 +146,14 @@ export function readCeilingVerdict(door: ReadDoor, c: CeilingCount, now: number)
 }
 
 export type AckVerdict =
-  | { readonly kind: 'settle' } | { readonly kind: 'already'; readonly state: MessageState | 'unknown' } | { readonly kind: 'absent' };
-/** An id that is no message is absent; one already settled or spent is `already` (a retried call is harmless); any other
- *  state, `unknown` included, is unsettled and may be settled. */
+  | { readonly kind: 'settle' } | { readonly kind: 'already'; readonly state: MessageState } | { readonly kind: 'unknown' }
+  | { readonly kind: 'absent' };
+/** An id that is no message is absent; one already settled or spent is `already` (a retried call is harmless); a state this build
+ *  does not know is `unknown`: the private store's move refuses it (`messageMove`), so it is never reported settled and never
+ *  retried (review 3389 F4). Any other state is unsettled and may be settled. */
 export function acknowledgeVerdict(row: { state: MessageState | 'unknown' } | 'absent'): AckVerdict {
   if (row === 'absent') return { kind: 'absent' };
+  if (row.state === 'unknown') return { kind: 'unknown' };
   if (row.state === 'settled' || row.state === 'spent') return { kind: 'already', state: row.state };
   return { kind: 'settle' };
 }
@@ -213,4 +216,5 @@ export const isOverlordInboxKebab = (word: string): boolean =>
   || (INBOX_BEHIND_KINDS as readonly string[]).includes(word)
   || word === INBOX_WAKE_SUBJECT
   || FIXED_LINE_MAIL.some((r) => r.name === word || r.firstDelivery === word)
+  || (FIXED_LINE_REPLAYS as readonly string[]).includes(word)
   || word === 'read-rows';

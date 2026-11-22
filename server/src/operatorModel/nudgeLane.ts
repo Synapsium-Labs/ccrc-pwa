@@ -6,6 +6,7 @@
 import type { WatcherCoordPort } from '../coord/ports.js';
 import type { OperatorModelStore } from './store.js';
 import { isOperatorMessageMail, operatorMessageIdOf } from '../../../shared/operatorMessages.js';
+import { fixedLineReplayOf } from '../coord/envelope.js';
 
 const BEFORE_DELIVERED: ReadonlySet<string> = new Set(['recorded', 'queued']);
 
@@ -38,11 +39,23 @@ function ackDelivery(deps: Pick<NudgeLaneDeps, 'coord' | 'now' | 'warn'>, delive
 
 /** The first delivery of a fixed line that moves nothing in the private store (a wake, a spot-probe notice): the delivery is acked on
  *  its first delivery only, through the same writer, and a refused ack is logged as `settleOperatorNudge` logs it. A replay (a
- *  delivery already delivered once) acks nothing here: the mail lane's own replay and the recipient's ack own it. */
+ *  delivery already delivered once) acks nothing here: `finishFixedLineAck` finished it before the pass could type. */
 export function settleFixedLine(
   deps: Pick<NudgeLaneDeps, 'coord' | 'now' | 'warn'>, delivery: { readonly id: number; readonly deliveredAt: number | null },
 ): void {
   if (delivery.deliveredAt === null) ackDelivery(deps, delivery.id);
+}
+
+/** Before the mail lane types a due delivery: a fixed line delivered once whose ack never landed (`fixedLineReplayOf` answers
+ *  `ack-only`, review 3389 F1) is acked through the same writer, and nothing is typed. True when the pass is done with the row; a
+ *  refused ack (an ack already landed: terminal) is logged and changes nothing. */
+export function finishFixedLineAck(
+  deps: Pick<NudgeLaneDeps, 'coord' | 'now' | 'warn'>, delivery: { readonly id: number; readonly deliveredAt: number | null },
+  nudge: { readonly firstDelivery?: 'none' },
+): boolean {
+  if (fixedLineReplayOf(nudge, delivery.deliveredAt) !== 'ack-only') return false;
+  ackDelivery(deps, delivery.id);
+  return true;
 }
 
 /** After the mail lane typed a nudge and `markDelivered` landed: an operator message's move and ack, a fixed line's

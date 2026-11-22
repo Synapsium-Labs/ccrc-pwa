@@ -517,6 +517,21 @@ describe('unsettledFacts and messageFactsById: the text-free readers', () => {
     }
     expect(JSON.stringify(r)).not.toContain('private sentence');
   });
+  it('keep a row whose state this build does not know, as an unknown fact, and leave settled and spent rows out (review 3389 F5)', () => {
+    const f = fixture();
+    const a = idOf(record(f, { at: 100 }));
+    const b = idOf(record(f, { at: 200, text: 'a private sentence' }));
+    const c = idOf(record(f, { at: 300 }));
+    f.store.moveMessage(c, 'settle', 'acknowledge', 310);
+    f.db.prepare("UPDATE operator_messages SET state = 'a-later-word' WHERE id = ?").run(b);   // a newer build's state, synthetic
+    const r = f.store.unsettledFacts();
+    expect(r).toEqual({ kind: 'measured', value: [
+      { id: a, at: 100, term: 1, state: 'recorded', cut: false },
+      { id: b, at: 200, term: 1, state: 'unknown', cut: false },
+    ] });
+    expect(JSON.stringify(r)).not.toContain('private sentence');
+    expect(JSON.stringify(r)).not.toContain('a-later-word');
+  });
   it('messageFactsById answers one message\'s facts, or absent', () => {
     const f = fixture();
     const id = idOf(record(f, { at: 50, text: 'a private sentence' }));

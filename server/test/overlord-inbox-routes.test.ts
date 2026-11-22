@@ -457,6 +457,33 @@ describe('acknowledge', () => {
     expect(res.statusCode).toBe(REFUSAL_STATUS['said-not-operator']);
   });
 
+  it('a message in a state this build does not know answers 501 unsupported, is never moved, and is still in the inbox (review 3389 F4, F5)', async () => {
+    const r = await rig();
+    const id = r.record();
+    r.db.prepare("UPDATE operator_messages SET state = 'a-later-word' WHERE id = ?").run(id);   // a newer build's state, synthetic
+    const move = vi.spyOn(r.store, 'moveMessage');
+    const res = await ack(r, id);
+    expect(res.statusCode, res.body).toBe(REFUSAL_STATUS.unsupported);
+    expect(json(res)).toMatchObject({ ok: false, error: 'unsupported' });
+    expect(move).not.toHaveBeenCalled();
+    expect((await ack(r, id)).statusCode).toBe(REFUSAL_STATUS.unsupported);   // the same answer again, and still no write
+    expect(move).not.toHaveBeenCalled();
+    move.mockRestore();
+    expect((r.db.prepare('SELECT state FROM operator_messages WHERE id = ?').get(id) as { state: string }).state).toBe('a-later-word');
+    const facts = r.store.unsettledFacts();
+    expect(facts.kind === 'measured' && facts.value.map((f) => [f.id, f.state])).toEqual([[id, 'unknown']]);
+  });
+
+  it('a refused move that leaves the row in a state this build does not know answers 501 unsupported on the re-read', async () => {
+    const r = await rig();
+    const id = r.record();
+    vi.spyOn(r.store, 'moveMessage').mockImplementationOnce(() => {
+      r.db.prepare("UPDATE operator_messages SET state = 'a-later-word' WHERE id = ?").run(id);
+      return { ok: false, error: 'refused', detail: 'unknown-state' };
+    });
+    expect((await ack(r, id)).statusCode).toBe(REFUSAL_STATUS.unsupported);
+  });
+
   it('a move that fails for another reason answers 503 write-failed, and a refused move that leaves the row unsettled the same', async () => {
     const r = await rig();
     const id = r.record();

@@ -504,8 +504,8 @@ export function acknowledgeVerdictCases(m: InboxDecidersModule): Record<string, 
       expect(m.acknowledgeVerdict({ state: 'settled' })).toEqual({ kind: 'already', state: 'settled' });
       expect(m.acknowledgeVerdict({ state: 'spent' })).toEqual({ kind: 'already', state: 'spent' });
     },
-    'a state read as unknown is still unsettled: the Overlord may settle it': () => {
-      expect(m.acknowledgeVerdict({ state: 'unknown' })).toEqual({ kind: 'settle' });
+    'a state this build does not know is unknown: never settled, never already (review 3389 F4)': () => {
+      expect(m.acknowledgeVerdict({ state: 'unknown' })).toEqual({ kind: 'unknown' });
     },
     'an id that is no message is absent': () => {
       expect(m.acknowledgeVerdict('absent')).toEqual({ kind: 'absent' });
@@ -831,7 +831,8 @@ const ACKNOWLEDGE_SET: MutantSet<InboxDecidersModule> = {
     { id: 'A3 a spent message settled', old: " || row.state === 'spent'", new: '' },
     { id: 'A4 already always says settled', old: "{ kind: 'already', state: row.state }", new: "{ kind: 'already', state: 'settled' }" },
     { id: 'A5 an unsettled message already', old: "  return { kind: 'settle' };\n}", new: "  return { kind: 'already', state: row.state };\n}" },
-    { id: 'A6 an unknown state already', old: "if (row.state === 'settled'", new: "if (row.state === 'unknown' || row.state === 'settled'" },
+    { id: 'A6 an unknown state settled', old: "  if (row.state === 'unknown') return { kind: 'unknown' };\n", new: '' },
+    { id: 'A8 an unknown state already', old: "if (row.state === 'unknown') return { kind: 'unknown' };", new: "if (row.state === 'unknown') return { kind: 'already', state: 'settled' };" },
     { id: 'A7 an absent id already', old: "if (row === 'absent') return { kind: 'absent' };", new: "if (row === 'absent') return { kind: 'already', state: 'unknown' };" },
   ],
   suite: acknowledgeVerdictCases,

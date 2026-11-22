@@ -222,7 +222,7 @@ import {
 } from './coord/store.js';
 import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
-import { settleNudge } from './operatorModel/nudgeLane.js';
+import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
 import type { overlordReadGate } from './coord/overlordGateRun.js';
 import { isInboxWakeMail } from '../../shared/overlordInbox.js';
@@ -8849,6 +8849,8 @@ export class FleetWatcher {
         // mail branch); every other mail is the id-agnostic line above, as before.
         const origin = store.mailOrigin(d.mailId);
         const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
+        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1).
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge)) continue;
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
@@ -8865,8 +8867,8 @@ export class FleetWatcher {
         // sitting, so the TEXT proves nothing and a text-only recogniser
         // would have put this lane's C-u onto a human's own slash command.
         // With no run event to read, nothing is passed and `sendPrompt`
-        // stashes the `/clear` as a draft and restores it (D-5912).
-        const ownStrandedClear = store.strandedClear(d.toId);
+        // stashes the `/clear` as a draft and restores it (D-5912). It is
+        // read in the send's own options below.
         // D-5838: an `enter-ignored` PARK re-attempts only once its box is seen
         // different from what it held at the park (`parkBoxSeen`) — or, on this
         // timer, when the box holds exactly OUR OWN nudge. That case goes to
@@ -8896,7 +8898,7 @@ export class FleetWatcher {
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin, sweepDesignationOf(designation), now).line,
-          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear: store.strandedClear(d.toId), holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
