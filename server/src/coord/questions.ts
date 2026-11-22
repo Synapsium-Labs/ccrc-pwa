@@ -60,7 +60,6 @@ import {
 import { laneArmRowViewOf } from './laneArm.js';
 import { censusSightingOf, type CensusEnvelope } from './approvalCensus.js';
 import { paintedApprovalOf } from './approvalEnvelope.js';
-import { openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemOf } from './untrustedBuildItem.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
@@ -686,23 +685,6 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);
   };
 
-  /** Approvals PR 2 (Task 2.2): a `version-unverified` refusal raises the build's one Waiting on you item, keyed by the build
-   *  (`untrustedBuildItemOf` decides; an open item for the build raises nothing). The read and the raise run with no await
-   *  between, so two refusals in one process never raise two. A failure is logged once per cause and never changes the
-   *  refusal. */
-  const untrustedWarn = changeLatch<string>();
-  const raiseUntrustedBuildItem = (coord: WatcherCoordPort, version: string | null, reason: BuildUntrustedReason, now: number): void => {
-    try {
-      const open = openUntrustedBuildItems(coord.itemsFor(UNTRUSTED_BUILD_ITEM_PROGRAMME, now).open);
-      const input = untrustedBuildItemOf(new Set(open.map((i) => i.build)), version, reason);
-      if (input !== null) coord.raiseItem(input, now, 'ccrc');
-      untrustedWarn.clear();
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      if (untrustedWarn.changed(why)) console.warn(`ccrc-server: untrusted build item not raised (${why})`);
-    }
-  };
-
   const raiseApproval = async (request: ApprovalRaiseRequest, d: ApprovalRaiseDeps, now: number): Promise<ApprovalRaiseVerdict> => {
     const { sessionId, digest, nonce, canonical, truncated } = request;
     const coord = d.coord;
@@ -722,13 +704,14 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     if (standing === 'none') return { kind: 'deny-not-engaged' };
     const denyCurrent = standing === 'current';
     // D-8289: the build is trusted only when the record says its capture passed (`buildTrustOf`, the one decider); a record
-    // that cannot be read trusts nothing. The verdict carries the typed reason, and the detail says it in words.
+    // that cannot be read trusts nothing. The verdict carries the typed reason, and the detail says it in words. The refusal
+    // raises nothing on Waiting on you: the capture lane raises a build's item only once ccrc has given up capturing it (the
+    // Overlord's `docs/superpowers/programs/overlord/claude-release-unattended.md`, slug routing-reverted-until-capture).
     const version = await d.liveVersionOf(rec);
     let records: readonly ClaudeBuildRecord[] | null;
     try { records = coord.claudeBuilds(); } catch { records = null; }
     const trust = buildTrustOf(records, version);
     if (trust.kind === 'untrusted') {
-      raiseUntrustedBuildItem(coord, version, trust.reason, now);
       return { kind: 'version-unverified', trust: trust.reason, detail: `this child's live Claude Code build is not trusted: ${buildUntrustedSentence(trust.reason, version)}` };
     }
 

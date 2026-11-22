@@ -104,8 +104,8 @@ export type ItemAction =
   // depends on the workspace choice (an issue may still wait then, on its owner).
   | { verb: 'linear-team-workspace'; teamKey: string }
   | ReleaseReviewAction
-  // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2): children on this Claude Code build cannot route permission prompts
-  // until it is captured. The build is the item's key: one open item per build. It names no run, so it abandons nothing.
+  // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2), narrowed by the Overlord's slug item-only-when-given-up: ccrc gave up
+  // capturing this Claude Code build. The build is the item's key: one open item per build. It names no run, so it abandons nothing.
   | { verb: 'untrusted-build'; build: string };
 /** The untrusted-build action's verb, the one spelling its readers bind (approvals PR 2, Task 2.2). */
 export const UNTRUSTED_BUILD_VERB = 'untrusted-build' as const;

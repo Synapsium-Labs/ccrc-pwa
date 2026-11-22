@@ -2683,7 +2683,7 @@ export const MIGRATIONS: readonly string[] = [
   // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
   // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
   // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
-  // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
+  // `coord/claudeBuildsStore.ts`; its trust reader is `shared/claudeBuildTrust.ts#buildTrustOf` (and later the capture standing beside it). The seed is the four builds
   // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
   //
   // A NEW TABLE AND ITS SEED, NOTHING ELSE: an older build opening a file at `user_version 60` takes rule 3 (it warns, reads
@@ -4236,6 +4236,24 @@ export const MIGRATIONS: readonly string[] = [
     OR (endBasis = 'task-report' AND endedAt IS NOT NULL)
     OR (endBasis = 'backfill-unmeasured' AND endedAt IS NULL)
   );
+  `,
+
+  // ── 119: user_version 118 -> 119 ──────────────────────────────────────────
+  // A new Claude Code build needs no operator (Overlord, `docs/superpowers/programs/overlord/claude-release-unattended.md`,
+  // slug capture-retry-ceiling): `claude_builds.fails` counts a build's failed capture verdicts. Its one writer is
+  // `recordClaudeBuildVerdict`; its reader is `shared/claudeBuildTrust.ts#captureStandingOf`, which captures a failed build
+  // again by itself until the count reaches the ceiling, and only then asks the operator. The UPDATE counts the one
+  // failure every failed row already carries, so a build that failed before this entry is retried like any other.
+  // ONE COLUMN WITH A DEFAULT, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its reads and writes name their columns and never this one, and the default 0 covers
+  // every row it inserts (a new build's row then reads as never failed, which is what it is). The slot is the next free
+  // one by position on `main` (77a1fefe46 holds 118); whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 118, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claude_builds ADD COLUMN fails INTEGER NOT NULL DEFAULT 0;
+  UPDATE claude_builds SET fails = 1 WHERE capture = 'fail';
   `,
 ];
 
