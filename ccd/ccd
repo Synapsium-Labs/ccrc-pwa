@@ -32671,7 +32671,8 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
 # the watchdog then moves nothing. `choice=wait ... by=auto` is the watchdog's own choice where no account had room (D-8173
 # ruling (a)): it restarts in place the same way but is not a pin, so the rescue still moves the session the moment another
 # account has measured room; the operator's tap on it drops ` by=auto` and makes it a pin. When the record's reset has
-# passed and the session's OWN account has measured room, `_watchdog_resume_here` restarts the session in place on that
+# passed (or, before it, the account's row was lowered by a reading shown to be new after the block began: an early reset,
+# D-8944) and the session's OWN account has measured room, `_watchdog_resume_here` restarts the session in place on that
 # account (stop and ensure, in a transient unit, the cause `limit-resume`), because Claude Code does not always continue by
 # itself. A resume counts against the same WATCHDOG_PER_PASS as a forced rescue (WD_FORCED): every session waiting on one
 # account becomes eligible at the one moment its first fresh reading after the reset arrives, and an uncapped door would
@@ -32928,7 +32929,15 @@ _watchdog_resume_here() {   # id -> rc 0 the session was restarted in place | 1 
   # touch is on the session, any of which a restart would kill. `lastswap` is stamped as the wake move does (a restart is a
   # move to the supervisor's cooldown, and a banner the old process wrote is then carried in, not a block) and put back when
   # the unit cannot start.
-  local id="$1" w="" lw="" reset prev="" now score claim=""
+  # AN EARLY RESET ENDS THE WAIT BEFORE ITS DATE (D-8944). The provider can reset an account days before the date the record
+  # was opened with, and the wait is for room, not for a date. The proof is the account row's `resetSeen`: the second a
+  # reading that was shown to be NEW lowered that row (`statusline-command.sh`, D-8942), later than the start of this limit
+  # episode (`.limitsign`'s `since`, or the record's own when that is earlier: the record opens minutes after the block) and
+  # not ahead of now. A row that only READS low, however new its `ts`, is not that proof: it is the stale low reading above,
+  # or a limit five and seven do not show, and a restart on it would land on the limit again. A lowering from before the
+  # block says nothing about a limit met after it. An absent, unreadable or unstamped row decides nothing, a wait with no
+  # date stays as it is, and from here on the measured room and every hold are the dated restart's own.
+  local id="$1" w="" lw="" reset prev="" now score claim="" seen="" from="" why="the reset has passed"
   _reg_get_to lw "$id" limitwait || return 1
   [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait ]] || return 1
   _reg_read_to w "$id" wrapper && [[ -n "$w" ]] || return 1
@@ -32939,27 +32948,33 @@ _watchdog_resume_here() {   # id -> rc 0 the session was restarted in place | 1 
     _watchdog_hold "$id" noreset "the wait has no reset time; it ends when the limit clears or the session is moved, never by the clock"
     return 1
   fi
-  (( now >= 10#$reset )) || return 1
+  if (( now < 10#$reset )); then
+    seen=$(_limit_json_num "$LIMITS_DIR/$w.json" resetSeen 2>/dev/null); from="$(_rw_field "$lw" since)"
+    [[ "${WD_SINCE:-}" =~ ^[0-9]{1,12}$ && "$from" =~ ^[0-9]{1,12}$ ]] && (( 10#$WD_SINCE < 10#$from )) && from="$WD_SINCE"
+    [[ "$seen" =~ ^[0-9]{1,12}$ && "$from" =~ ^[0-9]{1,12}$ ]] && (( 10#$seen > 10#$from && 10#$seen <= now )) || return 1
+    why="an early reset was measured"
+  fi
   score=$(_limit_score "$w")
   [[ "$score" =~ ^[0-9]+$ ]] && (( 10#$score < SWAP_CEILING )) || return 1
   _reg_get_to prev "$id" lastswap || prev=""
   if [[ "$prev" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$prev >= 0 && now - 10#$prev < SWAP_COOLDOWN )); then
-    _watchdog_hold "$id" resumemoved "the reset has passed but the session moved $(( now - 10#$prev ))s ago (lastswap); the wait resumes it after SWAP_COOLDOWN"
+    _watchdog_hold "$id" resumemoved "$why but the session moved $(( now - 10#$prev ))s ago (lastswap); the wait resumes it after SWAP_COOLDOWN"
     return 1
   fi
   _file_read_to claim "$REG/$id.dispatching" || claim=""
   if [[ "$claim" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$claim >= 0 && now - 10#$claim < ${SWAP_JITTER:-0} + 60 )); then
-    _watchdog_hold "$id" resumepending "the reset has passed but a swap dispatched at $claim is still pending"
+    _watchdog_hold "$id" resumepending "$why but a swap dispatched at $claim is still pending"
     return 1
   fi
   if ! _swap_idle_gate "$id"; then
-    _watchdog_hold "$id" resumebusy "the reset has passed but the session is not at a clean turn boundary (a turn, background work or a recent touch); it restarts when it is"
+    _watchdog_hold "$id" resumebusy "$why but the session is not at a clean turn boundary (a turn, background work or a recent touch); it restarts when it is"
     return 1
   fi
   (( WD_FORCED < WATCHDOG_PER_PASS )) || return 1   # eligible, but this pass has moved its share: next pass
   _end_record "$id" limit-resume
   _reg_set "$id" lastswap "$now"
-  echo "$(date '+%F %T') watchdog-resume $id: $w after reset" >> "$REG/swap.log"
+  if [[ -n "$seen" ]]; then echo "$(date '+%F %T') watchdog-resume $id: $w after an early reset (the account's row was lowered $(( now - 10#$seen ))s ago)" >> "$REG/swap.log"
+  else echo "$(date '+%F %T') watchdog-resume $id: $w after reset" >> "$REG/swap.log"; fi
   # THE UNIT SOURCES THE BODY, NOT `~/.local/bin/ccd`: that path is the installed Python launcher (ccd-entry.py), and sourcing
   # it would define nothing. `${BASH_SOURCE[0]}` in a function is the file that defines it, the body this process runs.
   local body="${BASH_SOURCE[0]}" qb qi

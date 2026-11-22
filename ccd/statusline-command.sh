@@ -452,11 +452,18 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
            elif raises($f; .five; $fr; .fiveResetAt; .fiveResetFrom)
              or raises($s; .seven; $sr; .sevenResetAt; .sevenResetFrom) then "raise"
            else "publish" end),
-          field("fiveResetFrom"; mark($five; ($fr // .fiveResetAt); .fiveResetAt; .fiveResetFrom))
-          + field("sevenResetFrom"; mark($seven; $sr; .sevenResetAt; .sevenResetFrom))' "$acct_row" 2>/dev/null) || acct_out=""
+          ((field("fiveResetFrom"; mark($five; ($fr // .fiveResetAt); .fiveResetAt; .fiveResetFrom))
+           + field("sevenResetFrom"; mark($seven; $sr; .sevenResetAt; .sevenResetFrom))
+           # D-8944: `resetSeen` is WHEN the row was lowered, which the marks do not say
+           # (they ride along). The publish that sets a mark stamps it; it then rides
+           # and ends with the marks. `ccd` ends a limit wait on it (`_watchdog_resume_here`).
+           ) as $m | $m + (if $m == "" then ""
+                  elif ($five and (.fiveResetAt | type) == "number") or ($seven and (.sevenResetAt | type) == "number")
+                  then field("resetSeen"; $now)
+                  else field("resetSeen"; (.resetSeen | if type == "number" then . else null end)) end))' "$acct_row" 2>/dev/null) || acct_out=""
     acct_verdict="${acct_out%%$'\n'*}"
     case "$acct_out" in *$'\n'*) acct_mark="${acct_out#*$'\n'}" ;; esac
-    [[ "$acct_mark" =~ ^(,\"fiveResetFrom\":[0-9]+)?(,\"sevenResetFrom\":[0-9]+)?$ ]] || acct_mark=""
+    [[ "$acct_mark" =~ ^(,\"fiveResetFrom\":[0-9]+)?(,\"sevenResetFrom\":[0-9]+)?(,\"resetSeen\":[0-9]+)?$ ]] || acct_mark=""
   fi
   # D-8942: the writer's own history decides `older` and `raise`. One `jq`, and
   # only on those two words, so an ordinary render forks nothing more than it
@@ -469,6 +476,20 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
         ($prev[0] | if type == "object" then .limits else null end) as $was
         | if ($was | type) == "object" and (($was.five | type) == "number" or ($was.seven | type) == "number")
              and $was != limits then 1 else 0 end' 2>/dev/null) || acct_changed=0
+    fi
+    # D-8943: THE KEEPALIVE'S PROBE IS NEW BY CONSTRUCTION. An account at the
+    # ceiling is the one every session has left, so no ccd session renders there
+    # and nothing above can show a change: an early reset on it went unseen until
+    # the old window ended. `ccd-telemetry-keepalive` starts one process, which
+    # makes one API call and renders that call's figures; it exports
+    # `CCRC_KEEPALIVE_PROBE`, the second it started the turn, and that is the
+    # proof for an `older` reading. NARROW ON PURPOSE: only a render with no ccd
+    # id (a session is judged by its own history whatever its environment says,
+    # and no session is a child of the keepalive), and only for ten minutes after
+    # that second, so a value left in some environment proves nothing later.
+    if [ "$acct_changed" != 1 ] && [ -z "$ccd_id" ] && [[ "${CCRC_KEEPALIVE_PROBE:-}" =~ ^[0-9]{9,12}$ ]]; then
+      acct_probe_age=$(( acct_now - 10#$CCRC_KEEPALIVE_PROBE ))
+      [ "$acct_probe_age" -ge 0 ] && [ "$acct_probe_age" -le 600 ] && acct_changed=1
     fi
     if [ "$acct_changed" = 1 ]; then acct_verdict="publish"
     elif [ "$acct_verdict" = raise ] && [ -z "$ccd_id" ]; then acct_verdict="publish"

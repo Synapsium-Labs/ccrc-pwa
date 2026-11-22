@@ -48,7 +48,7 @@ const dispatches = (): string[] => h.calls().filter((l) => l.startsWith('dispatc
 const detached = (): string[] => h.calls().filter((l) => l.startsWith('detached '));
 
 /** `~/.cc-limits/<w>.json`: `five`/`seven` percentages, a `ts` (default fresh), optional reset epochs. */
-const limits = (w: string, five: number, seven: number, opts: { ts?: number; fiveResetAt?: number; sevenResetAt?: number } = {}): void => {
+const limits = (w: string, five: number, seven: number, opts: { ts?: number; fiveResetAt?: number; sevenResetAt?: number; fiveResetFrom?: number; resetSeen?: number } = {}): void => {
   fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`), JSON.stringify({ five, seven, ts: T0, ...opts }));
 };
 /** The default fleet: the session's account full, one other account with measured room, the rest unmeasured. */
@@ -754,6 +754,114 @@ describe('no account has room: ccd chooses "Wait until reset" itself (D-8173 rul
     expect(lines('watchdog-resume')).toEqual([]);
     expect(detached()).toEqual([]);
     expect(field(ID, 'stranded')).toMatch(/no account has measured room/);
+  });
+});
+
+// D-8944. The provider can reset an account's limit EARLY, days before the date the wait was opened with. The wait is for
+// room on the session's own account, so it ends when the account's row says a proven-new reading LOWERED it after the
+// session was blocked: `resetSeen`, which `statusline-command.sh` stamps on the publish that lowers a row (D-8942), later
+// than the start of the limit episode. A row that merely reads low proves nothing (the "stale low reading" this region
+// already refuses to restart on), and the restart then passes every gate the dated one passes.
+describe('a limit wait ends on a fresh measurement of room, before its date (an early reset, D-8944)', () => {
+  /** The session's account after an early reset: under the ceiling, lowered at `seen`, the old 5h window still named. */
+  const lowered = (seen: number, five = 1, seven = 0): void =>
+    limits('claude', five, seven, { ts: seen, fiveResetAt: T0 + 10000, fiveResetFrom: T0 + 10000, resetSeen: seen });
+  /** A no-room wait opened at T0+300 by the watchdog itself (`by=auto`), dated T0+10000, on a sign that began at T0. */
+  const waiting = (): void => { seed(); fullFleet(); processStatus(); pass(BANNER, T0); pass(BANNER, T0 + 300); };
+  const OPEN = `state=open since=${T0 + 300} reset=${T0 + 10000} account=claude sign=banner choice=wait at=${T0 + 300} by=auto`;
+
+  it('the row was lowered after the wait opened: the session restarts in place, days before the date', () => {
+    waiting();
+    expect(field(ID, 'limitwait')).toBe(OPEN);
+    lowered(T0 + 400);
+    pass(BANNER, T0 + 420);
+    expect(lines('watchdog-resume')).toEqual([expect.stringMatching(/watchdog-resume lane-a-project-a: claude after an early reset \(the account's row was lowered 20s ago\)$/)]);
+    expect(detached()).toHaveLength(1);
+    expect(dispatches()).toEqual([]);
+    expect(field(ID, 'limitwait')).toMatch(/ by=auto end=resume until=\d+$/);
+  });
+
+  it("the operator's own pin ends the same way", () => {
+    waiting(); h.sh(`_limitwait_choose ${ID}`);
+    lowered(T0 + 400);
+    pass(BANNER, T0 + 420);
+    expect(lines('watchdog-resume')).toHaveLength(1);
+    expect(field(ID, 'limitwait')).toMatch(/ choice=wait at=\d+ end=resume until=\d+$/);
+  });
+
+  it('a row that reads low with a newer ts but was never lowered restarts nothing (a stale low reading)', () => {
+    waiting();
+    limits('claude', 1, 0, { ts: T0 + 400, fiveResetAt: T0 + 10000, fiveResetFrom: T0 + 10000 });
+    pass(BANNER, T0 + 420);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(detached()).toEqual([]);
+    expect(field(ID, 'limitwait')).toBe(OPEN);
+  });
+
+  it('a lowering from before the session was blocked restarts nothing: the limit came after it', () => {
+    waiting();
+    limits('claude', 1, 0, { ts: T0 + 400, fiveResetAt: T0 + 10000, fiveResetFrom: T0 + 10000, resetSeen: T0 - 50 });
+    pass(BANNER, T0 + 420);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(field(ID, 'limitwait')).toBe(OPEN);
+  });
+
+  it('a lowering in the very second the sign began, or dated ahead of now, restarts nothing', () => {
+    waiting();
+    for (const seen of [T0, T0 + 9000]) {
+      lowered(seen);
+      pass(BANNER, T0 + 420);
+    }
+    expect(lines('watchdog-resume')).toEqual([]);
+  });
+
+  it('a lowered row that is at the ceiling again restarts nothing: the measured room is still asked', () => {
+    waiting();
+    lowered(T0 + 400, 99, 0);
+    pass(BANNER, T0 + 420);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(field(ID, 'limitwait')).toBe(OPEN);
+  });
+
+  it('a row that cannot be read decides nothing', () => {
+    waiting();
+    fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude.json'), '{"five":1,"seven":0,"resetSeen":"soon"');
+    pass(BANNER, T0 + 420);
+    fs.rmSync(path.join(h.home, '.cc-limits', 'claude.json'));
+    pass(BANNER, T0 + 480);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(field(ID, 'limitwait')).toBe(OPEN);
+  });
+
+  it('a wait with no date is still never ended by a reading: reset=- stays the operator\'s', () => {
+    seed(); limits('claude-a', 100, 100); limits('claude-b', 100, 100); processStatus();
+    h.sh(`_reg_set ${ID} limitwait "state=open since=${T0} reset=- account=claude sign=banner choice=wait at=${T0 + 10}"`);
+    h.sh(`_reg_set ${ID} limitsign "${T0} banner"`);
+    lowered(T0 + 400);
+    pass(BANNER, T0 + 420);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/the wait has no reset time/)]);
+  });
+
+  // The wait opens N minutes after the sign, and only then if no other account has room. A lowering inside those
+  // minutes is after the block and before the record: the episode's start (`.limitsign`) is what it is dated against.
+  it('a lowering between the block and the opening of the wait counts: the same pass restarts in place', () => {
+    seed(); processStatus(); limits('claude-a', 100, 5); limits('claude-b', 99, 5);
+    lowered(T0 + 100);
+    writeTranscript([turn(T0 - 600), limitRow(T0, T0 + 9000)]);
+    h.sh(`_reg_set ${ID} limitsign "${T0} transcript"`);
+    pass(PROMPT, T0 + 420, '', {}, T0 - 3600);
+    expect(lines('watchdog-resume')).toEqual([expect.stringMatching(/claude after an early reset \(the account's row was lowered 320s ago\)$/)]);
+    expect(field(ID, 'limitwait')).toMatch(new RegExp(`^state=closed since=${T0 + 420} reset=${T0 + 9000} .* by=auto end=resume until=\\d+$`));
+    expect(field(ID, 'stranded')).toBeNull();
+  });
+
+  it('the holds of the dated restart hold this one too: a turn running on the session', () => {
+    waiting(); processStatus('busy');
+    lowered(T0 + 400);
+    pass(BANNER, T0 + 420);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/an early reset was measured but the session is not at a clean turn boundary/)]);
   });
 });
 
