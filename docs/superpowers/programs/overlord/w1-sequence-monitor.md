@@ -36,18 +36,11 @@ request. The coordinator folds it into the programme ledger.
 
 ## Departures, by slug
 
-- `stamp-failure-is-a-row-write-failure`. The plan's ruling F1 has a writer call `AuthorityGuardPort.writerFailed('trailing')`
-  when its stamp is refused after an authority append, and calls that "the path the authority plan already takes for a row
-  write that fails after its append". No writer on `main` takes that path. The designation and ladder writers hold only
-  `appendInTx`, and the journal itself fences a file left past the head row at its next append
-  (`overlordAuthorityJournal.ts`, `writer-failure-fences-trailing`). So this PR does two things:
-  - Each designation writer that appends checks its lines' verdict BEFORE the append. A line the verdict refuses therefore
-    never follows a record.
-  - A stamp that still fails after the append (a failed insert) throws `SequenceStampRefused` inside the transaction. No row
-    and no line are written, exactly as when the row write itself fails. The record stands, and the journal's next append
-    names it `trailing`.
-
-  Adding the guard port to the writers is left for a ruling: it would widen `AuthorityAppender` and every fake of it.
+- `stamp-failure-is-a-row-write-failure`. The designation writer checks its lines' verdict before any append. If a stamp
+  insert still fails, `SequenceStampRefused` rolls back the designation row, the head row and the sequence lines, while the
+  durable records stand. Fix round F1 closes the original next-append gap: the journal's successful append receipt delegates
+  to the existing `AuthorityGuardPort.writerFailed('trailing')`, and the stamped writer calls it before propagating the
+  transaction failure. No successful append means no such call. The guard, remeasurement and Confirm paths are unchanged.
 - `ladder-stamps-ride-pr-b`. The ladder merged before sequence A. The index's "sequence writer" bullet gives its stamps to
   PR B ("if it merges after sequence A; otherwise PR B wires it"), and the plan's question 11 notes that the ladder's rows
   carry no actor kind yet. PR A therefore stamps the generation and the designation only. Its kind table has no ladder rows.
@@ -68,6 +61,6 @@ request. The coordinator folds it into the programme ledger.
   that ends generations through `endOverlordGeneration`. Whichever lands second passes `at` there, and puts the writer in
   the stamp census, stamping a Confirm that clears the binding as `retired` the way `retire` does. Authority journal C also
   switches the cursor read's `restoreGeneration` from `unmeasured` to its counter.
-- **The inbox** stamps acknowledge's message line through `stampSequenceInTx` in its own transaction (plan question 17). It
-  adds the `message` kind to `SEQUENCE_KIND_MAP` and its writers to the census.
+- **The inbox acknowledgement** gets its `message` line and matching census entry together in the second lander of Sequence A
+  and Inbox (plan question 17). The existing message queue, delivery and settlement writers remain unstamped and outstanding.
 - **Migration 121** is provisional: a later lander renumbers by position and re-pins `coord-db` and `run-close-switch`.

@@ -14,8 +14,8 @@
 // THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending` and `retire` change the
 // designation's state, so each stamps its line(s) with `stampSequenceInTx` after the row write, in its transaction, with the actor
 // it writes to the row. A writer with an append checks its lines' verdict BEFORE the append, so a refused line never follows a
-// record; a stamp that still fails (a failed insert) throws `SequenceStampRefused` inside the transaction, so no row is written,
-// exactly as a failed row write would (slug `stamp-failure-is-a-row-write-failure`). The other writers stamp nothing.
+// record; a stamp that still fails (a failed insert) throws `SequenceStampRefused` inside the transaction, rolling back the rows
+// and stamps. If an append succeeded, its receipt fences the authority guard before the error reaches the caller.
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { sequenceLineVerdict } from './overlordSequence.js';
@@ -138,11 +138,29 @@ function held(db: DatabaseSync): { row: DesignationView | null } | RowUnreadable
   return typeof row === 'string' ? { ok: false, reason: 'unmeasured', detail: row } : { row };
 }
 
-type Appended = { ok: true; journalled: boolean } | AuthorityRefused;
+type Appended = { ok: true; journalled: true; postAppendFailed: () => void } | { ok: true; journalled: false } | AuthorityRefused;
 /** One record, BEFORE the row; the journal's answer checked (`row-only` goes on, `journalled: false`, a refusal stops). */
 function append(db: DatabaseSync, journal: AuthorityAppender, entry: OverlordAuthorityMove): Appended {
   const a = journal.appendInTx(db, entry);
-  return a.ok ? { ok: true, journalled: a.kind === 'appended' } : { ok: false, authority: a.error, detail: a.detail };
+  if (!a.ok) return { ok: false, authority: a.error, detail: a.detail };
+  return a.kind === 'appended'
+    ? { ok: true, journalled: true, postAppendFailed: a.postAppendFailed }
+    : { ok: true, journalled: false };
+}
+
+/** A stamped writer's transaction: only a durable append arms the fence. An ordinary refusal still returns and commits. */
+function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, write: (add: (entry: OverlordAuthorityMove) => Appended) => T): T {
+  let postAppendFailed: (() => void) | undefined;
+  try {
+    return tx(db, () => write((entry) => {
+      const a = append(db, journal, entry);
+      if (a.ok && a.journalled) postAppendFailed = a.postAppendFailed;
+      return a;
+    }));
+  } catch (error) {
+    postAppendFailed?.();
+    throw error;
+  }
 }
 
 /** The live actor's four columns, set together from one `RecordedActor` (`actorCols`' order). */
@@ -182,17 +200,17 @@ export type DesignateResult = { ok: true; changed: true } | { ok: false; reason:
 // guard is already damaged (`journal-append` or `diverged`, each calling `writerFailed`); a throw would be worse, the record being a file.
 export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i: DesignateInput): DesignateResult {
   if (actorRefused(i.actor)) return ACTOR_REFUSED;
-  return tx(db, (): DesignateResult => {
+  return txWithAuthorityStamp(db, journal, (add): DesignateResult => {
     const h = held(db);
     if ('ok' in h) return h;
     const row = h.row;
     if (row !== null && (row.bound !== null || row.pending !== null)) return { ok: false, reason: 'exists' };
     const lines = [designationLine(i.sessionId, 'pending', i.actor, i.at)];
     checkLines(lines);
-    const set = append(db, journal, { kind: 'authority-account-set', opKey: `${i.opKey}-set`,
+    const set = add({ kind: 'authority-account-set', opKey: `${i.opKey}-set`,
       from: row === null ? NARROWEST_SET : row.accountPools, to: i.accountPools });
     if (!set.ok) return set;
-    const model = append(db, journal, { kind: 'authority-model-class', opKey: `${i.opKey}-model`,
+    const model = add({ kind: 'authority-model-class', opKey: `${i.opKey}-model`,
       from: row === null ? NARROWEST_MODEL : row.model, to: i.model });
     if (!model.ok) return model;
     db.prepare(
@@ -238,7 +256,7 @@ export type GoLiveResult = { ok: true; changed: true; term: number } | { ok: tru
  *  `designatedTerm`, clears the pending slot and the last attempt (`golive-clears-last-attempt`), and re-stamps the body's live
  *  generation (X5) inside this transaction. PR B adds the rebind arm; until then a pending `rebind` is left untouched. */
 export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: string, generation: string, at: number): GoLiveResult {
-  return tx(db, (): GoLiveResult => {
+  return txWithAuthorityStamp(db, journal, (add): GoLiveResult => {
     const h = held(db);
     if ('ok' in h) return h;
     const p = h.row?.pending ?? null;
@@ -246,7 +264,7 @@ export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: 
     const term = h.row.term + 1;
     const lines = [designationLine(sessionId, 'live', p.actorDetail, at)]; // the attempt's actor, which the binding copies
     checkLines(lines);
-    const a = append(db, journal, { kind: 'authority-designate', opKey: `go-live-term-${term}`, term, sessionId, generation });
+    const a = add({ kind: 'authority-designate', opKey: `go-live-term-${term}`, term, sessionId, generation });
     if (!a.ok) return a;
     db.prepare(
       // The binding names the operator who started it (X2): the attempt's four actor columns, copied before the clear (the
@@ -297,7 +315,7 @@ export type RetireResult =
  *  (`not-in-transaction`) writes nothing. `owed` is the ids this call put on `stopsOwed`. The retiring actor is the row's. */
 export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireInput): RetireResult {
   if (actorRefused(i.actor)) return ACTOR_REFUSED;
-  return tx(db, (): RetireResult => {
+  return txWithAuthorityStamp(db, journal, (add): RetireResult => {
     const h = held(db);
     if ('ok' in h) return h;
     const row = h.row;
@@ -316,7 +334,7 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
     // A pending attempt it cancels is `failed`, then the binding `retired` (sequence plan review F12), both by the retiring actor.
     const lines = [...(p === null ? [] : [designationLine(p.sessionId, 'failed', i.actor, i.at)]), designationLine(bound, 'retired', i.actor, i.at)];
     checkLines(lines);
-    const a = append(db, journal, { kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
+    const a = add({ kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
     if (!a.ok) return a;
     endOverlordGeneration(db, bound, i.at); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
     if (p !== null) endOverlordGeneration(db, p.sessionId, i.at); // and the pending body's it cancels (review 2366 N3)

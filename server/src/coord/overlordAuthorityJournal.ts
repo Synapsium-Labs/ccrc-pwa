@@ -65,7 +65,8 @@ export interface AuthorityGuardPort {
 
 /** `appendInTx`'s answer. None is an HTTP refusal: a door maps them (X2's door mapping). */
 export type AuthorityAppend =
-  | { ok: true; kind: 'appended'; record: ChainedJournalRecord<OverlordAuthorityEntry> }
+  /** The caller reports a later transaction failure through the same guard, if the durable record outlives its head row. */
+  | { ok: true; kind: 'appended'; record: ChainedJournalRecord<OverlordAuthorityEntry>; postAppendFailed(): void }
   /** An operator narrowing while the journal is not coherent: write the row, append nothing, leave the head row. */
   | { ok: true; kind: 'row-only'; state: Exclude<AuthorityState, { kind: 'coherent' }> }
   | { ok: false; error: AuthorityAppendError; detail: string };
@@ -296,7 +297,7 @@ export class OverlordAuthorityJournal {
           db.prepare(`INSERT INTO overlord_authority_head (id, sequence, journalId, digest, at) VALUES (1, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET sequence = excluded.sequence, journalId = excluded.journalId, digest = excluded.digest,
             at = excluded.at`).run(rec.sequence, rec.journalId, rec.digest, Date.parse(rec.acceptedAt));
-          return { ok: true, kind: 'appended', record: rec };
+          return { ok: true, kind: 'appended', record: rec, postAppendFailed: () => this.guard.writerFailed('trailing') };
         },
       }, phase);
     } catch (err) {

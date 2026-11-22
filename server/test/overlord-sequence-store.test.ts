@@ -6,9 +6,9 @@ import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import {
-  pruneSequenceThrough, sequenceAfter, sequenceOldest, stampSequenceInTx, type SequenceLineInput,
+  isSequenceStampKebab, pruneSequenceThrough, sequenceAfter, sequenceOldest, STAMP_FAILURES, stampSequenceInTx, type SequenceLineInput,
 } from '../src/coord/overlordSequenceStore.js';
-import { sequencePage } from '../src/coord/overlordSequence.js';
+import { LINE_REFUSALS, sequencePage } from '../src/coord/overlordSequence.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 let template = '';
@@ -33,6 +33,15 @@ const AT = 1_800_000_000_000;
 const LINE: SequenceLineInput = { kind: 'generation', id: '7', state: 'carded', actor: 'server', actorKind: 'server', at: AT };
 const stamp = (db: DatabaseSync, over: Partial<SequenceLineInput> = {}) => tx(db, () => stampSequenceInTx(db, { ...LINE, ...over }));
 const count = (db: DatabaseSync): number => Number((db.prepare('SELECT count(*) AS n FROM overlord_sequence').get() as { n: number }).n);
+
+describe('sequence stamp refusal vocabulary', () => {
+  it('admits every derived refusal word to the coordination census', () => {
+    for (const word of [...LINE_REFUSALS, ...STAMP_FAILURES]) expect(isSequenceStampKebab(word), word).toBe(true);
+  });
+  it('does not admit an unknown refusal word to the coordination census', () => {
+    expect(isSequenceStampKebab('imaginary-sequence-refusal')).toBe(false);
+  });
+});
 
 describe('stampSequenceInTx, the one writer', () => {
   it('inside tx() a stamp answers the next number and the line reads back with every column', () => {

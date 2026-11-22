@@ -1,6 +1,6 @@
 // Overlord W1, designation plan Task 1 (PR A): the designation row, its six writers and its one reader
-// (`overlordDesignationStore.ts`), over a coord db opened through the real migrations and a FAKE authority appender, so
-// each writer's record, its order against the row write and its `from` are pinned without a journal file.
+// (`overlordDesignationStore.ts`), over a coord db opened through the real migrations. A fake appender pins each writer's
+// record, its order against the row write and its `from`; the rollback fence cases use a real journal and guard.
 import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
@@ -10,7 +10,9 @@ import {
   bindPendingGeneration, designatePending, designationRead, failPending, goLive, retire, stopDone, SequenceStampRefused,
   type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
-import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
+import { OverlordAuthorityJournal, overlordAuthorityFileAt, type AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
+import { OverlordAuthorityGuard } from '../src/coord/overlordAuthorityGuard.js';
+import { fakeTime } from './fakeTime.js';
 import { authorityEntry, type OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import { insertStart, mintGeneration } from '../src/continuity/continuityStore.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -37,8 +39,7 @@ const B = 'overlord-brisk-heron';
 const GEN = '11111111-2222-3333-4444-555555555555';
 const SET_X = { pools: ['pool-b', 'pool-a'], untagged: true };
 const SET_Y = { pools: ['pool-a'], untagged: false };
-const openDb = (): DatabaseSync => {
-  const dir = path.join(mkTmp('ccrc-designation-'), '.ccrc');
+const openDb = (dir = path.join(mkTmp('ccrc-designation-'), '.ccrc')): DatabaseSync => {
   mkdirSync(dir, { recursive: true });
   copyFileSync(template, path.join(dir, 'coord.db'));
   const db = openCoordDb(path.join(dir, 'coord.db'));
@@ -66,7 +67,7 @@ const kinds = (f: Fake): string[] => f.seen.map((s) => s.entry.kind);
 const rowOf = (db: DatabaseSync): Record<string, unknown> | undefined =>
   db.prepare('SELECT * FROM overlord_designation').get() as Record<string, unknown> | undefined;
 
-const des = (db: DatabaseSync, f: Fake, over: Partial<Parameters<typeof designatePending>[2]> = {}): ReturnType<typeof designatePending> =>
+const des = (db: DatabaseSync, f: AuthorityAppender, over: Partial<Parameters<typeof designatePending>[2]> = {}): ReturnType<typeof designatePending> =>
   designatePending(db, f, { sessionId: A, deadlineAt: NOW + 60_000, model: 'opus', accountPools: SET_X, actor: OPERATOR, at: NOW,
     opKey: 'op-designate-1', ...over });
 const live = (db: DatabaseSync, f: Fake, id = A): void => {
@@ -497,16 +498,60 @@ describe('the one sequence (Overlord §10.4): the designation lines', () => {
     expect(f.seen).toEqual([]);
     expect(rowOf(db)).toBeUndefined();
   });
-  it('a stamp that fails after the append throws inside the tx: the record stands, and no row and no line are written', () => {
-    const db = openDb(); const f = fake(db);
-    des(db, f);
+});
+
+describe('the immediate authority fence on designation stamp failure', () => {
+  function journalFixture() {
+    const dir = path.join(mkTmp('ccrc-designation-journal-'), '.ccrc');
+    const db = openDb(dir);
+    const clock = fakeTime({ wallMs: NOW }).ports.clock;
+    const guard = new OverlordAuthorityGuard({ healTornTail: () => journal.healTornTail(db), measure: () => journal.measure(db) });
+    const journal: OverlordAuthorityJournal = new OverlordAuthorityJournal(overlordAuthorityFileAt(dir), { clock }, guard);
+    guard.bootVerdict(journal.measure(db));
+    const snapshot = () => ({ row: rowOf(db), head: db.prepare('SELECT * FROM overlord_authority_head').get(),
+      lines: db.prepare('SELECT * FROM overlord_sequence ORDER BY seq').all() });
+    const recordKinds = () => {
+      const file = journal.readVerified();
+      expect(file.kind).toBe('records');
+      return file.kind === 'records' ? file.records.map((record) => record.entry.kind) : [];
+    };
+    return { db, guard, journal, snapshot, recordKinds };
+  }
+  const refuseInsert = (db: DatabaseSync) =>
     db.exec("CREATE TRIGGER refuse BEFORE INSERT ON overlord_sequence BEGIN SELECT RAISE(ABORT, 'refused'); END");
-    const n = f.seen.length;
-    const before = rowOf(db);
-    expect(() => goLive(db, f, A, GEN, NOW + 1)).toThrow(SequenceStampRefused);
-    expect(kinds(f).slice(n)).toEqual(['authority-designate']);
-    expect(rowOf(db)).toEqual(before);
-    expect(() => failPending(db, A, 'create-failed', NOW + 2, true)).toThrow(SequenceStampRefused);
-    expect(rowOf(db)).toEqual(before);
+  const settingsRecords = ['authority-account-set', 'authority-model-class'];
+
+  it('fences immediately when a go-live stamp fails after one durable append', () => {
+    const { db, guard, journal, snapshot, recordKinds } = journalFixture();
+    expect(des(db, journal)).toEqual({ ok: true, changed: true });
+    expect(guard.state()).toEqual({ kind: 'coherent' });
+    const before = snapshot();
+    refuseInsert(db);
+    expect(() => goLive(db, journal, A, GEN, NOW + 1)).toThrow(SequenceStampRefused);
+    expect(guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+    expect(snapshot()).toEqual(before);
+    expect(recordKinds()).toEqual([...settingsRecords, 'authority-designate']);
+  });
+
+  it('fences immediately when a pending stamp fails after two durable appends', () => {
+    const { db, guard, journal, snapshot, recordKinds } = journalFixture();
+    expect(guard.state()).toEqual({ kind: 'coherent' });
+    refuseInsert(db);
+    expect(() => des(db, journal)).toThrow(SequenceStampRefused);
+    expect(guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+    expect(snapshot()).toEqual({ row: undefined, head: undefined, lines: [] });
+    expect(recordKinds()).toEqual(settingsRecords);
+  });
+
+  it('does not fence when a stamp fails without an append', () => {
+    const { db, guard, journal, snapshot, recordKinds } = journalFixture();
+    expect(des(db, journal)).toEqual({ ok: true, changed: true });
+    expect(guard.state()).toEqual({ kind: 'coherent' });
+    const before = snapshot();
+    refuseInsert(db);
+    expect(() => failPending(db, A, 'create-failed', NOW + 1, true)).toThrow(SequenceStampRefused);
+    expect(guard.state()).toEqual({ kind: 'coherent' });
+    expect(snapshot()).toEqual(before);
+    expect(recordKinds()).toEqual(settingsRecords);
   });
 });
