@@ -162,3 +162,8 @@ export const ASK_HELD_CHIP_MAX_MS = ASK_GRACE_MS + ASK_ANSWERING_MAX_MS;
  *  or two ticks later the envelope is there and the question can be held
  *  instead of pushed. Counted per `dialog.id`; the third sighting raises. */
 export const ASK_SETTLE_TICKS = 2;
+
+/** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
+ *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
+ *  a sweep's slack. Moved from `watch.ts` (approvals PR 3): the ruling read's `fetchedAt` uses the same grace. */
+export const APPROVAL_RULED_GRACE_MS = 10_000;

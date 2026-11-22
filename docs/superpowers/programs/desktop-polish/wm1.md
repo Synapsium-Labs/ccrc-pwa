@@ -30,43 +30,44 @@ if it can, its `{ runId }` and that pull request could each close a ticket.
 
 - **Measured** on `origin/main` at `9e79fb3c1` (WM0 merged): `git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`
   printed 93, so this entry was 94. Forecasts A (#2987) then took 94.
-- **Step B, after WM1r (#3001) landed:** one merge of `origin/main` at `8781ef20a`, on the coordinator's word. The same
+- **Step B, after WM1r (#3001) landed** (measured when written, from the counts each merge printed; not re-measured since): one merge of `origin/main` at `8781ef20a`, on the coordinator's word. The same
   count printed 102 there, so this entry was 103. The pre-push fetch then showed the door process A1 (#3035) at 103, so a
   **second merge**, on the coordinator's word, took `origin/main` at `9e372d2bc` (count 103), and this entry was 104.
   Nine files conflicted there (`README.md`, `schema.ts` and the tests `auth-gate`, `box-token-census`, `ccrc-api-closed`,
   `ccrc-api`, `coord-db`, `run-close-switch` and `sim/mutation-floors.json`), each resolved keeping both sides. Both
   sides had added one box-token lane, one `ccrc-api` row and one route, so the lines each wrote alike merged clean one
   short and were re-measured too (`ccd/ccrc-api`, `gate.ts`, `README.md`).
-- **The land-sync's merge**, on the coordinator's word (mail delivery 26229), after review 2740 ruled the PR safe to land:
+- **The land-sync's merge** (measured when written; the delivery id is from the mail, which the tree cannot show), on the coordinator's word (mail delivery 26229), after review 2740 ruled the PR safe to land:
   the mail idempotency key (#3056) took 105, so the merge took `origin/main` at `c5b4d587c` (count 105), and this entry
   is **106**. Three files conflicted (`schema.ts`, `coord-db`, `run-close-switch`), each resolved keeping both sides;
   coord-db's version literals and `run-close-switch`'s replay count merged clean one short and were re-measured. After
   it: 106 migrations, and `run-close-switch` replays fifty-three (54 through 106). The route counts did not move.
-- **Fix round 2's third merge**, on the coordinator's word (mail delivery 25954): the census of prompts (#3043) took 104,
+- **Fix round 2's third merge** (measured: review 2740's third lens re-measured every count below and found them true; the delivery id is from the mail), on the coordinator's word (mail delivery 25954): the census of prompts (#3043) took 104,
   so the merge took `origin/main` at `de1cbeddd` (count 104), and this entry was 105. Three files conflicted
   (`schema.ts`, `auth-gate`, `coord-db`), each resolved keeping both sides; the lines each side wrote alike (coord-db's
   literals, auth-gate's route count, `gate.ts`'s route word, `run-close-switch`'s undo list and replay count) merged clean
   one short and were re-measured. After it: 105 migrations, 284 routes scanned, 281 at the gate's HTTP half, 101 exempt,
-  180 gated, and `run-close-switch` replays fifty-two (54 through 105). The counts in the bullet below are the second
-  merge's.
-- **The fifteen conflicted files of the first merge**, each resolved keeping both sides (the coordinator's terms), its counts re-measured on
+  180 gated, and `run-close-switch` replays fifty-two (54 through 105). The counts in the bullet "The counts, measured on the
+  tree after the second merge", three bullets below, are the second merge's, not this one's.
+- **The fifteen conflicted files of the first merge** (measured when written, from the merge's own conflict list; the reading of main's plan writers is inferred from reading them, not from a run), each resolved keeping both sides (the coordinator's terms), its counts re-measured on
   the merged tree: `README.md`, `ccd/ccrc-api`, `server/src/auth/gate.ts`, `server/src/coord/planPolicy.ts`,
   `planRoutes.ts`, `planStore.ts`, `schema.ts`, and the tests `auth-gate`, `box-token-census`, `ccrc-api-closed`,
   `ccrc-api`, `coord-db`, `open-run-preconditions`, `run-close-switch` and `sim/mutation-floors.json`. The plan files met
   only at import lines and header comments: main's new `plan_tickets` writers (the inbound path, #2982) insert an open
   ticket and move one, and neither writes `done`, so the done arm is still the one writer of `doneAt` and `doneEvidence`.
-- **The one change the merge forced (its own commit):** since #2996 every plan write door names a row of `OTHER_LANES`
+- **The one change the merge forced (its own commit)** (measured: the compile and the other-lanes census named it): since #2996 every plan write door names a row of `OTHER_LANES`
   (`server/src/coord/otherLanes.ts`) that refuses the Overlord's body with `overlord-uses-its-doors`, and the census pins
   the plan-door rows to exactly the write doors `planRoutes.ts` registers. So the `plan ticket-done` door is the row
   `planTicketsDone` (route `POST /api/programmes/:slug/plan/tickets/done`, `plan-door`), shaped as its neighbours; the
-  other-lanes pin counts ten plan-door rows; `plan-ticket-done` has the refusal case, and a mutant of the row's word
+  `overlord-other-lanes.test.ts` counts ten plan-door rows (its case `the ten plan-door rows refuse the bound body with
+  overlord-uses-its-doors`; review 2740 F11: this note named the pin file); `plan-ticket-done` has the refusal case, and a mutant of the row's word
   turns it red (§4.2, M-17). Claim 5404 holds the two other-lanes files.
 - **The counts, measured on the tree after the second merge:** 104 migrations; 91 `ccrc-api` rows, 11 of them `plan`
   rows; 243 mutation floors (main's 239 and WM1's 4); 283 routes scanned, 280 at the gate's HTTP half, 101 exempt HTTP, 179
   gated; 92 machine lanes (89 box-token lanes, plus notify, pools/epoch and updates/intent). `run-close-switch`'s rollback
   undoes migrations 54 to 104, fifty-one in all. At the first merge it read fifty (54 to 103); main's line had said
   forty-three, short already against its own 102.
-- **Two pins main gained, which met WM1 in CI's fast run at `74f096c81`** (neither was in the run list; both fixed on the
+- **Two pins main gained, which met WM1 in CI's fast run at `74f096c81`** (measured: CI's run 44451428962 named both) (neither was in the run list; both fixed on the
   coordinator's word, each in its own commit, under claim 5437):
   - The plan-reference test from #3040 asks `plan.md` to name every `PLAN_REFUSALS` word, unless its `NOT_MET` table says
     where the word is answered. It already exempts WM1's verb `ticket-done` until WM5 documents it, but not WM1's word
@@ -90,7 +91,11 @@ cases run against every mutant in §4; the route and store cases were mutated by
 | Held ticket `plan-runs-open`; not open `plan-bad-body` (F21) | `verdict:` cases; route cases | EV-1, EV-2 | Measured |
 | `{ runId }`: exists, this programme's, a work run, done, its own ticket this one, auto or none | `verdict:` cases; route cases | EV-3 to EV-7c | Measured |
 | `{ pr }`: landed for the ticket's own project; no entry names the run; unreadable refuses | `verdict:`/`landed:` cases; route cases | EV-8 to EV-10, LF-1 to LF-3 | Measured |
-| Evidence already stored on another ticket refuses, except the run's own auto ticket (F2) | `verdict:` cases; route case | ST-1 to ST-4 | Measured |
+| Evidence already stored on another ticket refuses, except the run's own auto ticket (F2); the run id compared, global across the programme's projects (F5) | `verdict:` cases; route case | ST-1 to ST-5 | Measured |
+| A run and the pull request it carried are one piece of work, whichever is named first: a `{ runId }` tied to a stored `{ pr }` and a `{ pr }` tied to a stored `{ runId }` refuse, but not the run's own auto ticket (reviews 2429 F2, 2712 F2) | `verdict:` link cases; the route cases `a run and the pull request it carried close one ticket …` | ST-6, ST-7, ST-9, ST-10, ST-14; M-14 to M-16, M-18, M-18b | Measured (review 2740's third lens counted the floor set, ST-1 to ST-14) |
+| A `{ pr }` the landing line ties to a run that holds another declared ticket refuses, stored evidence or not; the run holding this very ticket does not (review 2712 F1) | `verdict:` cases; the route case `a run holding its ticket and the pull request it carried …` | ST-11, ST-12; M-18 | Measured |
+| A link that cannot be read refuses (the landing line that ties runs to pull requests) | `verdict:` case; the fenced-landing route case | ST-8; M-13, M-15 | Measured |
+| Stored evidence that reads `malformed` refuses every other ticket's `ticket-done` (review 2712 F3) | `verdict:` case; the route case `refuses evidence while another ticket stores evidence that cannot be read` | ST-13; M-19 | Measured |
 | The back-fill | `the migration back-fills …` | M-2 | Measured |
 | The done arm stores `{ runId }` and the time | `a run closing done stores doneAt and its runId` | M-3 | Measured |
 | `markTicketDone` settles the epic and marks the sync due | `settles the epic` | M-4 | Measured |
@@ -168,6 +173,7 @@ The review's MD (the `{ pr }` side's project check dropped) is floor mutant ST-1
   cases and sets, the shared fixture), 4848 (`plan-phases.test.ts`).
 - Claimed by this task for the CI fix (measured): 4864 (`ccd/coordinator-skill/references/plan.md`), released in fix round 1
   once the file was back to main's copy, for WM1r's worker.
+- The co-edit bullets below are recorded from the mails that granted them (delivery ids in each); the tree cannot show a consent, so none is measured here.
 - Co-edited under the Linear hierarchy wave 4's claims 4783, 4787, 4791 and 4824 (`schema.ts`, `planStore.ts`,
   `planRoutes.ts`, `planPolicy.ts`, `ccd/ccrc-api`, `shared/plan.ts`, `shared/refusal.ts`, `plan-store`, `ccrc-api`,
   `ccrc-api-closed`, `auth-gate`, `coord-db`, `run-close-switch` and `refusal-status` tests): the coordinator's grant (mail
@@ -243,3 +249,40 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 50 | `mutation-floors`, the whole file, one worker | 11.87 | 252 passed: every programme's floor mutants, WM1's 42 among them |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.
+
+## 7. What review 2740 left, and what WM7 did with it (D-8845)
+
+Recorded by Task WM7; the cases WM7 added and their mutants are in `wm7.md`. Each line says whether it was measured or inferred.
+
+- **F3, a record (measured by reading and by grep).** One stored evidence that reads as `malformed` makes every `plan ticket-done` in
+  that programme refuse `evidence-unverified`, whichever kind the caller names, and nothing in the tree repairs such a row. The
+  refusal is `ticketDoneVerdict`'s `unread` arm (`server/src/coord/planPolicy.ts`, the `f.stored.find(… === 'malformed')` line, reached
+  after the link check and before any holder rule). A row can only read `malformed` if `doneEvidence` holds text that is neither
+  kind: the writers of that column are `markTicketDone` and the done arm of `onRunAdvancedInTx` in `planStore.ts` (a grep of
+  `server/src/coord` for `doneEvidence` finds those two and the migration's back-fill), and each writes a typed evidence, so the
+  state is reachable only by a hand edit of `coord.db`. The refusal fails closed, as review 2712 F3 ruled. A repair is an operator's
+  edit of the row; no verb does it.
+- **F5, a correction of a record (inferred, from the diff and run 40).** Fix round 2's commit message says its new F1, F2 and F3 verdict and
+  route cases were red at `949df9ba5`. Run 40 (above) measured them red, but for one of them, the verdict case for stored
+  `malformed` evidence, by a throw: the old verdict evaluated `in` on the string `malformed` (a `TypeError`), not a wrong
+  verdict word. The route case `refuses evidence while another ticket stores evidence that cannot be read` is the one red for the right
+  reason there (the old route dropped `malformed` before the verdict, so it answered 200 where 409 is due).
+- **F7, the tally (measured by reading `auth-gate.test.ts`).** The comment chain of route counts in the property loop stays one low
+  against its own pairs where WM1's fix round moved a jump down a line instead of removing it: the designation's Settings doors
+  line ends at gated 163, and the next line (the 265-route inbound path, main's) reads "the gated count 162 -> 163". No assertion
+  reads the comment; the file's own note near the Models line already says the gated figures in this tally trail the derived value
+  (the HTTP half less the exempt-HTTP count) by one. WM7 left the comment as it stands: the file is held by another wave's claim, and
+  the direction offered this record in its place.
+- **F12, the route suite's door table (measured by reading `overlord-other-lanes-routes.test.ts`).** Review 2712 F7 asked for
+  `planTicketsDone` among the route suite's `PLAN_DOORS`. The build added a separate `WORK_MAP_DOORS` table beside `INBOUND_DOORS` and
+  loops both with the core doors. The table's own comment gives the reason: a plain session passes the Overlord's lane and is
+  answered by the door's own evidence check (`409 evidence-unverified`, no landing entry), where a `PLAN_DOORS` row expects the
+  lane's word. The suite is green (35 of 35 in review 2740's run).
+- **F1 and F2, pins (measured by WM7's cases, `wm7.md`).** F1 (the landing lines `evidenceLinksOf` reads for a `{ runId }`) and F2
+  (the `{ pr }` holder check over several ties) are pinned in `wm7.md`'s table, with their mutants.
+- **F4, left (the review's own direction says later).** A run read that fails is refused by the route itself, because
+  `TicketDoneFacts['run']` has no `unreadable` arm: a decision in delivery code, failing closed, pinned by `refuses a run that
+  cannot be read` since review 2429 F3. The direction is an `unreadable` arm on `run`, decided in the verdict; it changes no
+  answer, so no ruling is needed, and it is left for a later task that edits `ticketDoneVerdict`.
+- **F6 belongs to WM5** (its Files line and Step 1b). **F8 is the coordinator's** (the migration slot, settled at landing).
+  **F9, F10 and F11 are done in this note** (the rows of §3; the labels and the pointer of §2 and §5; the file name of §2).

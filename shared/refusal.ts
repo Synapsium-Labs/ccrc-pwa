@@ -496,6 +496,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // Approvals PR 0: an allow of a row whose child runs under older deny rules than the box's. CHOSEN: the conflict
   // status of the approval routes' other refusals.
   'deny-not-current': 409,
+  // Approvals PR 3: a second principal's ruling on a park that holds an unspent one, and an allow on a key whose park
+  // records the coordinator's deny. CHOSEN: the conflict status of the approval routes' other refusals.
+  'park-ruled': 409, 'coordinator-denied': 409,
   // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
   'not-coordinator': 409, 'digest-unreadable': 503, 'unknown-call': 404,
   // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed

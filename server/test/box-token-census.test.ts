@@ -285,7 +285,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Programme work map WM1: POST /api/programmes/:slug/plan/tickets/done (`plan ticket-done`), a box-token lane in the plan file: ninety-two machine lanes in all.
   'ninety-two',
   // Overlord W1 door process B1: POST /api/sessions/:id/report, the hook's report door, a box-token lane in the continuity file: ninety-three machine lanes in all.
-  'ninety-three'];
+  'ninety-three',
+  // D-8186: POST /api/teams/:team/plan/map (`plan map-propose`), the per-team migration's map, a box-token lane in the plan file: ninety-four machine lanes in all.
+  'ninety-four'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

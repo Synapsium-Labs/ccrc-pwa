@@ -166,6 +166,11 @@ describe('no pwa/ file before W7 (D-5855; spec §5.1 rule 8)', () => {
 // The session hook left the signing arm the same way (slug path-guard-w3-releases-hook, approvals plan 2026-11-18 PR 1):
 // W3 has landed (Q3a to Q3g, the last of them Q3f, #1745), and the approvals plan edits the hook's approval wait beside the questions owner by design
 // (Task 1.2 the envelope's route word, Task 1.3 the census the owner writes). The verifier and the signer stay on it.
+// WHAT THE ARM GUARDS NOW that W3 has landed (approvals PR 3, slug record-name-is-the-union, the coordinator's ruling on
+// review 2889): a change to the questions owner, who asks for a signature and when, never rides in one diff with a change
+// to the two files that sign and verify one, so each is reviewed on its own. What a signature covers is the shared byte
+// function in `shared/api.ts` (`approvalRulingBytes`), which this file-keyed arm does not list: the verifier's own pin
+// (`approval-verify.test.ts`, its bytes held equal to the verifier's copy) guards it.
 
 /** The files W3 creates (Q3b, Q3c, Q3g). */
 const W3_OWNED: readonly string[] = ['server/src/coord/questions.ts', 'server/src/coord/questionPolicy.ts', 'server/src/pane/askPairing.ts'];

@@ -49,6 +49,7 @@ import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
+import * as parks from './approvalParkStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
@@ -227,6 +228,7 @@ import {
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
 } from '../../../shared/api.js'; import { programmeNameFromSlug, PEER_MAIL_WINDOW_MS } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+import { type ApprovalParkWord, isApprovalParkWord } from '../../../shared/approval-park.js';
 
 /** One entry in `$REG/<id>.prhistory` (appended by ccd/ccd's `_pr_py`). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
@@ -992,10 +994,13 @@ export type StallObservation =
   | { recorded: true; eventId: number }
   | { recorded: false; why: StallWriteMiss };
 
-/** The state predicate of the observation writer: a closed union of exactly two members. `active` is the stall lane's
+/** The state predicate of the observation writer: a closed union of three members. `active` is the stall lane's
  *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
- *  is `episode`, PR landing in ccrc stage 1). */
-export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
+ *  is `episode`, PR landing in ccrc stage 1); `admission` is the admission wake's (D-6095: a run still waiting for the
+ *  cap in an idle state, with a claimant, whose newest refusal is still `refusedAt`). */
+export type ObservationPredicate =
+  | { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number }
+  | { readonly kind: 'admission'; readonly refusedAt: number };
 
 /** `delegationRunStamps`' answer: every stamp, or the one reason none is given (all-or-failure). */
 export type DelegationRunStampsResult =
@@ -1041,6 +1046,11 @@ export interface ApprovalRow {
    *  for a child under an older deny file (the installer's history named it) is `false`, and the rule door refuses its
    *  allow (`approvalAllowRefusal`). The column defaults to 1, and anything but 1 reads `false`. */
   denyCurrent: boolean;
+  /** Approvals PR 3 (F1): the park's word decided at mint (`live`, `shadow`, `capped`), null on a row minted before PR 3 or
+   *  released at mint; a token this build does not know reads null, which never parks. `parkKey` is the key a retry
+   *  repeats (null with no word). `fetchedAt` is the ruling read's first serve of a ruling (F8-c), `wouldPark` the shadow's
+   *  record that the row would have parked. */
+  parkWord: ApprovalParkWord | null; parkKey: string | null; fetchedAt: number | null; wouldPark: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -3051,6 +3061,7 @@ export class CoordStore {
     ).run(runId, now, from, to, causedBy, detail ?? null);
     this.settleEndRequests(runId, from, to, causedBy, detail, now);
     planStore.onRunAdvancedInTx(this.db, runId, from, to, now);   // D-8181: the run's ticket and epic follow it, in this transaction
+    this.clearAdmissionWait(runId);   // D-6095: any move ends the wait for the cap
     return { ok: true as const, from, to };
   }
 
@@ -3158,10 +3169,17 @@ export class CoordStore {
       ? this.db.prepare(
         `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
       ).get(runId) as { state: string } | undefined
-      : this.db.prepare(
-        "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
-        "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
-      ).get(runId, runId, when.episode) as { state: string } | undefined;
+      : when.kind === 'admission'
+        // D-6095: the admission waiters' own predicate (`admissionWaiters`), narrowed to the refusal being woken, so a run
+        // that moved, was refused again or lost its claimant since the lane read it is `run-gone` and gets no mail.
+        ? this.db.prepare(
+          `SELECT state FROM runs WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL} AND admissionWaitSince IS NOT NULL ` +
+          "AND lastRefusedAt = ? AND claimedBy <> ''",
+        ).get(runId, when.refusedAt) as { state: string } | undefined
+        : this.db.prepare(
+          "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
+          "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
+        ).get(runId, runId, when.episode) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
     if (seen !== undefined) return { recorded: false, why: 'duplicate' };
@@ -6216,6 +6234,45 @@ export class CoordStore {
     return this.db.prepare(
       `SELECT id AS runId, sessionId FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL} ORDER BY id`,
     ).all() as unknown as CapsCountedRun[];
+  }
+
+  // ── the admission wait (D-6095) ───────────────────────────────────────────
+
+  /** A refusal by the concurrency cap, stamped on the run (inside the coordination serialiser): `admissionWaitSince` keeps
+   *  the OLDEST refusal (set only while null), `lastRefusedAt` always moves to `at`. Only a run still waiting (`planned`,
+   *  or parked in another idle state) takes a stamp. */
+  stampAdmissionWait(runId: number, at: number): void {
+    this.db.prepare(
+      `UPDATE runs SET admissionWaitSince = COALESCE(admissionWaitSince, ?), lastRefusedAt = ? WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL}`,
+    ).run(at, at, runId);
+  }
+
+  /** The `admissionWake` lane's mail for the run's newest refusal went out (or was already out): the only writer of
+   *  `admissionWokenAt`. A run with no stamp is left alone. */
+  markAdmissionWoken(runId: number, at: number): boolean {
+    const r = this.db.prepare('UPDATE runs SET admissionWokenAt = ? WHERE id = ? AND admissionWaitSince IS NOT NULL').run(at, runId);
+    return Number(r.changes) === 1;
+  }
+
+  /** All three columns to NULL. Called by `advanceInner` for every state move, so a dispatch, a send-back that proceeds, a
+   *  close and an abandon each end the wait. */
+  clearAdmissionWait(runId: number): void {
+    this.db.prepare(
+      'UPDATE runs SET admissionWaitSince = NULL, lastRefusedAt = NULL, admissionWokenAt = NULL WHERE id = ? AND admissionWaitSince IS NOT NULL',
+    ).run(runId);
+  }
+
+  /** The runs waiting on the cap, oldest refusal first: stamped, still `planned` or parked in an idle state (`sendBack`: a
+   *  refused send-back, not a refused dispatch), with a claimant, and ELIGIBLE: never woken, or refused again since the
+   *  wake (`lastRefusedAt` newer than `admissionWokenAt`). */
+  admissionWaiters(): { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; sendBack: boolean }[] {
+    const rows = this.db.prepare(
+      `SELECT id AS runId, program, claimedBy, admissionWaitSince AS since, lastRefusedAt, state FROM runs
+       WHERE admissionWaitSince IS NOT NULL AND lastRefusedAt IS NOT NULL AND state IN ${IDLE_RUN_STATES_SQL}
+         AND claimedBy <> '' AND (admissionWokenAt IS NULL OR admissionWokenAt < lastRefusedAt)
+       ORDER BY admissionWaitSince, id`,
+    ).all() as { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; state: string }[];
+    return rows.map((r) => ({ runId: r.runId, program: r.program, claimedBy: r.claimedBy, since: r.since, lastRefusedAt: r.lastRefusedAt, sendBack: r.state !== 'planned' }));
   }
 
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────
@@ -9938,14 +9995,14 @@ export class CoordStore {
   private static readonly APPROVAL_COLS =
     'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
     'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
-    'answeredBy, toolUseId, corrected, denyCurrent';
+    'answeredBy, toolUseId, corrected, denyCurrent, parkWord, parkKey, fetchedAt, wouldPark';
 
   private hydrateApproval(r: {
     idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
     agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
     releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
     reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
-    denyCurrent: number;
+    denyCurrent: number; parkWord: string | null; parkKey: string | null; fetchedAt: number | null; wouldPark: number | null;
   }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'approval id');
     if (!id.ok) return id;
@@ -9970,6 +10027,8 @@ export class CoordStore {
         reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
         corrected: r.corrected === 1,
         denyCurrent: r.denyCurrent === 1,
+        parkWord: isApprovalParkWord(r.parkWord) ? r.parkWord : null,
+        parkKey: r.parkKey, fetchedAt: r.fetchedAt === null ? null : Number(r.fetchedAt), wouldPark: r.wouldPark === 1,
       },
     };
   }
@@ -10042,26 +10101,43 @@ export class CoordStore {
      *  the grammar cannot list them) and `literalInRoot`. Absent: stored NULL, as on a row minted before them. */
     commandWords?: readonly string[] | null; literalInRoot?: boolean;
   }): number {
+    return this.insertApprovalAt(a).id;
+  }
+
+  /** `insertApproval` with the park's step (approvals PR 3, F1): given `park` (its key and the lane's and sign-in's state)
+   *  on a held row with a run, the word is decided INSIDE this transaction from the key's slots as read here, a `live`
+   *  word reserves a slot, and the row stores the word and key. Answers the id and the word (null: no park step ran). */
+  insertApprovalAt(a: Parameters<CoordStore['insertApproval']>[0] & {
+    park?: { key: string; runId: number; laneLive: boolean; signedIn: boolean };
+  }): { id: number; parkWord: ApprovalParkWord | null } {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot, parkWord, parkKey) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
+      // The park's word, decided here with the slots this transaction reads (the cap race, F1): only a held row with a run.
+      // The park's run is the key's (the child's live binding run, review 2889 F2), not the row's.
+      const park = a.park !== undefined && reason === null && a.runId !== null ? a.park : null;
+      const parkWord = park === null ? null : parks.reserveParkAtMint(this.db, {
+        key: park.key, childId: a.childId, runId: park.runId, laneLive: park.laneLive, signedIn: park.signedIn, now: a.askAt,
+      });
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
         a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
         a.commandWords === undefined || a.commandWords === null ? null : JSON.stringify(a.commandWords),
         a.literalInRoot === undefined ? null : (a.literalInRoot ? 1 : 0),
+        parkWord, park === null ? null : park.key,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');
       }
-      return Number(exactId);
+      return { id: Number(exactId), parkWord };
     });
   }
 
@@ -10076,7 +10152,9 @@ export class CoordStore {
         'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
         "WHERE id = ? AND state IN ('held','released') AND releaseReason IS NULL",
       ).run(r.verdict === 'allow' ? 'allowed' : 'denied', r.verdict, r.reason, r.ruling, r.now, r.by, id);
-      if (Number(res.changes) > 0) return { ok: true as const };
+      // Approvals PR 3: a row ruled inside its window releases its park slot, and a coordinator's deny is recorded on the
+      // key's park in this same transaction (F3), so no later allow of the key is signed for anyone.
+      if (Number(res.changes) > 0) return parks.afterRulingOfRow(this.db, id, r.verdict === 'deny' && r.by !== ASK_OPERATOR_PRINCIPAL);
       const read = this.approvalById(id);
       if (!read.ok) throw new Error(`takeApprovalForRule: ${read.detail}`);
       if (read.row === null) return { ok: false as const, why: 'unknown-approval' as const };
@@ -10089,17 +10167,37 @@ export class CoordStore {
 
   /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
-    const res = this.db.prepare(
+    // Approvals PR 3 (F3): the coordinator's decline is recorded on the key's park in the row's own transaction.
+    return tx(this.db, () => parks.noteDeclinedIf(this.db, id, Number(this.db.prepare(
       "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
-    ).run(now, by, id);
-    return Number(res.changes) > 0;
+    ).run(now, by, id).changes) > 0));
   }
 
   /** The window's end (`notifyAt`, D-5441): `held` -> `released`. A row a principal acted on is untouched. */
-  lapseApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'released' WHERE id = ? AND state = 'held'").run(id);
+  lapseApproval(id: number, wouldPark = false): boolean {
+    // Approvals PR 3: a shadow lapse records that the row would have parked (`wouldPark`), with the lapse itself.
+    const res = this.db.prepare(`UPDATE approvals SET state = 'released'${wouldPark ? ', wouldPark = 1' : ''} WHERE id = ? AND state = 'held'`).run(id);
     return Number(res.changes) > 0;
   }
+
+  // The park (approvals PR 3): its SQL is `approvalParkStore.ts`'s, every write in this store's transaction. `parkApprovalRow`
+  // is the one write of `parked`; `meetApprovalParkRuling` is the spend (F6); see each function there.
+  parkApprovalRow(id: number, now: number): boolean { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now)); }
+  /** The last-poll move's read (F2): ruled rows minted `live` at or after `sinceAskAt` whose ruling the hook never fetched. */
+  approvalsUnfetchedLive(sinceAskAt: number): ApprovalsReadResult {
+    return this.approvalRows("WHERE state IN ('allowed','denied') AND parkWord = 'live' AND fetchedAt IS NULL AND askAt >= ? ORDER BY id", sinceAskAt);
+  }
+  markApprovalFetched(id: number, now: number): boolean { return parks.markApprovalFetched(this.db, id, now); }
+  approvalPark(key: string): parks.ParkRow | null { return parks.parkByKey(this.db, key); }
+  recordApprovalParkRuling(key: string, r: Parameters<typeof parks.recordParkRuling>[2]): boolean {
+    return tx(this.db, () => parks.recordParkRuling(this.db, key, r));
+  }
+  meetApprovalParkRuling(...a: Parameters<typeof parks.meetParkRuling> extends [unknown, ...infer R] ? R : never): ReturnType<typeof parks.meetParkRuling> {
+    return tx(this.db, () => parks.meetParkRuling(this.db, ...a));
+  }
+
+  /** The park's retention (approvals PR 3, T8-4): parks whose horizon passed before `before`. */
+  pruneApprovalParks(before: number): number { return tx(this.db, () => parks.pruneParks(this.db, before)); }
 
   /** The operator answered the dialog, or the painted dialog closed with no ruling taken: every open row (`held` or
    *  `released`) of the child becomes `operator`, so a later ruling is `409 already-ruled`. Returns the count. */
@@ -10112,16 +10210,18 @@ export class CoordStore {
 
   /** A cleared painted dialog (`FleetWatcher`): of these rows, the ones no principal ruled become `operator`. */
   markApprovalOperatorRows(ids: readonly number[], now: number): number {
+    parks.voidParksOfParkedRows(this.db, ids);   // approvals PR 3 (F4): only the rows this cleared dialog covered (review 2889 F3)
     let n = 0;
     const stmt = this.db.prepare(
-      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released')");
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released','parked')");
     for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
     return n;
   }
 
-  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`. */
+  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`; or a
+   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. */
   staleApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released')").run(id);
+    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released','parked')").run(id);
     return Number(res.changes) > 0;
   }
 

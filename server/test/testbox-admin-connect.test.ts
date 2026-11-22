@@ -69,7 +69,7 @@ const PASSING_RULES: string[][] = [
   ['/etc/ccrc-testbox/ccrc\\.env', '0', ''],
   ['rows', '0', ''],
   ['push\\.pub', '0', ''],
-  ['/dev/stdin', '0', ''],
+  ['XXXXXXXX', '0', ''],
   ['systemctl restart ccrc-testbox\\.service', '0', ''],
   ['systemctl.*is-active', '0', ''],
   ['^(sudo -n -- )?timeout ', '0', ''],
@@ -279,10 +279,13 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     expect(lastAct(h).outcome).toBe('ok');
     const tok = readFileSync(h.token, 'utf8');
     expect(tok).toMatch(/^[0-9a-f]{64}$/);
-    expect(stdinOf(h, '/dev/stdin')).toBe(tok);
+    expect(stdinOf(h, 'p=/var/lib/')).toBe(tok);
     expect(readFileSync(h.log, 'utf8')).not.toContain(tok);
-    const cmd = sshCalls(h).map(cmdOf).find((c) => c.includes('/dev/stdin'))!;
-    expect(cmd).toContain('install -m 0600 -o');
+    const cmd = sshCalls(h).map(cmdOf).find((c) => c.includes('p=/var/lib/'))!;
+    // a temp beside the file and a rename: `install … /dev/stdin` over a token already there fails on some userlands
+    expect(cmd).toContain('mktemp "$p.XXXXXXXX"');
+    expect(cmd).toContain('chmod 0600 "$t" && mv -f -- "$t" "$p"');
+    expect(cmd).not.toContain('/dev/stdin');
     expect(cmd).toContain('ccrc-tb-svc');
     expect(sshCalls(h).map(cmdOf).some((c) => c.includes('systemctl restart ccrc-testbox.service'))).toBe(true);
   });
@@ -449,6 +452,25 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     expect(lastAct(d)).toMatchObject({ outcome: 'failed', code: 'no-egress', phase: 'settings' });
     expect(sshCalls(d).map(cmdOf).some((c) => c.includes('/etc/ccrc-testbox') && c.includes('ccrc.env') && c.includes('install -d'))).toBe(false);
     expect(existsSync(d.token)).toBe(false);
+  });
+
+  it('a box that already holds this release is not asked for the npm upstream: its firewall is up and the probe could only fail', () => {
+    // the installed marker names the fleet host's release, and the probe would fail: the act goes on and ends ok
+    const h = fixture({}, [['ccrc-testbox/installed', '0', 'v1.2.3\\n'], ['^(sudo -n -- )?timeout ', '124', ''], ...PASSING_RULES]);
+    connectedTo(h);
+    act(h, WORDS());
+    expect(lastAct(h).outcome).toBe('ok');
+    expect(sshCalls(h).map(cmdOf).filter((c) => c.startsWith('timeout '))).toEqual([]);
+    // a marker naming ANOTHER release is no such box: it is asked, and the failed probe ends the act
+    const o = fixture({}, [['ccrc-testbox/installed', '0', 'v1.2.2\\n'], ['^(sudo -n -- )?timeout ', '124', ''], ...PASSING_RULES]);
+    connectedTo(o);
+    act(o, WORDS());
+    expect(lastAct(o)).toMatchObject({ outcome: 'failed', code: 'no-egress', phase: 'settings' });
+    // and so is a box with no marker to read
+    const n = fixture({}, [['ccrc-testbox/installed', '1', ''], ['^(sudo -n -- )?timeout ', '124', ''], ...PASSING_RULES]);
+    connectedTo(n);
+    act(n, WORDS());
+    expect(lastAct(n)).toMatchObject({ outcome: 'failed', code: 'no-egress', phase: 'settings' });
   });
 
   it('an installer refused line ends at install with install-refused, and the line stays in the fleet-side log', () => {

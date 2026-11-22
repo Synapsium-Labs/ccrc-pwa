@@ -286,6 +286,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/hierarchy',
   // A project's Upkeep epic (D-8183): its tickets' titles are what a person typed in Linear.
   '/api/projects/:project/upkeep',
+  // The per-team migration's map and report (D-8186): titles and identifiers are Linear text.
+  '/api/migrations/:id',
   // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
@@ -2122,7 +2124,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     answered: (id, route, res) => answeredFrame(id, route, res),
     hookStateOf: (id) => watcher?.currentHookStates().get(id) ?? null,
   };
-  const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps });
+  const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps, gate: accountGate });
   const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors, presenceOf);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
@@ -2149,6 +2151,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys, presenceOf, runVerdicts: watcher?.runVerdicts,
     inboundRecheck: (row) => deps.driftPass?.recheckInbound(row) ?? Promise.resolve({ kind: 'unmeasured', word: null }),
+    migration: deps.linearMigration ?? undefined,
   });
 
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
@@ -2156,6 +2159,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
     itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
     driftAct: (i, a, b) => deps.driftPass?.act(i, a, b) ?? { ok: false, word: 'unavailable' },
+    migration: deps.linearMigration ?? undefined,
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),

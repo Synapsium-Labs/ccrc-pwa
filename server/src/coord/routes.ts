@@ -60,6 +60,7 @@ import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } f
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
+import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
@@ -136,6 +137,9 @@ import {
   type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
 } from './questions.js';
 import { noticeSink, questionOutboxOf, type NoticeSink } from '../notice.js';
+import { approvalOperatorArm } from './approvalParkDoor.js';
+import type { AccountGate } from '../accounts/gate.js';
+import { APPROVAL_RULED_GRACE_MS } from '../askwindow.js';
 import { itemBoundOf, outboxSettledOf } from '../pushSender.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
 import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
@@ -533,6 +537,8 @@ export { homeProjectVerdict, shapeHomeProject, type HomeProjectShape, type HomeP
 export interface OperatorDoorWiring {
   readonly knownId: (id: string) => Promise<boolean>;
   readonly answerDeps: OperatorDoorDeps;
+  /** Approvals PR 3: the account gate, for the `approval-<n>` arm's step-up (`approvalParkDoor.ts#approvalOperatorArm`). */
+  readonly gate: AccountGate;
 }
 
 export interface CoordRoutesHandle {
@@ -2083,6 +2089,7 @@ export function registerCoordRoutes(
       const sendBackOverConcurrency = await sendBackCapCheck(coord, capPorts, id, to);
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
         overConcurrency: sendBackOverConcurrency });
+      waitOnSendBackRefusal(coord, id, gate);   // D-6095: a send-back the cap refused waits like a refused dispatch
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });
@@ -4644,6 +4651,8 @@ export function registerCoordRoutes(
    *  store, where every claimant door answers `notConfigured` before it would be read. */
   const claimantDeps: ClaimantDoorDeps | undefined = deps.coord === undefined ? undefined : {
     coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, signerFor, rulingsAllowedHere, heldFor, notice,
+    // Approvals PR 3 (F2's carry): the one signing site re-checks the child's deny standing at signing.
+    denyStanding,
     approvalsKilled, pressAsk: (childId, key, optionIndexes) => answerAsk(askDeps, childId, key, optionIndexes),
   };
   /** A core's answer, sent: the status and the body it answered, never decided here. */
@@ -4692,6 +4701,8 @@ export function registerCoordRoutes(
       // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.
       case 'approval-released': return refuseRoute(reply, 'approval-released', { id: v.id, releaseReason: v.releaseReason });
       case 'minted': {
+        // Approvals PR 3: the park's word decided and stored at mint; a mint with no park step answers as before.
+        if (v.park !== null) return reply.code(201).send({ id: v.id, waitS: v.waitS, park: v.park } satisfies ApprovalRequestAccepted);
         const accepted: ApprovalRequestAccepted = { id: v.id, waitS: v.waitS };
         return reply.code(201).send(accepted);
       }
@@ -4721,6 +4732,7 @@ export function registerCoordRoutes(
     const answer: ApprovalRulingAnswer = (row.state === 'allowed' || row.state === 'denied') && row.ruling !== null
       ? { state: row.state, ruling: JSON.parse(row.ruling) as NonNullable<ApprovalRulingAnswer['ruling']> }
       : { state: row.state };
+    questions.noteRulingServed(row, Date.now(), APPROVAL_RULED_GRACE_MS);   // approvals PR 3 (F8-c): `fetchedAt`
     return reply.code(200).send(answer);
   });
 
@@ -4788,6 +4800,8 @@ export function registerCoordRoutes(
     if (wiring === undefined) return notConfigured(reply);
     const qid = parseQuestionId((req.params as { id: string }).id);
     if (qid === null) return refuseRoute(reply, 'bad-request');
+    // Approvals PR 3 (F3-a): an `approval-<n>` id is the operator's ruling on a parked row, which presses nothing.
+    if (qid.kind === 'approval') return approvalOperatorArm(req, reply, qid.id, { gate: wiring.gate, questions });
     if (qid.kind !== 'session') return refuseRoute(reply, 'kind-mismatch');
     if (!(await wiring.knownId(qid.sessionId))) return refuseRoute(reply, 'unknown-session');
     const body = (req.body ?? {}) as Record<string, unknown>;

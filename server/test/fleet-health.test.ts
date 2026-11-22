@@ -576,6 +576,7 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
     'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
     'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
     'pwa/src/fleet/WorktreeControls.tsx', 'pwa/src/fleet/sessionWorktrees.ts', 'pwa/src/session/SessionWorktrees.tsx',
+    'pwa/src/fleet/ArchiveUnownedWork.tsx', 'pwa/src/screens/ArchiveScreen.tsx', 'pwa/src/app.tsx', 'pwa/src/screens/FleetScreen.tsx',
   ];
   it('wave 3 Task 13, narrowed in wave 4: the health member adds no PWA state (its type is named nowhere in pwa/src), and `.delegation` (the frame\'s store slot) appears only in wave 4\'s frame files', () => {
     const fh: FleetHealth = { mode: 'local', connected: true, downSince: null };

@@ -1099,11 +1099,14 @@ describe('the worker skill: follow-ups go into the plan (D-8185)', () => {
   it('the Linear skill says the hierarchy is ccrc\'s', () => {
     const linearSkill = readFileSync(path.join(root, 'ccd/linear-skill/SKILL.md'), 'utf8').replace(/\s+/g, ' ');
     expect(linearSkill).toContain('**The hierarchy is ccrc\'s.**');
+    // Review 2597 F2: plan sync writes the plan's objects in any linked team (it reads each project's linking, never
+    // `managedTeams`); only the put-back and the `plan-owned` refusal are a managed team's.
+    expect(linearSkill).toContain('closes each plan\'s initiatives, projects, milestones and issues in any linked team');
     // Review 2580 F3: a team is managed once its migration is applied (design §7.1, `managedTeams`), not when the hierarchy is on.
-    expect(linearSkill).toContain('In a managed team (a team whose migration is applied)');
+    expect(linearSkill).toContain('in a managed team (a team whose migration is applied) puts back an edit a person makes');
     expect(linearSkill).toContain('that restore comment is ccrc\'s own');
     expect(linearSkill).toContain('Never edit one of these by hand');
-    expect(linearSkill).toContain('never file a hierarchy object or a ticket there with `linear create`');
+    expect(linearSkill).toContain('never file a hierarchy object, or a ticket in a managed team, with `linear create`');
     expect(linearSkill).toContain('`plan ticket-add`');
   });
 });
