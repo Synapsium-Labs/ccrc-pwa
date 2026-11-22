@@ -457,7 +457,9 @@ describe('the client stays closed', () => {
     // `linking.suggest` (D-8808) to ninety-four: it takes the `calls.record` fill's rule, pinned below. `linking.confirm` (D-8809)
     // to ninety-five: the suggestion row's fill, on one condition with it. `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the
     // unattended quiz: the timer's verb and runner, and the coordinator's own body, no splice and no fill) to ninety-eight.
-    expect(routeKeys().size).toBe(98);
+    // `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece: the pane's pair in the
+    // query of the two reads, and the acknowledge body built from it alone) to one hundred and one.
+    expect(routeKeys().size).toBe(101);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane and appends it LAST, byId then byUuid (review 2039 F7, review 3245 A2). Each
     // slice below ends at its own block's closing `fi`, so a later block's splice (`runs.review-rounds`) cannot satisfy it
@@ -485,10 +487,11 @@ describe('the client stays closed', () => {
     // with `append_body_field` (the pair LAST, so a parser keeping the later of two keys keeps the pane's, review 2039 F7), and
     // no such block that splices it. The goals writes (review 2240 F1) and the remaining-work door (Overlord W2, review 2265 F9)
     // joined the note and probe rows; the call record and the linking suggest and confirm doors joined them (review 3245 A2).
+    // The Overlord's `acknowledge` (the inbox piece) joined them: it refuses any body and builds one from the pane's pair alone.
     const blocks = [...code.matchAll(/^  if \[\[ ("\$key" == '[a-z.-]+'(?: \|\| "\$key" == '[a-z.-]+')*) \]\]; then\n([\s\S]*?)^  fi$/gm)];
     const keysOf = (head: string): string[] => [...head.matchAll(/'([a-z.-]+)'/g)].map((m) => m[1]!);
     const appendLast = blocks.filter((b) => /append_body_field 'byId'/.test(b[2]!)).flatMap((b) => keysOf(b[1]!)).sort();
-    expect(appendLast).toEqual(['calls.record', 'goals.merged', 'goals.modify', 'goals.pin', 'linking.confirm', 'linking.suggest', 'note.add', 'note.close', 'note.handover', 'probe.answer', 'programme.remaining']);
+    expect(appendLast).toEqual(['calls.record', 'goals.merged', 'goals.modify', 'goals.pin', 'linking.confirm', 'linking.suggest', 'note.add', 'note.close', 'note.handover', 'overlord.acknowledge', 'probe.answer', 'programme.remaining']);
     const lastFirst = ['programme.remaining', 'calls.record', 'linking.suggest'];
     expect(blocks.filter((x) => keysOf(x[1]!).some((k) => lastFirst.includes(k)))).toHaveLength(3);
     for (const b of blocks.filter((x) => keysOf(x[1]!).some((k) => lastFirst.includes(k)))) {

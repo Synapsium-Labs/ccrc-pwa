@@ -291,12 +291,16 @@ describe('the closed route table', () => {
     [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
     [['timer', 'list'], 'GET', '/api/timers'],
     [['timer', 'cancel', '12'], 'POST', '/api/timers/12/cancel'],
+    // The Overlord's inbox (Overlord W1, the inbox piece): the pane's pair rides the query of the two reads and the body of the acknowledgement.
+    [['overlord', 'inbox'], 'GET', '/api/overlord/inbox'],
+    [['overlord', 'messages', '12'], 'GET', '/api/overlord/messages/12'],
+    [['overlord', 'acknowledge', '12'], 'POST', '/api/overlord/messages/12/acknowledge'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
       || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'plan' && args[1] !== 'show') || (args[0] === 'runs' && args[1] === 'review-rounds')
-      || args[0] === 'calls' || args[0] === 'programme' || (args[0] === 'goals' && args[1] !== 'show') || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer';
+      || args[0] === 'calls' || args[0] === 'programme' || (args[0] === 'goals' && args[1] !== 'show') || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer' || args[0] === 'overlord';
     if (paned) plantPane('demo-ws');
     await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -355,7 +359,8 @@ describe('the closed route table', () => {
     // ninety-two since `sessions.report` (Overlord W1 door process B1).
     // Ninety-three since `plan.map-propose` (the per-team migration, D-8186); ninety-four since `linking.suggest` (D-8808);
     // ninety-five since `linking.confirm` (D-8809); ninety-eight since `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the unattended quiz).
-    expect(keys).toHaveLength(98);
+    // One hundred and one since `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece).
+    expect(keys).toHaveLength(101);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -370,7 +375,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight', 99: 'ninety-nine', 100: 'one-hundred', 101: 'one-hundred-and-one',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -550,6 +555,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
+      ['overlord', 'inbox'], ['overlord', 'messages', '12'], ['overlord', 'acknowledge', '12'],
       ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
       ['programme', 'remaining', 'prog-a', '--json', '-'],
       ['quiz', 'record', '--json', '-'], ['quiz', 'confirm', '12', '--json', '-'], ['quiz', 'live', '--json', '-'], ['quiz', 'status', '--json', '-'],
@@ -2156,5 +2162,76 @@ describe('the linking and call doors put the pane\'s pair last (review 3245 A2, 
     seen = [];
     expect((await run(args, plain, pane)).status).toBe(0);
     expect(seen[0]!.body).toBe(`${plain.slice(0, -1)},"byId":"demo-ws","byUuid":"uuid-7"}`);
+  });
+});
+
+describe('the Overlord inbox rows fill identity from the pane and send nothing else of it (Overlord W1, the inbox piece)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the rows: the two reads are GETs, the acknowledgement a POST, the message id on the last two', () => {
+    const at = (k: string) => { const r = clientRoutes().find((x) => x.key === k)!; return [r.method, r.path, r.needsId, r.query]; };
+    expect(at('overlord.inbox')).toEqual(['GET', '/api/overlord/inbox', false, []]);
+    expect(at('overlord.messages')).toEqual(['GET', '/api/overlord/messages/{id}', true, []]);
+    expect(at('overlord.acknowledge')).toEqual(['POST', '/api/overlord/messages/{id}/acknowledge', true, []]);
+  });
+
+  it.each([
+    [['overlord', 'inbox'], '/api/overlord/inbox'],
+    [['overlord', 'messages', '12'], '/api/overlord/messages/12'],
+  ])('%j: GET with the pane\'s pair in the query, the token off argv, no body', async (args, p) => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(args, undefined, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth, seen[0]!.body]).toEqual(['GET', `${p}?byId=demo-ws&byUuid=uuid-7`, TOKEN, '']);
+    expect(args.join(' ')).not.toContain(TOKEN);
+  });
+
+  it('acknowledge: POST with exactly the pane\'s pair as its body, byId then byUuid, and no query', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['overlord', 'acknowledge', '12'], undefined, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/overlord/messages/12/acknowledge', TOKEN]);
+    expect(seen[0]!.body).toBe('{"byId":"demo-ws","byUuid":"uuid-7"}');
+  });
+
+  it('acknowledge: a --json of any body is refused bad-body, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const b of ['{}', '{"note":"x"}', '{"byId":"someone-else"}']) {
+      const r = await run(['overlord', 'acknowledge', '12', '--json', '-'], b, pane);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('a typed identity or query key is refused unsent on all three', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const a of [['overlord', 'inbox', '--byId', 'x'], ['overlord', 'messages', '12', '--byUuid', 'x'], ['overlord', 'acknowledge', '12', '--byId', 'x']]) {
+      const r = await run(a, undefined, pane);
+      expect([r.status, errorOf(r)], a.join(' ')).toEqual([2, 'unknown-query']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('a message id that is not positive digits is refused bad-id, unsent; inbox takes no id', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const v of ['messages', 'acknowledge']) {
+      for (const bad of ['0', '012', 'abc', '-1', '1.5', '../x', '12345678901']) {
+        const r = await run(['overlord', v, bad], undefined, pane);
+        expect([r.status, errorOf(r)], `${v} ${bad}`).toEqual([2, 'bad-id']);
+      }
+      expect(errorOf(await run(['overlord', v], undefined, pane))).toBe('no-id');
+    }
+    expect(errorOf(await run(['overlord', 'inbox', '12'], undefined, pane))).toBe('unexpected-id');
+    expect(seen).toEqual([]);
+  });
+
+  it('a pane with no identity is refused, nothing sent', async () => {
+    for (const a of [['overlord', 'inbox'], ['overlord', 'messages', '12'], ['overlord', 'acknowledge', '12']]) {
+      const r = await run(a);
+      expect(r.status, a.join(' ')).not.toBe(0);
+    }
+    expect(seen).toEqual([]);
   });
 });
