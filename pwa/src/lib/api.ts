@@ -3,7 +3,8 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
-import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { CoordCapsWrite } from '../../../shared/runCap';
 import type { ArchiveAnswer, CallView, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsVersion, GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
@@ -951,8 +952,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  — the first may well have stored the value — and the control says
      *  "unconfirmed" for the one rather than reporting the other. The safe
      *  reading of "no answer" is stated here, at the call, as that helper's own
-     *  docstring requires. */
-    setCoordCaps: (next: Partial<CoordCaps>) =>
+     *  docstring requires.
+     *
+     *  D-8920: `{ maxConcurrentWorkers }` is the operator's OVERRIDE of the cap the server derives from
+     *  the fleet host, and `{ mode: 'automatic' }` clears it. The second is sent only to a server whose view carried
+     *  `capNow`: an older one knows no `mode` and would refuse the body as asking for nothing. */
+    setCoordCaps: (next: CoordCapsWrite) =>
       postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
     /** `GET /api/coord/review-cap/:id` (D-6910): a work run's review-cap ask, composed by the refusal's own helper, with
      *  when it was raised and lifted. `LiftCapSheet` reads it on open. Session-gated when armed; no box token. */
