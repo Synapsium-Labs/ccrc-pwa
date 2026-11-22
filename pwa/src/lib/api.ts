@@ -19,6 +19,7 @@ import type { RotateAnswer } from '../../../shared/box-token';
 import type { RosterFactsChange } from '../../../shared/rosterFacts';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
+import type { WitnessTuple } from '../../../shared/authorityWitness';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import type { Character as CharacterName } from '../../../shared/face';
@@ -1146,6 +1147,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       (await request(`/api/continuity/quiz-runs/${id}/withdraw`, {
         method: 'POST', headers: { accept: 'application/json' },
       })).json() as Promise<QuizRuleAnswer>,
+    /** `POST /api/overlord/witness` (Overlord W1 authority witness): sends what this device holds, answers `{ offer }` raw (`lib/witness.ts`
+     *  parses it). A refusal (`auth-off`, 401, 503) rejects with an `ApiError`. Session-gated when armed. */
+    overlordWitness: (held: WitnessTuple | null): Promise<unknown> => postJson('/api/overlord/witness', { held }),
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */

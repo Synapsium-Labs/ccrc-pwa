@@ -26,6 +26,7 @@ import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
+import { startWitnessExchange } from './lib/witness';
 import { lazyScreen, preloadWhenIdle } from './lib/lazyScreen';
 import { navigate, useLocation } from './lib/router';
 import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
@@ -105,6 +106,8 @@ export function App(): ReactNode {
   // With `CCRC_AUTH` off this can never be true: nothing on a dark box produces
   // an auth refusal, and `raiseAuthLostFrom` demands positive evidence of one.
   const { lost: authLost } = useAuthLost();
+  // The authority witness exchanges while signed in (lib/witness.ts); the sign-in screen stops it.
+  useEffect(() => (authLost ? undefined : startWitnessExchange()), [authLost]);
   // The ladder's one source of routes (D-5466): a path outside the table is
   // the fleet's placeholder, never a screen the table does not name.
   const at = matchRoute(path);
