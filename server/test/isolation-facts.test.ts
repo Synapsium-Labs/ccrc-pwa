@@ -27,13 +27,9 @@ function tree(over: Record<string, St | 'unmeasured' | undefined> = {}): Record<
 }
 function seams(t: Record<string, St | 'unmeasured' | undefined>, opts: Partial<{ links: Record<string, string>; uidMap: string | 'unmeasured'; overflow: string | 'unmeasured'; platform: string; uid: number | undefined }> = {}): ServerSeams {
   const links = opts.links ?? {};
-  const resolve = (p: string): string => {
-    for (const [from, to] of Object.entries(links)) if (p === from || p.startsWith(`${from}/`)) return to + p.slice(from.length);
-    return p;
-  };
   return {
-    lstat: (p) => { const v = t[p] ?? t[resolve(p)]; return v === undefined ? 'absent' : v; },
-    realpath: (p) => resolve(p),
+    lstat: (p) => { const v = t[p]; return v === undefined ? 'absent' : v; },
+    readlink: (p) => links[p] ?? 'unmeasured',
     readText: (p) => p.endsWith('uid_map') ? (opts.uidMap ?? '         0          0 4294967295\n') : p.endsWith('overflowuid') ? (opts.overflow ?? '65534\n') : 'unmeasured',
     uid: () => ('uid' in opts ? opts.uid : SERVER_UID),
     hostIds: () => ({ machine: MACHINE, boot: BOOT }),
@@ -94,6 +90,49 @@ describe('measureServerFacts', () => {
     expect(exposureOf(seams({ ...base, [HOME]: dir(0o777) }, { links }), 'ccrcDir')!.exposure).toBe('exposed');
     // An owner of the target's chain is among the owners.
     expect(exposureOf(seams({ ...base, '/data': dir(0o755, 2000) }, { links }), 'ccrcDir')!.owners).toEqual([2000]);
+  });
+
+  // F1 of the review: the chain is established whole, link after link, or it is unmeasured. Synthetic trees only.
+  describe('a chain through more than one link', () => {
+    const links = { [`${HOME}/.ccrc`]: '/srv/x/ccrc', '/srv/x': '/vol/x' };
+    const base = tree({ [`${HOME}/.ccrc`]: link(), '/srv': dir(0o755, 0), '/srv/x': link(), '/vol': dir(0o755, 0), '/vol/x': dir(0o755, 0), '/vol/x/ccrc': dir(0o700) });
+
+    it('the measured control: every element owner-only reads owner-only', () => {
+      expect(exposureOf(seams(base, { links }), 'coordDbPath')).toEqual({ name: 'coordDbPath', owners: [], exposure: 'owner-only' });
+    });
+
+    it('the directory holding the second link is measured: a writable one exposes the store', () => {
+      expect(exposureOf(seams({ ...base, '/srv': dir(0o777, 0) }, { links }), 'coordDbPath')!.exposure).toBe('exposed');
+    });
+
+    it("the second link's owner is among the owners, in a sticky directory too", () => {
+      const t = { ...base, '/srv': dir(0o1777, 0), '/srv/x': link(2000) };
+      expect(exposureOf(seams(t, { links }), 'coordDbPath')).toEqual({ name: 'coordDbPath', owners: [2000], exposure: 'owner-only' });
+    });
+
+    it('a relative target is resolved from the directory holding the link', () => {
+      const rel = { [`${HOME}/.ccrc`]: '../store/ccrc' };
+      const t = tree({ [`${HOME}/.ccrc`]: link(), '/h/store': dir(0o755, 0), '/h/store/ccrc': dir(0o700) });
+      expect(exposureOf(seams(t, { links: rel }), 'coordDbPath')!.exposure).toBe('owner-only');
+      expect(exposureOf(seams({ ...t, '/h/store': dir(0o777, 0) }, { links: rel }), 'coordDbPath')!.exposure).toBe('exposed');
+    });
+
+    it("an unreadable link's target reads the holding unmeasured", () => {
+      expect(exposureOf(seams(base, { links: { [`${HOME}/.ccrc`]: '/srv/x/ccrc' } }), 'coordDbPath')!.exposure).toBe('unmeasured');
+    });
+
+    it('an unreadable element met after the second link reads the holding unmeasured', () => {
+      expect(exposureOf(seams({ ...base, '/vol': 'unmeasured' }, { links }), 'coordDbPath')!.exposure).toBe('unmeasured');
+    });
+
+    it('a link loop reads unmeasured, within the step bound', () => {
+      const loop = { [`${HOME}/.ccrc`]: '/a', '/a': `${HOME}/.ccrc` };
+      expect(exposureOf(seams(tree({ [`${HOME}/.ccrc`]: link(), '/a': link() }), { links: loop }), 'coordDbPath')!.exposure).toBe('unmeasured');
+    });
+
+    it('a path below something that is not a directory reads unmeasured', () => {
+      expect(exposureOf(seams(tree({ [`${HOME}/.ccrc`]: file(0o600) })), 'coordDbPath')!.exposure).toBe('unmeasured');
+    });
   });
 
   it('an absent store is measured at its nearest existing ancestor', () => {

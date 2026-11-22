@@ -9,11 +9,12 @@ import type {
 } from '../../shared/isolation.js';
 import type { ConditionReading } from '../../shared/overlord-ladder.js';
 
-/** One element of a held path's chain, as `lstat` measured it. */
-export interface PathStat { readonly uid: number; readonly mode: number; readonly dir: boolean }
+/** One element of a held path's chain, as `lstat` measured it. A symbolic link (`link`) counts by its owner only: its own
+ *  mode grants nothing, and the directory that holds it is an element of its own. */
+export interface PathStat { readonly uid: number; readonly mode: number; readonly dir: boolean; readonly link?: boolean }
 /** A held path's chain: its leaf first (the path as resolved, or its nearest existing ancestor for a store not yet
- *  created), then every directory above it, then, for a path reached through a symbolic link, the directories that hold
- *  the link. `unmeasured` when any element could not be read. */
+ *  created), then every other element the resolution passed through: each directory, and each symbolic link met on the
+ *  way, link after link. `unmeasured` when the whole chain could not be established. */
 export interface HoldingChain {
   readonly name: string; readonly concern: 'secret' | 'control';
   readonly elements: Measured<readonly PathStat[]>;
@@ -35,10 +36,13 @@ export function holdingExposure(chain: HoldingChain, serverUid: Measured<number>
   const { name, elements } = chain;
   if (elements === 'unmeasured' || elements.length === 0) return { name, owners: 'unmeasured', exposure: 'unmeasured' };
   const owners = [...new Set(elements.map((e) => e.uid).filter((u) => u !== 0 && u !== serverUid))];
-  const writable = elements.some((e, i) => (e.mode & GROUP_OTHER_WRITE) !== 0 && (i === 0 || (e.mode & STICKY) === 0));
+  // A link's mode is no permission: the modes read are those of the leaf and the directories.
+  const dirs = elements.filter((e) => e.link !== true);
+  if (dirs.length === 0) return { name, owners: 'unmeasured', exposure: 'unmeasured' };
+  const writable = dirs.some((e, i) => (e.mode & GROUP_OTHER_WRITE) !== 0 && (i === 0 || (e.mode & STICKY) === 0));
   if (writable) return { name, owners, exposure: 'exposed' };
   if (chain.concern === 'control') return { name, owners, exposure: 'owner-only' };
-  const guarded = elements.some((e) => (e.mode & GROUP_OTHER_ANY) === 0 && (e.uid === 0 || e.uid === serverUid));
+  const guarded = dirs.some((e) => (e.mode & GROUP_OTHER_ANY) === 0 && (e.uid === 0 || e.uid === serverUid));
   if (guarded) return { name, owners, exposure: 'owner-only' };
   return { name, owners, exposure: serverUid === 'unmeasured' ? 'unmeasured' : 'exposed' };
 }

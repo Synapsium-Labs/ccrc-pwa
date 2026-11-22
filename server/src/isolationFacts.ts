@@ -2,7 +2,7 @@
 // Ring L3, context C1: it measures, and decides nothing. `measurePeer` is the one writer of the link's peer facts, called
 // only by the client's ready handler, on the socket that delivered the ready. No address, uid or id is logged here.
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { hostDigest, readHostIds, type HostIds } from '../../shared/host-identity.mjs';
@@ -191,7 +191,8 @@ type Lstat = { readonly uid: number; readonly mode: number; readonly dir: boolea
 /** The server's own reads, as a seam: tests pass synthetic trees and values. */
 export interface ServerSeams {
   lstat(p: string): Lstat | 'absent' | 'unmeasured';
-  realpath(p: string): string | 'unmeasured';
+  /** A symbolic link's target, as written. */
+  readlink(p: string): string | 'unmeasured';
   readText(p: string): string | 'unmeasured';
   uid(): number | undefined;
   hostIds(): HostIds;
@@ -209,7 +210,7 @@ export function realServerSeams(): ServerSeams {
         return (err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ENOTDIR' ? 'absent' : 'unmeasured';
       }
     },
-    realpath: (p) => { try { return realpathSync(p); } catch { return 'unmeasured'; } },
+    readlink: (p) => { try { return readlinkSync(p); } catch { return 'unmeasured'; } },
     readText: (p) => { const t = readBounded(p, 64 * 1024); return t === 'absent' ? 'unmeasured' : t; },
     uid: () => process.getuid?.(),
     hostIds: () => readHostIds(),
@@ -218,33 +219,46 @@ export function realServerSeams(): ServerSeams {
   };
 }
 
-/** A held path's chain (plan question 11): the path as resolved, or its nearest existing ancestor, then every directory
- *  above it, then the directories that hold any symbolic link on the way (whoever rewrites the link redirects the store).
- *  A link is followed, never refused. Any element unreadable: `unmeasured`. */
+/** The most path components `chainOf` resolves for one held path, every link's target included. Past it the chain is
+ *  not established (a link loop, or a chain too long), so it reads `unmeasured`. */
+export const CHAIN_STEPS_MAX = 256;
+
+/** A held path's chain (plan question 11), resolved one component at a time from `/`, as the kernel resolves it: every
+ *  directory passed through, every symbolic link met on the way (its owner can rewrite it, and the directory holding it
+ *  is passed through first), and through each link, the directories its target passes through, link after link. It ends
+ *  at the path, or at its nearest existing ancestor for a store not yet created; the leaf comes first. Anything that
+ *  stops the chain being established whole reads `unmeasured`, never a partial chain: an element or a link's target that
+ *  cannot be read, a component below something that is not a directory, or more than `CHAIN_STEPS_MAX` steps. */
 function chainOf(p: string, seams: ServerSeams): Measured<readonly PathStat[]> {
-  let target = path.resolve(p);
-  let st = seams.lstat(target);
-  while (st === 'absent') {
-    const up = path.dirname(target);
-    if (up === target) return 'unmeasured';
-    target = up;
-    st = seams.lstat(target);
-  }
-  if (st === 'unmeasured') return 'unmeasured';
-  const real = seams.realpath(target);
-  if (real === 'unmeasured') return 'unmeasured';
-  const elements: PathStat[] = [];
-  const walk = (from: string, skipLinks: boolean): boolean => {
-    for (let d = from; ; d = path.dirname(d)) {
-      const s = seams.lstat(d);
-      if (s === 'absent' || s === 'unmeasured') return false;
-      if (!(skipLinks && s.link)) elements.push({ uid: s.uid, mode: s.mode, dir: s.dir });
-      if (path.dirname(d) === d) return true;
+  const root = seams.lstat('/');
+  if (root === 'absent' || root === 'unmeasured' || !root.dir) return 'unmeasured';
+  const seen = new Map<string, PathStat>([['/', { uid: root.uid, mode: root.mode, dir: true }]]);
+  let cur = '/';
+  let todo = path.resolve(p).split('/').filter((c) => c !== '');
+  for (let steps = 0; todo.length > 0; steps++) {
+    if (steps >= CHAIN_STEPS_MAX) return 'unmeasured';
+    const c = todo.shift()!;
+    if (c === '.') continue;
+    if (c === '..') { cur = path.dirname(cur); continue; }
+    const next = path.join(cur, c);
+    const st = seams.lstat(next);
+    if (st === 'unmeasured') return 'unmeasured';
+    if (st === 'absent') break;
+    if (st.link) {
+      seen.set(next, { uid: st.uid, mode: st.mode, dir: false, link: true });
+      const to = seams.readlink(next);
+      if (to === 'unmeasured' || to === '') return 'unmeasured';
+      if (path.isAbsolute(to)) cur = '/';
+      todo = [...to.split('/').filter((x) => x !== ''), ...todo];
+      continue;
     }
-  };
-  if (!walk(real, false)) return 'unmeasured';
-  if (path.dirname(target) !== target && !walk(path.dirname(target), true)) return 'unmeasured';
-  return elements;
+    if (!st.dir && todo.length > 0) return 'unmeasured';
+    seen.set(next, { uid: st.uid, mode: st.mode, dir: st.dir });
+    cur = next;
+  }
+  const leaf = seen.get(cur);
+  if (leaf === undefined) return 'unmeasured';
+  return [leaf, ...[...seen].filter(([k]) => k !== cur).map(([, v]) => v)];
 }
 
 function uidMapIsIdentity(text: string): boolean {

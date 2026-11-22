@@ -97,7 +97,8 @@ export function blinded(c: Cell): Cell[] {
 
 export function holdingExposureSuite(mod: Pick<WordModule, 'holdingExposure'>): Record<string, SuiteCase> {
   const f = (uid: number, mode: number, dir = true) => ({ uid, mode, dir });
-  const chain = (elements: Measured<readonly { uid: number; mode: number; dir: boolean }[]>, concern: 'secret' | 'control' = 'secret') =>
+  const lnk = (uid: number) => ({ uid, mode: 0o777, dir: false, link: true });
+  const chain = (elements: Measured<readonly { uid: number; mode: number; dir: boolean; link?: boolean }[]>, concern: 'secret' | 'control' = 'secret') =>
     mod.holdingExposure({ name: 'x', concern, elements }, SERVER_UID);
   return {
     'an owner-only leaf owned by the server': () => eq(chain([f(SERVER_UID, 0o600, false), f(SERVER_UID, 0o755), f(0, 0o755)]), { name: 'x', owners: [], exposure: 'owner-only' }),
@@ -120,6 +121,12 @@ export function holdingExposureSuite(mod: Pick<WordModule, 'holdingExposure'>): 
     'owners are listed once': () => eq(chain([f(OWNER_UID, 0o600, false), f(OWNER_UID, 0o700)]).owners, [OWNER_UID]),
     'an unreadable element reads the holding unmeasured': () => eq(chain('unmeasured'), { name: 'x', owners: 'unmeasured', exposure: 'unmeasured' }),
     'an empty chain reads unmeasured': () => eq(chain([]).exposure, 'unmeasured'),
+    "a link's own mode grants nothing: an owner-only chain through a link stays owner-only": () =>
+      eq(chain([f(SERVER_UID, 0o600, false), lnk(SERVER_UID), f(SERVER_UID, 0o700), f(0, 0o755)]), { name: 'x', owners: [], exposure: 'owner-only' }),
+    "a link's owner is among the owners": () =>
+      eq(chain([f(SERVER_UID, 0o600, false), lnk(OWNER_UID), f(0, 0o1777)]).owners, [OWNER_UID]),
+    'a link is never the guard of a secret': () => eq(chain([f(SERVER_UID, 0o644, false), { ...lnk(SERVER_UID), mode: 0o700 }, f(0, 0o755)]).exposure, 'exposed'),
+    'a chain of links only reads unmeasured': () => eq(chain([lnk(SERVER_UID)], 'control').exposure, 'unmeasured'),
     'an unmeasured server uid cannot prove a server-owned guard': () => {
       eq(mod.holdingExposure({ name: 'x', concern: 'secret', elements: [f(SERVER_UID, 0o600, false), f(SERVER_UID, 0o755)] }, 'unmeasured').exposure, 'unmeasured');
       eq(mod.holdingExposure({ name: 'x', concern: 'secret', elements: [f(SERVER_UID, 0o600, false), f(0, 0o700)] }, 'unmeasured').exposure, 'owner-only');
@@ -383,6 +390,9 @@ export const ISOLATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'H10 root does not guard', old: '(e.uid === 0 || e.uid === serverUid)', new: '(e.uid === serverUid)' },
     { id: 'H11 unmeasured server reads exposed', old: "exposure: serverUid === 'unmeasured' ? 'unmeasured' : 'exposed'", new: "exposure: 'exposed'" },
     { id: 'H12 unmeasured server reads owner-only', old: "exposure: serverUid === 'unmeasured' ? 'unmeasured' : 'exposed'", new: "exposure: serverUid === 'unmeasured' ? 'owner-only' : 'exposed'" },
+    { id: "H13 a link's mode read", old: 'const dirs = elements.filter((e) => e.link !== true);', new: 'const dirs = elements;' },
+    { id: "H14 a link's owner dropped", old: 'const owners = [...new Set(elements.map(', new: 'const owners = [...new Set(elements.filter((e) => e.link !== true).map(' },
+    { id: 'H15 a links-only chain measured', old: "if (dirs.length === 0) return { name, owners: 'unmeasured', exposure: 'unmeasured' };", new: '' },
   ], holdingExposureSuite),
   'server/src/isolationWord.ts#linkKernel': set<WordModule>(WORD_TS, [
     { id: 'K1 one differing digest forwards', old: "differMeasured(report.machine, s.machine) && differMeasured(report.boot, s.boot) ? 'forwarded'", new: "(differMeasured(report.machine, s.machine) || differMeasured(report.boot, s.boot)) ? 'forwarded'" },
