@@ -1165,7 +1165,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'cc-tmp-loose-entries', 'child-workspaces', 'workspace-dependency-dirs', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
       'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
       'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-steer-files', 'history-replay-out',
-      'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
+      'history-quiz-single-out',
+      // Run 3212: the weekly unattended replay quiz's own record.
+      'quiz-unattended', 'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
       'testbox-token', 'testbox-push-key',
       // Test box connect (D-8166): the files `ccrc testbox-admin` owns.
@@ -1261,14 +1263,16 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     'W2-1': ['history-recall-off'],
     'W2-4': ['history-replay-out'],
     W3: ['history-steer-files'],
+    // Overlord W1a (plan 2026-11-17-overlord-quiz-record.md §4): the replay quiz's single-arm module's --out.
+    'Overlord W1a': ['history-quiz-single-out'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4', 'W2-1', 'W3'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4', 'W2-1', 'W3', 'Overlord W1a'];
 
-  it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
+  it('the history classes are §9.4\'s thirteen and Overlord W1a\'s one, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
     expect(new Set(all).size, 'a history class is listed under two PRs').toBe(all.length);
-    expect(all).toHaveLength(13);
+    expect(all).toHaveLength(14);
     const declared = new Set(LIFECYCLE.map((c) => c.name));
     for (const pr of Object.keys(HISTORY_ROWS_BY_PR) as HistoryPr[]) {
       for (const n of HISTORY_ROWS_BY_PR[pr]) {
@@ -1523,6 +1527,40 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.root).toContain('mode 0700');
     const { OUT_MARKER } = await import('../../deploy/history-replay.mjs');
     expect(c!.root, 'the row names another marker than the driver writes').toContain(`marked by ${OUT_MARKER}`);
+  });
+
+  // ── Overlord W1a (plan 2026-11-17-overlord-quiz-record.md §4): the replay quiz's single-arm module's --out ─────────────
+  // A class of its own, so history-replay-out keeps describing one W2 run, unchanged. Operator-made, with no collector; the
+  // marker's name in the row is the module's own, bound here as the driver's is above.
+  it('declares history-quiz-single-out: the single-arm module\'s --out, an O class it creates, with no collector, beside the driver\'s marker', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-quiz-single-out');
+    expect(c, 'shared/lifecycle.ts declares no history-quiz-single-out class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    // Run 3212: the weekly unattended run names these directories too, and collects its own week directories.
+    expect(c!.creators).toEqual(['deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs (through the module)']);
+    expect(c!.collector).toContain('deploy/history-quiz-unattended.mjs');
+    // Review 3232 F10: what the runner never collects (a hand-run --out, a setup directory left after a refusal) keeps a ruling.
+    expect(c!.ruling).toContain('removed by hand once its run is confirmed or discarded');
+    expect(c!.ruling).toContain('a hand-run --out');
+    const { KEEP_WEEKS } = await import('../../deploy/history-quiz-unattended.mjs');
+    expect(KEEP_WEEKS, 'the row names another keep count than the runner prunes to').toBe(4);
+    expect(c!.collector).toContain('beyond the newest four');
+    expect(c!.bound).toBe('the setup directory for as long as the quiz lane runs; a week directory until its run is confirmed or discarded');
+    expect(c!.root).toContain('outside any git tree');
+    expect(c!.root).toContain('mode 0700');
+    const { OUT_MARKER } = await import('../../deploy/history-quiz-single.mjs');
+    expect(c!.root, 'the row names another marker than the module writes').toContain(`marked by ${OUT_MARKER as string} beside the driver's own marker`);
+    expect(LIFECYCLE.find((x) => x.name === 'history-replay-out')!.creators, 'the W2 class is unchanged').toEqual(['deploy/history-replay.mjs']);
+  });
+
+  // Run 3212: the weekly unattended run's own record under ~/.ccrc/quiz/, bound to the runner's own file names.
+  it('declares quiz-unattended: the runner\'s state, lock, journal and marker temp, ccrc-owned with no collector', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'quiz-unattended');
+    expect(c, 'shared/lifecycle.ts declares no quiz-unattended class').toBeTruthy();
+    expect(c!.creators).toEqual(['deploy/history-quiz-unattended.mjs']);
+    expect(c!.collector).toBeNull();
+    const { STATE_FILE, LOCK_FILE } = await import('../../deploy/history-quiz-unattended.mjs');
+    for (const name of [STATE_FILE as string, LOCK_FILE as string, 'journal.log', 'headless-on.tmp.<pid>']) expect(c!.root).toContain(path.basename(name));
   });
 
   // ── ccrc history W2-1 (spec 2026-10-05 §9.4, O17's W2-1 half; W2-D9, W2-D28) ──────────────────────────────────────

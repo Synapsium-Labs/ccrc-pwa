@@ -273,6 +273,8 @@ describe('the reconstruction drill', () => {
                                          // forgets the home; the recovery is the coordinator
                                          // sending the right one on the next open, not a parse.
       'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
+      'inPlace',                         // D-6096: a run its coordinator took in a sibling worktree. No ledger line, registry
+                                         // field or `.prhistory` row says so, so a rebuilt run reads as an ordinary one.
       'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
       'health',                          // F7's per-run health facts. Every one of the eight is a
                                          // measurement over `mail_deliveries`, `mail_rejections` or
@@ -349,6 +351,7 @@ describe('the reconstruction drill', () => {
       lastMoveAt: true,
       hadChild: true,
       runTitle: true, closedBy: true, closeDetail: true,
+      inPlace: true,   // D-6096 (migration 117): a run its coordinator took in place; absent otherwise
       stuck: true, waitsOn: true, blockedBy: true, coordinatorGone: true,
       workerLastSeen: true, workerLastTurn: true,
     };
@@ -379,13 +382,14 @@ describe('the reconstruction drill', () => {
     // restarts at the first pass after the rebuild: the later, more patient direction.
     // Bumped 36 -> 38 (D-8285): the worker heartbeat, `workerLastSeen` and `workerLastTurn`. NOT in UNRECOVERABLE, `childIds`'
     // reason: nothing stores them, the stall sweep derives them from each worker's turn marker on its next pass.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(38);
+    // Bumped 38 -> 39 (D-6096): `inPlace`, named in UNRECOVERABLE above.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(39);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(23);
+    expect(UNRECOVERABLE.length).toBe(24);
   });
 
   it('coordinator_calls is a table no artifact mirrors: reconstruct() rebuilds none of it (D-8126)', () => {
@@ -396,6 +400,42 @@ describe('the reconstruction drill', () => {
     const r = reconstruct(fx);
     expect(JSON.stringify(r)).not.toContain('coordinator_calls');
     expect(Object.keys(r)).not.toContain('calls');
+  });
+
+  it('programme_remaining and programme_edges are tables no artifact mirrors: reconstruct() rebuilds none of them (Overlord W2)', () => {
+    // A statement of the waves left, and the edges it opened, are the coordinator's own record (remaining work A). Neither
+    // the ledger, the registry nor `.prhistory` carries one, so a DB loss forgets every statement and every edge: the
+    // forecast reads no remaining work until the coordinator next states it, and no edge blocks. A named loss, not a gap.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toMatch(/programme_remaining|programme_edges/);
+    expect(Object.keys(r)).not.toContain('remaining');
+    expect(Object.keys(r)).not.toContain('edges');
+  });
+
+  it('programme_forecasts is a table no artifact mirrors: reconstruct() rebuilds no seal (Overlord W2 forecasts A)', () => {
+    // A sealed forecast is the forecast lane's own record. No ledger, registry or `.prhistory` carries one, so a DB loss
+    // forgets every seal and every score: the lane seals closes again only inside its 7-day look-back, and calibration
+    // reads unmeasured until enough seals are scored again. A named loss, not a gap.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('programme_forecasts');
+    expect(Object.keys(r)).not.toContain('forecasts');
+  });
+
+  it('programme_health is a table no artifact mirrors: reconstruct() rebuilds no health row (Overlord W2 forecasts B)', () => {
+    // A health row is the forecast lane's own record of a change of word. No ledger, registry or `.prhistory` carries one, so
+    // a DB loss forgets every row: the lane's next pass reads each programme's first word as a first row (no notice) and
+    // the portfolio shows no health until it has run. A named loss, not a gap.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('programme_health');
+    expect(Object.keys(r)).not.toContain('health');
+  });
+
+  it('run_spend is a table no artifact mirrors: reconstruct() rebuilds no spend row (Overlord W2 forecasts B)', () => {
+    // A run's spend is read once, at its close, from the usage sweep, which keeps no history. Nothing else carries it, so a
+    // DB loss forgets what every closed run cost and the portfolio counts each such run unmeasured, never 0. A named loss.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('run_spend');
+    expect(Object.keys(r)).not.toContain('spend');
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

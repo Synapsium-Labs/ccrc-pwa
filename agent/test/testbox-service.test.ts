@@ -23,7 +23,7 @@ import {
 import {
   ConfigRefusal, configFromLines, KNOB_FIELD_SEP, knobArgv, parseKnobLines, readRepoRows, readTestboxConfig, realKnobRunner, SERVICE_KNOBS,
 } from '../src/testbox/config.js';
-import { reflinkProbe } from '../src/testbox/fsprobe.js';
+import { reflinkProbe, reflinkProbeDir } from '../src/testbox/fsprobe.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from '../src/testbox/hello.js';
 import { listenRefusal, POLICY_CLOSE_CODE, startTestboxServer } from '../src/testbox/main.js';
 import { mirrorOps, type MirrorOps } from '../src/testbox/mirror.js';
@@ -556,6 +556,15 @@ describe('fsprobe.ts: the reflink probe', () => {
     expect(readdirSync(root)).toEqual([]);
     expect(await reflinkProbe(root, async () => ({ status: 0, stdout: '', stderr: '', killed: false }))).toEqual({ ok: true });
   });
+  it('the probe writes in `out`, the service user\'s directory of the run root, never at the run root, which is root\'s', () => {
+    expect(reflinkProbeDir('/srv/box')).toBe(path.join('/srv/box', 'out'));
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // the installer makes the run root root's and `out` the service user's: the two facts the choice rests on
+    const installer = readFileSync(path.join(here, '..', '..', 'deploy', 'testbox', 'install.sh'), 'utf8');
+    expect(installer).toContain('dir 0755 root root "$ROOT"');
+    expect(installer).toMatch(/for d in [a-z ]*\bout\b[a-z ]*; do dir 0750 "\$SVC" "\$SVC" "\$ROOT\/\$d"; done/);
+    expect(readFileSync(path.join(here, '..', 'src', 'testbox', 'main.ts'), 'utf8')).toContain('reflinkProbe(reflinkProbeDir(cfg.root), short)');
+  });
   it('a box whose probe fails answers down', async () => {
     const box = makeBox({}, false);
     await box.svc.start();
@@ -668,8 +677,8 @@ describe('the WebSocket door: hello, the status answer, refusals', () => {
       await srv.close();
     }
   });
-  it('the dispatch table takes run.submit, run.cancel, (TB6, D-7408) tools.sync and (D-8290) probe.submit, nothing else yet', () => {
-    expect(Object.keys(FRAME_HANDLERS).sort()).toEqual(['probe.submit', 'run.cancel', 'run.submit', 'tools.sync']);
+  it('the dispatch table takes run.submit, run.cancel, (TB6, D-7408) tools.sync, (D-8290) probe.submit and (the capture runner spec of 2026-11-22) capture.submit, nothing else yet', () => {
+    expect(Object.keys(FRAME_HANDLERS).sort()).toEqual(['capture.submit', 'probe.submit', 'run.cancel', 'run.submit', 'tools.sync']);
   });
 });
 

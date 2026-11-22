@@ -138,7 +138,7 @@ describe("the ids are W2's door table's", () => {
       // The reader lab plan, Task 10: the reader lab, a page under Settings beside R19's; its door is the palette's Go to.
       'go-reader-lab',
       // W2 Task S2d: the ⋯ menu's items on the base, and the terminal and PR caps (D-5466).
-      'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive',
+      'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-renew', 'session-archive',
       'session-restore', 'open-terminal', 'session-pr',
       // Desktop polish T3e (D-6385): the inspector's hide and show, offered only while a part places a rail.
       'toggle-inspector',
@@ -219,7 +219,7 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
   it('entries with no terms, tier or searchOnly rank exactly as before', () => {
     // Measured on the base (4910f4cff) before T5a: the base commands' ids per query.
     const BEFORE: readonly [string, readonly string[]][] = [
-  ['', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'new-session', 'open-session', 'next-session', 'prev-session', 'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive', 'session-restore', 'open-terminal', 'session-pr', 'switch-layout', 'switch-theme', 'open-palette', 'show-shortcuts']],
+  ['', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'new-session', 'open-session', 'next-session', 'prev-session', 'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-renew', 'session-archive', 'session-restore', 'open-terminal', 'session-pr', 'switch-layout', 'switch-theme', 'open-palette', 'show-shortcuts']],
   ['runs', ['go-runs']],
   ['go', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'session-model', 'session-effort']],
   ['settings', ['go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security']],

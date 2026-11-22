@@ -51,6 +51,8 @@ const RunsAdvancedScreen = lazyScreen(() => import('./screens/RunsAdvancedScreen
 const SessionScreen = lazyScreen(() => import('./screens/SessionScreen').then((m) => m.SessionScreen));
 const SettingsScreen = lazyScreen(() => import('./screens/settings/SettingsFrame').then((m) => m.SettingsScreen));
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
+import { EpicScreen } from './ledgers/EpicScreen';
+import { UpkeepScreen } from './ledgers/UpkeepScreen';
 import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
@@ -68,7 +70,9 @@ function ShellCommands(): ReactNode {
 /** `/archive`: the one arm of the ladder that reads the fleet's rows, so it is the one that subscribes to them (C6). */
 function ArchiveRoute(): ReactNode {
   const sessions = useFleetStore((s) => s.sessions);
-  return <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(sessionPath(id))} />;
+  // The delegation frame feeds the Archive's "Work no session owns" section (desktop polish H4); null reads unavailable.
+  const delegation = useFleetStore((s) => s.delegation);
+  return <ArchiveScreen sessions={sessions} delegation={delegation} onOpen={(id) => navigate(sessionPath(id))} />;
 }
 
 export function App(): ReactNode {
@@ -105,6 +109,8 @@ export function App(): ReactNode {
   // the fleet's placeholder, never a screen the table does not name.
   const at = matchRoute(path);
   const route = at?.route.id ?? null;
+  // The epic row's second capture (`RouteMatch.rest`); undefined on every other row.
+  const [epicKey] = at?.rest ?? [];
   const sessionId = route === 'session' ? at!.param : null;
   // `/settings`, a section page, or an id that names none (D-5504): every one is Settings, never the fallback, except a
   // malformed escape (`/settings/%zz`), which is outside the table (carry C, D-7951; review 1437 F2).
@@ -218,6 +224,11 @@ export function App(): ReactNode {
     // (`shapeProgramSlug`) matches no route (the row's `accepts`), so it is an unknown path: the placeholder below on a
     // desk, and the fleet on a phone, where `shellViewOf` answers `fleet` for it (carry C, D-7951; review 1388 F1).
     <ProgrammeScreen key={at!.param} slug={at!.param!} />
+  ) : route === 'epic' && epicKey !== undefined ? (
+    // Keyed by slug and epic key: one epic's read never shows under another's name (Linear hierarchy §11.2, D-8184).
+    <EpicScreen key={`${at!.param}/${epicKey}`} slug={at!.param!} epicKey={epicKey} />
+  ) : route === 'upkeep' ? (
+    <UpkeepScreen key={at!.param} project={at!.param!} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">

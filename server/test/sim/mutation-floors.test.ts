@@ -9,6 +9,9 @@ import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } fr
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
+import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
+import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
+import { MAIL_HOLD_POLICY_MUTANT_SETS } from './mailHoldPolicySets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
@@ -23,15 +26,44 @@ import { CHECKPOINT_MUTANT_SETS } from './checkpointSets.js';
 import { RENEWAL_ACT_MUTANT_SETS } from './renewalActSets.js';
 import { QUIZ_MUTANT_SETS } from './quizSets.js';
 import { PORTFOLIO_MUTANT_SETS } from './portfolioSets.js';
+import { RATIFICATION_MUTANT_SETS } from './ratificationSets.js';
 import { OVERLORD_HISTORY_MUTANT_SETS } from './overlordHistorySets.js';
 import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
 import { RESPONSES_MUTANT_SETS } from './responsesSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
 import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { CHAINED_JOURNAL_MUTANT_SETS } from './chainedJournalSets.js';
+import { CHAINED_JOURNAL_FILE_MUTANT_SETS } from './chainedJournalFileSets.js';
+import { OPERATOR_MODEL_MUTANT_SETS } from './operatorModelSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
+import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
+import { ACT_KEY_MUTANT_SETS } from './actKeySets.js';
+import { HOOK_REPORT_MUTANT_SETS } from './hookReportSets.js';
+import { HOOK_READING_MUTANT_SETS } from './hookReadingSets.js';
+import { FIRST_PROMPT_MUTANT_SETS } from './firstPromptSets.js';
+import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
+import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
+import { BINOMIAL_BOUND_MUTANT_SETS } from './binomialBoundSets.js';
+import { PROGRAMME_FACTS_MUTANT_SETS } from './programmeFactsSets.js';
+import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
+import { PRIVATE_NAMES_MUTANT_SETS } from './privateNamesSets.js';
+import { RENEWAL_READING_MUTANT_SETS } from './renewalReadingSets.js';
+import { GATE_MUTANT_SETS } from './gateSets.js';
+import { OTHER_LANES_MUTANT_SETS } from './otherLanesSets.js';
+import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
+import { PLAN_TICKET_DONE_MUTANT_SETS } from './planTicketDoneSets.js';
+import { PLAN_EPIC_WAVES_MUTANT_SETS } from './planEpicWavesSets.js';
+import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
+import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
+import { LADDER_MUTANT_SETS } from './ladderSets.js';
+import { FORECAST_MUTANT_SETS } from './forecastSets.js';
+import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
+import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
+import { APPROVAL_PARK_MUTANT_SETS } from './approvalParkSets.js';
+import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
+import { WITNESS_MUTANT_SETS } from './witnessSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -161,6 +193,9 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...RENEWAL_MUTANT_SETS,
   ...GENERATION_START_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
+  ...MAIL_KEY_MUTANT_SETS,
+  ...URGENT_MAIL_MUTANT_SETS,
+  ...MAIL_HOLD_POLICY_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,
@@ -174,15 +209,44 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...RENEWAL_ACT_MUTANT_SETS,
   ...QUIZ_MUTANT_SETS,
   ...PORTFOLIO_MUTANT_SETS,
+  ...RATIFICATION_MUTANT_SETS,
   ...OVERLORD_HISTORY_MUTANT_SETS,
   ...PUSH_OUTBOX_MUTANT_SETS,
   ...VOCABULARY_MUTANT_SETS,
   ...POOL_SET_MUTANT_SETS,
   ...CHAINED_JOURNAL_MUTANT_SETS,
+  ...CHAINED_JOURNAL_FILE_MUTANT_SETS,
+  ...OPERATOR_MODEL_MUTANT_SETS,
   ...RESPONSES_MUTANT_SETS,
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
+  ...HANDOFF_MUTANT_SETS,
+  ...ACT_KEY_MUTANT_SETS,
+  ...HOOK_REPORT_MUTANT_SETS,
+  ...HOOK_READING_MUTANT_SETS,
+  ...FIRST_PROMPT_MUTANT_SETS,
+  ...DESIGNATION_MUTANT_SETS,
+  ...BINOMIAL_BOUND_MUTANT_SETS,
+  ...DECISION_MODEL_MUTANT_SETS,
+  ...PROGRAMME_FACTS_MUTANT_SETS,
+  ...OVERLAPS_MUTANT_SETS,
+  ...PRIVATE_NAMES_MUTANT_SETS,
+  ...RENEWAL_READING_MUTANT_SETS,
+  ...GATE_MUTANT_SETS,
+  ...OTHER_LANES_MUTANT_SETS,
+  ...PLAN_PHASES_MUTANT_SETS,
+  ...PLAN_TICKET_DONE_MUTANT_SETS,
+  ...PLAN_EPIC_WAVES_MUTANT_SETS,
+  ...WORK_MAP_MUTANT_SETS,
+  ...DONE_TEST_MUTANT_SETS,
+  ...LADDER_MUTANT_SETS,
+  ...FORECAST_MUTANT_SETS,
+  ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
+  ...APPROVAL_ENVELOPE_MUTANT_SETS,
+  ...APPROVAL_PARK_MUTANT_SETS,
+  ...PROGRAMME_HEALTH_MUTANT_SETS,
+  ...WITNESS_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

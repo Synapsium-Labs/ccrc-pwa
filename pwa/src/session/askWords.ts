@@ -22,6 +22,10 @@ import { commitWord } from './askLive';
  *  (`withCoordinatorWords`), the header's own words. */
 export const heldAskLine = (short: string): string => `Its coordinator, ${short}, may answer first. You can still answer.`;
 
+/** Approvals PR 2 (plan 2026-11-18, Task 2.1, path 6): the approval surface's first line when the server took the
+ *  envelope from the hook's per-agent list (`approval.thread === 'subagent'`), so the operator knows whose call it is. */
+export const subagentAsksLine = (tool: string): string => `One of its subagents asks to run a ${tool} call.`;
+
 /** The one fact all three dialog routes refuse with first (`stale-dialog`): the pane no longer shows the question the
  *  sheet answered. Each table says it in these words, then what that meant for its own send. */
 const MOVED_ON = 'That question moved on in the terminal';

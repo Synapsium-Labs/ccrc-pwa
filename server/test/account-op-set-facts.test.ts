@@ -97,3 +97,79 @@ describe('set-facts writes the two account facts and nothing else (F11)', () => 
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
 });
+
+// The organization label (plan 2026-11-16-account-organization.md Task A3): `--org <label>` writes it, `--org none`
+// removes the key, and an id-shaped or off-shape value is refused before any write.
+describe('set-facts writes the organization label (account organization A3)', () => {
+  it('--org writes the label silently, and none removes the key, never a null', () => {
+    const file = rosterFile();
+    expect(op(file, 'lane-a', '--org', 'org-a')).toEqual({ code: 0, stdout: '' });
+    expect(entry(file, 'lane-a')['org']).toBe('org-a');
+    expect(entry(file, 'lane-b')).toEqual(ROSTER.accounts[1]);
+    expect(op(file, 'lane-a', '--org', 'org-b').code).toBe(0);
+    expect(entry(file, 'lane-a')['org']).toBe('org-b');
+    expect(op(file, 'lane-a', '--org', 'none')).toEqual({ code: 0, stdout: '' });
+    expect(Object.hasOwn(entry(file, 'lane-a'), 'org')).toBe(false);
+    expect(readFileSync(file, 'utf8')).not.toContain('null');
+  });
+
+  it('--org none on an unlabelled lane changes no byte', () => {
+    const file = rosterFile();
+    const bytes = readFileSync(file, 'utf8');
+    expect(op(file, 'lane-a', '--org', 'none')).toEqual({ code: 0, stdout: '' });
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+  });
+
+  it('an id-shaped value is refused org-looks-like-an-id before any write', () => {
+    const file = rosterFile();
+    const before = readFileSync(file, 'utf8');
+    for (const v of ['0f8e2c1a-1b2c-4d3e-8f90-123456789abc', 'abcdef0123456789abcdef0123456789']) {
+      const bad = op(file, 'lane-a', '--org', v);
+      expect(bad.code, v).toBe(2);
+      expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false, error: 'org-looks-like-an-id' });
+    }
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('an off-shape value is refused bad-argv before any write', () => {
+    const file = rosterFile();
+    const before = readFileSync(file, 'utf8');
+    for (const v of ['Org-A', 'org a', `o${'x'.repeat(32)}`]) {
+      const bad = op(file, 'lane-a', '--org', v);
+      expect(bad.code, v).toBe(2);
+      expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false, error: 'bad-argv' });
+    }
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+});
+
+// `org-check` (account organization B1, PR A's review F2): the label's gate alone, which the verb asks read-only before
+// its first write. It shares `set-facts`' gate, so both refuse alike, and both say nothing was written.
+describe('org-check: the label gate, read-only (account organization B1)', () => {
+  const check = (...flags: string[]): { code: number | null; stdout: string } => {
+    const r = spawnSync(process.execPath, [OP, 'org-check', ...flags], { encoding: 'utf8' });
+    return { code: r.status, stdout: r.stdout };
+  };
+
+  it('admits a label and the clear word, silently', () => {
+    expect(check('--org', 'org-a')).toEqual({ code: 0, stdout: '' });
+    expect(check('--org', 'none')).toEqual({ code: 0, stdout: '' });
+  });
+
+  it('refuses an id shape and an off-shape name as set-facts does, saying nothing was written', () => {
+    const file = rosterFile();
+    for (const [v, word] of [['0f8e2c1a-1b2c-4d3e-8f90-123456789abc', 'org-looks-like-an-id'],
+      ['abcdef0123456789abcdef0123456789', 'org-looks-like-an-id'], ['Org-A', 'bad-argv'], ['none-of-it x', 'bad-argv']] as const) {
+      const alone = check('--org', v);
+      expect(alone.code, v).toBe(2);
+      const said = JSON.parse(alone.stdout) as { error: string; detail: string };
+      expect(said.error, v).toBe(word);
+      expect(said.detail, v).toMatch(/Nothing was written\.$/);
+      expect(JSON.parse(op(file, 'lane-a', '--org', v).stdout), v).toEqual(said);
+    }
+  });
+
+  it('takes no key but --org', () => {
+    expect(check('--file', '/nonexistent', '--org', 'org-a').code).toBe(2);
+  });
+});

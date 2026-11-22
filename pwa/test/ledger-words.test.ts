@@ -4,10 +4,13 @@ import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
-  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry,
+  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry, CALL_CLEARED_WORD, callClearedHow, callClearedOn,
 } from '../src/ledgers/ledgerWords';
+import { RATIFICATION_UNREADABLE_WORDS, RATIFY_UNAVAILABLE_TEXT, doneWhenPlacement, ratificationWords, ratifyFailureOf, ratifyOffered } from '../src/ledgers/ledgerWords';
+import type { GoalsView, Ratification, RatificationWhy } from '../../shared/ledgers';
 import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import type { AskMarkRow } from '../../shared/answerMarks';
+import type { CallView } from '../../shared/api';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -366,7 +369,7 @@ describe('review caps in the grouping (Task 24, F21)', () => {
 
 // D-8194: the Recently cleared trail is the last 48 hours (CLEARED_WINDOW_MS, the server's window too), newest first.
 describe('clearedTrail and itemNumber (D-8194)', () => {
-  const idOf = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : `a${e.ask.id}`);
+  const idOf = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : e.kind === 'ask' ? `a${e.ask.id}` : `c${e.call.id}`);
   const HOUR = 60 * MIN;
   const done = (id: number, closedAt: number | null) => itemView({ id, state: 'done', closedAt });
 
@@ -398,11 +401,155 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
     expect(clearedGroups(trail).map((g) => [g.program, g.entries.map(idOf)])).toEqual([[null, ['a2', 'a4']], ['prog-a', ['i1', 'a3']]]);
   });
 
+  // D-8126 A4: a big call that left "Calls made for you" joins the trail. Its time there is the operator's own clear (Seen or
+  // Overturn, the earlier), or when it was made for one that aged out (the wire carries no other); the server's list is its window.
+  const call = (id: number, o: Partial<CallView> = {}): CallView => ({
+    id, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big', question: 'q?', options: ['a', 'b'], chosen: 'a', why: 'w',
+    reversible: true, wakeOn: null, at: NOW - 3 * 86_400_000, seenAt: null, overturnedAt: null, overturnNote: null, ...o,
+  });
+
+  it('joins the calls that left the group, at the operator\'s clear, an aged one at when it was made, an item first at the same instant', () => {
+    const calls = [call(1, { seenAt: NOW - HOUR }), call(2, { seenAt: NOW - 5 * HOUR, overturnedAt: NOW - 90 * MIN }), call(3, { at: NOW - 30 * HOUR }),
+      call(4, { overturnedAt: NOW - 2 * HOUR })];
+    expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], calls).map(idOf)).toEqual(['c1', 'i1', 'c4', 'c2', 'c3']);
+    expect(clearedGroups(clearedTrail([], NOW, [], [call(5, { seenAt: NOW, program: 'prog-b' })])).map((g) => g.program)).toEqual(['prog-b']);
+  });
+
+  // Fix round 1 (review 2792 F4): a stale frame or the device's saved copy keeps calls to the trail's window, as items and asks.
+  it('windows cleared calls by the same 48 hours, edge included', () => {
+    const calls = [call(1, { seenAt: NOW - CLEARED_WINDOW_MS }), call(2, { seenAt: NOW - CLEARED_WINDOW_MS - 1 }), call(3, { overturnedAt: NOW - HOUR })];
+    expect(clearedTrail([], NOW, [], calls).map(idOf)).toEqual(['c3', 'c1']);
+  });
+
+  // Fix round 1 (review 2792 F3, the coordinator's ruling): the server sends when a cleared call left the group (`clearedAt`,
+  // from `callClearedAt`), and the trail sorts, windows and dates a call by it; an older server omits it and the console's own
+  // reading stands.
+  it('a call the server dates by clearedAt sorts and windows by it; without it, the console\'s reading stands', () => {
+    const aged = call(1, { at: NOW - 8 * 86_400_000, clearedAt: NOW - 86_400_000 });
+    const lateOverturn = call(2, { at: NOW - 8 * 86_400_000, overturnedAt: NOW - HOUR, clearedAt: NOW - 86_400_000 });
+    expect(callClearedOn(aged)).toBe(NOW - 86_400_000);
+    expect(callClearedOn(lateOverturn)).toBe(NOW - 86_400_000);
+    expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], [aged]).map(idOf)).toEqual(['i1', 'c1']);
+    expect(callClearedOn(call(3, { seenAt: NOW - HOUR }))).toBe(NOW - HOUR);
+    expect(callClearedHow(aged)).toBe('aged');
+    expect(callClearedHow(lateOverturn)).toBe('aged');
+    expect(callClearedHow(call(4, { seenAt: NOW - HOUR, clearedAt: NOW - HOUR }))).toBe('seen');
+  });
+
+  // Fix round 1 (review 2792 F8): a cleared call says how it cleared, never a bare tick.
+  it('says how a call cleared: seen, overturned, or aged out', () => {
+    expect(callClearedHow(call(1, { seenAt: NOW - HOUR }))).toBe('seen');
+    expect(callClearedHow(call(2, { overturnedAt: NOW - HOUR }))).toBe('overturned');
+    expect(callClearedHow(call(3, { seenAt: NOW - HOUR, overturnedAt: NOW - 2 * HOUR }))).toBe('overturned');
+    expect(callClearedHow(call(4, { seenAt: NOW - 2 * HOUR, overturnedAt: NOW - HOUR }))).toBe('seen');
+    expect(callClearedHow(call(5))).toBe('aged');
+    expect(Object.values(CALL_CLEARED_WORD)).toEqual(['seen', 'overturned', 'aged out']);
+  });
+
   it('the shown count is five', () => {
     expect(CLEARED_SHOWN).toBe(5);
   });
 
   it('an item\'s number is its id after a #', () => {
     expect(itemNumber(itemView({ id: 129 }))).toBe('#129');
+  });
+});
+
+describe('ratificationWords', () => {
+  it('words both ratified sources', () => {
+    expect(ratificationWords({ ratified: true, source: { kind: 'operator' } }, null)).toBe('Ratified by you');
+    expect(ratificationWords({ ratified: true, source: { kind: 'coordinator' } }, null)).toBe('Ratified by the coordinator');
+  });
+  it('words every reason a version is not ratified, naming the item where there is one', () => {
+    const words: Record<RatificationWhy, string> = {
+      'source-does-not-ratify': 'Not ratified: written by the coordinator',
+      'effect-unmeasured': "Not ratified: rests on item 9's answer, which does not ratify goals yet",
+      'item-not-answered': 'Not ratified: item 9 has not been answered',
+      unreadable: 'Not ratified: what it rests on could not be read',
+      unrecorded: 'Not recorded',
+      absent: 'Not recorded',
+    };
+    for (const [why, text] of Object.entries(words)) {
+      const r: Ratification = { ratified: false, why: why as RatificationWhy, source: null };
+      expect(ratificationWords(r, 9), why).toBe(text);
+    }
+  });
+});
+
+describe('ratifyFailureOf: what a failed ratify means to the Goals card', () => {
+  it('a 404 (an older server), not-configured and auth-off take the button away, each with its words', () => {
+    expect(ratifyFailureOf(404, { ok: false, error: 'not-found' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-found'] });
+    expect(ratifyFailureOf(501, { ok: false, error: 'not-configured' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-configured'] });
+    expect(ratifyFailureOf(501, { ok: false, error: 'auth-off' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['auth-off'] });
+  });
+  it('goals-changed reads again; anything else is only said', () => {
+    expect(ratifyFailureOf(409, { ok: false, error: 'goals-changed' })).toEqual({ kind: 'changed' });
+    expect(ratifyFailureOf(400, { ok: false, error: 'bad-request' })).toEqual({ kind: 'other' });
+    expect(ratifyFailureOf(null, null)).toEqual({ kind: 'other' });
+    for (const inherited of ['toString', '__proto__', 'constructor']) expect(ratifyFailureOf(400, { ok: false, error: inherited }), inherited).toEqual({ kind: 'other' });
+  });
+  it('a version resting on an item\'s answer, ratified (from W3), has its own words', () => {
+    expect(ratificationWords({ ratified: true, source: { kind: 'item' } }, 4)).toBe('Ratified by the answer to the item it cites');
+  });
+});
+
+describe('ratificationWords and ratifyOffered: a word from a newer server (review 2240 F5)', () => {
+  const FIXED = 'Could not read whether this is ratified';
+  const bad = (r: unknown): Ratification => r as Ratification;
+  it('the fixed word is the one constant', () => { expect(RATIFICATION_UNREADABLE_WORDS).toBe(FIXED); });
+  it.each(['future-reason', 'toString', '__proto__', 'constructor', ''])('an unknown why %j reads the fixed word and offers no Ratify', (why) => {
+    const r = bad({ ratified: false, why, source: null });
+    expect(ratificationWords(r, 3)).toBe(FIXED);
+    expect(ratifyOffered(r)).toBe(false);
+  });
+  it.each(['future-kind', 'toString', '__proto__'])('an unknown source kind %j on a ratified verdict reads the fixed word', (kind) => {
+    const r = bad({ ratified: true, source: { kind } });
+    expect(ratificationWords(r, null)).toBe(FIXED);
+    expect(ratifyOffered(r)).toBe(false);
+  });
+  it.each(['future-kind', 'toString', '__proto__'])('an unknown source kind %j on a not-ratified verdict reads the fixed word and offers no Ratify', (kind) => {
+    const r = bad({ ratified: false, why: 'unrecorded', source: { kind } });
+    expect(ratificationWords(r, null)).toBe(FIXED);
+    expect(ratifyOffered(r)).toBe(false);
+  });
+  it('a ratified verdict with no source reads the fixed word', () => {
+    expect(ratificationWords(bad({ ratified: true, source: null }), null)).toBe(FIXED);
+  });
+  it('offers Ratify only to an unratified, readable verdict that is not absent', () => {
+    const no = (why: RatificationWhy, source: Ratification['source'] = null): Ratification => ({ ratified: false, why, source });
+    for (const why of ['unrecorded', 'unreadable', 'source-does-not-ratify', 'effect-unmeasured', 'item-not-answered'] as const) {
+      expect(ratifyOffered(no(why)), why).toBe(true);
+    }
+    expect(ratifyOffered(no('item-not-answered', { kind: 'item' }))).toBe(true);
+    expect(ratifyOffered(no('absent'))).toBe(false);
+    expect(ratifyOffered({ ratified: true, source: { kind: 'operator' } })).toBe(false);
+  });
+});
+
+describe('doneWhenPlacement: where the stored definition of done is drawn (review 2240 F4)', () => {
+  const g = (over: Partial<GoalsView> = {}): GoalsView => ({
+    program: 'prog-a', specPath: null, inShort: 'In short', inShortAt: 1000,
+    modifications: [{ id: 5, at: 2000, text: 'change', ruling: null, itemId: null, pr: null, merged: true }], doneWhen: ['one'], ...over,
+  });
+  it('is null with no list: null, absent or empty', () => {
+    expect(doneWhenPlacement(g({ doneWhen: null }))).toBeNull();
+    expect(doneWhenPlacement(g({ doneWhen: undefined }))).toBeNull();
+    expect(doneWhenPlacement(g({ doneWhen: [] }))).toBeNull();
+  });
+  it('the pin when its stamp is the one shown', () => {
+    expect(doneWhenPlacement(g({ doneWhenVersion: { pin: { inShortAt: 1000 } } }))).toEqual({ at: 'pin' });
+  });
+  it('a modification when it is one listed', () => {
+    expect(doneWhenPlacement(g({ doneWhenVersion: { modification: 5 } }))).toEqual({ at: 'modification', id: 5 });
+  });
+  it('alone when the writer is null, absent, a stale pin stamp, a modification not shown, or unreadable', () => {
+    expect(doneWhenPlacement(g({ doneWhenVersion: null }))).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g())).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g({ doneWhenVersion: { pin: { inShortAt: 999 } } }))).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g({ doneWhenVersion: { modification: 6 } }))).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g({ doneWhenVersion: {} as never }))).toEqual({ at: 'alone' });
+  });
+  it('alone when the pin is the writer but none is drawn', () => {
+    expect(doneWhenPlacement(g({ inShort: null, inShortAt: null, doneWhenVersion: { pin: { inShortAt: 1000 } } }))).toEqual({ at: 'alone' });
   });
 });

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Programme work map mockup</title>
+<!--
+  Mockup for docs/superpowers/specs/2026-11-16-programme-work-map-design.md (Task C37, D-8669).
+  Neutral sample data only. Rendered to PNG beside this file:
+    ?view=desktop  -> desktop.png (1440 wide)
+    ?view=phone    -> phone.png (390 wide)
+    ?view=noplan   -> no-plan.png (the Work card for a programme with no declared plan)
+  Not product code: the build follows the spec, not this file's markup.
+-->
+<style>
+:root {
+  --bg: #0b0b0c; --card: #141416; --well: #1b1b1e; --line: #2a2a2e; --text: #e8e8ea; --dim: #9a9aa2; --faint: #6c6c74;
+  --hue: #5fc4e0; --done: #4fb07a; --prog: #5b9cf0; --wait: #e0a54a; --stuck: #e0645a; --todo: #55555c;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+a { color: var(--text); }
+.page { padding: 16px; max-width: 1440px; }
+.head { border: 1px solid var(--line); border-left: 4px solid var(--hue); background: var(--card); border-radius: 6px; padding: 14px 16px; }
+.kicker { font: 600 13px var(--mono); color: var(--hue); letter-spacing: .06em; text-transform: uppercase; margin-right: 10px; }
+.title { font: 600 20px var(--mono); }
+.sub { font: 13px var(--mono); color: var(--dim); margin-left: 8px; }
+.spec { float: right; font: 13px var(--mono); }
+.facts { font: 13px var(--mono); color: var(--dim); margin-top: 10px; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; align-items: start; }
+.col { display: grid; gap: 16px; }
+.card { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 14px 16px; }
+.h { font: 600 12px var(--mono); letter-spacing: .08em; color: var(--dim); text-transform: uppercase; margin: 0 0 10px; }
+.well { background: var(--well); border-radius: 4px; padding: 10px 12px; }
+.inshort { color: var(--text); font-size: 14px; }
+.small { font-size: 12px; color: var(--dim); }
+/* Work card */
+.sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.sum b { font: 600 18px var(--mono); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 12px var(--mono); color: var(--dim); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 10px 0 6px; background: var(--todo); }
+.bar span { display: block; height: 100%; }
+.source { font: 11px var(--mono); color: var(--faint); margin-bottom: 8px; }
+.phase { border-top: 1px solid var(--line); padding: 8px 0 4px; }
+.phase-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.phase-name { font: 600 14px var(--mono); }
+.phase-count { font: 12px var(--mono); color: var(--dim); }
+.phase-sum { font-size: 12px; color: var(--dim); margin: 2px 0 4px; }
+.chev { color: var(--faint); font: 12px var(--mono); }
+.linear { margin-left: auto; font: 12px var(--mono); color: var(--dim); }
+.row { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 4px 0 4px 2px; }
+.st { font: 12px var(--mono); white-space: nowrap; }
+.st.done { color: var(--done); } .st.prog { color: var(--prog); } .st.wait { color: var(--wait); } .st.stuck { color: var(--stuck); } .st.todo { color: var(--dim); }
+.desc { min-width: 0; overflow-wrap: anywhere; }
+.meta { font: 12px var(--mono); color: var(--dim); white-space: nowrap; }
+.meta a { color: var(--dim); }
+.fold { font: 12px var(--mono); color: var(--dim); padding: 4px 0 4px 2px; }
+.donephase .phase-name { color: var(--dim); }
+.note { border: 1px dashed var(--line); border-radius: 4px; padding: 8px 10px; font-size: 13px; color: var(--dim); margin: 6px 0 10px; }
+.tag { display: inline-block; font: 11px var(--mono); color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; margin-left: 6px; white-space: nowrap; vertical-align: 1px; }
+.strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.chip { font: 12px var(--mono); border: 1px solid var(--line); border-radius: 12px; padding: 2px 9px; color: var(--text); }
+.chip em { font-style: normal; color: var(--dim); margin-left: 4px; }
+/* Runs card, as today */
+.run { font: 13px var(--mono); color: var(--dim); padding: 4px 0; }
+.run b { color: var(--text); font-weight: 500; }
+.sq { display: inline-block; width: 9px; height: 9px; background: var(--dim); margin-right: 8px; }
+/* Phone */
+.phone .page { max-width: 390px; padding: 12px; }
+.phone .two { grid-template-columns: minmax(0, 1fr); }
+.phone .row { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 6px 0 6px 2px; }
+.phone .meta { white-space: normal; }
+.phone .spec { float: none; display: block; margin-top: 6px; }
+.phone .linear { margin-left: 0; }
+.phone .inshort { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.noplan .page { max-width: 720px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const view = new URLSearchParams(location.search).get('view') || 'desktop';
+document.body.classList.add(view);
+
+const C = { done: 'var(--done)', prog: 'var(--prog)', wait: 'var(--wait)', todo: 'var(--todo)' };
+
+function bar(parts, total) {
+  return '<div class="bar" role="img" aria-label="progress">' +
+    parts.map(([n, c]) => `<span style="width:${(100 * n / total).toFixed(2)}%;background:${c}"></span>`).join('') + '</div>';
+}
+function legend(items) {
+  return '<div class="legend">' + items.map(([c, t]) => `<span><i class="dot" style="background:${c}"></i>${t}</span>`).join('') + '</div>';
+}
+function row(st, cls, desc, meta) {
+  return `<div class="row"><span class="st ${cls}">${st}</span><span class="desc">${desc}</span><span class="meta">${meta || ''}</span></div>`;
+}
+
+const tag = (t) => `<span class="tag">${t}</span>`;
+const workPlan = `
+<section class="card" aria-label="Work">
+  <h2 class="h">Work</h2>
+  <div class="sum"><b>11 of 21 done</b>${legend([[C.prog, '3 in progress'], [C.wait, '1 waiting on you'], [C.todo, '6 not started']])}</div>
+  ${bar([[11, C.done], [3, C.prog], [1, C.wait], [6, C.todo]], 21)}
+  <div class="strip"><span class="chip">The switch <em>5 of 9 · ◇ 1 of 2</em></span><span class="chip">The list screen <em>6 of 10 · ◇ 0 of 1</em></span><span class="chip">The operator's guide <em>0 of 2 · ◇ 0 of 1</em></span></div>
+  <div class="source">From the programme's plan · 3 phases · 3 epics · read 1 min ago</div>
+
+  <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">1 · Foundations</span><span class="phase-count">6 of 6 done · finished 2026-11-02</span></div></div>
+
+  <div class="phase">
+    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">2 · Build</span><span class="phase-count">5 of 8 done · 1 carried to phase 3</span></div>
+    <div class="phase-sum">The switch's Settings row and the list screen, at every width.</div>
+    ${row('● working', 'prog', 'The switch\'s Settings row, with its confirm sheet ' + tag('The switch'), '<a href="#">run 412</a> · moved 12m ago')}
+    ${row('● in review', 'prog', 'The list screen at phone width ' + tag('The list screen'), '<a href="#">run 415</a> · review round 1')}
+    ${row('◆ waiting on you', 'wait', 'Which order the list opens in ' + tag('The list screen'), '<a href="#">1 item</a> · needed soon')}
+    ${row('↷ carried', 'todo', 'The list screen\'s empty state ' + tag('The list screen'), 'not started · carried to phase 3')}
+    <div class="fold">▸ 5 done</div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">3 · Rollout</span><span class="phase-count">0 of 7 done · takes on all of The operator's guide (◇ 0 of 1)</span></div>
+    <div class="phase-sum">A shadow week, the switch turned on, the old path removed, and the guide.</div>
+    ${row('● working', 'prog', 'The shadow week, measured and recorded ' + tag('The switch'), '<a href="#">run 418</a> · moved 2h ago')}
+    ${row('○ not started', 'todo', 'The list screen\'s empty state ' + tag('The list screen'), 'from phase 2')}
+    ${row('○ not started', 'todo', 'Turn the switch on for every project ' + tag('The switch'), '')}
+    ${row('○ not started', 'todo', 'Remove the old path and its readers ' + tag('The switch'), '')}
+    ${row('○ not started', 'todo', 'The operator\'s guide ' + tag('The operator\'s guide'), '')}
+    ${row('○ not started', 'todo', 'The README section ' + tag('The operator\'s guide'), '')}
+    ${row('○ not started', 'todo', 'The list screen\'s closing review ' + tag('The list screen'), '')}
+  </div>
+  <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">Done when</span><span class="phase-count">1 of 3 proved</span></div></div>
+</section>`;
+
+const workNoPlan = `
+<section class="card" aria-label="Work">
+  <h2 class="h">Work</h2>
+  <div class="note">No plan declared, so what remains is not known. Below is the work run so far.</div>
+  <div class="sum"><b>38 work runs done</b>${legend([[C.prog, '2 in progress'], ['var(--stuck)', '1 failed']])}</div>
+  <div class="source">From this programme's runs · waves 1 to 41</div>
+  <div class="phase">
+    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">In progress</span><span class="phase-count">2</span></div>
+    ${row('● working', 'prog', 'The export button and its file name', '<a href="#">run 902</a> · wave 41 · moved 20m ago')}
+    ${row('● merging', 'prog', 'The search box keeps its query across pages', '<a href="#">run 899</a> · wave 40 · in the merge queue')}
+  </div>
+  <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">Done</span><span class="phase-count">38 · newest: wave 39, the empty state's wording</span></div></div>
+  <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">Failed</span><span class="phase-count">1 · wave 22</span></div></div>
+</section>`;
+
+const goals = `
+<section class="card" aria-label="Goals">
+  <h2 class="h">Goals</h2>
+  <div class="well"><div class="h">In short</div>
+    <div class="inshort">An example programme that adds a switch, a list screen and its controls, then rolls the switch out behind a measured shadow week. Every step keeps the old path working until the last phase removes it.</div>
+    <div class="small" style="margin-top:6px">As of 2026-11-01 · <a href="#">Open the spec in Docs</a> to read all of it.</div>
+  </div>
+  <div class="h" style="margin-top:12px">Changed since approval</div>
+  <div class="small">Nothing has changed since approval.</div>
+</section>`;
+
+const waiting = `
+<section class="card" aria-label="Waiting on you">
+  <h2 class="h">Waiting on you</h2>
+  <a href="#">1 waiting on you</a>
+</section>`;
+
+const runs = `
+<section class="card" aria-label="Runs">
+  <h2 class="h">Runs</h2>
+  <div class="run"><i class="sq"></i>working <b>The switch's Settings row · wave 31</b> example · 0/4 settled · 3 commits · 40m ago</div>
+  <div class="run"><i class="sq"></i>awaiting review <b>The list screen at phone width · wave 32</b> example · 1 commit · 2h ago</div>
+  <div class="run" style="padding-left:18px">working <b>Review of wave 32, round 1</b> example · 10m ago</div>
+  <div class="run"><i class="sq"></i>working <b>The shadow week · wave 33</b> example · 0/4 settled · 2h ago</div>
+  <div class="run" style="margin-top:10px">▸ Closed waves · 30</div>
+</section>`;
+
+const head = `
+<header class="head">
+  <span class="kicker">Programme</span><span class="title">Example programme</span><span class="sub">wave 33</span>
+  <a class="spec" href="#">Spec</a>
+  <div class="facts">● moving · 3 working · 0 waiting · 0 queued · 29 done · 1 failed · Coordinator: example-coordinator · alive</div>
+</header>`;
+
+const root = document.getElementById('root');
+if (view === 'noplan') {
+  root.innerHTML = `<div class="page">${workNoPlan}</div>`;
+} else {
+  root.innerHTML = `<div class="page">${head}<div class="two"><div class="col">${goals}${workPlan}</div><div class="col">${waiting}${runs}</div></div></div>`;
+}
+</script>
+</body>
+</html>

@@ -84,7 +84,13 @@ export function hookAskSummary(hs: HookState | null, liveWaitingFor: string | nu
 /** D-5298 (spec §6.7): the hookstate envelope as it leaves this server on the session frame (`sessionws.ts`), with an
  *  approval's `summary` redacted. A question envelope is the operator's answer sheet and is sent as read. */
 export function wireHookAsk(ask: HookAsk): HookAsk {
-  return 'approval' in ask ? { approval: { tool: ask.approval.tool, summary: redactCommand(ask.approval.summary) } } : ask;
+  return 'approval' in ask ? {
+    approval: {
+      tool: ask.approval.tool, summary: redactCommand(ask.approval.summary),
+      // Approvals PR 2: a subagent's envelope says so, for the console's "one of its subagents asks" line.
+      ...(ask.approval.thread === 'subagent' ? { thread: 'subagent' as const } : {}),
+    },
+  } : ask;
 }
 
 function hookAskText(hs: HookState | null): string | null {
@@ -869,7 +875,8 @@ export async function assembleFleetWithPanePids(
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
       // D-5296: the quiet "with coordinator" state, from the same row.
       withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs, approvalsByChild.get(r.id) ?? null),
-      subagents: hs?.subagents ?? null,
+      // H1b (D-8862): the roster's `id` is server-internal; the wire and the state cache keep `{name, startedAt}`.
+      subagents: hs?.subagents.map(({ name, startedAt }) => ({ name, startedAt })) ?? null,
       // `background-aware-working` (D-5231): the delegated work a main Stop
       // left running, and ONLY when the live file's own word covers that work
       // (2.1.277 on, `liveCoversWorkflows`) — below that floor D-75 answers as

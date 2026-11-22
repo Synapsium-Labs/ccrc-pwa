@@ -222,7 +222,7 @@ describe('ccrc: dispatch and usage', () => {
     // owns what it does, this line owns that an operator can find it.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|settings\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\|test\|testbox-admin\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|settings\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\|test\|testbox-admin\|quiz-record\}/);
     // `settings` joined it with the box settings view (D-6914): the read-only verb that prints and records what the box's
     // settings resolve to, by display class. It sits after `coordination-snapshot`, which `install-census` pins right after `backup`.
     // `server/test/ccrc-settings-verb.test.ts` owns what it does; this row owns that an operator can find it.
@@ -232,6 +232,10 @@ describe('ccrc: dispatch and usage', () => {
     // ccd/ccrc-test, joined in place, last, with its paragraph (_usage_test_paragraph) reached beside history's.
     // `server/test/ccrc-test-wrapper.test.ts` owns what it does.
     expect(r.stdout).toMatch(/^ {2}test {6}run one test or typecheck inside ccrctests\.slice/m);
+    // `quiz-record` joined it with the Overlord's replay quiz (W1a, plan 2026-11-17-overlord-quiz-record.md Task 10): the one
+    // dispatch line that execs ccd/ccrc-quiz-record, its paragraph (_usage_quiz_paragraph) reached beside test's.
+    // `server/test/ccrc-quiz-record.test.ts` owns what it does.
+    expect(r.stdout).toMatch(/^ {2}quiz-record {2}record a replay quiz run, by hand outside any session or pane:$/m);
     // codex bridge Stage 2's whole-wave addendum (U-1): the paragraph names each mode's tiers, and `switch`.
     expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's tiers - in litellm mode its LiteLLM gateway$/m);
     expect(r.stdout.replace(/\s+/g, ' ')).toContain('in direct mode its bridge alone');

@@ -1,6 +1,8 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { HookAsk, HookAskQuestion } from '../../shared/api.js';
+import type { HookApprovalEntry } from './coord/approvalEnvelope.js';
+import { isAgentId } from '../../shared/continuity-reports.js';
 
 /** A hookstate file whose `updatedAt` and `aliveAt` are both older than this is presumed stale: the writing hook
  *  process may be dead, wedged, or the session may have moved on without a
@@ -39,7 +41,10 @@ export interface HookState {
    *  literal, so a misspelt name fails to compile. */
   event: string | null;
   ask: HookAsk | null;
-  subagents: { name: string; startedAt: number }[];
+  /** The hook's roster. `id` (H1b, D-8862) is SERVER-INTERNAL: the session stream reads it for the Helpers section, and
+   *  `fleet.ts` strips it when it copies the roster onto `FleetSession.subagents`, so the fleet wire and the state cache are
+   *  unchanged. Absent for an entry that carries none (D-5375) or one that fails the hook's id rule (`isAgentId`). */
+  subagents: { id?: string; name: string; startedAt: number }[];
   /** How many `graphify query` / `path` / `explain` calls this session has
    *  made since it last started or cleared, as the hook counted them
    *  (`ccd/session-hook.sh`'s `GRAPH_QUERY_RE`). R4 of the read-side design:
@@ -80,7 +85,39 @@ export interface HookState {
    *  file whose `updatedAt` is good (`aliveAt`'s rule). `fleet.ts` is the one
    *  reader that turns it into `FleetSession.background`. */
   background?: { count: number; kinds: string[] };
+  /** The hook's `waitBy` (D-5232): `subagent` when a subagent's own prompt raised this wait. Absent otherwise, and on any
+   *  other value. Read by the approval census (approvals plan 2026-11-18, Task 1.3) for a prompt's thread. */
+  waitBy?: 'subagent';
+  /** The hook's per-agent approval envelopes (approvals plan 2026-11-18, Task 2.1, path 6): one entry per subagent whose
+   *  permission prompt stands, kept through the main thread's and siblings' events. Absent when the file carries none, or
+   *  none that reads whole. Its readers ask `coord/approvalEnvelope.ts#paintedApprovalOf`, never this field directly. */
+  approvals?: readonly HookApprovalEntry[];
 }
+
+/** The longest summary the hook writes (`.[0:200]`, in code points, so it is counted in code points here: review 2752 F7)
+ *  and the longest route word this reader keeps (the `ask` reader's). */
+const ENTRY_SUMMARY_MAX = 200;
+const ENTRY_ROUTE_MAX = 64;
+const ENTRY_TOOL_MAX = 128;
+/** The hook's `approvals` list (Task 2.1), its ONE reader. An entry is kept only when it reads whole (an id on the hook's
+ *  rule, a tool, a summary of at most 200 characters, a finite stamp, and a route word when there is one); any other
+ *  entry is dropped, and a list that is not an array reads as none. A bad list never condemns a file whose `updatedAt`
+ *  is good (`aliveAt`'s rule): an older server ignored the field, and this one degrades to that. */
+const reviveApprovalEntries = (raw: unknown): HookApprovalEntry[] => {
+  if (!Array.isArray(raw)) return [];
+  const out: HookApprovalEntry[] = [];
+  for (const e of raw) {
+    if (!isRecord(e)) continue;
+    const { agentId, tool, summary, route, at } = e;
+    if (!isAgentId(agentId)) continue;
+    if (typeof tool !== 'string' || tool === '' || tool.length > ENTRY_TOOL_MAX) continue;
+    if (typeof summary !== 'string' || Array.from(summary).length > ENTRY_SUMMARY_MAX) continue;
+    if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) continue;
+    if (route !== undefined && (typeof route !== 'string' || route === '' || route.length > ENTRY_ROUTE_MAX)) continue;
+    out.push({ agentId, tool, summary, at, ...(route === undefined ? {} : { route }) });
+  }
+  return out;
+};
 
 /** D-5231: the kinds string the hook writes — unique cleaned kinds, comma-joined, or empty. */
 const BG_KINDS_RE = /^(?:[a-z_-]+(?:,[a-z_-]+)*)?$/;
@@ -156,12 +193,21 @@ function reviveAsk(raw: unknown): HookAsk {
     if (!isRecord(approvalRaw) || typeof approvalRaw['tool'] !== 'string' || typeof approvalRaw['summary'] !== 'string') {
       throw new Malformed('ask.approval');
     }
-    return { approval: { tool: approvalRaw['tool'], summary: approvalRaw['summary'] } };
+    // The hook's route word (approvals plan Task 1.2), ADDITIVE: absent on an older hook's envelope, and anything but a
+    // short string is dropped rather than failing the whole state, so a bad word never costs the prompt its envelope.
+    // `shared/approval-census.ts#parseApprovalRoute` is what reads the word; here it is only carried.
+    const route = approvalRaw['route'];
+    return {
+      approval: {
+        tool: approvalRaw['tool'], summary: approvalRaw['summary'],
+        ...(typeof route === 'string' && route.length > 0 && route.length <= 64 ? { route } : {}),
+      },
+    };
   }
   throw new Malformed('ask');
 }
 
-function reviveSubagents(raw: unknown): { name: string; startedAt: number }[] {
+function reviveSubagents(raw: unknown): HookState['subagents'] {
   // Absent (a file written before this field existed) or explicit null both
   // read as "no subagents", never a crash — the writer always includes the
   // field today, but the reader must not assume every file on disk agrees.
@@ -172,7 +218,10 @@ function reviveSubagents(raw: unknown): { name: string; startedAt: number }[] {
         typeof item['startedAt'] !== 'number' || !Number.isFinite(item['startedAt'])) {
       throw new Malformed('subagents[]');
     }
-    return { name: item['name'], startedAt: item['startedAt'] };
+    // H1b (D-8862): the id is kept when it is one on the hook's rule; any other value reads as ABSENT, never as a malformed
+    // state, because id-less entries still occur (D-5375) and a bad id must not cost the session its whole hook read.
+    const id = item['id'];
+    return { ...(isAgentId(id) ? { id } : {}), name: item['name'], startedAt: item['startedAt'] };
   });
 }
 
@@ -345,6 +394,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
     const ask = askRaw === null || askRaw === undefined ? null : reviveAsk(askRaw);
     const subagents = reviveSubagents(raw['subagents']);
     const background = reviveBackground(raw);
+    const approvals = reviveApprovalEntries(raw['approvals']);
     return {
       ok: true,
       state: {
@@ -357,6 +407,8 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
         graphGateDenials: reviveGraphCount(raw, 'graphGateDenials'),
         interrupted: interruptedRaw === true,
         ...(background === undefined ? {} : { background }),
+        ...(raw['waitBy'] === 'subagent' ? { waitBy: 'subagent' as const } : {}),
+        ...(approvals.length === 0 ? {} : { approvals }),
       },
       sessionId,
       identity: currentUuid === null ? 'unregistered' : sessionId === currentUuid ? 'current' : 'foreign',

@@ -77,12 +77,12 @@ describe('the index and the section routes', () => {
       appearance: () => screen.findByRole('group', { name: 'Theme' }),
       notifications: () => screen.findByText(/Push notifications for this browser|This browser cannot receive Web Push\./),
       automation: () => screen.findByRole('heading', { level: 3, name: 'Temp root collector' }),
-      // Four cards load on this page, and exactly four: the sign-in gate's skeleton, the box token's, the Linear card's
-      // and the Approvals card's (D-8382). A fifth (a card drawn twice, or a skeleton left behind) is a defect, so the
+      // Five cards load on this page, and exactly five: the sign-in gate's skeleton, the box token's, the Linear card's,
+      // the Approvals card's (D-8382) and the Permission prompts (M38) card's. A sixth (a card drawn twice, or a skeleton left behind) is a defect, so the
       // count is asserted and not merely "some".
       security: () => waitFor(() => {
         expect(screen.getByRole('heading', { level: 3, name: 'Sign-in gate' })).toBeInTheDocument();
-        expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(4);
+        expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(5);
       }),
     };
     for (const s of SETTINGS_SECTIONS) {
@@ -105,11 +105,11 @@ describe('the index and the section routes', () => {
     expect(Array.from(index().querySelectorAll('a[data-section]'))).toHaveLength(5);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its fifteen cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its sixteen cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
   });
 });
 
@@ -390,8 +390,8 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     updates: ['Fleet version', 'Nodes', 'Box settings', 'Update policy'],
     appearance: ['Layout and theme', 'Character'],
     notifications: ['Push notifications', 'Release announcements'],
-    automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
-    security: ['Sign-in gate', 'Box token', 'Linear', 'Project linking', 'Approvals'],
+    automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
+    security: ['Sign-in gate', 'Box token', 'Linear', 'Project linking', 'Approvals', 'Permission prompts (M38)'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
 

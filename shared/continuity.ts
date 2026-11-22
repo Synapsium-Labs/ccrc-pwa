@@ -13,7 +13,7 @@ const GENERATION_STATE_MAP = {
   carded: 'the anchor is injected, the card is read, and the served hash comes back',
   probing: 'the probes run',
   degraded: 'no soft renewal; one operator item',
-  ended: 'a later generation replaced it (terminal)',
+  ended: 'a later generation replaced it, or the operator ended the binding (terminal)',
 } as const;
 export type GenerationState = keyof typeof GENERATION_STATE_MAP;
 export const GENERATION_STATES = Object.keys(GENERATION_STATE_MAP) as GenerationState[];
@@ -29,6 +29,10 @@ const GENERATION_OUTCOME_MAP = {
   'woken-elsewhere': 'a wake on another host replaced it',
   unmeasured: 'a start replaced it, and what that start was cannot be told from what the lane read',
   cleared: 'a /clear on the same row and account replaced it: asked for, but not by a renewal (review 2006)',
+  // The operator ended the Overlord's binding to this body, or the attempt that started it was cancelled or failed; no later
+  // start of this body replaced it. An older build's readers skip an ended row, and only `checkpointBefore` reads its outcome
+  // (review 2366 N5), so an older build meets the word only there.
+  retired: "the operator ended the Overlord's binding to this body, or the attempt that started it ended; no later start replaced it",
 } as const;
 export type GenerationOutcome = keyof typeof GENERATION_OUTCOME_MAP;
 export const GENERATION_OUTCOMES = Object.keys(GENERATION_OUTCOME_MAP) as GenerationOutcome[];
@@ -59,6 +63,7 @@ const RENEWAL_TRIGGER_MAP = {
   'probe-failed': 'a probe failed mid-generation, and a re-read did not fix it',
   'model-drift': 'the running model is not the one the generation records',
   'resumed-other-class': 'a start that resumed the conversation on another model class',
+  'resumed-other-org': 'a start that resumed the conversation in another organization',
   'entry-retired': 'an entry it was served was retired, edited, superseded or wiped',
   'term-raised': 'the operator confirmed a restore, which raised the term',
   'account-outside-set': "the generation's account is outside its set",
@@ -91,6 +96,19 @@ export const SOFT_BUDGET = { count: 3, windowMs: 21_600_000 } as const;
 /** Table 11.5b, observed time: a break (R19), no operator message for this long, or no visible place for this long. */
 export const BREAK_NO_MESSAGE_MS = 1_200_000;
 export const BREAK_PLACE_HIDDEN_MS = 300_000;
+/** Table 11.1e, the mark `operator-at-programme` (W1a): a coordinator's operator activity lasts this long, observed, after the
+ *  operator's newest prompt into any session of its programme; older, it reads as no activity (C50, the hand-offs piece). */
+export const OPERATOR_MARK_MS = 1_800_000;
+/** Table 11.1d (W1a), the Setting "Renew when I'm away" / "Renew on schedule" (R19): when soft renewals happen. The default is
+ *  when the operator is away. Read back through `isRenewalMode`, never cast. */
+export const RENEWAL_MODES = ['when-away', 'on-schedule'] as const;
+export type RenewalMode = (typeof RENEWAL_MODES)[number];
+export const RENEWAL_MODE_DEFAULT: RenewalMode = 'when-away';
+export function isRenewalMode(v: unknown): v is RenewalMode {
+  return typeof v === 'string' && (RENEWAL_MODES as readonly string[]).includes(v);
+}
+/** `GET`/`POST /api/coord/renewal-mode`'s answer: the stored mode (null when it does not read), the default and the choices. */
+export interface RenewalModeView { mode: RenewalMode | null; default: RenewalMode; choices: readonly RenewalMode[] }
 /** Table 3.3.11b: the hard cap, or half the window, whichever is lower. */
 export const HARD_CAP_TOKENS = 250_000;
 /** Table 3.3.11b: the soft ceiling, as a fraction of the fitted ceiling. */
@@ -108,13 +126,16 @@ export const CHECKPOINT_THREAD = { messages: 60, tokens: 6_000 } as const;
 /** Table 11.5b: the caps on `continuity_notes` for one identity. */
 export const NOTES_CAP = { count: 200, chars: 500 } as const;
 /** The continuity notes (Overlord spec §3.3.2, C37; the notes piece of W1a). What a note keys to: a programme (by slug), an
- *  item or a run (by id), each a row the server can look up. `request` joins in W2 and `message` (a `miss`) in W1, as their
- *  rows appear (slug note-keys-in-w1a). */
+ *  item or a run (by id), or a message of the operator's (by id, a `miss`'s key), each a row the server can look up.
+ *  `request` joins in W2, as its row appears (slug note-keys-in-w1a). */
 export type NoteKey =
   | { readonly kind: 'programme'; readonly slug: string }
   | { readonly kind: 'item'; readonly id: number }
-  | { readonly kind: 'run'; readonly id: number };
-const NOTE_KEY_KIND_MAP = { programme: 'a programme, by slug', item: 'an item, by id', run: 'a run, by id' } as const;
+  | { readonly kind: 'run'; readonly id: number }
+  | { readonly kind: 'message'; readonly id: number };
+const NOTE_KEY_KIND_MAP = {
+  programme: 'a programme, by slug', item: 'an item, by id', run: 'a run, by id', message: "a message of the operator's, by id",
+} as const;
 export type NoteKeyKind = keyof typeof NOTE_KEY_KIND_MAP;
 export const NOTE_KEY_KINDS = Object.keys(NOTE_KEY_KIND_MAP) as NoteKeyKind[];
 export function isNoteKeyKind(v: unknown): v is NoteKeyKind {
@@ -123,6 +144,7 @@ export function isNoteKeyKind(v: unknown): v is NoteKeyKind {
 const NOTE_KIND_MAP = {
   thread: 'an open thread: what it waits on and what comes next',
   caution: 'something the next generation should watch for',
+  miss: "a message of the operator's the Overlord missed, keyed to it",
 } as const;
 export type NoteKind = keyof typeof NOTE_KIND_MAP;
 export const NOTE_KINDS = Object.keys(NOTE_KIND_MAP) as NoteKind[];
@@ -284,13 +306,15 @@ export const PROBE_GRADES = Object.keys(PROBE_GRADE_MAP) as ProbeGrade[];
 export function isProbeGrade(v: unknown): v is ProbeGrade {
   return typeof v === 'string' && (PROBE_GRADES as readonly string[]).includes(v);
 }
-/** Whether the session read anything between ask and answer (C41, closed-book). In W1a the server can attribute only its
- *  own continuity reads (the card, the notes), so an answer is `open` after one of them and `unmeasured` otherwise; `closed`
- *  needs W1's witness (slug closed-book-is-unmeasured-in-w1a). */
+/** Whether the session read anything between ask and answer (C41, closed-book). The server attributes its own continuity reads
+ *  (the card, the notes) and, for the designated session, the lines of its read ledger (W1 door process B1, slug
+ *  closed-book-reads-the-ledger; no read door writes the ledger yet, so those count 0 until they do). An answer is `open` after
+ *  one of them, `closed` when the ledger covers the session, was measured and holds none and no card or notes read was found,
+ *  and `unmeasured` otherwise. */
 const BOOK_STATE_MAP = {
-  closed: 'nothing was read between ask and answer (W1, the witness)',
+  closed: "the designated session's ledger and card and notes show no read between ask and answer",
   open: 'the session read its card or its notes between ask and answer',
-  unmeasured: 'no read the server can attribute; reads through other doors carry no attribution in W1a',
+  unmeasured: 'no read the server can attribute: a session its ledger does not cover, or a read it could not measure',
 } as const;
 export type BookState = keyof typeof BOOK_STATE_MAP;
 export const BOOK_STATES = Object.keys(BOOK_STATE_MAP) as BookState[];

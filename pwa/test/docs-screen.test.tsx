@@ -20,10 +20,11 @@ import { detachUrls } from '../src/docs/docsLinks';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import { pinFor, type DocsVisit, type FileSlot } from '../src/docs/useDocsVisit';
 import { exportStateFor } from '../src/docs/DocsHead';
-import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
+import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, MOCKUP_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
+import type { RangeLoader } from '../src/docs/range/readRange';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import { HighlighterContext } from '../src/lib/highlighterContext';
 import type { Highlighter } from '../src/lib/highlightProtocol';
@@ -31,7 +32,7 @@ import type { HighlightClock } from '../src/lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
+  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, NO_RANGE_VISIT, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okFile, okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter, syncTestStore, withSyncHighlight } from './highlightTestStore';
@@ -63,6 +64,17 @@ const pngBytes = (): Uint8Array<ArrayBuffer> => new Uint8Array([...DOCS_RASTER_T
 const okPng = (): DocsRasterAnswer => ({ s: 'ok', value: { bytes: pngBytes(), mime: 'image/png' } });
 
 /** Loaders whose `file` answers by path (an unknown path answers `absent-path`). */
+/** X2 P1: `f` with a range loader whose prepare never answers, so a leaf read by range stays at "Reading…"; `calls`
+ *  names each prepare's path. */
+function withHeldRange(f: FakeLoaders): FakeLoaders & { readonly rangeCalls: string[] } {
+  const rangeCalls: string[] = [];
+  const range: RangeLoader = {
+    prepare: (target) => { rangeCalls.push(target.pin.path); return new Promise(() => undefined); },
+    frame: () => new Promise(() => undefined),
+  };
+  return { ...f, loaders: { ...f.loaders, range }, rangeCalls };
+}
+
 function byPath(tree: DocsTreeOk, files: Readonly<Record<string, DocsFileAnswer>>): FakeLoaders {
   const f = fakeLoaders({ tree: okTree(tree) });
   f.file.mockImplementation(async (_project: string, pin: DocPin) => files[pin.path] ?? failedAnswer('absent-path'));
@@ -538,19 +550,128 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
   });
 
-  it.each(['/docs/demo/specs/m.html', '/docs/demo/specs/m.html?ref=main&frame=full'])(
-    'html (%s): the stand-in with its size, Source and Download, and no frame of any kind', async (url) => {
-      const html = '<p>mock</p><script>x()</script>';
-      const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', html, 'html') });
-      const { container } = open(url, f);
-      expect(await screen.findByText('HTML mockups open in a later release; Source shows the file and Download saves it.')).toBeInTheDocument();
-      expect(screen.getByText('Size: 1 KiB')).toBeInTheDocument();
-      expect(container.querySelector('iframe, frame, object, embed, [srcdoc]')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: 'Source' }));
-      expect(container.querySelector('pre.doc-plain')?.textContent).toBe(html);
-      expect(container.querySelector('iframe, frame, object, embed, [srcdoc], script')).toBeNull();
-      expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
+  it('html: the mockup viewer (one sandboxed frame, Source and Download), and the stand-in sentence is gone', async () => {
+    const html = '<p>mock</p><script>x()</script>';
+    const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', html, 'html') });
+    const { container } = open('/docs/demo/specs/m.html', f);
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    expect(screen.queryByText(/HTML mockups open in a later release/)).toBeNull();
+    expect(container.querySelectorAll('iframe')).toHaveLength(1);
+    expect(container.querySelector('iframe')?.getAttribute('sandbox')).toBe('');
+    expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }));
+    expect(container.querySelector('.docs-leaf .code-block')?.textContent).toContain('<p>mock</p>');
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
+  });
+
+  it('html with ?frame=full: the full-frame view (Close and the frame), no toolbar', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', '<p>mock</p>', 'html') });
+    const { container } = open('/docs/demo/specs/m.html?ref=main&frame=full', f);
+    await waitFor(() => expect(container.querySelector('.docs-mockup[data-frame="full"] iframe')).not.toBeNull());
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Full screen' })).toBeNull();
+  });
+
+  it('html: a re-list that moves the commit of a committed page but not its blob does not remount the viewer (its state and its one-relist cap stay)', async () => {
+    const html = '<img src="a.png"><script>x()</script>';
+    const entries = [entry('specs', 'm.html'), entry('specs', 'a.png')];
+    const page = fileAs('m.html', html, 'html');
+    const sameBlob: DocsFileAnswer = page.s === 'ok'
+      ? { s: 'ok', value: { ...page.value, show: { ...page.value.show, blob: BLOB_1 } } }
+      : page;
+    const f = byPath(treeOk({ entries }), { 'm.html': sameBlob });
+    f.tree.mockReset();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A, entries })));
+    f.tree.mockResolvedValue(okTree(treeOk({ commit: COMMIT_B, entries })));
+    // The first read of the image waits for sign-in; every later one answers that the commit is gone (a movement).
+    f.raster.mockReset();
+    f.raster.mockResolvedValueOnce({ s: 'auth' });
+    f.raster.mockResolvedValue(failedAnswer('unknown-commit'));
+    const { container } = open('/docs/demo/specs/m.html', f);
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    const root = container.querySelector('.docs-mockup')!;
+    fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+    expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    // Sign-in reads again; the answer is a movement, so the view asks its host to re-list ONCE.
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(2));
+    // The new listing is a new commit with the same blob: the view starts over from it, and is the same view.
+    await waitFor(() => expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    expect(container.querySelector('.docs-mockup')).toBe(root);
+    expect(root.isConnected).toBe(true);
+    expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+    // The second movement was the view's own: no further re-list (the cap survived the re-list), and Retry is the user's.
+    await new Promise<void>((r) => { setTimeout(r, 50); });
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(3));
+  });
+
+  // The viewer's key is the document's identity, the page's view and its frame (D-8711; review M7c): each part below starts
+  // the viewer over, which a state it holds (Run scripts) shows. Each is measured red by dropping that part from the key.
+  describe('the mockup viewer\'s key holds its view, its frame and its draft fingerprint (review M7c)', () => {
+    const html = '<p>mock</p><script>x()</script>';
+    const entries = [entry('specs', 'm.html')];
+
+    it('a view=committed change starts the viewer over (Run scripts is off again)', async () => {
+      const f = byPath(treeOk({ entries }), { 'm.html': fileAs('m.html', html, 'html') });
+      const { container } = open('/docs/demo/specs/m.html?ref=main', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+      const root = container.querySelector('.docs-mockup')!;
+      act(() => navigate('/docs/demo/specs/m.html?ref=main&view=committed'));
+      await waitFor(() => expect(here()).toBe('/docs/demo/specs/m.html?ref=main&view=committed'));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+      expect(container.querySelector('.docs-mockup')).not.toBe(root);
     });
+
+    it('a frame change (Full screen) starts the viewer over: the full frame is static again', async () => {
+      const f = byPath(treeOk({ entries }), { 'm.html': fileAs('m.html', html, 'html') });
+      const { container } = open('/docs/demo/specs/m.html', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+      fireEvent.click(screen.getByRole('button', { name: 'Full screen' }));
+      await waitFor(() => expect(container.querySelector('.docs-mockup[data-frame="full"] iframe')).not.toBeNull());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+    });
+
+    it('a new draft fingerprint starts the viewer over; a re-list that keeps the fingerprint does not', async () => {
+      const FP_2 = 'e'.repeat(64);
+      const draftTree = (fp: string): DocsTreeOk =>
+        treeOk({ entries: [entry('specs', 'm.html', { draft: draftOf('modified', { fp }) })], drafts: holder() });
+      const f = fakeLoaders({ tree: okTree(draftTree(FP_1)) });
+      // The answers carry the same blob, so only the draft arm of the key (its pin, fingerprint included) tells the two apart.
+      f.file.mockImplementation(async (_p: string, pin: DocPin) => {
+        const a = fileAs('m.html', html + (pin.kind === 'draft' && pin.fp === FP_2 ? '<!-- two -->' : ''), 'html');
+        return a.s === 'ok' ? { s: 'ok', value: { ...a.value, show: { ...a.value.show, blob: BLOB_1 } } } : a;
+      });
+      f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(draftTree(FP_1))));
+      const { container } = open('/docs/demo/specs/m.html?ref=main', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      expect(f.file.mock.calls[0]![1]).toMatchObject({ kind: 'draft', fp: FP_1 });
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      const root = container.querySelector('.docs-mockup')!;
+      // The same fingerprint again: the same view, its choice kept.
+      fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+      await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(container.querySelector('.docs-mockup')).toBe(root);
+      expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+      // A new fingerprint: the document changed, so the view starts over.
+      f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(draftTree(FP_2))));
+      fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+      await waitFor(() => expect(f.file.mock.calls.some((c) => c[1].kind === 'draft' && c[1].fp === FP_2)).toBe(true));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+    });
+  });
 
   it('text with a registered grammar (x.ts) is highlighted through CodeBlock; x.txt is pre.doc-plain', async () => {
     const f = byPath(treeOk({ entries: [entry('specs', 'x.ts'), entry('specs', 'x.txt')] }), {
@@ -591,17 +712,18 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     expect(blob.type).toBe('application/octet-stream');
   });
 
-  it('a listed size over DOCS_CLASS_CAP is the too-large sentence with zero file requests (spec 4.4, 6.1)', async () => {
+  it('a listed size over DOCS_CLASS_CAP is read by range, with zero file requests (spec 4.4, 6.1; X2 P1, spec 4.3)', async () => {
     const big = DOCS_CLASS_CAP.markdown + 1;
-    const f = byPath(treeOk({ entries: [
+    const f = withHeldRange(byPath(treeOk({ entries: [
       entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: big } }),
       entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } }),
-    ] }), {});
+    ] }), {}));
     open('/docs/demo/specs/a.md', f);
-    expect(await screen.findByText('This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB.')).toBeInTheDocument();
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(f.file).not.toHaveBeenCalled();
     act(() => { navigate('/docs/demo/specs/p.png'); });
-    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    await waitFor(() => expect(f.rangeCalls).toEqual(['a.md', 'p.png']));
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(f.raster).not.toHaveBeenCalled();
   });
 
@@ -742,13 +864,13 @@ describe('a fragment belongs to the page it was meant for (refinement (o), revie
     const page = pageAt('/docs/demo/specs/' + path);
     if (page.kind !== 'path') throw new Error('fixture: not a leaf');
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture: no pin');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture: no pin');
     const base = fileResponse(text);
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 },
       file: { s: 'ok', pin, answer: { ...base, contentClass }, receivedAt: 0 },
       freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
       ...over,
     };
     return { visit, ...render(<DocsLeaf visit={visit} tree={tree} page={page} parser={parser} />) };
@@ -1165,7 +1287,7 @@ describe("Review 439 F23: a direct load's #fragment survives the linked-worktree
 describe("W5 Share: a raster leaf's own image reports the pin it settled at (spec 4.3 item 5, 4.16; refinement (f))", () => {
   const visitOf = (tree: DocsTreeOk, file: DocsVisit['file']): DocsVisit => ({
     tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 }, file, freshness: { s: 'idle' }, updatedTo: null,
-    pendingFragment: null, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
+    pendingFragment: null, ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
     setFragment: vi.fn(),
   });
 
@@ -1218,7 +1340,7 @@ describe("W5 Share: a raster leaf's own image reports the pin it settled at (spe
   it('an image inside a Markdown document reports nothing', async () => {
     const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'x.png')] });
     const pin = pinFor(tree, pageAt('/docs/demo/specs/a.md'));
-    if (pin === null) throw new Error('fixture: no pin');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture: no pin');
     const f = fakeLoaders({ tree: okTree(tree) });
     f.raster.mockResolvedValue(okPng());
     const seen = vi.fn();
@@ -1555,7 +1677,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const mdTree = treeOk();
     const inline = pageAt('/docs/demo/specs/a.md');
     const mdPin = pinFor(mdTree, inline);
-    if (mdPin === null || inline.kind !== 'path') throw new Error('fixture');
+    if (mdPin === null || (mdPin.kind === 'draft' && mdPin.fp === null) || inline.kind !== 'path') throw new Error('fixture');
     const mdFile: FileSlot = { s: 'ok', pin: mdPin, answer: fileResponse('# T\n'), receivedAt: 0 };
     const mdParsed = parseMarkdown('# T\n', 'docs');
     if (mdParsed.kind !== 'tree') throw new Error('fixture');
@@ -1572,15 +1694,14 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 
-  it('no Export for class other, nor for html in W5 (M4.SH8)', async () => {
+  it('no Export for class other; an html leaf offers it from W6 (M4.SH8; C2 Task 9, base 4.17)', async () => {
     const tree = treeOk({ entries: [entry('specs', 'o.pdf'), entry('specs', 'm.html')] });
     open('/docs/demo/specs/o.pdf', fakeLoaders({ tree: okTree(tree) }));
     await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
     expect(document.querySelector('.docs-export')).toBeNull();
     cleanup();
     open('/docs/demo/specs/m.html', byPath(tree, { 'm.html': fileAs('m.html', '<p>a</p>', 'html') }));
-    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
-    expect(document.querySelector('.docs-export')).toBeNull();
+    await waitFor(() => expect(exportButton()).toBeEnabled());
   });
 
   it("a new draft: Export is enabled and Share's refusal carries Export's clause; a withheld new file: no Export, no clause (M4.SH3)", async () => {
@@ -1667,7 +1788,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const tree = treeOk();
     const page = pageAt('/docs/demo/specs/a.md');
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
     const file: FileSlot = { s: 'ok', pin, answer: fileResponse('# New\n'), receivedAt: 0 };
     const old = parseMarkdown('# Old\n', 'docs');
     if (old.kind !== 'tree') throw new Error('fixture');
@@ -1800,15 +1921,15 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     expect(document.querySelector('.docs-export')).toBeNull();
     cleanup();
     const big = treeOk({ entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: DOCS_CLASS_CAP.markdown + 1 } })] });
-    open('/docs/demo/specs/a.md', byPath(big, {}));
-    expect(await screen.findByText(/^This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB/)).toBeInTheDocument();
+    open('/docs/demo/specs/a.md', withHeldRange(byPath(big, {})));
+    expect(await screen.findByText(/^Reading 0 MiB of 2\.1 MiB/)).toBeInTheDocument();
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 
   it('a raster listed over its cap offers no Export', async () => {
     const tree = treeOk({ entries: [entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } })] });
-    open('/docs/demo/specs/p.png', byPath(tree, {}));
-    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    open('/docs/demo/specs/p.png', withHeldRange(byPath(tree, {})));
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 });

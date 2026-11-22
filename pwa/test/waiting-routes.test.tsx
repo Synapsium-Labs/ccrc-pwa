@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
-import { ROUTES, matchRoute } from '../src/lib/routes';
+import { ROUTES, callParamOf, callPath, matchRoute } from '../src/lib/routes';
 import { ItemListColumn, ItemRoute, ItemRouteAt, WaitingRoute } from '../src/ledgers/WaitingRoutes';
 import { navigate, useLocation } from '../src/lib/router';
 import { refetchWaiting } from '../src/ledgers/waitingStore';
@@ -14,6 +14,8 @@ import { SAVED_ROWS_WORD, itemPath } from '../src/ledgers/ledgerWords';
 import { run as runFixture } from './rollupFixture';
 import { fleetSession } from './fleetFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
+import type { MigrationView } from '../../shared/plan';
+import { MIGRATION_BODY_TEXT } from '../src/ledgers/migrationWords';
 
 const makeSocket = (): WebSocket => ({ close() {}, set onopen(_v: unknown) {}, set onmessage(_v: unknown) {}, set onclose(_v: unknown) {}, set onerror(_v: unknown) {} }) as unknown as WebSocket;
 const mk = () => createFleetStore({ makeSocket });
@@ -201,13 +203,164 @@ describe('WaitingRoute', () => {
   });
 });
 
+describe('calls made for you on the route (D-8126)', () => {
+  const call = { id: 7, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big' as const, question: 'Which store?', options: ['sql', 'files'],
+    chosen: 'sql', why: 'it is already there', reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null, overturnedAt: null, overturnNote: null };
+
+  it('Seen posts the operator\'s Seen door for that call, with no body', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ ok: true, call: { ...call, seenAt: NOW } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [call] }) }));
+    render(<WaitingRoute store={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Seen' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/calls/7/seen'))).toBe(true));
+    const [, init] = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/api/calls/7/seen')) as unknown as [string, RequestInit];
+    expect(init.method).toBe('POST');
+  });
+
+  it('Overturn… sends the one correction door\'s body, rowKind call', async () => {
+    const correct = vi.spyOn(api, 'correctDigest').mockResolvedValue({ ok: true, mailId: 1, deliveryId: 2 } as never);
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [call] }) }));
+    render(<WaitingRoute store={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Overturn…' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should it have decided?' }), { target: { value: 'use files' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(correct).toHaveBeenCalledWith({ rowKind: 'call', id: 7, text: 'use files' }));
+  });
+});
+
+describe('a call named in the URL (D-8808, D-8809)', () => {
+  const call = { id: 7, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big' as const, question: 'Which store?', options: ['sql', 'files'],
+    chosen: 'sql', why: 'it is already there', reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null, overturnedAt: null, overturnNote: null };
+  const view = () => waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [{ ...call, id: 6 }, call] });
+
+  it('a cold start at /waiting?call=7 opens the group and marks the call', () => {
+    history.replaceState(null, '', callPath(7));
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: view() }));
+    render(<WaitingRoute store={store} />);
+    const li = document.querySelector('li[data-call="7"]')!;
+    expect(li.getAttribute('aria-current')).toBe('true');
+    expect(li.closest('details')!.hasAttribute('open')).toBe(true);
+    expect(document.querySelector('li[data-call="6"]')!.hasAttribute('aria-current')).toBe(false);
+  });
+
+  it('the live list with the device\'s session rows says gone for a call no longer on it, never "not saved on this device" (review 3217 F2)', () => {
+    history.replaceState(null, '', callPath(99));
+    const store = mk();
+    // The waiting frame first, the fleet frame after: the view is live, the rows are the device's (`saved-rows`).
+    act(() => store.setState({ waiting: view(), sessions: [fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question' })] }));
+    render(<WaitingRoute store={store} />);
+    expect(screen.getAllByRole('status').map((n) => n.textContent)).toContain(SAVED_ROWS_WORD);
+    expect(document.querySelector('[data-call-target="gone"]')).not.toBeNull();
+    expect(document.querySelector('[data-call-target="unheard"]')).toBeNull();
+  });
+
+  it('the device\'s saved list says "not in the list saved on this device" for a call it holds in neither list, never gone (review 3222 F1)', () => {
+    history.replaceState(null, '', callPath(99));
+    vi.spyOn(api, 'waiting').mockReturnValue(new Promise(() => {}));
+    const store = mk();
+    // No live view heard; the device's saved copy of the list and its rows (`saved-list`).
+    act(() => store.setState({ waiting: null, waitingSaved: { savedAt: NOW - MIN, view: view() }, sessions: [fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question' })] }));
+    render(<WaitingRoute store={store} />);
+    expect(document.querySelector('[data-call-target="unheard"]')).not.toBeNull();
+    expect(document.querySelector('[data-call-target="gone"]')).toBeNull();
+  });
+
+  it('a view that arrives after the mount still opens and marks the call', () => {
+    history.replaceState(null, '', callPath(7));
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: null }));
+    render(<WaitingRoute store={store} />);
+    act(() => store.setState({ waiting: view() }));
+    const li = document.querySelector('li[data-call="7"]')!;
+    expect(li.getAttribute('aria-current')).toBe('true');
+    expect(li.closest('details')!.hasAttribute('open')).toBe(true);
+  });
+});
+
 describe('the routes\' own paths', () => {
+  // D-8808, D-8809: a call is a place in the list, so its address is a query on the list's route.
+  it('a call\'s path is the list\'s path with ?call=, on the waiting route, and reads back', () => {
+    expect(callPath(7)).toBe('/waiting?call=7');
+    expect(matchRoute(callPath(7).split('?')[0]!)?.route.id).toBe('waiting');
+    expect(callParamOf(callPath(7).slice(callPath(7).indexOf('?')))).toBe(7);
+    expect(callParamOf('?call=7&programme=prog-a')).toBe(7);
+  });
+  it('callParamOf refuses anything but a canonical positive safe integer', () => {
+    for (const bad of ['?call=0', '?call=07', '?call=-1', '?call=abc', '', '?programme=x', `?call=${Number.MAX_SAFE_INTEGER + 1}`]) {
+      expect(callParamOf(bad), bad).toBeNull();
+    }
+    expect(callParamOf(`?call=${Number.MAX_SAFE_INTEGER}`)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it('itemPath and the list\'s path are the route table\'s, and each is on its own route', () => {
     expect(matchRoute(itemPath(12))?.route.id).toBe('item');
     expect(matchRoute(itemPath(12))?.param).toBe('12');
     const row = ROUTES.find((r) => r.id === 'waiting')!;
     expect(matchRoute(row.path!)?.route.id).toBe('waiting');
     expect(itemPath(1).startsWith(`${row.path}/`)).toBe(true);
+  });
+
+  // The map and report items read their migration (D-8186, D-8737's handover): the page hands `ItemView` the body.
+  const migrationView = (over: Partial<MigrationView> = {}): MigrationView => ({
+    ok: true, id: 3, team: 'AAA', state: 'proposed' as MigrationView['state'], counts: { created: 1, moved: 2, closed: 0, left: 0, skipped: 0 },
+    entries: [{ issue: '00000000-0000-4000-8000-000000000001', identifier: 'AAA-1', class: 'leaf' }],
+    structure: [{ programme: 'prog-a', title: 'Programme A', backlog: false, declared: true, epics: [{ key: 'e-1', title: 'First epic', checkpoints: [] }] }],
+    report: null, ...over,
+  });
+
+  it('a map item reads its migration and draws the body, with its controls', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 21, action: { verb: 'linear-map', migrationId: 3 } })] }) }));
+    const read = vi.spyOn(api, 'migration').mockResolvedValue(migrationView());
+    render(<ItemRoute id={21} store={store} />);
+    await waitFor(() => expect(document.querySelector('[data-migration-structure]')).not.toBeNull());
+    expect(read).toHaveBeenCalledWith(3);
+    expect(document.querySelector('[data-migration-counts]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('a report item draws the report\'s lists', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 22, action: { verb: 'linear-report', migrationId: 4 } })] }) }));
+    vi.spyOn(api, 'migration').mockResolvedValue(migrationView({ id: 4, report: { skipped: ['AAA-5'], waiting: [], movedSince: [], milestonesLeft: [] } }));
+    render(<ItemRoute id={22} store={store} />);
+    await waitFor(() => expect(document.querySelector('[data-report-list="skipped"]')).not.toBeNull());
+  });
+
+  it('a failed read draws no body and no alert: the item keeps its why, how and controls, with a quiet note', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 23, why: 'A team awaits its map.', action: { verb: 'linear-map', migrationId: 3 } })] }) }));
+    const read = vi.spyOn(api, 'migration').mockRejectedValue(new ApiError(404, { ok: false, error: 'not-found' }));
+    render(<ItemRoute id={23} store={store} />);
+    await screen.findByText(MIGRATION_BODY_TEXT.unread);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-migration-counts]')).toBeNull();
+    expect(screen.getByText('A team awaits its map.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('an answer that is not a migration (no counts or entries) is a failed read, never a crash', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 26, action: { verb: 'linear-map', migrationId: 3 } })] }) }));
+    vi.spyOn(api, 'migration').mockResolvedValue({} as never);
+    render(<ItemRoute id={26} store={store} />);
+    await screen.findByText(MIGRATION_BODY_TEXT.unread);
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('an item of another kind reads no migration', () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 24 }), itemView({ id: 25, action: { verb: 'linear-drift', bindingId: 8 } })] }) }));
+    const read = vi.spyOn(api, 'migration');
+    const view = render(<ItemRoute id={24} store={store} />);
+    view.unmount();
+    render(<ItemRoute id={25} store={store} />);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('ItemRouteAt opens the item its parameter names, and says so for one that names none', () => {

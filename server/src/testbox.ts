@@ -168,6 +168,18 @@ export function degradedReasons(cells: readonly TestboxCell[], box: StatusAnswer
   return out;
 }
 
+/** stale-tree-recovery-over-admin-lane (testbox-sync-home): a box whose installed tool sync predates `_tbt_home`
+ *  (`deploy/testbox/bin/tools-sync#@tbt-home`) is started by a unit with no HOME, so its sourced ccd/ccrc dies under
+ *  `set -u` at every release step and the box records `release: <its ccd/ccrc>: line <n>: HOME: unbound variable`. It
+ *  cannot fetch the release that fixes it, so the tool sync's call asks the admin lane's `tools-home` first. Only that
+ *  failure, at that step, on a box the admin lane is connected to: anything else is sent as a plain sync, as before. */
+const STALE_TREE_HOME = /^release: .*: HOME: unbound variable$/;
+export function toolsSyncNeedsHome(block: TestboxBlock | null): boolean {
+  const sync = block?.box?.sync;
+  if (sync === undefined || sync.state !== 'failed' || sync.detail === null) return false;
+  return block?.admin?.connected === true && STALE_TREE_HOME.test(sync.detail);
+}
+
 const summaryOf = (state: TestboxState, reasons: readonly string[]): string =>
   reasons.length === 0 ? state : `${state} (${reasons.join('; ')})`;
 

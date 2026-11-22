@@ -228,7 +228,7 @@ const REGISTERED: Record<string, string> = {
     + 'layout glue that means nothing beyond itself. A constant for every '
     + 'common quadruple of utilities is a second spelling of Tailwind, and '
     + 'the registry would stop being able to tell the two apart.',
-  ['chat.css .compaction--sys .compaction-label + fleet.css .acct-card-label + fleet.css .sess-subagent-name '
+  ['chat.css .compaction--sys .compaction-label + fleet.css .acct-card-label '
     + '+ ui/workbench-account-row.css .wb-acct-row .wb-acct-name '
     + '+ ui/workbench-sidebar.css .wb-side .wb-side-clip '
     + '+ ui/workbench-sidebar.css .wb-side-agent .wb-side-name '

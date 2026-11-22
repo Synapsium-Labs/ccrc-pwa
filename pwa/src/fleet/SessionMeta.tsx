@@ -26,12 +26,13 @@
 // The classes stay `sess-*`. fleet.css grounds them there and `.sess-meta >
 // *:not(:first-child)::before` punctuates this row's cells from the parent
 // rule — the shape moves, the ground stays.
-import type { CSSProperties, ReactNode } from 'react';
-import { WARN_GLYPH } from '@ccrc/ui';
+import { Fragment, type CSSProperties, type ReactNode } from 'react';
+import { RoleBadge, WARN_GLYPH } from '@ccrc/ui';
 import { programmeWaveTail, type ChildRunContext } from './runWords';
 import { GraphChip, LastSpawnChip } from './chips';
 import {
-  PROGRAMME_BUDGET, cardFacts, heldWords, markers, shortenByToken, type Fact, type MarkerKey, type SessionFactSet,
+  COORDINATOR_BADGE, PROGRAMME_BUDGET, cardFacts, headerMetaCells, heldWords, shortenByToken, type Fact, type MarkerKey,
+  type SessionFactSet,
 } from './sessionFacts';
 import { buildText } from './buildWords';
 import './fleet.css';
@@ -98,18 +99,10 @@ export interface SessionMetaProps {
   mode: 'card' | 'header';
   /** Where a tap on the hold opens the run board, or `null` for nowhere (Task 5). */
   onOpenRun: (() => void) | null;
-  /** The subagent disclosure's state (header mode; the list renders beside the row). */
-  subagentsOpen?: boolean;
-  subagentsId?: string;
-  onToggleSubagents?: () => void;
-  /** The delegated-entries disclosure's state (header mode; `SessionDetails` draws the list beside the row). */
-  delegatedOpen?: boolean;
-  delegatedId?: string;
-  onToggleDelegated?: () => void;
 }
 
 export function SessionMeta({
-  facts: f, mode, onOpenRun, subagentsOpen = false, subagentsId, onToggleSubagents, delegatedOpen = false, delegatedId, onToggleDelegated,
+  facts: f, mode, onOpenRun,
 }: SessionMetaProps): ReactNode {
   const card = mode === 'card';
   const session = f.session;
@@ -170,15 +163,12 @@ export function SessionMeta({
           {glance.marker !== null && glance.marker.key !== 'spawn' && (
             <Marker fact={glance.marker} full={false} />
           )}
-          {/* R9: the row's attached delegation entries, every liveness, on a live or dead row (D-7781): one chip after the marker. */}
-          {glance.delegated !== null && (
-            <span className="sess-meta-chip" title={glance.delegated.title}>{glance.delegated.text}</span>
-          )}
         </span>
         {(glance.role !== null || context !== null) && (
           <span className="sess-meta sess-meta--context" style={metaStyle}>
-            {/* D-8142: a coordinator's role, first on the context line; the middot rule separates it from the context. */}
-            {glance.role !== null && <span className="sess-role" title={glance.role.title}>{glance.role.text}</span>}
+            {/* D-8142: a coordinator's role, first on the context line; the middot rule separates it from the context.
+                D-8817: drawn as the badge, never the word. */}
+            {glance.role !== null && <RoleBadge {...COORDINATOR_BADGE} className="sess-role" />}
             {context}
           </span>
         )}
@@ -186,67 +176,40 @@ export function SessionMeta({
     );
   }
 
-  const subagentList = f.subagents;
+  // The header draws exactly the cells `headerMetaCells` names, in its order (desktop polish HF2, D-8877; review 2995 F3): that
+  // list is the one reading of which cells this row has, and `detailsHaveFacts` asks it too. The programme and wave are the
+  // coordination row's link in the header (`SessionCoordination`), so the hold cell is listed only for a hold no run explains,
+  // and the child cell only for its hedge. No subagent and no delegated cell (session helpers H3, D-8875): the Helpers section
+  // lists and counts them.
   return (
     <span className="sess-meta" style={metaStyle}>
-      {/* The programme and wave are the coordination row's link in the header (`SessionCoordination`), so here
-          the hold cell renders only for a hold no run explains, and the child cell only for its hedge. */}
-      {ctx?.key === 'programme' ? null : held}
-      {ctx?.key === 'child-marker' ? childCell : null}
-      {/* The last spawn's verdict (spawnWords.ts). */}
-      <LastSpawnChip chip={f.spawn} />
-      {/* Task 19: the ask pre-emption lane's chip (design doc §2.8). Informational only. */}
-      {f.askState !== null && (
-        <span className="sess-ask-state" data-ask-state={f.askState.state} title={f.askState.title}>
-          {f.askState.label}
-        </span>
-      )}
-      {/* The cleanup bucket's merge facts: a merged PR's number and its reclaimable size, as two cells. */}
-      {f.cleanup.map((fact, i) => (
-        <span key={`${session.id}-cleanup-${i}`} className="sess-cleanup-fact">{fact}</span>
-      ))}
-      {f.tasks !== null && (
-        <span className="sess-tally" title="tasks done of total">
-          {f.tasks.done}/{f.tasks.total} tasks
-        </span>
-      )}
-      {/* The read counter (R4) with the gate's suffix (R5, D-1613) — a measured zero is a finding. */}
-      {f.graph !== null && <GraphChip reads={f.graph.reads} gated={f.graph.gated} />}
-      {/* D-8276: the Claude Code build of a session on the newest one (one behind says it in its marker below). */}
-      {f.build.kind === 'current' && <span className="sess-unmeasured" data-build="current">{buildText(f.build.build)}</span>}
-      {/* The subagent tally, a disclosure: a REAL `<button>`; `aria-controls` only while the list exists. */}
-      {subagentList !== null && subagentList.length > 0 && (
-        <button
-          type="button"
-          className="sess-subagents"
-          aria-expanded={subagentsOpen}
-          aria-controls={subagentsOpen ? subagentsId : undefined}
-          aria-label={`${subagentList.length} subagent${subagentList.length === 1 ? '' : 's'}`}
-          onClick={onToggleSubagents}
-        >
-          ⑂ {subagentList.length} subagent{subagentList.length === 1 ? '' : 's'}
-        </button>
-      )}
-      {/* Delegation visibility (spec §5): every entry this session started, a disclosure in the subagent toggle's shape: a
-          REAL `<button>`, `aria-controls` only while the list exists (`SessionDetails` draws it). Its count is never
-          smaller than the card's chip, which counts only the attached entries (D-7782). */}
-      {f.delegated !== null && (
-        <button
-          type="button"
-          className="sess-subagents"
-          aria-expanded={delegatedOpen}
-          aria-controls={delegatedOpen ? delegatedId : undefined}
-          title={f.delegated.title}
-          onClick={onToggleDelegated}
-        >
-          {f.delegated.text}
-        </button>
-      )}
-      {/* Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
-          above, the header's own restart chip). */}
-      {markers(f).filter((m) => m.key !== 'spawn' && m.key !== 'restarted').map((m) => (
-        <Marker key={m.key} fact={m} full />
-      ))}
+      {headerMetaCells(f).map((c) => {
+        switch (c.key) {
+          case 'hold': return <Fragment key="hold">{held}</Fragment>;
+          case 'child': return <Fragment key="child">{childCell}</Fragment>;
+          // The last spawn's verdict (spawnWords.ts).
+          case 'spawn': return <LastSpawnChip key="spawn" chip={f.spawn} />;
+          // Task 19: the ask pre-emption lane's chip (design doc §2.8). Informational only.
+          case 'ask-state': return f.askState === null ? null : (
+            <span key="ask-state" className="sess-ask-state" data-ask-state={f.askState.state} title={f.askState.title}>
+              {f.askState.label}
+            </span>
+          );
+          // The cleanup bucket's merge facts: a merged PR's number and its reclaimable size, as two cells.
+          case 'cleanup': return <span key={`${session.id}-cleanup-${c.at}`} className="sess-cleanup-fact">{c.text}</span>;
+          case 'tasks': return f.tasks === null ? null : (
+            <span key="tasks" className="sess-tally" title="tasks done of total">{f.tasks.done}/{f.tasks.total} tasks</span>
+          );
+          // The read counter (R4) with the gate's suffix (R5, D-1613) — a measured zero is a finding.
+          case 'graph': return f.graph === null ? null : <GraphChip key="graph" reads={f.graph.reads} gated={f.graph.gated} />;
+          // D-8276: the Claude Code build of a session on the newest one (one behind says it in its marker below).
+          case 'build': return f.build.kind !== 'current' ? null
+            : <span key="build" className="sess-unmeasured" data-build="current">{buildText(f.build.build)}</span>;
+          // Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
+          // above, the header's own restart chip): `headerMetaCells` leaves those two out.
+          case 'marker': return <Marker key={c.fact.key} fact={c.fact} full />;
+        }
+      })}
     </span>
   );
 }

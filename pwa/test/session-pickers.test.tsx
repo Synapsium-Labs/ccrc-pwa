@@ -717,3 +717,216 @@ describe('the model sheet names its rows from the lane registry (D-8406)', () =>
     expect(names.join(' ')).not.toMatch(/\b(GPT-\d|Opus \d|Sonnet \d|Haiku \d|Fable \d)/);
   });
 });
+
+// D-8686 (re-plan R1): which list a lane's pickers show is its roster row's to decide, and the effort sheet offers the
+// levels the catalogue lists for the class the session runs. A neutral second lane stands in for a managed Codex lane
+// the wrapper fallback does not name.
+describe("a managed Codex lane's pickers follow its roster kind (re-plan R1, D-8686)", () => {
+  const LANE_B_ROW: RosterWire = {
+    id: 'lane-b', label: 'Lane B', hue: 'violet', homeAble: false, hidden: false, pool: null, provider: 'openai',
+    kind: 'codex', managed: true, telemetry: 'codex',
+  };
+  const body = {
+    ok: true, lane: 'lane-b',
+    models: { kind: 'read', classes: {
+      fable: { model: 'model-6-delta', label: 'Delta 6', efforts: null },
+      opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: ['low', 'medium', 'high', 'xhigh'] },
+      sonnet: { model: 'model-6.1-alpha', label: 'Alpha 6.1', efforts: [] },
+      haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: ['low', 'medium'] },
+    } },
+  };
+  const renderLaneB = (row: RosterWire, over: Partial<FleetSession> = {}): string[] => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      if (!String(url).includes('/api/models/')) return new Response('{}', { status: 200 });
+      asked.push(String(url));
+      return new Response(JSON.stringify(body), { status: 200 });
+    }));
+    const store = makeStore();
+    const fleet = createFleetStore();
+    act(() => {
+      fleet.setState({
+        roster: [...TEST_ROSTER, row], conn: 'open',
+        sessions: [fleetSession({ wrapper: 'lane-b', model: 'model-6.1-gamma', effort: 'low', ...over })],
+      });
+    });
+    render(
+      <>
+        <CommandLayer openNewSession={() => {}} />
+        <SessionScreen id={ID} store={store} fleet={fleet} />
+        <ToastHost />
+      </>,
+    );
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    return asked;
+  };
+  const rowNames = (): string[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"] button.opt'))
+      .map((b) => (b.textContent ?? '').replace(/\s+/g, ' ').trim());
+
+  it('the model sheet has the four class rows and no Default row', async () => {
+    renderLaneB(LANE_B_ROW);
+    openModelSheet();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Gamma 6\.1/ })).toBeInTheDocument());
+    expect(rowNames(), 'the four class rows').toHaveLength(4);
+    expect(screen.queryByRole('button', { name: /^Default/ })).toBeNull();
+  });
+
+  it('the effort sheet offers the levels the lit class lists: Xhigh, and neither Max nor Ultracode', async () => {
+    const asked = renderLaneB(LANE_B_ROW);
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0)); // the screen reads the lane's files when it mounts
+    await act(async () => { await Promise.resolve(); });
+    openEffortSheet();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Xhigh/ })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /^Max/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Ultracode/ })).toBeNull();
+  });
+
+  // The recorded-only shape (`managed: false`) and the shape an older server sends (no `managed` key at all) both fall
+  // back to the wrapper check, which puts `lane-b` on the Anthropic list.
+  const { managed: _managed, ...WITHOUT_MANAGED } = LANE_B_ROW;
+  it('control: the same row without the managed key gets the Anthropic list, Default, Max and Ultracode', async () => {
+    const asked = renderLaneB(WITHOUT_MANAGED);
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    expect(await screen.findByRole('button', { name: /^Default/ })).toBeInTheDocument();
+    cleanup();
+    const again = renderLaneB(WITHOUT_MANAGED);
+    await waitFor(() => expect(again.length).toBeGreaterThan(0));
+    await act(async () => { await Promise.resolve(); });
+    openEffortSheet();
+    expect(await screen.findByRole('button', { name: /^Max/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Ultracode/ })).toBeInTheDocument();
+  });
+
+  it('control: the recorded-only row (managed false) also gets the Anthropic list', async () => {
+    const asked = renderLaneB({ ...LANE_B_ROW, managed: false });
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    expect(await screen.findByRole('button', { name: /^Default/ })).toBeInTheDocument();
+  });
+
+  // The screen hands the roster row to `routeView`, which decides what the header calls queued. Nothing else on the
+  // screen changes when it does not (the lit class, hence the levels, is the same on both lists), so the badge is what
+  // measures the wiring.
+  describe('the queued badge follows the roster row the screen passes to routeView', () => {
+    const route = (fields: NonNullable<FleetSession['route']>['fields']): FleetSession['route'] =>
+      ({ fields, degraded: null, inert: [], unreadable: [] });
+    /** Opens the model sheet and waits for the lane's read to land (its rows carry the lane's own labels). */
+    const readLanded = async (): Promise<void> => {
+      openModelSheet();
+      await screen.findByRole('button', { name: /Gamma 6\.1/ });
+    };
+
+    it('a class asked on a managed Codex lane shows queued while the pane runs another class', async () => {
+      renderLaneB(LANE_B_ROW, { model: 'model-6-beta', route: route({ class: 'opus' }) });
+      await readLanded();
+      expect(screen.getAllByText('queued').length).toBeGreaterThan(0);
+    });
+
+    it('an effort the lit class does not list is not queued, and a listed one is', async () => {
+      renderLaneB(LANE_B_ROW, { effort: 'low', route: route({ effort: 'max' }) });
+      await readLanded();
+      expect(screen.queryByText('queued')).toBeNull();
+      cleanup();
+      renderLaneB(LANE_B_ROW, { effort: 'low', route: route({ effort: 'high' }) });
+      await readLanded();
+      expect(screen.getAllByText('queued').length).toBeGreaterThan(0);
+    });
+  });
+});
+
+// R3b fix round 1, F1 and F3: the model picker's note, through the real screen. The lane read is the one fetch this
+// file answers with a body: a never-made lane says it has no registry, an Anthropic lane's absent says nothing (its rows
+// are the client's own aliases), and a transient answer says its word. Deleting the note's wiring in `SessionScreen`
+// reds the first case; making the Anthropic absent show the note reds the second.
+describe('the model picker says why it names no model (R3b)', () => {
+  const answerLaneWith = (models: unknown): void => {
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('/api/models/')) {
+        const lane = decodeURIComponent(u.split('/api/models/')[1]!.split('?')[0]!);
+        return new Response(JSON.stringify({ ok: true, lane, models }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{}', { status: 200 });
+    }));
+  };
+
+  it('a lane whose registry was never made: the note says so, above the class rows', async () => {
+    answerLaneWith({ kind: 'absent', laneKind: 'never-made' });
+    renderScreen({ wrapper: 'gpt' });
+    openModelSheet();
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/no class registry/);
+  });
+
+  it('an Anthropic lane\'s absent: no note at all, and the alias rows as always', async () => {
+    answerLaneWith({ kind: 'absent', laneKind: 'anthropic' });
+    renderScreen();
+    openModelSheet();
+    expect(await screen.findByRole('button', { name: /Opus class/ })).toBeInTheDocument();
+    // let the lane's read land before measuring the note's absence
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes('/api/models/claude'))).toBe(true));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('pick-note')).toBeNull();
+  });
+
+  // Fix round 2, N5: the kept-read-plus-word path through the screen. The read on mount names the models; the picker
+  // opening asks again and the box is busy, so the rows keep the read's labels and the note says the word beside them.
+  // Dropping the screen's transient argument to the note reds this case.
+  it('a good read, then busy on opening: the rows keep the models, and the note says the word', async () => {
+    const good = { kind: 'read', classes: {
+      fable: { model: 'model-6-delta', label: 'Delta 6', efforts: null },
+      opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: null },
+      sonnet: { model: 'model-6.1-alpha', label: 'Alpha 6.1', efforts: null },
+      haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: null },
+    } };
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (!u.includes('/api/models/')) return new Response('{}', { status: 200 });
+      asked.push(u);
+      const lane = decodeURIComponent(u.split('/api/models/')[1]!.split('?')[0]!);
+      const models = asked.length === 1 ? good : { kind: 'busy' };
+      return new Response(JSON.stringify({ ok: true, lane, models }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    renderScreen({ wrapper: 'gpt' });
+    await waitFor(() => expect(asked.length).toBe(1)); // the read on mount
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    await waitFor(() => expect(asked.length).toBe(2)); // the picker opening asks again
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/busy.*reads the lane again/i);
+    expect(screen.getByRole('button', { name: /Gamma 6\.1/ })).toBeInTheDocument();
+  });
+
+  // Follow-up transient-beside-kept-answer (item 2): an Anthropic lane's absent rides through a busy. The read on mount is
+  // the absent; the picker opening asks again and the box is busy. The absent keeps its lane kind, so the picker adds no
+  // note over the alias rows, and the busy does not replace it (if it did, the note would say the box was busy).
+  it('an Anthropic absent, then busy on opening: still no note, and the alias rows as always', async () => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (!u.includes('/api/models/')) return new Response('{}', { status: 200 });
+      asked.push(u);
+      const lane = decodeURIComponent(u.split('/api/models/')[1]!.split('?')[0]!);
+      const models = asked.length === 1 ? { kind: 'absent', laneKind: 'anthropic' } : { kind: 'busy' };
+      return new Response(JSON.stringify({ ok: true, lane, models }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    renderScreen();
+    await waitFor(() => expect(asked.length).toBe(1)); // the read on mount
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    await waitFor(() => expect(asked.length).toBe(2)); // the picker opening asks again, and the box is busy
+    await act(async () => { await Promise.resolve(); });
+    expect(await screen.findByRole('button', { name: /Opus class/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('pick-note')).toBeNull();
+  });
+
+  it('a busy box: the note says the word', async () => {
+    answerLaneWith({ kind: 'busy' });
+    renderScreen({ wrapper: 'gpt' });
+    openModelSheet();
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/busy.*reads the lane again/i);
+  });
+});

@@ -85,7 +85,7 @@ export type ProjectAddRefusal = (typeof PROJECT_ADD_REFUSALS)[number];
 export const LINEAR_PROXY_REFUSALS = [
   'bad-field', 'team-unknown', 'workspace-unknown', 'name-unknown', 'team-ambiguous', 'workspace-required', 'name-ambiguous',
   'issue-moved', 'policy-denied', 'policy-unavailable', 'journal-unavailable', 'linear-unauthorised', 'linear-forbidden',
-  'linear-invalid',
+  'linear-invalid', 'plan-owned',
 ] as const;
 export type LinearProxyRefusal = (typeof LINEAR_PROXY_REFUSALS)[number];
 
@@ -178,6 +178,8 @@ export const LEDGER_ROUTE_REFUSALS = {
   notBig: 'not-big',
   // The portfolio's rank door (Overlord W1, question 8): a write based on a revision that is no longer current.
   rankChanged: 'rank-changed',
+  // The goals ratify door (Overlord W1, portfolio B, question 4): the pin changed since the operator read it.
+  goalsChanged: 'goals-changed',
   // The answer-mark door (Overlord W1, §9.2.1 C70): the row exists and carries no box, or is not on the operator's list.
   notMarkable: 'not-markable',
 } as const;
@@ -204,6 +206,10 @@ export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_R
  *  for it. */
 export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
 export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
+/** The replay quiz's record door's own word (W1a quiz record, review 2442 F3): five recorded runs already wait for the
+ *  operator's Confirm or Discard, so a sixth is refused rather than added. Box-facing: `ccrc quiz-record` prints it. */
+export const QUIZ_RECORD_REFUSALS = { pendingFull: 'quiz-pending-full' } as const;
+export type QuizRecordRefusal = (typeof QUIZ_RECORD_REFUSALS)[keyof typeof QUIZ_RECORD_REFUSALS];
 /** The loads door's own word (Overlord W1 sandbox, Task 5): a report whose `reportId` names no start the server has recorded
  *  for that session yet. 404, and the hook keeps the report and resends it, as it does for the start report's door. */
 export const START_LOADS_REFUSALS = { unknownStart: 'unknown-start' } as const;
@@ -217,6 +223,11 @@ export const NOTE_REFUSALS = {
   notAsked: 'note-not-asked',
 } as const;
 export type NoteRefusal = (typeof NOTE_REFUSALS)[keyof typeof NOTE_REFUSALS];
+/** The hierarchy item acts' own word (review 2394 A-7, departure D-8736): the operator's Hand on a persistent-drift item whose
+ *  binding is an Upkeep plan's, or a programme's with no coordinator, goes to the project's Linear owner, and with none usable
+ *  (none named, or gone) it is refused and the item stays open. */
+export const HIERARCHY_ITEM_REFUSALS = { noLinearOwner: 'no-linear-owner' } as const;
+export type HierarchyItemRefusal = (typeof HIERARCHY_ITEM_REFUSALS)[keyof typeof HIERARCHY_ITEM_REFUSALS];
 /** The probe door's own words (Overlord W1a, the probes piece; spec Table 11.6, m5): no round of the caller's is open, and a
  *  round already answered. Box-facing, so the console has no sentence for them. */
 export const PROBE_REFUSALS = { noneOpen: 'probe-none-open', closed: 'probe-closed' } as const;
@@ -233,10 +244,19 @@ export const TIMER_REFUSALS = {
   'timer-not-found': 404,
 } as const;
 export type TimerRefusal = keyof typeof TIMER_REFUSALS;
-/** The Overlord's W1 refusal words (Overlord W1, the vocabulary piece; spec §11.6 and Table 11.6), grouped by door, each
- *  with its one status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). No W1 door sends
- *  one yet: each later W1 piece ships its door and reads its word from here. Each status is CHOSEN, not measured, by this
- *  file's family rule: 403 for a caller that is not allowed (as `not-owner`), 409 for a state of the world (as
+/** The renewal hand-offs' words (Overlord W1a, plan `w1a-renewal-handoffs.md` Tasks 1 and 2; spec §3.3.11 "Before the message
+ *  record exists"), each with its one status, spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). CHOSEN, not measured: 409
+ *  for each, a state of the world. `renewing`: the console's prompt route, while the session is between conversations (its
+ *  live generation's `state` is `clearing` or `carded`), and the console keeps the draft. `renew-not-long-lived`: the Renew now
+ *  door, for a session with no live generation of a long-lived role. `renew-pending`: the same door, while a request of the
+ *  session's waits for the generations lane. */
+export const HANDOFF_REFUSALS = { renewing: 409, 'renew-not-long-lived': 409, 'renew-pending': 409 } as const;
+export type HandoffRefusal = keyof typeof HANDOFF_REFUSALS;
+/** The Overlord's W1 and W2 refusal words (Overlord W1 and W2, the vocabulary pieces; spec §11.6 and Table 11.6), grouped
+ *  by door, each with its one status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). A
+ *  word is declared before its door: each W1 and W2 piece ships its door and reads its word from here, and no W2 door sends
+ *  one until its piece lands. Each status is CHOSEN, not measured, by this file's family rule: 400 for a body the caller
+ *  can fix (as `timer-too-soon`), 403 for a caller that is not allowed (as `not-owner`), 409 for a state of the world (as
  *  `note-not-asked`), 429 for a rate (as `timer-rate`), 501 for a build that lacks what the door needs (as `unsupported`
  *  and `auth-off`), 503 for a box fault (as `journal-unreadable`). Later waves' words join this group with their doors. */
 export const OVERLORD_REFUSALS = {
@@ -254,10 +274,15 @@ export const OVERLORD_REFUSALS = {
   'overlord-exists': 409,
   // Rebind: the old session does not measure dead or absent (designation B). 409.
   'overlord-body-alive': 409,
+  // Rebind: an attempt is pending on the designation's one slot (designation B; the designation plan, question 9). 409.
+  'overlord-attempt-pending': 409,
   // Designate, rebind and the account set's Settings row: fewer than two accounts (designation A and C). 409.
   'overlord-single-account': 409,
   // Designate and rebind: a property of the sandbox check failed (sandbox B). 409.
   'overlord-sandbox-unmet': 409,
+  // Recorded on the row, never answered: the journal refused the go-live record until the deadline (designation B;
+  // the designation plan, question 10). 503, a box fault.
+  'authority-unrecorded': 503,
   // Every door but card, probe and note: the session's profile digest is not the designation's (sandbox B). 409.
   'launch-profile-unmet': 409,
   // Every door but card, probe and note: boot coherence failed, the authority journal rolled back (authority journal A).
@@ -269,6 +294,9 @@ export const OVERLORD_REFUSALS = {
   'card-unread': 409,
   // Every write door: the hook reported no matching call before it (gates B, door process B). 409.
   'unwitnessed': 409,
+  // The report door's picked-up report: the message id names no operator message on record (door process B1). 404, a row the
+  // catalogue does not hold, as `decision-row-unknown`.
+  'unknown-message': 404,
   // Peer mail, item raise, claims, the claimant's question door and coordinator intent (other-lane refusals). 403.
   'overlord-uses-its-doors': 403,
   // Run open: the designated session may never open a run (other-lane refusals). 403 (ruled, review 2102 F6), with
@@ -277,8 +305,38 @@ export const OVERLORD_REFUSALS = {
   // The history door: no connected agent, or more than one, serves the history store (board and history B). 503.
   'history-unreachable': 503,
   // Every Overlord read door: the read rate's ceiling is reached (the inbox piece; the W1 index's question 32). 429, a
-  // rate. Not yet in Table 11.6: `refusal-table.data.json`'s codeOnly names it until the spec-fixes run adds the row.
+  // rate, as `act-ceiling`.
   'read-ceiling': 429,
+  // The W2 words (the W2 vocabulary plan, Table V1). Every Overlord write door: the act kind's ceiling for its window is
+  // reached (the act catalogue piece). 429, a rate.
+  'act-ceiling': 429,
+  // `overlordMayAct` and grants: the caller's identity strength is under the act's or the grant's least (the act
+  // catalogue piece). 403.
+  'identity-too-weak': 403,
+  // `overlordMayAct`: a member of the act's effective class is not covered (C25, C26; the act catalogue piece). 403.
+  'operator-only': 403,
+  // Grants, commands, learning and `overlordMayAct`: the server shares a user with fleet sessions (the act catalogue
+  // piece). 409, a state of the world: how the box is installed.
+  'server-not-isolated': 409,
+  // The answer doors, `return-over-asked` and the Overlord's request moves: the row has already reached the operator, or
+  // the operator took the request (`takenFrom` is set), or the Overlord would drop a `needs-you` request the operator has
+  // not answered (the request record and doors pieces). 409.
+  'operator-has-it': 409,
+  // Open request, relay, kickoff and start, `acknowledge` and `messages`: a cited message is not on record, spent or
+  // changed (the request record piece; the W1 inbox plan chose 409 too). 409.
+  'said-not-operator': 409,
+  // `POST /api/runs`: the run's programme is not the request's owner (the request ids piece). 403, as `not-owner`.
+  'request-not-yours': 403,
+  // The owner's `blocked` door: the dependency would close a cycle (the coordinator request doors piece). 409.
+  'dependency-cycle': 409,
+  // Relay, answer, kickoff and brief: the body quotes an `overlord-only` entry or hits the private-name list (the relay
+  // piece). 403, one word with no detail, counted and throttled, so the status says nothing a fix could use.
+  'egress-refused': 403,
+  // The relay: the decision model flags the Overlord's part as prescribing a method (the relay piece). 400, a body the
+  // caller can fix.
+  'relay-carries-method': 400,
+  // The relay: it would deepen a goal conflict the operator has not ruled on (the relay piece). 409.
+  'goal-conflict-open': 409,
 } as const;
 export type OverlordRefusal = keyof typeof OVERLORD_REFUSALS;
 /** The group's words, in its order. */
@@ -287,6 +345,19 @@ export const OVERLORD_REFUSAL_WORDS = Object.keys(OVERLORD_REFUSALS) as Overlord
 export function isOverlordRefusal(v: unknown): v is OverlordRefusal {
   return typeof v === 'string' && (OVERLORD_REFUSAL_WORDS as readonly string[]).includes(v);
 }
+
+/** The Overlord's decision-model doors (Overlord W2, decision model B; plan question 13; spec Table 11.6), each with its one
+ *  status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). CHOSEN by this file's family rule:
+ *  404 for a row the catalogue does not hold, 400 for a body the operator can fix, 409 for a state of the world (no key, a
+ *  private-state row on a hosted host, no admitted line, an incomplete or crossed canary, a new origin without its key, a row
+ *  changed since it was read), 503 for a key stored whose host record was not written (as `stored-not-ticked` is). The
+ *  journal's refusals reuse `authority-rolled-back` and `journal-unreadable`. Decided by `server/src/coord/decisionLines.ts`. */
+export const DECISION_MODEL_REFUSALS = {
+  'decision-row-unknown': 404, 'key-unset': 409, 'key-required': 409, 'private-state-host': 409, 'line-not-admitted': 409,
+  'canary-unmet': 409, 'bad-ceiling': 400, 'bad-endpoint': 400, 'row-changed': 409, 'stored-not-applied': 503,
+  'removed-not-held': 503,
+} as const;
+export type DecisionModelRefusal = keyof typeof DECISION_MODEL_REFUSALS;
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -298,6 +369,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | QuestionDoorRefusal
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
   | DispatchAbandonRefusal
+  // The renewal hand-offs (Overlord W1a): the prompt route's `renewing` and the Renew now door's two words.
+  | HandoffRefusal
   // The run-close switch door (D-8077, Task 26): its two words of its own, a lane held by a pause and a registry that would not list.
   | RunCloseRefusal
   // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
@@ -308,16 +381,22 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | EndRequestRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
+  // The replay quiz's record door: its one word of its own.
+  | QuizRecordRefusal
   // The loads door (Overlord W1 sandbox): its one word of its own.
   | StartLoadsRefusal
   // The note door (Overlord W1a): its five words of its own.
   | NoteRefusal
   // The probe door (Overlord W1a, the probes piece): its two words of its own.
   | ProbeRefusal
+  // The hierarchy item acts' word (D-8736): `no-linear-owner`.
+  | HierarchyItemRefusal
   // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
   | TimerRefusal
-  // The Overlord's W1 words (the vocabulary piece), each with its status in `OVERLORD_REFUSALS`.
+  // The Overlord's W1 and W2 words (the vocabulary pieces), each with its status in `OVERLORD_REFUSALS`.
   | OverlordRefusal
+  // The decision-model doors (Overlord W2, decision model B): their ten words, each with its status in `DECISION_MODEL_REFUSALS`.
+  | DecisionModelRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The test box connect routes (D-8166): their one word of their own.
@@ -370,25 +449,30 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'bad-team-key': 400, 'bad-override': 400, 'no-project': 404,
   'repo-public': 409, 'repo-unmeasured': 409, 'template-exists': 409, 'no-team-key': 409, 'tracker-id-public': 409,
   'ticket-slug-public': 409, 'override-private-public': 409,
+  // D-8808: a suggestion for a project that already has a team: nothing to suggest.
+  'team-set': 409,
+  // D-8808 (review 2971 F7): a suggestion from a session that claims no open run, so is no programme's coordinator. 403: who
+  // the caller is, as `not-your-programme`; it is a role, so it can change (the session opens or takes a run).
+  'not-a-coordinator': 403,
   // 502: the template pull request's ccd act failed (a fetch, a push or a create), with ccd's stderr beside the word.
   'template-failed': 502,
   // 400
   'bad-request': 400, 'bad-tag': 400, 'bad-kind': 400, 'bad-account-id': 400, 'bad-attachment': 400,
-  'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400,
+  'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400, 'urgent-wrong-run': 400,
   // 401, 403
   'unauthenticated': 401,
   'wrong-node': 403, 'unknown-sender': 403, 'stale-uuid': 403, 'foreign-origin': 403, 'not-owner': 403,
-  'not-parent': 403, 'sign-in-unarmed': 403,
+  'not-parent': 403, 'sign-in-unarmed': 403, 'urgent-not-allowed': 403,
   // 404, 410
   'no-claim': 404, 'unknown-recipient': 404, 'unknown-run': 404, 'unknown-scope': 404, 'unknown-node': 404,
   'gone': 404, 'no-such-passkey': 404, 'not-found': 404, 'unknown-ask': 404, 'unknown-claim': 404,
   'unknown-session': 404,
   'code-expired': 410, 'code-used': 410,
   // 409
-  'duplicate': 409, 'superseded': 409, 'busy': 409, 'auto-needs-rollback-gate': 409, 'no-channel': 409,
+  'duplicate': 409, 'key-conflict': 409, 'superseded': 409, 'busy': 409, 'auto-needs-rollback-gate': 409, 'no-channel': 409,
   'unknown-tag': 409, 'not-newer': 409, 'refused-by-node': 409, 'stamp-unread': 409, 'floor-unread': 409,
   'no-detach-cap': 409, 'no-rollback-cap': 409, 'agent-predates-update-op': 409, 'halted': 409,
-  'no-bundle': 409, 'no-previous': 409, 'no-desired': 409,
+  'no-bundle': 409, 'no-previous': 409, 'no-desired': 409, 'urgent-outstanding': 409,
   'ask-mismatch': 409, 'bad-session': 409, 'bad-transition': 409, 'ceiling': 409, 'child-unmeasurable': 409,
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-waiting': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
@@ -406,7 +490,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'unmeasured': 502,
   'unavailable': 503, 'journal-unreadable': 503, 'journal-unwritable': 503, 'ask-unreadable': 503,
   'pool-unreadable': 503, 'registry-unreadable': 503, 'run-unreadable': 503, 'runs-unreadable': 503,
-  'state-unmeasurable': 503, 'write-failed': 503, 'application-failed': 503, 'not-ready': 503,
+  'state-unmeasurable': 503, 'write-failed': 503, 'application-failed': 503, 'not-ready': 503, 'urgent-unmeasured': 503,
   // The approval routes (plan Task 16, D-5298): CHOSEN, not measured — new words. 404 for a row the caller cannot
   // name (another nonce reads as no row), 503 for a row that could not be read back, 409 for every other refusal,
   // the conflict status spec §6.3 names them with.
@@ -414,6 +498,12 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'not-a-child': 409, 'approvals-disabled': 409, 'single-box': 409, 'deny-not-engaged': 409, 'digest-mismatch': 409,
   'version-unverified': 409, 'approval-released': 409, 'parent-changed': 409, 'guard-forbidden': 409,
   'guard-escalate': 409, 'declined': 409, 'hook-gone': 409, 'already-ruled': 409,
+  // Approvals PR 0: an allow of a row whose child runs under older deny rules than the box's. CHOSEN: the conflict
+  // status of the approval routes' other refusals.
+  'deny-not-current': 409,
+  // Approvals PR 3: a second principal's ruling on a park that holds an unspent one, and an allow on a key whose park
+  // records the coordinator's deny. CHOSEN: the conflict status of the approval routes' other refusals.
+  'park-ruled': 409, 'coordinator-denied': 409,
   // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
   'not-coordinator': 409, 'digest-unreadable': 503, 'unknown-call': 404,
   // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed
@@ -434,7 +524,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
   // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry
   // may help, and nothing was saved).
-  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400,
+  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400, 'org-looks-like-an-id': 400,
   'not-discardable': 409, 'lane-exists': 409, 'config-dir-exists': 409, 'live-sessions': 409, 'sleeping-sessions': 409,
   'upstream': 409, 'last-home-able': 409, 'auth-in-progress': 409, 'not-a-token-lane': 409, 'duplicate-id': 409,
   'token-unverified': 503,
@@ -523,6 +613,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
   [CARD_REFUSALS.cardChanged]: 409,
+  // The replay quiz's record door: CHOSEN, not measured. 409, as `timer-cap`: the cap is a state of the box, not a fault in the
+  // body; a Confirm or a Discard on the card frees a place.
+  [QUIZ_RECORD_REFUSALS.pendingFull]: 409,
   // The loads door (Overlord W1 sandbox): CHOSEN, not measured. 404: no start of this session's own, a startup or a resume,
   // carries the report's id yet; the hook keeps the report and resends it, as for the start door's 404.
   [START_LOADS_REFUSALS.unknownStart]: 404,
@@ -534,16 +627,23 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The probe door (Overlord W1a): CHOSEN, not measured. 409 for both, as `note-not-asked`: no round open and a round already
   // answered are each a state of the world, not a fault in the body.
   [PROBE_REFUSALS.noneOpen]: 409, [PROBE_REFUSALS.closed]: 409,
+  // The hierarchy item acts' word (D-8736, review 2394 A-7): CHOSEN, not measured. 409: the item is there and the act is a valid one; the
+  // project has no live Linear owner to hand it to, a state of the world the operator cures by naming one.
+  [HIERARCHY_ITEM_REFUSALS.noLinearOwner]: 409,
   // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
   ...TIMER_REFUSALS,
-  // The Overlord's W1 words: CHOSEN, not measured, each status declared once in `OVERLORD_REFUSALS`.
+  // The Overlord's W1 and W2 words: CHOSEN, not measured, each status declared once in `OVERLORD_REFUSALS`. No W2 door
+  // sends one until its piece lands.
   ...OVERLORD_REFUSALS,
+  ...HANDOFF_REFUSALS,
+  ...DECISION_MODEL_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,
   // The Seen door (D-8126): CHOSEN, not measured. 409 as `not-open`: the row is there, in a state this door does not act on.
   [LEDGER_ROUTE_REFUSALS.notBig]: 409,
   [LEDGER_ROUTE_REFUSALS.rankChanged]: 409,
+  [LEDGER_ROUTE_REFUSALS.goalsChanged]: 409,
   [LEDGER_ROUTE_REFUSALS.notMarkable]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
@@ -568,6 +668,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'wave-overlap': 409, 'ticket-workspace-mismatch': 409, 'linear-text-public': 409, 'plan-owned': 409, 'map-rewrites-plan': 409,
   'map-incomplete': 409, 'migration-in-flight': 409, 'not-managed': 409, 'issue-not-inbound': 409, 'item-act-mismatch': 409,
   'plan-closed': 409, 'plan-runs-open': 409,
+  // The phase words (programme work map WM0, D-8715): a reference to a plan object or phase that is not there, or is dropped,
+  // reads like the other absent objects; a refused carry is a state that exists.
+  'unknown-ref': 404, 'bad-carry': 409,
+  // Programme work map WM1 (D-8727): evidence that does not verify is a refusal of a state that exists.
+  'evidence-unverified': 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -579,7 +684,7 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
   | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'>;
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed' | 'ticket-required'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -593,6 +698,8 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   'cap-review-rounds': 409,
   // D-8181: chosen, not measured — the plan's five words, 409 like the family.
   'wave-epic-mismatch': 409, 'plan-missing': 409, 'reserved-programme': 409, 'ticket-unavailable': 409, 'plan-closed': 409,
+  // Programme work map WM1 (D-8727): chosen, not measured — a new word, 409 like the plan's five.
+  'ticket-required': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

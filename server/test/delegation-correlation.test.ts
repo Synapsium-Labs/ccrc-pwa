@@ -27,8 +27,8 @@ import {
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
   namedAgentsOf,
-  recoverDelegation,
 } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import {
   DELEGATION_CLOCK_SKEW_MS,
   DELEGATION_CORRELATION_REASONS,
@@ -2400,13 +2400,20 @@ describe('D-WF: a workflow run ends on its task notification (D-6269)', () => {
     expect(run.lastEventAt).toBe(T(1));
   });
 
-  it('D-WF7: an Agent launch is never indexed: a notification naming its tool-use id and agent id leaves the agent active', () => {
-    // Green by design at base; the "Agent-index mutant" reds it.
-    const w = world([agentLaunch(1, AGENT), subagentStart(2, AGENT), notification(3, 'toolu_1', AGENT, 'completed')]);
+  it('D-WF7: an Agent launch is never indexed: a notification naming its tool-use id leaves the agent active; only its own task id ends it (D-8830)', () => {
+    // Green by design at base. Since session helpers S1 (D-8830) an Agent's final notification ends its record on the natural key
+    // (its task id is its agent id), never through the launch index or the tool-use id. The "Agent-index mutant" reds the second
+    // world: an indexed launch matches a notification only when its task id matches too, so only the second world's notification
+    // reaches the index at all (review 3026 F8).
+    const w = world([agentLaunch(1, AGENT), subagentStart(2, AGENT), notification(3, 'toolu_1', 'task_other', 'completed')]);
     expect(w.activities).toHaveLength(1);
     expect(w.activities[0]!.sourceKind).toBe('agent');
     expect(w.activities[0]!.executionState).toBe('active');
     expect(holdReasons(w.cp)).toEqual(['checkpoint-anchor']);
+    const own = world([agentLaunch(1, AGENT), subagentStart(2, AGENT), notification(3, 'toolu_1', AGENT, 'completed')]);
+    expect(own.activities).toHaveLength(1);
+    expect(own.activities[0]).toMatchObject({ sourceKind: 'agent', executionState: 'ended', endedAt: T(3), endBasis: 'task-report' });
+    expect(holdReasons(own.cp)).toEqual(['checkpoint-anchor']);
   });
 
   it('D-WF8: a notification journaled BEFORE its launch is ignored: the run opens active and nothing is held', () => {

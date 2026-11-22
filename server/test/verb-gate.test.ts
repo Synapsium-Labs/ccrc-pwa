@@ -110,8 +110,13 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  */
 const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
   'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log',
+  // X2 P1.2: the range verb, read through `ccdCan`'s `docsShowRange` row (`DOCS_RANGE_CAP`); the docs range route is its call site.
+  'docs-show-range',
   // D-6784: sent only behind the `pr-landing-v1` capability word (CCD_CAN's `capRow`); PL-4's lane is its one call site.
   'pr-landing',
+  // The Overlord W1 ccd arms (cross-plan ruling X8): `keep-awake` is read through `capRow(KEEP_AWAKE_CAP)`, refusing on no
+  // evidence, so a box whose ccd lacks it answers `capability-missing`; designation A is its call site.
+  'keep-awake',
 ]);
 
 /**
@@ -154,6 +159,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   prTemplate: ['x', 'KEY'],
   // Overlord W1a (fresh start): `hibernate`'s fourth argument is a mode word (`sleep`, `roll` or `fresh`), not a flag, so the default probe `'x'` names no mode.
   hibernate: ['x', null, null, 'sleep'],
+  // X2 P1.2: `docsShowRange`'s second parameter is the place (`{commit}` or `{branch, head}`) and its last the step, not strings.
+  docsShowRange: ['x', { commit: 'x' }, 'specs', 'a.md', 'x', 'prepare'],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather
@@ -494,7 +501,7 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // `project-add` (add-project spec 2026-11-04 §4) joins for `project-pool`'s reason: its one site is
     // `planProjectAdd` (`projectAdd.ts`), gated by `ccdCan`'s `verbRow`, and naming it reds a vanished site or a lost gate.
 const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool',
-  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log', 'ws-collect', 'project-add'];
+  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log', 'docs-show-range', 'ws-collect', 'project-add'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);

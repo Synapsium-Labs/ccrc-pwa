@@ -33,6 +33,7 @@ import {
   OPEN_RUN_GATES, openRunPreconditions,
   type OpenRunFacts, type OpenRunGate, type OpenRunPlanFacts, type ReviewedRunFacts,
 } from '../src/coord/openRun.js';
+import { NOT_DESIGNATED_READS, boundReads, overlordDetail, owedReads, pendingReads, unmeasuredReads } from './otherLanesFixture.js';
 
 const WORK = {
   program: 'demo-program', title: 'Wave two', project: 'demo',
@@ -65,14 +66,15 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
     claimantListed: async () => ({ ok: true }),
     claimantProject: async () => ({ kind: 'measured', project: 'demo' }),
     sessionMark: async () => ({ kind: 'absent' }),
-    plan: () => ({ required: false, ended: false, epics: [], ticket: () => null }),
+    plan: () => ({ required: false, ended: false, phased: false, epics: [], ticket: () => null, tickets: () => [] }),
+    otherLaneReads: NOT_DESIGNATED_READS,
     ...over,
   };
 }
 
 /** D-8181: a stored plan with one epic listing waves 1 to 3, and tickets by key. */
 const planOf = (over: Partial<OpenRunPlanFacts> = {}, tickets: Record<string, ReturnType<OpenRunPlanFacts['ticket']>> = {}): ((s: string) => OpenRunPlanFacts) =>
-  () => ({ required: true, ended: false, epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }], ticket: (k) => tickets[k] ?? null, ...over });
+  () => ({ required: true, ended: false, phased: false, epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }], ticket: (k) => tickets[k] ?? null, tickets: () => [], ...over });
 const T = (over: Record<string, unknown> = {}) => ({ id: 9, epicId: 5, project: 'demo', state: 'open' as const, runId: null, ...over });
 
 const BAD_SLUG = 'a/b';
@@ -163,6 +165,23 @@ const SINGLE: Row[] = [
     refusal: { refused: 'wave-epic-mismatch' } },
   { name: "a ticket of another epic than the wave's", gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ epicId: 6 }) }) }),
     refusal: { refused: 'wave-epic-mismatch' } },
+  // Programme work map WM1 (D-8727): in a phased plan, no ticket into an epic with an open declared ticket no run holds.
+  { name: 'no ticket in a phased plan whose epic has an open declared ticket', gate: 'planGate',
+    f: facts({ ...WORK }, { plan: planOf({ phased: true, tickets: () => [{ key: 'k1', state: 'open', runId: null }] }) }),
+    refusal: { refused: 'ticket-required' } },
+  // Programme work map WM6 (D-8780): a run with no ticket whose wave no epic lists, in a plan where a live epic lists none.
+  { name: 'no ticket, no epic lists the wave, a live epic lists none', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9 }, { plan: planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }) }),
+    refusal: { refused: 'ticket-required' } },
+  { name: 'a ticket of an epic that lists waves, at a wave it does not list, beside an epic that lists none', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T() }) }),
+    refusal: { refused: 'wave-epic-mismatch' } },
+  { name: 'a ticket of a dropped epic that lists no waves, at a wave no epic lists (review 2791 F5)', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'dropped' }] }, { k1: T({ epicId: 6 }) }) }),
+    refusal: { refused: 'wave-epic-mismatch' } },
+  { name: 'a named ticket of an epic with no waves that another run holds, at any wave', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6, state: 'started', runId: 3 }) }) }),
+    refusal: { refused: 'ticket-unavailable' } },
   { name: 'a ticket that does not exist (an Upkeep ticket is never found)', gate: 'planGate', f: facts({ ...WORK, ticket: 'nope' }, { plan: planOf() }),
     refusal: { refused: 'ticket-unavailable' } },
   { name: 'a ticket already started by another run', gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ state: 'started', runId: 3 }) }) }),
@@ -188,6 +207,20 @@ const SINGLE: Row[] = [
     f: facts({ ...WORK, homeProject: 'demo-home', sessionId: 'ws-1' }, {
       claimantProject: async () => ({ kind: 'measured', project: 'demo-home' }), sessionMark: async () => ({ kind: 'child' }) }),
     refusal: { refused: 'project-mismatch', by: 'demo-home', detail: CROSSING_DETAIL } },
+  // Overlord W1 other lanes (C48): the Overlord's body never becomes a claimant.
+  { name: 'the Overlord\'s bound body as claimant', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: boundReads('coord-1') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
+  { name: 'a pending attempt\'s body as claimant', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: pendingReads('coord-1', 'rebind') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
+  { name: 'an id still owed its stop as claimant', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: owedReads('coord-1') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
+  { name: 'an unreadable designation and a claimant whose profile reads overlord', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: unmeasuredReads({ kind: 'measured', word: 'overlord' }) }),
+    refusal: { error: 'unmeasured', detail: 'the Overlord\'s designation could not be read (bad pending kind), and this '
+      + 'caller\'s launch profile reads overlord, so POST /api/runs cannot rule out that it is the Overlord; transient, retry' } },
 ];
 
 /** One row per adjacent order-dependent pair: the body trips both, the
@@ -224,12 +257,14 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
   { name: 'sessionId on a review + a stale uuid', pair: ['reviewSession', 'attribution'], gate: 'reviewSession',
     f: facts({ ...REVIEW, sessionId: 'ws-1' }, { attribute: async () => STALE }),
     refusal: { error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' } },
-  { name: 'a stale uuid + unreadable target (who asks is decided before the store answers)',
-    pair: ['attribution', 'reviewRead'], gate: 'attribution',
-    f: facts({ ...REVIEW }, { attribute: async () => STALE, reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
+  { name: 'a stale uuid + the Overlord\'s body as claimant (who asks is decided before what it is)',
+    pair: ['attribution', 'overlordClaimant'], gate: 'attribution',
+    f: facts({ ...REVIEW }, { attribute: async () => STALE, reviewed: () => ({ ok: false, detail: 'database is locked' }),
+      otherLaneReads: boundReads('coord-1') }),
     refusal: { error: 'stale-uuid', detail: STALE.detail } },
-  { name: 'no uuid once upgraded + unreadable target', pair: ['attribution', 'reviewRead'], gate: 'attribution',
-    f: facts({ ...REVIEW, claimedByUuid: undefined }, { reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
+  { name: 'no uuid once upgraded + the Overlord\'s body as claimant', pair: ['attribution', 'overlordClaimant'], gate: 'attribution',
+    f: facts({ ...REVIEW, claimedByUuid: undefined }, { reviewed: () => ({ ok: false, detail: 'database is locked' }),
+      otherLaneReads: boundReads('coord-1') }),
     refusal: { refused: 'attribution-required', detail: "upgrade the fleet box's ccrc-api (ccrc rollout)" } },
   { name: 'missing target (the kind gate reads the target the read gate loads)',
     pair: ['reviewRead', 'reviewKind'], gate: 'reviewRead',
@@ -281,6 +316,10 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
     f: facts({ ...WORK, sessionId: 'ws-1' }, {
       claimantProject: async () => ({ kind: 'none' }), sessionMark: async () => ({ kind: 'root' }) }),
     refusal: { refused: 'project-mismatch', detail: NO_PROJECT_DETAIL } },
+  { name: 'the Overlord\'s body opens a review + unreadable target (refused before the reviewed run is read)',
+    pair: ['overlordClaimant', 'reviewRead'], gate: 'overlordClaimant',
+    f: facts({ ...REVIEW }, { reviewed: () => ({ ok: false, detail: 'database is locked' }), otherLaneReads: boundReads('coord-1') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
 ];
 
 /** Adjacent pairs no single input trips together, and why. Each is bridged by
@@ -302,6 +341,19 @@ describe('openRunPreconditions — one row per gate (D-5384)', () => {
       expect(await openRunPreconditions(r.f)).toStrictEqual({ ok: false, refusal: { gate: r.gate, ...r.refusal } });
     });
   }
+});
+
+describe('openRunPreconditions — overlordClaimant passes everyone else to reviewRead (Overlord W1 other lanes)', () => {
+  const unreadable = { reviewed: () => ({ ok: false as const, detail: 'database is locked' }) };
+  it.each([
+    ['another session is the bound body', boundReads('coord-9')],
+    ['nobody is designated', NOT_DESIGNATED_READS],
+    ['an unreadable designation and a coordinator profile', unmeasuredReads({ kind: 'measured', word: 'coordinator' })],
+    ['an unreadable designation and no profile', unmeasuredReads({ kind: 'absent' })],
+  ])('%s: the open reaches reviewRead', async (_n, reads) => {
+    expect(await openRunPreconditions(facts({ ...REVIEW }, { ...unreadable, otherLaneReads: reads })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'reviewRead', error: 'run-unreadable', detail: 'database is locked' } });
+  });
 });
 
 describe('openRunPreconditions — the gate-order table (D-5384)', () => {
@@ -363,6 +415,16 @@ describe('openRunPreconditions — a claimant may coordinate from any project (D
   it('admits the next wave\'s work run of a programme homed elsewhere, stamping the claimant\'s own project', async () => {
     expect(await openRunPreconditions(facts(WORK_B, { ...IN_A, ...KNOWN_B })))
       .toMatchObject({ ok: true, home: { kind: 'agrees' }, open: { kind: 'work', project: 'demo-b', wave: 11, coordProject: 'demo-a' } });
+  });
+  it('admits a named ticket of an epic that lists no waves at any wave, into that epic (programme work map WM6, D-8780)', async () => {
+    const plan = planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6 }) });
+    expect(await openRunPreconditions(facts({ ...WORK_B, wave: 9, ticket: 'k1' }, { ...IN_A, ...KNOWN_B, plan })))
+      .toMatchObject({ ok: true, open: { ticket: { kind: 'existing', id: 9, epicId: 6 } } });
+  });
+  it('admits a named ticket of an epic that lists no waves into that epic even at a wave another epic lists (review 2791 F2)', async () => {
+    const plan = planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6 }) });
+    expect(await openRunPreconditions(facts({ ...WORK_B, wave: 1, ticket: 'k1' }, { ...IN_A, ...KNOWN_B, plan })))
+      .toMatchObject({ ok: true, open: { ticket: { kind: 'existing', id: 9, epicId: 6 } } });
   });
   it('admits a review run of a run it claims, in the reviewed run\'s project', async () => {
     expect(await openRunPreconditions(facts(REVIEW_B, { ...IN_A, ...KNOWN_B, ...REVIEWED_B })))

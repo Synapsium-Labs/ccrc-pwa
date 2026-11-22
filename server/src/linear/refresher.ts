@@ -25,10 +25,11 @@
  */
 import { valueDigestHex } from '../token/files.js';
 import { callLinear, checkLinearKey, type FetchLike, type LinearKeyCheck } from './client.js';
-import { LinearDirectory, type LinearDirectoryRead } from './directory.js';
+import { LinearDirectory, type LinearDirectoryRead, type LinearStatusesRead } from './directory.js';
+import { readInitiativesProbe } from './hierarchyOps.js';
 import {
-  LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES, readLinearDirectoryPage,
-  type LinearDirectoryEntries,
+  LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES, LINEAR_HIERARCHY_DOCUMENTS, linearErrorOf,
+  readLinearDirectoryPage, readLinearProjectStatusesPage, type LinearDirectoryEntries,
 } from './ops.js';
 import { oneCallOutcome, type LinearRateGrant, type LinearRateLane, type LinearRateRefusal, type LinearRateService } from './rate.js';
 import type { LinearKeyRead } from './connection.js';
@@ -300,6 +301,11 @@ export class LinearRefresher {
    * from the slot's floor and settled with what it spent. The key is read from its file before each page, and a key
    * gone or changed stops the refresh, recording nothing. Kept only whole: a page refused, failed or out of its grammar
    * leaves the directory as it was. Past the fourth page a collection is cut (a known limit; the remedy is the id).
+   *
+   * Then the hierarchy's two reads (D-8182), one page each on the same floor lane and settled the same way: the project
+   * statuses into `entries.projectStatuses`, and the initiatives probe into `entries.initiatives` (`on` or `unknown`,
+   * never `off`: R8). "When a key is verified" needs no path of its own: a key act already calls `queueDirectory`, so the
+   * directory refresh, and the probe with it, follows every add, replace and Check again.
    */
   private async refreshDirectory(ref: LinearSlotRef): Promise<void> {
     const { ccrcDir, rate } = this.opts;
@@ -341,6 +347,34 @@ export class LinearRefresher {
         after = p.next;
       }
     }
-    if (digest !== null) this.names.put(ref, digest, entries, this.now());
+    /** One page of a hierarchy document: `moved` when the key changed (record nothing), `failed` when the floor refused or the
+     *  call failed (the four core collections are still whole and are kept), else the body. */
+    const onePage = async (document: string): Promise<{ kind: 'moved' | 'failed' } | { kind: 'body'; body: unknown }> => {
+      const k = await readLinearSlotKey(ccrcDir, ref);
+      if (k.kind !== 'key' || valueDigestHex(k.key) !== digest) return { kind: 'moved' };
+      const t = rate.take({ lane: 'floor', slot: ref, calls: 1 });
+      if (!t.ok) return { kind: 'failed' };
+      const call = await callLinear(k.key, document, {}, { fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs, now: this.now });
+      rate.settle(t.grant, oneCallOutcome(call));
+      return call.ok ? { kind: 'body', body: call.body } : { kind: 'failed' };
+    };
+    if (digest === null) return;
+    // The hierarchy's two reads never cost the session name lookups the four collections they rest on: a failed page keeps
+    // what the directory held for this key (or empty / `unknown`), and the whole is stored. D-8701: so does the statuses'
+    // read mark, so a first fill whose statuses page failed says `unread`, never "this workspace has no status types".
+    const held = this.names.get(ref, digest);
+    entries.projectStatuses.push(...(held?.projectStatuses ?? []));
+    let statusesRead: LinearStatusesRead = this.names.projectStatusesRead(ref, digest) ?? 'unread';
+    entries.initiatives = held?.initiatives ?? 'unknown';
+    const statuses = await onePage(LINEAR_HIERARCHY_DOCUMENTS.projectStatuses);
+    if (statuses.kind === 'moved') return;
+    if (statuses.kind === 'body') {
+      const sp = readLinearProjectStatusesPage(statuses.body);
+      if (sp.ok) { entries.projectStatuses.splice(0, entries.projectStatuses.length, ...sp.statuses); statusesRead = 'read'; }
+    }
+    const probe = await onePage(LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe);
+    if (probe.kind === 'moved') return;
+    if (probe.kind === 'body' && linearErrorOf(probe.body)?.word !== 'rate-limited') entries.initiatives = readInitiativesProbe(probe.body);
+    this.names.put(ref, digest, entries, this.now(), statusesRead);
   }
 }

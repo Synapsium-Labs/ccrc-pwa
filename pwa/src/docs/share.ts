@@ -13,7 +13,7 @@
 
 import {
   DOC_SECTIONS, admitDraft, contentClass, docRepoPath, entryView, githubPermalink,
-  type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryMode,
+  type DocListPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryMode,
 } from '../../../shared/docs';
 import {
   DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, SHARE_TEXT, WITHHELD_SENTENCE, closedWorktreeLabel, fillSentence, pluralS,
@@ -55,7 +55,7 @@ export interface ShareNoteLine {
  *  raster leaf, a failed or too-large read, and a class Docs does not preview). `none`: the page opened no file: a
  *  project, section or directory page, or a leaf that opens nothing (a symlink, a submodule, a withheld new file). */
 export type ShareOpened =
-  | { readonly kind: 'file'; readonly pin: DocPin; readonly show: DocsShowOk | null }
+  | { readonly kind: 'file'; readonly pin: DocListPin; readonly show: DocsShowOk | null }
   | { readonly kind: 'none' };
 
 /** What Share sends from a page, or why it sends nothing (spec 4.16). A discriminated union, so a later kind of link

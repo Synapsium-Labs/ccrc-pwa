@@ -15,8 +15,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { HOUR, MIN, NOW, asking, coordinatorFleet, sess } from './rollupFixture';
-import { activity, frame } from './delegationFixture';
-import { NEST_BRACKET } from '../src/fleet/ProjectCard';
+import { activity, frame, lease, unowned } from './delegationFixture';
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -136,28 +135,33 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     expect(cardOf('project-a').getAttribute('data-collapsed')).toBeNull();
   });
 
-  it('W4-U31: a folded coordinator counts two live activities in its line and hides them; expanded, both nest', () => {
+  const trees = [
+    lease({ leaseId: 'l1', parentId: 'coord', project: 'project-c', adminRecord: 'agent-c1', canonicalPath: '/work/project-c/.claude/worktrees/agent-c1' }),
+    lease({ leaseId: 'l2', parentId: 'coord', project: 'project-c', adminRecord: 'agent-c2', canonicalPath: '/work/project-c/.claude/worktrees/agent-c2',
+      firstObservedAt: '2026-10-26T10:02:00.000Z' }),
+  ];
+  const acts = [
+    activity({ activityId: 'a1', parentId: 'coord', displayName: 'map the tree' }),
+    activity({ activityId: 'a2', parentId: 'coord', displayName: 'read the plan', openedAt: '2026-10-26T10:01:00.000Z' }),
+  ];
+
+  it('W4-U31 (D-8782): a folded coordinator\'s line names workers only: a frame of activities, worktrees and unowned work adds no word and no row', () => {
     const store = mount(skin);
-    act(() => {
-      store.setState({ delegation: frame({ activities: [
-        activity({ activityId: 'a1', parentId: 'coord', displayName: 'map the tree' }),
-        activity({ activityId: 'a2', parentId: 'coord', displayName: 'read the plan', openedAt: '2026-10-26T10:01:00.000Z' }),
-      ] }) });
-    });
+    const footer = (): string[] => {
+      const line = within(cardOf('project-c').querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ });
+      return [...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent ?? '');
+    };
+    const before = footer();
+    expect(before, 'positive control: the footer names the workers it hides').toEqual(['4 more workers', '2 working']);
+    act(() => { store.setState({ delegation: frame({ leases: trees, activities: acts, unowned: [unowned()] }) }); });
+    expect(footer()).toEqual(before);
     const c = cardOf('project-c');
-    // Task G2: the line is the programme box's footer, which counts what the tray hides: the four quiet workers, then
-    // the two activities, never as workers.
-    const line = within(c.querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ });
-    expect([...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent))
-      .toEqual(['4 more workers', '2 working', '2 delegated']);
     expect(c.querySelectorAll('.proj-work')).toHaveLength(0);
-    fireEvent.click(line);
-    // Open, the footer hides the five workers and names the two activities apart from them.
+    expect(c.textContent).not.toMatch(/delegated|worktree|map the tree|read the plan|Unowned work|Offline coordinator/);
+    fireEvent.click(within(c.querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ }));
     const open = within(cardOf('project-c').querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /^hide/ });
-    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers', '2 delegated']);
-    const rows = [...cardOf('project-c').querySelectorAll('.proj-work')];
-    expect(rows).toHaveLength(2);
-    for (const r of rows) expect(r.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers']);
+    expect(cardOf('project-c').querySelectorAll('.proj-work')).toHaveLength(0);
   });
 });
 

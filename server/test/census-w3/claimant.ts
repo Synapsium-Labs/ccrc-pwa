@@ -103,7 +103,7 @@ export function capReaderDefinitions(root: string = REPO): CapReaderDefinitionSi
 export interface CapReaderCallSite extends CensusSite { readonly guarded: boolean }
 
 /** Every call of `_api_server_cap` in `ccd/ccrc-api` outside the generated regions (comment lines skipped, a definition
- *  line not a call), each `guarded` when the same line names `$claimant` BEFORE the call, or tests `"$key" == 'goals.show'` or `'calls.record'` (D-8126) or `"$key" == plan.*` (the plan door, D-8181) or `"$key" == timer.*` (the timers piece) (the claimant-row test; it
+ *  line not a call), each `guarded` when the same line names `$claimant` BEFORE the call, or tests `"$key" == 'goals.show'` or `'calls.record'` (D-8126) or `"$key" == plan.*` (the plan door, D-8181) (the plan rows' one table gate too: phase-ref, take, triage and ticket-done, D-8183) or `"$key" == timer.*` (the timers piece) (the claimant-row test; it
  *  was `$family`, the row's fifth field, from Q3j until Q3l removed that field, D-7324). At Q3h's base: 0; 0 at Q3i,
  *  exactly 1 guarded and 0 unguarded at Q3j, and still at Q3l. This census, not a runtime probe, is the proof that no other row reads
  *  the cap file (D-7339). */

@@ -271,11 +271,6 @@ const CONTROLS: Record<string, string> = {
   'fleet/ProjectCardHead.tsx <button> proj-card-pool': "TOKEN. The card's pool tag.",
   'fleet/ProjectCardHead.tsx <button> proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
   'fleet/SessionLine.tsx <button> sess-actions': 'TOKEN, and OVERLAY below.',
-  'fleet/SessionMeta.tsx <button> sess-subagents':
-    'TOKEN. The subagent toggle and, beside it in the header, the delegated-entries toggle (delegation visibility): '
-    + 'real un-nested buttons in one shape. On a card the floor is the `::before` overlay; in the header, where '
-    + '`.chat-facts .sess-meta > *::before` removes it, the box itself takes it on a coarse pointer '
-    + '(`.chat-facts .sess-subagents` under `(pointer: coarse)`, D-7785); with a mouse the toggles keep their base size.',
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
@@ -365,6 +360,10 @@ const CONTROLS: Record<string, string> = {
     'TOKEN. The digest\'s correction box (D-5300): `.digest-correct-input` is '
     + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because it '
     + 'opens at three rows for a sentence and grows by its own resize handle.',
+  'ledgers/OverturnSheet.tsx <textarea> wl-overturn-note':
+    'TOKEN. The Overturn sheet\'s note box (D-8126): `.wl-overturn-note` is '
+    + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because the '
+    + 'operator writes a sentence into it and it grows by its own resize handle.',
   'session/Composer.tsx <textarea> composer-input':
     'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
     + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '
@@ -520,6 +519,12 @@ const CONTROLS: Record<string, string> = {
     + '`.docs-owner-link`, `.docs-hint-link`), and the one use with none is the failure view\'s "Did you mean …?" '
     + 'link inside its sentence (`.docs-fail-suggest a`), the inline exception docs.css states.',
   'docs/DocsLeaf.tsx <button> docs-leaf-action': "TOKEN. A leaf's Source and Download.",
+  'docs/MockupView.tsx <button> docs-leaf-action':
+    "TOKEN. The mockup viewer's one hand-drawn button (`Action`): Run and Stop scripts, Load external, Full screen, New tab, Source, "
+    + "Close, Reload mockup and Render mockup, each the leaf's bordered `.docs-leaf-action`, whose own rule carries the floor.",
+  'docs/MockupView.tsx <a> docs-hint-link':
+    "TOKEN. An external link in the mockup's links list (native Docs reader C2 Task 8), opened with `openExternal` on tap: a standalone "
+    + "line of the list wearing `.docs-hint-link`, whose own rule carries the floor.",
   'docs/DocMarkdown.tsx <button> doc-gate-btn': "TOKEN. The large-document gate's two choices.",
   'docs/DocMarkdown.tsx <button> doc-plain-action': "TOKEN. Plain text's Format anyway or Retry.",
   'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',
@@ -535,6 +540,9 @@ const CONTROLS: Record<string, string> = {
   'docs/export/exportMarkdown.tsx <a> (none)':
     'INLINE. The links inside an exported document, `EXPORT_COMPONENTS.a` (docs W5 Export): drawn into the saved file, '
     + 'never into the app, and in a sentence or block of text, as for `docs/DocLink.tsx <a> (none)`.',
+  'docs/export/buildExport.tsx <a> (none)':
+    'INLINE. The "Links in this page" list of a saved mockup export (native Docs reader C2, Task 9; base 5.6.9 step 5): drawn '
+    + 'into the saved file, never into the app, each link a line of text in the list, as for `docs/export/exportMarkdown.tsx <a> (none)`.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */

@@ -17,7 +17,7 @@ import { refuseRoute } from '../refuse.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import type { CallRecordAnswer } from '../../../shared/api.js';
 import { isSlotSlug } from '../../../shared/ledgers.js';
-import { callBodyOf } from './coordCalls.js';
+import { callBodyOf, type NewCall } from './coordCalls.js';
 import type { CoordStore } from './store.js';
 
 /** What the route needs. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures, handed in
@@ -35,6 +35,15 @@ export interface CoordCallsRouteDeps {
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** A big call made in the operator's name, announced: one `record-only` feed notice (the operator's trail; never pushed, the
+ *  Seen door is the prompt) and the Waiting-on-you frame's rebuild (`waiting`). The one announcer, for this route and the
+ *  Overlord's team link (D-8809, `linking/routes.ts`). */
+export function announceBigCall(deps: { notice: NoticeSink; bus: Bus }, slug: string, id: number, call: NewCall): void {
+  deps.notice({ kind: 'coord', sessionId: '', runId: call.runId, title: `Call made · ${slug}`, body: `${call.question ?? ''} → ${call.chosen}` },
+    'record-only', { degraded: `coordinator call ${id}, feed archive degraded` });
+  deps.bus.emit('waiting');
+}
 
 export function registerCoordCallsRoute(app: FastifyInstance, deps: CoordCallsRouteDeps): void {
   const bad = (reply: FastifyReply, detail: string) => refuseRoute(reply, 'bad-request', { detail });
@@ -72,12 +81,7 @@ export function registerCoordCallsRoute(app: FastifyInstance, deps: CoordCallsRo
       }
     }
     const id = coord.insertCall(slug, byId, call, deps.build, now);
-    if (call.class === 'big') {
-      // The feed is the operator's trail of a call made in their name; it is never pushed (the Seen door is the prompt).
-      deps.notice({ kind: 'coord', sessionId: '', runId: call.runId, title: `Call made · ${slug}`, body: `${call.question ?? ''} → ${call.chosen}` },
-        'record-only', { degraded: `coordinator call ${id}, feed archive degraded` });
-    }
-    if (call.class === 'big') deps.bus.emit('waiting');
+    if (call.class === 'big') announceBigCall(deps, slug, id, call);
     const stored = coord.callById(id);
     const answer: CallRecordAnswer = { ok: true, id, class: call.class, expiresAt: stored?.expiresAt ?? null };
     return reply.code(200).send(answer);

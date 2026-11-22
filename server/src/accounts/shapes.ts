@@ -6,12 +6,17 @@
  * `accounts/mask.ts#SecretMasker` reads them for its shape half and for its exact-bytes candidates, so there is one
  * copy of each and one view memo.
  *
+ * A PEM private-key block is masked here too (overlord wave 168, `response-masks-miss-pem`): its finder is the egress
+ * profiles' scanner, `shared/redact.mjs#pemBlockSpans`, the one owner of that shape (a scanner, not a regular-expression
+ * source, so it is no `CREDENTIAL_MASKS` row), and each row of a block is masked on its own (`pemRowSpans`).
+ *
  * `SHAPE_MASK` is the shape-only mask of a decoded value, a plain function of it: what the masker's keyless instance
  * answers, read without the masker, so an inner module (the transcript parse) masks with it (D-7513).
  *
  * Ring L1: this module holds no timer, no clock, no database and no route.
  */
 import { CREDENTIAL_MASKS, SECRET_MASK, type CredentialMask } from '../../../shared/api.js';
+import { pemBlockSpans, pemStreamSpans, type PemStreamCarry } from '../../../shared/redact.js';
 
 /** A candidate run's byte bounds (a fingerprint row's `len` lies within them). */
 export const RUN_MIN_BYTES = 20;
@@ -110,11 +115,24 @@ export function shapeMatchers(masks: readonly CredentialMask[] = CREDENTIAL_MASK
 }
 export const SHAPES = shapeMatchers();
 
+/** What follows the LF of a LF, blanks, CR break: blanks (NULs, in the escape view), then a CR that no LF follows. Its
+ *  one other reader is `accounts/mask.ts`'s `BREAK_REST`, so the two never drift apart (review 2514 F5). */
+export const LF_BREAK_REST = String.raw`[ \t\0]*\r(?!\n)`;
+/** A row break (D-5995, D-8710): CR LF, LF, CR, or a LF then blanks then a CR that no LF follows. The last is ONE row
+ *  down to the first column, as CR LF is: a move down (CUD, IND) reads as a LF and one NUL of unknown indent, and the
+ *  CR after it returns to the first column, so a key a program wraps with CUD+CR or IND+CR is joined like one wrapped
+ *  with CR LF (review 2326 O2). A CR CR LF (a CR LF that a second output translation doubled) is one row down too, as a
+ *  terminal draws it: read as a CR, then a CR LF, it was an empty row that ended a key's rows, and the whole key showed
+ *  (C45, review 2445 F4); at most one CR more, so a run of CRs is never read back more than once. A LF, blanks, CR then
+ *  a CR LF stays two breaks with no row between (a blank row on screen), as at `main`: the chain walk steps through
+ *  both, and reading the LF alone as the break left a blank row that ended a key's rows (C45 fix round, review 2514 F1).
+ *  The one definition every row reader in this module and `accounts/mask.ts` builds on. */
+export const ROW_BREAK = String.raw`\r\r?\n|\n${LF_BREAK_REST}|\r|\n`;
 /** The next row's leading token run after a span that ends at its row's end: [start, end) in `t`, or null. A TUI
  *  wrap is INDENTED (Claude Code indents the rows a long line wraps into; tmux may draw that indent as a cursor move,
  *  which both views read as a NUL), so a next row with no indent is a new line, never a wrap. Sticky expressions:
  *  nothing is sliced, so a text with many matches stays linear (D-5995). */
-export const ROW_END = /[ \t\0]*(?:[│┃|][ \t\0]*)?(?:\r\n|\r|\n)/y;
+export const ROW_END = new RegExp(String.raw`[ \t\0]*(?:[│┃|][ \t\0]*)?(?:${ROW_BREAK})`, 'y');
 /** Where a row's text ends before its row end at `e` (D-5995): back over blanks, a box's right rule (a side-bordered
  *  dialog draws one on every row a key wraps across, mirroring `ROW_INDENT`'s left rule) and the blanks before it. */
 export function rowTextEnd(t: string, e: number): number {
@@ -128,7 +146,9 @@ export function rowTextEnd(t: string, e: number): number {
 }
 export const ROW_INDENT = /(?:[ \t\0]|│|┃|\|)+/y;
 export const TOKEN_RUN = /[A-Za-z0-9_+/.-]+/y;
-const TEXT_END = /[ \t\0]*(?:\r\n|\r|\n)?$/y;
+/** A text that ends at a row's end (D-5995): blanks (and a right rule), then perhaps the row break and the next row's
+ *  indent with nothing of its run yet (D-8710), so a shape that reaches it carries into the next text's leading run. */
+const TEXT_END = new RegExp(String.raw`[ \t\0]*(?:[│┃|][ \t\0]*)?(?:(?:${ROW_BREAK})(?:[ \t\0]|│|┃|\|)*)?$`, 'y');
 function continuationAfter(t: string, end: number): [number, number] | null {
   ROW_END.lastIndex = end;
   const nl = ROW_END.exec(t);
@@ -164,7 +184,7 @@ function columnsOf(t: string, a: number, b: number): number {
 }
 /** The row widths of one text, in columns, from one index of its line breaks (D-5995: built once, in rows mode only;
  *  each row is measured once, on first use). */
-class Rows {
+export class Rows {
   private readonly breaks: number[] = [];
   private readonly widths = new Map<number, number>();
   constructor(private readonly t: string) {
@@ -184,10 +204,43 @@ class Rows {
     }
     return w;
   }
+  /** The width of the last row before the row `i` sits on that holds more than blanks (a CR LF, or a move down and a
+   *  CR, leaves an empty row between its two bytes), or 0: there is none, or it is the text's first row, which may
+   *  begin before the text (D-8710). */
+  prevWidth(i: number): number {
+    const b = this.breaks;
+    let lo = 0; let hi = b.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (b[mid]! < i) lo = mid + 1; else hi = mid; }
+    for (let row = lo - 1; row >= 1; row--) {
+      const start = b[row - 1]! + 1;
+      for (let k = start; k < b[row]!; k++) if (!' \t\0│┃|'.includes(this.t[k]!)) return this.length(start);
+    }
+    return 0;
+  }
 }
 
-/** Every shape starts with one of these, so a text holding none of them holds no shape. */
-const SHAPE_HINT = /sk-|eyJ|_token"|OPENAI_API_KEY"/;
+/** Rows mode (D-5995): a run that reaches its row's end at `end` runs on into the next row's leading run, and on through
+ *  every further row while the row before it was as full as `full` columns (a shorter row is the value's last); `first`:
+ *  the row `end` is on is not measured. Each run it takes goes to `put`. True: it ran to the text's last row end, so its
+ *  next row is the next text's leading run (the carry). The one walk of a run across rows: a shape's (`shapeSpans`), and
+ *  a run the last text masked that this text's leading run continues (`accounts/mask.ts#SecretMasker`, D-8710). */
+export function runOnRows(t: string, end: number, full: number, rows: Rows, put: (a: number, b: number) => void,
+  first: boolean): boolean {
+  for (;; first = false) {
+    if (!first && rows.length(end - 1) < full) return false;
+    const next = continuationAfter(t, end);
+    if (next === null) {
+      TEXT_END.lastIndex = end;
+      return TEXT_END.test(t);
+    }
+    put(next[0], next[1]);
+    end = next[1];
+  }
+}
+
+/** Every shape starts with one of these, so a text holding none of them holds no shape; a PEM block's BEGIN line starts
+ *  with the last. */
+const SHAPE_HINT = /sk-|eyJ|_token"|OPENAI_API_KEY"|-----BEGIN /;
 /** A shape's start at a boundary (D-5995): `sk-` or `eyJ`. */
 export const SHAPE_STARTED = new RegExp(`${BOUNDARY}(?:sk-|eyJ)`);
 /** A row's trailing token run, read back from its row end. */
@@ -247,7 +300,84 @@ function joinWraps(t: string): Joined | null {
   map[n] = t.length;
   return { t: parts.join(''), map: map.subarray(0, n + 1), seams };
 }
-const LINE_BREAK_ANY = /\r\n|\r|\n/g;
+const LINE_BREAK_ANY = new RegExp(ROW_BREAK, 'g');
+const PEM_ROW_BREAK = new RegExp(ROW_BREAK, 'g');
+/** PEM blocks' spans of `t` (in order, never overlapping) as one span per row (overlord wave 168): split at each row
+ *  break, which is kept, and each row less its indent, a box's rules and its trailing blanks, so a block in the drawer is
+ *  masked row by row, a mark per row, and no row is joined to the next (`spliceMasked` joins only spans that touch). A
+ *  block's rows are its own: nothing runs on past its end, so the row after its END line is never taken as a wrap. The
+ *  row breaks are read with one forward-only cursor over the whole text (review 2729 F2): a block with no row break in
+ *  it searched on to the next one, which in a JSON answer (every line break escaped) was the end of the text, so many
+ *  blocks cost the square of its length. */
+function pemRowSpans(t: string, blocks: readonly [number, number][], put: (x: number, y: number) => void): void {
+  const row = (x: number, y: number): void => {
+    ROW_INDENT.lastIndex = x;
+    const indent = ROW_INDENT.exec(t);
+    if (indent !== null) x += indent[0].length;
+    y = rowTextEnd(t, y);
+    if (y > x) put(x, y);
+  };
+  // The first row break at or after the last search's start (undefined: none searched yet; null: none left).
+  let next: RegExpExecArray | null | undefined;
+  const breakFrom = (at: number): RegExpExecArray | null => {
+    if (next === undefined || (next !== null && next.index < at)) {
+      PEM_ROW_BREAK.lastIndex = at;
+      next = PEM_ROW_BREAK.exec(t);
+    }
+    return next;
+  };
+  for (const [a, b] of blocks) {
+    let p = a;
+    for (let m = breakFrom(p); m !== null && m.index < b; m = breakFrom(p)) {
+      row(p, m.index);
+      p = m.index + m[0].length;
+    }
+    if (p < b) row(p, b);
+  }
+}
+/** What a drawer's stream carries from one text to the next (review 2729 F1): the PEM block the text it sent last ended
+ *  inside (`shared/redact.mjs#pemStreamSpans`; null: none), and the unfinished last line of what it sent (raw, its last
+ *  `PEM_CARRY_LINE` characters at most; `lineWhole`: from its line's start), so a BEGIN or END line a chunk boundary cut
+ *  is read whole (review 2751 F2). */
+export interface PemCarry {
+  readonly block: PemStreamCarry | null;
+  readonly line: string;
+  readonly lineWhole: boolean;
+}
+/** The most raw characters of a line already sent that the carry keeps: it only caps the work. A line is longer than a
+ *  terminal's row only when escapes (a colour per character, a link) or a long label fill it. */
+const PEM_CARRY_LINE = 4096;
+/** One text of the drawer's stream (review 2729 F1, the coordinator's ruling): the row spans of every PEM block in it,
+ *  the block the last text ended inside running on from its start, and the carry this text ends with. The text is read
+ *  after the unfinished line the last text ended with, so a cut BEGIN or END line is read whole (spans in that line were
+ *  sent already and are dropped), and all of it in the text as drawn, its escapes stripped, so a key a highlighter
+ *  colours per character is found (review 2751 F1); the spans are the text's own. The drawer keeps the carry per stream
+ *  (`accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays masked to its END line after its BEGIN line has
+ *  left the masker's context. */
+export function pemCarrySpans(text: string, carry: PemCarry | null): { spans: [number, number][]; carry: PemCarry } {
+  const spans: [number, number][] = [];
+  const line = carry === null ? '' : carry.line;
+  const all = line + text;
+  // The unfinished last line this text ends with: after its last line feed or JSON-escaped one.
+  const lf = all.lastIndexOf('\n'); const esc = all.lastIndexOf('\\n');
+  const rest = all.slice(Math.max(lf === -1 ? 0 : lf + 1, esc === -1 ? 0 : esc + 2));
+  const next = (block: PemStreamCarry | null): PemCarry => ({
+    block, line: rest.slice(-PEM_CARRY_LINE),
+    lineWhole: rest.length <= PEM_CARRY_LINE && (rest.length < all.length || carry === null || carry.lineWhole),
+  });
+  const block = carry === null ? null : carry.block;
+  const v = viewOf(all, '');
+  if (block === null && !v.t.includes('PRIVATE KEY')) return { spans, carry: next(null) };
+  // The block was measured at the end of the last text: read from the line's start, it holds the line too.
+  const from = block === null ? null
+    : { left: block.left + viewOf(line, '').t.length, lineStart: line === '' ? block.lineStart : carry!.lineWhole };
+  const r = pemStreamSpans(v.t, from);
+  pemRowSpans(v.t, r.spans, (x, y) => {
+    const [a, b] = spanIn(v, x, y);
+    if (b > line.length) spans.push([Math.max(a, line.length) - line.length, b - line.length]);
+  });
+  return { spans, carry: next(r.carry) };
+}
 /** Whether a run holds a whole shape on its own. */
 export const matchesShape = (run: string): boolean => SHAPES.some((re) => { re.lastIndex = 0; return re.test(run); });
 /** Whether a seam lies strictly inside [a, b): one binary search over the sorted seams. */
@@ -288,6 +418,8 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
         }
         spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
       };
+      // A PEM private-key block, in the text as drawn: one span per row, and no run-on.
+      if (j === null) pemRowSpans(t, pemBlockSpans(t), (x, y) => spans.push(spanIn(v, x, y)));
       const r = rows ? new Rows(t) : null;
       for (const re of masks) {
         re.lastIndex = 0;
@@ -300,18 +432,7 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
           if (r === null || (j !== null && seamWithin(j.seams, m.index, end))) continue;
           // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
           // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
-          const full = r.length(m.index);
-          for (let first = true; ; first = false) {
-            if (!first && r.length(end - 1) < full) break;
-            const next = continuationAfter(t, end);
-            if (next === null) {
-              TEXT_END.lastIndex = end;
-              if (TEXT_END.test(t)) carry = true;   // the next row is in the next text
-              break;
-            }
-            put(next[0], next[1]);
-            end = next[1];
-          }
+          if (runOnRows(t, end, r.length(m.index), r, put, true)) carry = true;   // the next row is in the next text
         }
       }
     }
@@ -322,8 +443,9 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
 // ── the splice and the walk ────────────────────────────────────────────────
 
 /** `text` up to `limit`, each run of overlapping or touching `spans` (original spans, in any order; sorted here) as one
- *  `SECRET_MASK`: `accounts/mask.ts#SecretMasker`'s splice, and the shape-only mask's (D-7513). */
-export function spliceMasked(text: string, spans: [number, number][], limit: number): string {
+ *  `mark`: `accounts/mask.ts#SecretMasker`'s splice, and the shape-only mask's (D-7513). Every egress draws
+ *  `SECRET_MASK`; the drawer alone passes its one-column mark (`accounts/mask.ts#DRAWER_SECRET_MASK`, D-8694). */
+export function spliceMasked(text: string, spans: [number, number][], limit: number, mark: string = SECRET_MASK): string {
   spans.sort((x, y) => x[0] - y[0]);
   // Parts joined once (D-5995): appending to a string and testing its end on every span flattens it each time.
   const out: string[] = []; let at = 0; let masked = false;
@@ -332,7 +454,7 @@ export function spliceMasked(text: string, spans: [number, number][], limit: num
     const a = Math.max(a0, at); const b = Math.min(b0, limit);
     if (b <= at) continue;
     if (a > at) { out.push(text.slice(at, a)); masked = false; }
-    if (!masked) { out.push(SECRET_MASK); masked = true; }
+    if (!masked) { out.push(mark); masked = true; }
     at = b;
   }
   if (at < limit) out.push(text.slice(at, limit));

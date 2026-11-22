@@ -219,6 +219,18 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the project create verb granted without --name',
     codes: ['TS2322'],
   },
+  // THE SKILL SELF-INSTALL (D-8126), g26's shape: enrolled on `--wrapper`, its whole argument surface, so the narrowed grant is
+  // a compile error.
+  'g31-skill-ensure-without-wrapper.ts': {
+    what: 'the skill self-install verb granted without --wrapper',
+    codes: ['TS2322'],
+  },
+  // NATIVE DOCS READER X2 wave P1, g28's shape for the range read: read-only, enrolled on `--project`, so the narrowed
+  // grant is a compile error.
+  'g32-docs-show-range-without-project.ts': {
+    what: 'the docs range read granted without --project',
+    codes: ['TS2322'],
+  },
   // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
   'g27-pane-scope-stop-without-state.ts': {
     what: 'the pane-scope stop switch verb granted without --state',
@@ -228,6 +240,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   // so the narrowed grant is a compile error.
   'g29-pool-answer-without-session.ts': {
     what: 'the pool answer verb granted without --session',
+    codes: ['TS2322'],
+  },
+  // THE SLEEP MARKERS' VERB (Overlord W1 ccd arms, plan Task 3), g29's shape: enrolled on `--session`, its whole argument
+  // surface, so the narrowed grant is a compile error.
+  'g30-keep-awake-without-session.ts': {
+    what: 'the keep-awake verb granted without --session',
     codes: ['TS2322'],
   },
 };
@@ -504,6 +522,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
       .toEqual([['pool-answer', '--session']]);
   });
 
+  it('throws on a keep-awake without --session, and grants exactly the one prefix (Overlord W1 ccd arms)', () => {
+    expect(() => auditExecWhitelist(withCcd([['keep-awake']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['keep-awake', '--state']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['keep-awake', '--session']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'keep-awake'), 'one keep-awake grant, on --session')
+      .toEqual([['keep-awake', '--session']]);
+  });
+
   it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {
     expect(() => auditExecWhitelist(withCcd([['ws-shed-deps']])))
       .toThrow(/only grantable with '--session'/);
@@ -559,6 +587,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['project-add', '--empty', '--name']]))).toThrow(/only grantable with '--name'/);
     expect(() => auditExecWhitelist(withCcd([['project-add', '--name']]))).not.toThrow();
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'project-add'), 'one project-add grant, on --name').toEqual([['project-add', '--name']]);
+  });
+
+  // THE SKILL SELF-INSTALL (D-8126): `skill-ensure` is enrolled for its ARGUMENT SURFACE, so the audit refuses the bare verb,
+  // the wrong flag and the flag out of place, over a CONSTRUCTED table.
+  it('throws on a skill-ensure with no --wrapper, the wrong flag, or the flag out of place (D-8126)', () => {
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure']]))).toThrow(/only grantable with '--wrapper'/);
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure', '--all']]))).toThrow(/only grantable with '--wrapper'/);
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure', 'lane-a', '--wrapper']]))).toThrow(/only grantable with '--wrapper'/);
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure', '--wrapper']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'skill-ensure'), 'one skill-ensure grant, on --wrapper').toEqual([['skill-ensure', '--wrapper']]);
   });
 
   // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).

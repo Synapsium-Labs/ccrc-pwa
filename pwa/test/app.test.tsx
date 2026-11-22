@@ -20,6 +20,7 @@ import { api } from '../src/lib/api';
 import { TEST_ROSTER } from './rosterFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
+import { frame, unowned } from './delegationFixture';
 
 /** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
  *  hang reports the wait's own failure, with the DOM, before the case's timeout (reviews 1464 F8 and 1473 A9). */
@@ -60,6 +61,18 @@ describe('App /archive route', () => {
     // mounts alongside the /archive detail pane.
     fireEvent.click(screen.getByRole('button', { name: /^workspace /i }));
     expect(location.pathname).toBe('/s/demo-quiet-basin');
+  });
+
+  it('hands the delegation frame to the Archive screen: "Work no session owns" draws from the store (desktop polish H4)', () => {
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [], delegation: frame({ unowned: [unowned()] }) }));
+    try {
+      navigate('/archive');
+      render(<App />);
+      const section = screen.getByRole('region', { name: /^Work no session owns/ });
+      expect(within(section).getByText(/no owner found/)).toBeInTheDocument();
+    } finally {
+      act(() => useFleetStore.setState({ delegation: null }));
+    }
   });
 
   it('leaves / on data-view="fleet" and /s/:id routing to SessionScreen untouched', () => {
@@ -380,6 +393,9 @@ describe('ROUTES and the ladder, both ways', () => {
     '/waiting', '/waiting/7', '/waiting/x', '/waiting/7/y', '/waitingx',
     // The programme view (desktop-polish PL5b): a programme by slug, and near misses that name no route.
     '/programmes/prog-a', '/programmes/prog-a/', '/programmes', '/programmes/Prog-A', '/programmes/Build_4', '/programmes/a/b', '/programmesx',
+    // An epic of a programme and a project's Upkeep page (Linear hierarchy §11.2, D-8184), and near misses that name no route.
+    '/programmes/prog-a/epics/e-1', '/programmes/prog-a/epics/e-1/', '/programmes/prog-a/epics', '/programmes/a.b/epics/e-1',
+    '/programmes/prog-a/epics/%zz', '/projects/project-a/upkeep', '/projects/project-a/upkeep/', '/projects/project-a', '/projects/a/b/upkeep',
     // A slug the owner refuses and a malformed escape are no route (carry C, D-7951; review 1388 F1 and F3): the fleet.
     '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz',
     // Settings' five pages and the catch-all (D-5504).
@@ -398,6 +414,7 @@ describe('ROUTES and the ladder, both ways', () => {
     '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x', '/waiting/x', '/waiting/7/y', '/waitingx',
     '/programmes', '/programmes/a/b', '/programmesx', '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz', '/settings/a/b',
     '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
+    '/programmes/prog-a/epics', '/programmes/a.b/epics/e-1', '/programmes/prog-a/epics/%zz', '/projects/project-a', '/projects/a/b/upkeep',
   ]);
 
   it('every ROUTES row is reached by a probe, and every probe renders what the table says', () => {

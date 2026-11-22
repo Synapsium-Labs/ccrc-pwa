@@ -37,7 +37,8 @@
 # are removed after a sync succeeds. The release the takeover replaced is removed once the takeover has ended (the
 # next sync, or `tools-sync --takeover-ended`, which TB7's service unit runs before the new service starts).
 # It reads no config file but the box's one (for the release base), assigns no BOX_ENV_FILE, and names no test box
-# setting: every other value comes from the spec.
+# setting: every other value comes from the spec. The unit gives it no HOME, so before the spec is read HOME is taken
+# from the password database when the environment names none (`_tbt_home`, testbox-sync-home).
 set -uo pipefail
 
 TBT_PROG=ccrc-testbox-tools
@@ -59,6 +60,30 @@ _tbt_paths() {   # -> TBT_TOOLS, TBT_TREE; else 1 and TBT_WHY
   t="${t%/release/installed}"
   [ "$t" != "$TBT_TREE" ] && [ -n "$t" ] || { TBT_WHY="not run from <tools>/release/installed: $TBT_TREE"; return 1; }
   TBT_TOOLS="$t"
+}
+# @anchor tbt-home
+# THE HOME (testbox-sync-home). The unit is root's and names no User=, and the system manager sets HOME only for a
+# unit with User= (systemd.exec(5)), so this script starts with no HOME. The sourced ccd/ccrc reads $HOME at its top
+# level under `set -u`, and the npmrc's `cache=${HOME}/.npm` names npm's cache by it, so every sync that changed the
+# release died at step 1 (`ccd/ccrc: line 103: HOME: unbound variable`). With no HOME in the environment, HOME is the
+# running user's home from the password database, as a login would set it. A home the database does not name, or one
+# that is not an absolute directory, fails the sync before anything is fetched. A HOME the environment gives is kept when
+# it is an absolute directory, and fails the sync the same way when it is not (review 3223 F6).
+_tbt_home() {   # -> HOME exported; else 1 and TBT_WHY
+  local row h
+  if [ -n "${HOME-}" ]; then
+    [[ "$HOME" == /* ]] && [ -d "$HOME" ] && return 0
+    TBT_WHY="the environment's HOME is not an absolute directory"
+    return 1
+  fi
+  row="$(getent passwd "$EUID" 2>/dev/null)" || row=""
+  IFS=: read -r _ _ _ _ _ h _ <<<"$row"
+  if [[ "${h-}" != /* ]] || [ ! -d "$h" ]; then
+    TBT_WHY="HOME is not set, and the password database names no usable home for uid $EUID"
+    return 1
+  fi
+  HOME="$h"
+  export HOME
 }
 
 # ── small helpers ────────────────────────────────────────────────────────
@@ -276,14 +301,57 @@ _tbt_apt_sources() {   # -> the mirror's sources list, for the distribution rele
          "$TBT_MIRROR" "$code" "$TBT_MIRROR" "$code" "$TBT_MIRROR" "$code" > "$TBT_TOOLS/apt/sources.list" \
     || { TBT_WHY="cannot write $TBT_TOOLS/apt/sources.list"; return 1; }
 }
-_tbt_apt_version() {   # <package> <measured version> -> the mirror's full version whose upstream part is the measured one
-  local pkg="$1" want="$2" l v up
+# `_tbt_apt_version <package> <measured version> [letter]` -> the mirror's full version whose upstream part is the measured
+# one. With `letter`, an upstream part that is the measured one plus one trailing letter matches too (a packaging respin: the
+# package is 3.6a and its `tmux -V` says 3.6).
+_tbt_apt_version() {
+  local pkg="$1" want="$2" loose="${3-}" l v up
   while IFS= read -r l; do
     v="$(awk -F'|' '{ gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }' <<<"$l")"
     up="${v#*:}"; up="${up%%-*}"; up="${up%%+*}"; up="${up%%~*}"
     [ "$up" = "$want" ] && { printf '%s\n' "$v"; return 0; }
+    [ "$loose" = letter ] && [[ "$up" =~ ^(.*[0-9])[a-z]$ ]] && [ "${BASH_REMATCH[1]}" = "$want" ] && { printf '%s\n' "$v"; return 0; }
   done < <(_tbt_apt_cache madison "$pkg" 2>/dev/null)
   return 1
+}
+# `_tbt_apt_pins <tool> <measured version>` -> TBT_PINS, the package manager's words that put the tool at the version the
+# fleet host MEASURED (what the tool prints), which is not always its package's version; else 1. In order:
+#   1. the tool's package at exactly that version;
+#   2. the tool's package at that version plus one letter (see `_tbt_apt_version`), only when (1) found none;
+#   3. python3 alone: `python3` is a metapackage whose version trails the interpreter's (3.14.3 for an interpreter that
+#      prints 3.14.4), so the interpreter's own package, `python<major>.<minor>`, is pinned at the measured version and
+#      `python3` is installed unpinned beside it.
+# The box measures its own tools after the sync and reports any that differ, so a wrong choice here cannot pass unseen.
+_tbt_apt_pins() {
+  local t="$1" want="$2" full mm
+  TBT_PINS=()
+  if full="$(_tbt_apt_version "$t" "$want")" || full="$(_tbt_apt_version "$t" "$want" letter)"; then TBT_PINS=("$t=$full"); return 0; fi
+  if [ "$t" = python3 ] && [[ "$want" =~ ^([0-9]+\.[0-9]+)(\.[0-9]+)*$ ]]; then
+    mm="${BASH_REMATCH[1]}"
+    if full="$(_tbt_apt_version "python$mm" "$want")"; then TBT_PINS=("python3" "python$mm=$full"); return 0; fi
+  fi
+  return 1
+}
+# `_tbt_dep_pick <deb.deps line>` -> TBT_DEP, the package to install for one dependency line (`a (>= 1) | b | c`); else 1 and
+# TBT_WHY. The line's first alternative the mirror can install wins, each tried under its own name and then under its
+# `t64` name: Chrome's list still names `libasound2`, `libglib2.0-0` and their like, which a distribution past the 64-bit
+# time_t rename ships as `libasound2t64`, and the old name is then a virtual package with two providers, which apt-get
+# refuses to choose between ("has no installation candidate"). When the mirror answers for none of them the line's first
+# name is kept, as before, and apt-get says what is wrong with it.
+_tbt_dep_pick() {
+  local line="$1" alt name first="" c
+  TBT_DEP=""
+  while IFS= read -r alt; do
+    name="${alt#"${alt%%[![:space:]]*}"}"; name="${name%%[[:space:]]*}"
+    [ -n "$name" ] || continue
+    [[ "$name" =~ ^[a-z0-9][a-z0-9.+-]*$ ]] || { TBT_WHY="deb.deps names an odd package: $(_tbt_clean "$name")"; return 1; }
+    [ -n "$first" ] || first="$name"
+    for c in "$name" "${name}t64"; do
+      if [ -n "$(_tbt_apt_cache madison "$c" 2>/dev/null)" ]; then TBT_DEP="$c"; return 0; fi
+    done
+  done < <(printf '%s\n' "$line" | tr '|' '\n')
+  [ -n "$first" ] || { TBT_WHY="deb.deps holds a line that names no package"; return 1; }
+  TBT_DEP="$first"
 }
 _tbt_chrome_install() {   # <tools> <version> -> <tools>/chrome/<version>; TBT_CHROME_SHA; else 1 and TBT_WHY
   local tools="$1" v="$2" dst="$1/chrome/$2" st url d deps=()
@@ -301,10 +369,9 @@ _tbt_chrome_install() {   # <tools> <version> -> <tools>/chrome/<version>; TBT_C
   fi
   if [ -f "$dst/chrome-linux64/deb.deps" ]; then
     while IFS= read -r d; do
-      d="${d%%[[:space:]]*}"
-      [ -n "$d" ] || continue
-      [[ "$d" =~ ^[a-z0-9][a-z0-9.+-]*$ ]] || { TBT_WHY="deb.deps names an odd package: $(_tbt_clean "$d")"; return 1; }
-      deps+=("$d")
+      [ -n "${d//[[:space:]]/}" ] || continue
+      _tbt_dep_pick "$d" || return 1
+      deps+=("$TBT_DEP")
     done < "$dst/chrome-linux64/deb.deps"
   fi
   [ "${#deps[@]}" -eq 0 ] || _tbt_apt install -y --no-install-recommends "${deps[@]}" >/dev/null \
@@ -383,6 +450,7 @@ _tbt_main() {
   if [ "${1:-}" = --takeover-ended ] && [ "$#" -eq 1 ]; then _tbt_takeover_ended; exit 0; fi
   [ "$#" -eq 1 ] || { printf 'usage: tools-sync <spec file> | tools-sync --takeover-ended\n' >&2; exit 2; }
   spec="$1"
+  _tbt_home || _tbt_fail home "$TBT_WHY"
   _tbt_read_spec "$spec" || _tbt_fail spec "$TBT_WHY"
   # The node that renames: the box's current one until this sync has placed its own.
   TBT_SWAP_NODE="$TBT_TOOLS/current/node"
@@ -412,9 +480,8 @@ _tbt_main() {
   local pins=()
   for t in python3 git tmux; do
     _tbt_step "$t"
-    local full
-    full="$(_tbt_apt_version "$t" "${TBT_V[$t]}")" || _tbt_fail "$t" "the OS mirror has no $t ${TBT_V[$t]}"
-    pins+=("$t=$full")
+    _tbt_apt_pins "$t" "${TBT_V[$t]}" || _tbt_fail "$t" "the OS mirror has no $t ${TBT_V[$t]}"
+    pins+=("${TBT_PINS[@]}")
   done
   _tbt_apt install -y --no-install-recommends --allow-downgrades "${pins[@]}" strace jq >/dev/null \
     || _tbt_fail python3 "the package manager refused ${pins[*]} strace jq"

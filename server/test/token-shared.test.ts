@@ -382,8 +382,23 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the sixteen separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These sixteen are separate
+  // Seven days that hold no week: each is a different fact that only shares the number, ruled out of the holders above and
+  // named in this row of its own (remaining work A, fix round 1; slug `edge-unmeasurable-is-its-own-fact`).
+  const OWN_FACTS: Record<string, string> = {
+    // How long an edge's target may stay unmeasured before the edge stops blocking (w2-remaining-work.md question 3).
+    'shared/programmeFacts.ts:EDGE_UNMEASURABLE_AFTER_MS': 'target-unmeasurable exit',
+    // How far back the forecast lane's seal arm looks for a close with no seal (w2-forecasts-health.md, forecasts A).
+    'server/src/coord/programmeFactsStore.ts:SEAL_LOOKBACK_MS': 'seal look-back',
+    // The step between calibration's four weekly cuts, M30's "four weeks" (w2-forecasts-health.md question 6, forecasts A).
+    'server/src/coord/forecast.ts:CALIBRATION_CUT_STEP_MS': 'calibration cut step',
+  };
+
+  it('each seven-day fact of its own is still found by the scan where its row says, and is no holder', () => {
+    expect(sevenDayHolders(ALL).filter((h) => h in OWN_FACTS)).toEqual(Object.keys(OWN_FACTS).sort());
+  });
+
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the nineteen separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These nineteen are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -414,7 +429,16 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // The portfolio's closed-waves window (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-portfolio.md` Task 1,
     // "waves closed in 7 and 28 days") is the sixteenth, ruled a separate quantity by the coordinator (ask 437): a reporting
     // window unrelated to token rotation, and it does not import the token interval.
-    expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
+    // The response record's Waiting on you window (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-responses.md`
+    // Task 5) is the seventeenth: a Waiting on you row's longest window (§4.3 Table 4.3a), unrelated to token rotation, and
+    // it does not import the token interval.
+    // The drift pass's persistent-drift window (Linear hierarchy wave 4, D-8183; design 2026-11-10 §7.4: three restores of one
+    // object within seven days raise a Waiting on you item) is the eighteenth, ruled a separate quantity (run 2337's ask): the
+    // design's own week of restores, unrelated to token rotation, and it does not import the token interval.
+    // The hook's reports keep (Overlord W1 door process B1: reader and model-switch rows and the witness checks, the plan's starting
+    // value, question 12) is the nineteenth, ruled a separate quantity by the coordinator (coordinator ruling, 2026-11-20, run 2832):
+    // unrelated to token rotation, and it does not import the token interval.
+    expect(sevenDayHolders(ALL).filter((h) => !(h in OWN_FACTS)), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
@@ -427,10 +451,13 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
       'server/src/coord/runCloseSwitch.ts:RUN_CLOSE_TALLY_MS',
       'server/src/coord/runStuck.ts:NEVER_STARTED_AFTER_MS',
       'server/src/coord/runStuckPass.ts:PROGRAMME_GONE_KEEP_MS',
+      'server/src/linear/driftPolicy.ts:DRIFT_PERSIST',
       'shared/accounts.ts:SIGNED_IN_WITHIN_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
+      'shared/continuity-reports.ts:REPORT_KEEP_MS',
       'shared/push-outbox.ts:OUTBOX_KEEP_MS',
+      'shared/responses.ts:WAITING_WINDOW_MS',
     ]);
   });
 });

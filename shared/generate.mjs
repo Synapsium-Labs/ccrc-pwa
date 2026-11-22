@@ -62,7 +62,7 @@
 //    deliberately does. Two independent locks on one door, on purpose.
 
 import { SUBAGENT_CLASSES } from './models.mjs';
-import { API_KEY_PROVIDERS } from './roster-json.mjs';
+import { API_KEY_PROVIDERS, orgLabelVerdict } from './roster-json.mjs';
 
 /**
  * Backslash-escapes the characters that are still live inside a
@@ -222,6 +222,11 @@ function idArray(ids) {
  * stdout at rc 0 is an account with no such fact AND an unknown id; `_is_valid_wrapper` gates ids first. Both
  * values are a word from a closed set or a non-negative integer, so `echo` of them raw is safe.
  *
+ * ── `_ccrc_org` ──
+ *
+ * The operator's organization label (plan 2026-11-16-account-organization.md), emitted ALWAYS like `_ccrc_pool`, so
+ * `declare -F _ccrc_org` tells ccd's `_acct_org` whether this projection knows labels; empty stdout at rc 0 is unset.
+ *
  * ── `_ccrc_secrets_file` ──
  *
  * The roster's `exec.secretsFile`, HOME-relative, for an account that declares
@@ -341,6 +346,12 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.continuity.recordedAt} ;;`)
     .join('\n');
 
+  // One arm per labelled account; only a value the label gate admits gets one (an unvalidated caller's junk does not).
+  const orgArms = roster.byIdLengthDesc
+    .filter((a) => typeof a.org === 'string' && orgLabelVerdict(a.org) === 'ok')
+    .map((a) => `    ${a.id}) echo ${a.org} ;;`)
+    .join('\n');
+
   // One arm per account that DECLARES `exec.secretsFile`, the same filter shape
   // as `poolArms` and for the same reason (an unvalidated non-string gets no
   // arm). TWO PRODUCERS, TWO SHAPES: `parseRoster` nests the field under `exec`,
@@ -421,6 +432,11 @@ ${billingArms}
 _ccrc_continuity() {
   case "$1" in
 ${continuityArms}
+  esac
+}
+_ccrc_org() {
+  case "$1" in
+${orgArms}
   esac
 }
 _ccrc_secrets_file() {

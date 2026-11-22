@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import type { DigestAnswer, DigestLine } from '../../shared/api';
 import { DigestScreen, asDigestAnswer, digestTotalsText, utcClock } from '../src/screens/DigestScreen';
 import { ApiError } from '../src/lib/api';
+import { CALL_REFUSAL_TEXT, type CallRefusal } from '../src/ledgers/callWords';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -126,4 +127,43 @@ describe('the digest screen\'s helpers', () => {
     expect(digestTotalsText({ ...DIGEST, totals: { decisions: 1, answers: 0, allows: 1, denies: 0, handOvers: 0, lapses: 0, calls: 0, guardForbidden: 0 } }))
       .toBe('1 decision · 1 allowed');
   });
+});
+describe('call lines (D-8126)', () => {
+  const callLineRow = line({ rowKind: 'call', id: 7, kind: 'big-call', childId: '', text: 'Which store?', tool: null, class: null, answer: 'Postgres', reason: 'it is already in use' });
+  const withCall = { ...DIGEST, lines: [callLineRow] };
+  it('the wire guard keeps a call line, and it names the call, the chosen option and the reason', async () => {
+    expect(asDigestAnswer(withCall)?.lines).toHaveLength(1);
+    render(<DigestScreen day="2026-10-18" load={vi.fn().mockResolvedValue(withCall)} />);
+    const row = (await screen.findByText('called')).closest('li')!;
+    expect(row.querySelector('.digest-what')?.textContent).toBe('call');
+    expect(row.textContent).toContain('Which store?');
+    expect(row.textContent).toContain('chose: Postgres · reason: it is already in use');
+    expect(row.querySelector('.digest-child')).toBeNull();
+  });
+  it('its correction posts rowKind call', async () => {
+    const correct = vi.fn().mockResolvedValue({ ok: true, mailId: 9, deliveryId: 11 });
+    render(<DigestScreen day="2026-10-18" load={vi.fn().mockResolvedValue(withCall)} correct={correct} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Correct call 7' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Use SQLite.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send correction' }));
+    await waitFor(() => expect(correct).toHaveBeenCalledWith({ rowKind: 'call', id: 7, text: 'Use SQLite.' }));
+  });
+});
+
+// Fix round 1 (review 2792 F5): ONE owner of the call refusal sentences. A call line's correction says each refusal the
+// correction door answers for a call in `callWords.ts`'s words. That every code of the door's result type has a sentence is
+// pinned in server/test/digest-call-refusals.test.ts: a pwa test may not read server/src (ci-reach-census).
+describe('a call line\'s correction refusals (D-8126)', () => {
+  for (const code of ['unknown-call', 'not-coordinator', 'duplicate']) {
+    it(`${code} is said in the call table's words`, async () => {
+      const callRow = line({ rowKind: 'call', id: 7, kind: 'big-call', childId: '', text: 'Which store?', tool: null, class: null, answer: 'sql', reason: 'r' });
+      const correct = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: code }));
+      render(<DigestScreen day="2026-10-18" load={vi.fn().mockResolvedValue({ ...DIGEST, lines: [callRow] })} correct={correct} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Correct call 7' }));
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Use files.' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send correction' }));
+      expect((await screen.findByRole('alert')).textContent).toBe(CALL_REFUSAL_TEXT[code as CallRefusal]);
+    });
+  }
+
 });

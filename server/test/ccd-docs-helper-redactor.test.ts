@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactDocsText } from '../../shared/docs.js';
-import { harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD_LIBS, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { docsRepo, REAL_GIT, runCcdDocs, type DocsRun } from './ccdDocsHelpers.js';
 import { unitJson } from './docsHelperPy.js';
 
@@ -881,19 +881,29 @@ describe('the docs front probes node and the pinned redactor before any work (D-
 
   it('a hashing tool that answers the loader and then prints an empty digest answers redactor-mismatch', () => {
     const count = path.join(h.home, 'hash-calls');
+    const heads = path.join(h.home, 'hash-heads');
+    const input = path.join(h.home, 'hash-input');
     for (const tool of ['sha256sum', 'shasum']) {
       const real = execFileSync('sh', ['-c', `command -v ${tool} || true`], { encoding: 'utf8' }).trim();
       fs.writeFileSync(path.join(harnessBin(h.home), tool), [
         '#!/bin/sh',
-        `echo x >> ${shWord(count)}`,
-        // The loader hashes each of its four libraries (D-7463, wave 5, the Overlord W1 pool set); every later call is the front's.
-        `[ "$(wc -l < ${shWord(count)})" -le 4 ] && ${real ? `exec ${shWord(real)} "$@"` : 'exit 127'}`,
-        'cat >/dev/null; exit 0',
+        // Each call's input is kept and its first line logged, so the case can say WHICH bytes were hashed (review 3006 F8).
+        `cat > ${shWord(input)}; head -n 1 ${shWord(input)} >> ${shWord(heads)}; echo x >> ${shWord(count)}`,
+        // The loader hashes each of its seven libraries (D-7463, wave 5, the Overlord W1 pool set, ccd arms, door process and model aliases); every later call is the front's.
+        `[ "$(wc -l < ${shWord(count)})" -le 7 ] && ${real ? `exec ${shWord(real)} "$@" < ${shWord(input)}` : 'exit 127'}`,
+        'exit 0',
         '',
       ].join('\n'), { mode: 0o755 });
     }
     const r = installed().run(INDEX);
-    expect(fs.readFileSync(count, 'utf8').split('\n').filter(Boolean).length, 'the loader and the front both hashed').toBeGreaterThanOrEqual(5);
+    // The loader hashed exactly the seven libraries, in its own order, the seventh being the model-aliases library; the front
+    // hashed after them. A library dropped from the loader's list moves the front's input into the first seven.
+    const libHeads = CCD_LIBS.map((f) => fs.readFileSync(f, 'utf8').split('\n')[0]);
+    expect(libHeads).toHaveLength(7);
+    expect(libHeads[6]).toContain('ccd/lib/model-aliases.sh');
+    const hashed = fs.readFileSync(heads, 'utf8').split('\n').filter(Boolean);
+    expect(hashed.slice(0, 7), 'the loader hashed the seven libraries, model-aliases.sh last').toEqual(libHeads);
+    expect(hashed.length, 'the front hashed after the loader').toBeGreaterThanOrEqual(8);
     expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
   });
 

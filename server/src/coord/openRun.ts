@@ -1,8 +1,9 @@
 import { isPositiveDecimalSafeInteger, isRegistryId, shapeProgramSlug } from '../../../shared/api.js';
 import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../../shared/plan.js';
-import { epicAdmitsRun, epicForWave, ticketIsHeld } from './planPolicy.js';
+import { epicAdmitsRun, epicForOpen, runMustNameTicket, ticketIsHeld } from './planPolicy.js';
 import type { OpenRunTicket } from './planStore.js';
+import { decideOtherLane, type OtherLaneReads } from './otherLanes.js';
 
 /**
  * `POST /api/runs`' synchronous preconditions, decided (D-5384, audit ticket
@@ -87,10 +88,14 @@ export interface OpenRunFacts {
    *  true for a slug with no row (a new programme that skipped `plan put`); `ended` is `planEnd IS NOT NULL`; `ticket`
    *  finds a ticket of this programme by key (an Upkeep ticket belongs to no programme, so it is never found). */
   readonly plan: (slug: string) => OpenRunPlanFacts;
+  /** Overlord W1 other lanes (C48): the designation and the claimant's launch profile, read by `overlordClaimant`. */
+  readonly otherLaneReads: OtherLaneReads;
 }
 
 export interface OpenRunPlanFacts {
   required: boolean; ended: boolean;
+  /** Programme work map WM1: the plan declares at least one phase; `tickets` lists one epic's tickets, as stored. */
+  phased: boolean; tickets(epicId: number): readonly { key: string; state: TicketState; runId: number | null }[];
   epics: readonly { id: number; waves: readonly number[]; state: EpicState }[];
   ticket(key: string): { id: number; epicId: number; project: string; state: TicketState; runId: number | null } | null;
 }
@@ -200,14 +205,14 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
  *  body key, with `by`), as opposed to the `error` words. */
 export type OpenRunConflictCode = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'attribution-required' | 'not-a-child'
-  | 'reserved-programme' | 'plan-closed' | 'plan-missing' | 'wave-epic-mismatch' | 'ticket-unavailable'>;
+  | 'reserved-programme' | 'plan-closed' | 'plan-missing' | 'wave-epic-mismatch' | 'ticket-unavailable' | 'ticket-required'>;
 
 /** One refusal, carrying the gate that answered it (for the order table; the
  *  route does not send it) and exactly the body fields the inline sends wrote:
  *  the bare shape refusal has NO `detail` key, every other `error` has one. */
 export type OpenRunRefusal =
   | { gate: OpenRunGate; error: 'bad-request'; detail?: string }
-  | { gate: OpenRunGate; error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal; detail: string }
+  | { gate: OpenRunGate; error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal; detail: string }
   | { gate: OpenRunGate; refused: OpenRunConflictCode; by?: string; detail?: string };
 
 /** The admitted open, shaped: what `CoordStore.openRun` and the route's later
@@ -247,7 +252,10 @@ interface Ctx {
   ticket?: OpenRunTicket | null;
 }
 
-type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal; detail: string }
+/** C48's two words at `overlordClaimant`, `error` words sent by `refuseRoute` (slug `overlord-run-refusal-is-an-error-word`). */
+type OverlordClaimantRefusal = 'overlord-not-a-coordinator' | 'unmeasured';
+type GateResult = { error: 'bad-request'; detail?: string }
+  | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal; detail: string }
   | { refused: OpenRunConflictCode; by?: string; detail?: string } | undefined;
 type Gate = (c: Ctx) => GateResult | Promise<GateResult>;
 
@@ -343,6 +351,13 @@ const GATES = [
     const r = await c.f.attribute(c.b.claimedBy as string, uuid as string);
     return r.ok ? undefined : { error: r.error, detail: r.detail };
   }],
+  // Overlord W1 other lanes (C48, §3.5): the Overlord's body never becomes a claimant. After `attribution` (an
+  // unattributed or stale caller keeps its answer) and before `reviewRead`, the first store read, so a refused open
+  // leaves no `planned` row, places no hold and learns nothing about the store.
+  ['overlordClaimant', async (c) => {
+    const v = await decideOtherLane('runOpen', c.b.claimedBy as string, c.f.otherLaneReads);
+    return v.kind === 'refuse' ? { error: v.word, detail: v.detail } : undefined;
+  }],
   ['reviewRead', (c) => {
     if (!isReview(c)) return undefined;
     const r = c.f.reviewed(c.b.reviews as number);
@@ -403,13 +418,18 @@ const GATES = [
       c.ticket = null;
       return undefined;
     }
-    const epicId = epicForWave(p.epics, wave);
-    if (epicId === null) return { refused: 'wave-epic-mismatch' };
+    // Programme work map WM6 (D-8780): a named ticket's epic that lists no waves takes the run at any wave; else the wave's epic.
+    const named = typeof c.b.ticket === 'string' ? p.ticket(c.b.ticket) : null;
+    const ruled = epicForOpen(p.epics, wave, named === null ? null : named.epicId, typeof c.b.ticket === 'string');
+    if ('refused' in ruled) return { refused: ruled.refused };
+    const epicId = ruled.epicId;
     if (typeof c.b.ticket !== 'string') {
+      // Programme work map WM1 (D-8727, spec §4.1 D10): a phased plan's run names its open declared ticket, after the wave's epic.
+      if (runMustNameTicket(p.phased, p.tickets(epicId))) return { refused: 'ticket-required' };
       c.ticket = { kind: 'new', epicId, project, title: c.b.title as string };
       return undefined;
     }
-    const t = p.ticket(c.b.ticket);
+    const t = named;
     if (t === null || t.state === 'done' || t.state === 'dropped' || ticketIsHeld(t)) {
       return { refused: 'ticket-unavailable' };
     }

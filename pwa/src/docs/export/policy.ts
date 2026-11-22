@@ -40,5 +40,6 @@ export type ExportPlain = 'over-cap' | 'page-ceiling' | 'timeout' | 'too-large' 
 
 /** Why Export is shown but disabled (spec 4.17's "When it is offered"; refinement (j)): the parse has not settled or
  *  answers another text, the page's highlight store has not settled, the render gate waits, or a raster leaf's own image
- *  did not load. */
-export type ExportWait = 'formatting' | 'highlighting' | 'gate' | 'image-failed';
+ *  did not load; for a mockup (class `html`, spec 5.6.9; completion plan Task 9), the auto-render gate waits for its tap
+ *  (`render-first`), or the parse or the plan is not done (`preparing`). */
+export type ExportWait = 'formatting' | 'highlighting' | 'gate' | 'image-failed' | 'render-first' | 'preparing';

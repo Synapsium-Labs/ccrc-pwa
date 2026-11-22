@@ -60,18 +60,15 @@ import {
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
-  DELEGATION_RECOVERY_PHASES,
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   COORDINATION_RESTORE_MARKER_FILE,
   DELEGATION_RESTORE_IN_PROGRESS,
-  DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  recoverDelegation,
-  recoverDelegationState,
 } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_RECOVERY_PHASES, DelegationEvidenceIndex, recoverDelegation, recoverDelegationState } from '../src/coord/delegation-recovery.js';
 import { DELEGATION_REPAIR_FULL_MS, repairDelegationProjection, type DelegationProjectionPort, type DelegationProjectionRepairReport } from '../src/coord/delegation-db-projection.js';
 import { DELEGATION_DURABILITY_EDGES, DelegationDurability, isDelegationCheckpointKebab, recoverDelegationFromFiles, type DelegationDurabilityDeps, type DelegationDurabilityEdge, type DelegationDurableBatch } from '../src/coord/delegation-durability.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
@@ -3594,7 +3591,8 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
     }
     const own = new Set(programMembers(CHECKPOINT_SOURCE).map((f) => `./${path.basename(f, '.ts')}.js`));
     const imports = [...new Set(texts.flatMap((t) => importsOf(strip(t.text))).filter((s) => !own.has(s)))];
-    expect(imports.sort()).toEqual(['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
+    // D-8830: plus the end-basis rules, a new L1 module the builder calls (session helpers S1), not a move out of the checkpoint.
+    expect(imports.sort()).toEqual(['../../../shared/api.js', './delegation-compaction.js', './delegation-end-basis.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
   });
   for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {

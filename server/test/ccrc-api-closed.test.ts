@@ -46,7 +46,9 @@ describe("the operator's act and decline are not in ccrc-api's table", () => {
       expect(paths, `${door} is a row of the client: a session could end a run`).not.toContain(door);
     }
     const text = fs.readFileSync(CCRC_API, 'utf8');
-    expect(text).not.toMatch(/\/act\b|\/decline\b/);
+    // `(?![\w-])`, not `\b`: `/api/sessions/{id}/act-key` (the door process's claim, Overlord W1 door process A1) is another
+    // word, and `\b` ends a word at its hyphen.
+    expect(text).not.toMatch(/\/act(?![\w-])|\/decline(?![\w-])/);
   });
 });
 
@@ -184,16 +186,23 @@ describe('the corpora no longer invoke curl', () => {
       'linear.statuses',
       'linear.update',
       'linking.show',
+      'linking.suggest',
       'mail.inbox',
       'mail.send',
       'peers.list',
       'plan.close',
       'plan.epic-drop',
+      'plan.map-propose',
       'plan.met',
+      'plan.phase-ref',
       'plan.put',
       'plan.show',
+      'plan.take',
       'plan.ticket-add',
+      'plan.ticket-done',
       'plan.ticket-move',
+      'plan.triage',
+      'programme.remaining',
       'runs.end-request',
       'runs.list',
       'runs.open',
@@ -211,6 +220,18 @@ describe('the corpora no longer invoke curl', () => {
     const calls = executableBlocks(text).flatMap((b) => [...b.matchAll(/ccrc-api\s+leases\s+retain\b/g)]);
     expect(calls.length, 'the reference has no executable `ccrc-api leases retain` call').toBeGreaterThan(0);
     expect(routeKeys().has('leases.retain'), 'no [leases.retain] row').toBe(true);
+  });
+
+  it('the wave-boundary reference teaches `ccrc-api programme remaining` with an example that is a call of the row (Overlord W2)', () => {
+    const file = path.join(root, 'ccd/coordinator-skill/references/wave-lifecycle-5-boundary.md');
+    const blocks = executableBlocks(fs.readFileSync(file, 'utf8')).filter((b) => /"\$API"\s+programme\s+remaining\b/.test(b));
+    expect(blocks, 'the boundary reference has no executable `programme remaining` call').toHaveLength(1);
+    expect(routeKeys().has('programme.remaining'), 'no [programme.remaining] row').toBe(true);
+    const m = /"\$API" programme remaining (\S+) --json - <<'JSON'\n([\s\S]*?)\nJSON/.exec(blocks[0]!);
+    expect(m, 'the example is not a `--json -` heredoc call').not.toBeNull();
+    const body = JSON.parse(m![2]!) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['hi', 'lo', 'reason', 'runId']);
+    expect(body).not.toHaveProperty('byId');
   });
 
   it('executes ask examples with no valid default and exact expanded calls', () => {
@@ -285,8 +306,9 @@ describe('the client stays closed', () => {
     const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
     // `--session` (delegation broker wave 3, Task 15) is the third label and is NOT a second identity-bearing flag: it belongs to
     // `parse_intent`, the focused grammar of `coordinators intent`, where it is an ASSERTION that must equal the pane-derived id
-    // (the next test holds that), the shape `asks list --parent` already has.
-    expect(cases.sort()).toEqual(['--by', '--json', '--session']);
+    // (the next test holds that), the shape `asks list --parent` already has. `--key` (Overlord wave 164) carries no identity
+    // either: it is `mail send`'s idempotency key, refused on every other row, and `ccrc-api-mail-key.test.ts` holds it.
+    expect(cases.sort()).toEqual(['--by', '--json', '--key', '--session']);
   });
 
   it('`coordinators intent` takes its identity from the pane: --session is compared with it and never builds anything (Task 15)', () => {
@@ -357,8 +379,12 @@ describe('the client stays closed', () => {
     // reds here by its line.
     const code = clientCode();
     const mentions = code.split('\n').filter((l) => /x-ccrc-mail-token/i.test(l)).map((l) => l.trim());
-    expect(mentions).toEqual([`code=$(printf 'header = "x-ccrc-mail-token: %s"\\n' "$TOKEN" \\`]);
-    expect(code).toContain(`\n    | curl "\${args[@]}" "$url" 2>/dev/null)\n`);
+    // Since the door process (Overlord W1 door process A1, ruled F1) the header is the config's first line and a body its
+    // `data-raw` line after it, both on curl's stdin; `--data-binary` is on no argv.
+    expect(mentions).toEqual([`cfg=$(printf 'header = "x-ccrc-mail-token: %s"' "$TOKEN")`]);
+    expect(code).toContain(`\n  code=$(printf '%s\\n' "$cfg" | curl "\${args[@]}" "$url" 2>/dev/null)\n`);
+    expect(code).toContain(`cfg+=$'\\n'"data-raw = \\"$esc\\""`);
+    expect(code).not.toMatch(/--data-binary "\$body"/);
     expect(code).toMatch(/^\s*local -a args=\(-sS -K - /m);
   });
 
@@ -418,28 +444,58 @@ describe('the client stays closed', () => {
     // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
     // The probe door's two (Overlord, the probes piece: `sessions.probe`, a read, and `probe.answer`, which takes the note door's
     // rule) to eighty-three. The loads door's `sessions.loads` (Overlord W1 sandbox, Task 4; a POST of the hook's spooled body,
-    // no splice and no fill) to eighty-four.
-    expect(routeKeys().size).toBe(84);
+    // no splice and no fill) to eighty-four. `programme.remaining` (Overlord W2 remaining work A, which takes the probe answer's
+    // rule: refuse a body naming either key, then append the pane's pair LAST, review 2265 F9) to eighty-five. `plan.phase-ref` (programme work map WM0) to eighty-six; it takes the caller's
+    // own body and fills none (the identity rides the query, as for the other `plan` rows).
+    // `plan.take` and `plan.triage` (D-8183; the caller's own body, the identity in the query, no fill) to eighty-eight. `quiz.record` (Overlord W1a quiz record:
+    // the operator's `ccrc quiz-record` posts its body through it, no splice and no fill; coordinator ruling, slug
+    // quiz-record-posts-through-the-client) to eighty-nine.
+    // `sessions.act-key` (Overlord W1 door process A1; the door process's own body, carrying the nonce, no splice and no fill)
+    // to ninety. `plan.ticket-done` (programme work map WM1) to ninety-one, the way `plan.phase-ref` does it. `sessions.report`
+    // (Overlord W1 door process B1; the hook's own report body, no splice and no fill) to ninety-two.
+    // `plan.map-propose` (the per-team migration, D-8186; the caller's own body, the identity in the query, no fill) to ninety-three.
+    // `linking.suggest` (D-8808) to ninety-four: it takes the `calls.record` fill's rule, pinned below. `linking.confirm` (D-8809)
+    // to ninety-five: the suggestion row's fill, on one condition with it. `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the
+    // unattended quiz: the timer's verb and runner, and the coordinator's own body, no splice and no fill) to ninety-eight.
+    expect(routeKeys().size).toBe(98);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
-    // refuses, then derives the pair from the pane, and fills nowhere else.
-    const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
+    // refuses, then derives the pair from the pane and appends it LAST, byId then byUuid (review 2039 F7, review 3245 A2). Each
+    // slice below ends at its own block's closing `fi`, so a later block's splice (`runs.review-rounds`) cannot satisfy it
+    // (review 3266 F1).
+    const blockOf = (head: string): string => {
+      const at = code.indexOf(head);
+      return at < 0 ? '' : code.slice(at, code.indexOf('\n  fi\n', at));
+    };
+    const pairLast = (fill: string): void => {
+      expect(fill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+      expect(fill).not.toMatch(/splice_body_field/);
+      expect(fill).toMatch(/append_body_field 'byId' "\$DERIVED_ID"/);
+      expect(fill.indexOf("append_body_field 'byId'")).toBeLessThan(fill.indexOf("append_body_field 'byUuid' \"$DERIVED_UUID\""));
+    };
     expect(code.match(/if \[\[ "\$key" == 'calls\.record' \]\]; then/g) ?? []).toHaveLength(1);
-    expect(callFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
-    expect(callFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
-    expect(callFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    pairLast(blockOf("if [[ \"$key\" == 'calls.record' ]]; then"));
     // The note door's fill (Overlord W1a, the notes piece) is the call record's rule on its three POST rows: it refuses a body
-    // naming either key, then splices the pane's pair; `note list` fills the query.
-    const noteFill = code.slice(code.indexOf("if [[ \"$key\" == 'note.add' || \"$key\" == 'note.close' || \"$key\" == 'note.handover' ]]; then"));
+    // naming either key, then appends the pane's pair last; `note list` fills the query.
     expect(code.match(/if \[\[ "\$key" == 'note\.add' \|\| "\$key" == 'note\.close' \|\| "\$key" == 'note\.handover' \]\]; then/g) ?? []).toHaveLength(1);
-    expect(noteFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
-    expect(noteFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
-    expect(noteFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    pairLast(blockOf("if [[ \"$key\" == 'note.add' || \"$key\" == 'note.close' || \"$key\" == 'note.handover' ]]; then"));
     // The probe answer's fill is the note door's rule on one row: refuse a body naming either key, then append the pane's pair.
-    const probeFill = code.slice(code.indexOf("if [[ \"$key\" == 'probe.answer' ]]; then\n    [[ -n"));
     expect(code.match(/if \[\[ "\$key" == 'probe\.answer' \]\]; then\n    \[\[ -n/g) ?? []).toHaveLength(1);
-    expect(probeFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
-    expect(probeFill).toMatch(/append_body_field 'byId' "\$DERIVED_ID"/);
-    expect(probeFill).toMatch(/append_body_field 'byUuid' "\$DERIVED_UUID"/);
+    pairLast(blockOf("if [[ \"$key\" == 'probe.answer' ]]; then\n    [[ -n"));
+    // THE APPEND-LAST FILLS, derived from the client's own blocks: every `if [[ "$key" == …` block that fills the pane's pair
+    // with `append_body_field` (the pair LAST, so a parser keeping the later of two keys keeps the pane's, review 2039 F7), and
+    // no such block that splices it. The goals writes (review 2240 F1) and the remaining-work door (Overlord W2, review 2265 F9)
+    // joined the note and probe rows; the call record and the linking suggest and confirm doors joined them (review 3245 A2).
+    const blocks = [...code.matchAll(/^  if \[\[ ("\$key" == '[a-z.-]+'(?: \|\| "\$key" == '[a-z.-]+')*) \]\]; then\n([\s\S]*?)^  fi$/gm)];
+    const keysOf = (head: string): string[] => [...head.matchAll(/'([a-z.-]+)'/g)].map((m) => m[1]!);
+    const appendLast = blocks.filter((b) => /append_body_field 'byId'/.test(b[2]!)).flatMap((b) => keysOf(b[1]!)).sort();
+    expect(appendLast).toEqual(['calls.record', 'goals.merged', 'goals.modify', 'goals.pin', 'linking.confirm', 'linking.suggest', 'note.add', 'note.close', 'note.handover', 'probe.answer', 'programme.remaining']);
+    const lastFirst = ['programme.remaining', 'calls.record', 'linking.suggest'];
+    expect(blocks.filter((x) => keysOf(x[1]!).some((k) => lastFirst.includes(k)))).toHaveLength(3);
+    for (const b of blocks.filter((x) => keysOf(x[1]!).some((k) => lastFirst.includes(k)))) {
+      expect(b[2]).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+      expect(b[2]).not.toMatch(/splice_body_field/);
+      expect(b[2]!.indexOf("append_body_field 'byId'")).toBeLessThan(b[2]!.indexOf("append_body_field 'byUuid'"));
+    }
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

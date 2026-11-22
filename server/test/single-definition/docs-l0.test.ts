@@ -45,6 +45,9 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
       'DOCS_RETRY_FLOOR_MS',
       'DOCS_LOG_MAX_ENTRIES', 'DOCS_LOG_SUBJECT_MAX_CHARS', 'DOCS_LOG_AUTHOR_MAX_CHARS', 'DOCS_LOG_MAX_WIRE_BYTES',
       'DOCS_REF_MAX_CHARS', 'DOCS_PATH_MAX_BYTES', 'DOCS_PATH_MAX_COMPONENT_BYTES', 'DOCS_PATH_MAX_DEPTH',
+      // X2 P1 (spec 4.3): the range ceilings and the prepare budget.
+      'DOCS_RANGE_FRAME_BYTES', 'DOCS_RANGE_MAX_BYTES', 'DOCS_PDF_INLINE_MAX_BYTES', 'DOCS_IMAGE_VIEW_MAX_PIXELS',
+      'DOCS_IMAGE_VIEW_MAX_SIDE', 'DOCS_RANGE_PREPARE_BUDGET_MS',
     ];
     const OWN = (name: string): RegExp => new RegExp('^export const ' + name + String.raw`\s*=\s*\d+\s*;`, 'm');
 
@@ -74,6 +77,9 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
       'DOC_SECTIONS', 'DOCS_PROJECT_RE_BODY', 'DOCS_BARE_REF_RE_BODY', 'DOCS_QUALIFIED_PREFIX_RE_BODY',
       'DOCS_QUALIFIED_REF_RE_BODY', 'DOCS_SHA_RE_BODY', 'DOCS_FINGERPRINT_RE_BODY', 'DOCS_MAX_BYTES_RE_BODY',
       'DOCS_SECTION_RE_BODY', 'DOCS_REL_PATH_RE_BODY', 'DOCS_PATH_EXCLUDED_CATEGORIES', 'DOCS_PATH_EXCLUDED_RANGES',
+      // X2 P1: the listed modified time. A plain decimal run that unrelated ccd code already spells, so it is pinned by
+      // DEF alone, as the commit and fingerprint bodies are; docs-parity.test.ts holds ccd's copy to it from P1.2.
+      'DOCS_MTIME_NS_RE_BODY',
     ];
     const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     /** [what, fingerprint, the files that may hold it, a planted copy it must see, a near miss it must not]. */

@@ -67,7 +67,7 @@ export interface PushSender {
   prepare(payload: PushPayload | null): PreparedPush;
   /** An unbound push: insert it claimed, send it now. `failed` is the caller's sentence for a rejected send. `label`, the
    *  notifier kind, gives the push a response row (Overlord W1, question 2); a push with none gets no row and no id. */
-  send(payload: PushPayload, opts?: { readonly failed?: string; readonly label?: string }): void;
+  send(payload: PushPayload, opts?: { readonly failed?: string; readonly label?: string; readonly source?: string }): void;
   /** A bound row its raising or arming transaction wrote `pending`: re-read its source, claim it, send it now. */
   sendRow(row: BoundRowTarget, settledOf: SettledOf): void;
   /** The lane's pass: the held items' reach, every due row sent in parallel, the purge. Resolves when the pass's attempts
@@ -215,7 +215,8 @@ export function senderFor(deps: SenderDeps): PushSender {
         let w: ReturnType<OutboxStorePort['insertUnboundRow']>;
         try {
           w = typeof masked.tag === 'string'
-            ? port.insertUnboundRow({ pushId, payload: masked as OutboxPayload, at }, responseOf(opts.label, null))
+            ? port.insertUnboundRow({ pushId, payload: masked as OutboxPayload, at, ...(opts.source === undefined ? {} : { pushSource: opts.source }) },
+              responseOf(opts.label, null))
             : { ok: false, detail: 'the payload has no tag' };
         } catch (e) { w = { ok: false, detail: message(e) }; }
         if (w.ok) {
@@ -230,7 +231,7 @@ export function senderFor(deps: SenderDeps): PushSender {
     sendRow(row, settledOf) { void sendBound(row, settledOf); },
     async drain(now, settledOf) {
       if (port === null || time === undefined) return;
-      reachHeldItems(port, now, push !== undefined, () => time.entropy.hex(PUSH_ID_BYTES), warnByCause);
+      reachHeldItems(port, now, push !== undefined, () => time.entropy.hex(PUSH_ID_BYTES), warnByCause, deps.responseStamp);
       const due = port.dueOutboxRows(now);
       if (!due.ok) { warnByCause(`due:${due.detail}`, `${due.detail}; the next drain reads again`); return; }
       // The boot's horizon, applied again here, so a row the boot pass could not seal is never sent stale (review 2150 F6):
@@ -264,7 +265,7 @@ const targetOf = (r: OutboxRow): BoundRowTarget | { id: number; source: null; so
  *  `pushDue` on `held` never answers `now` (slug held-drain-is-silent), so this sends nothing; an answer it does not
  *  expect leaves the item unstamped and is logged once (review 2150 F10). */
 function reachHeldItems(port: OutboxStorePort, now: number, service: boolean, mint: () => string,
-  warnByCause: (cause: string, line: string) => void): void {
+  warnByCause: (cause: string, line: string) => void, stamp: (() => ResponseStamp) | undefined): void {
   const first = port.firstBootAt();
   if (first === null) return;                                // the boot pass has not run: no stamp before it
   const held = port.heldItemsReached(now, first);
@@ -274,7 +275,7 @@ function reachHeldItems(port: OutboxStorePort, now: number, service: boolean, mi
       settled: false, superseded: false, payload: true });
     switch (due.due) {
       case 'silent':
-        try { port.reachHeldItem(item.id, mint(), due.why, item.heldUntil); } catch (e) {
+        try { port.reachHeldItem(item.id, mint(), due.why, item.heldUntil, stamp?.()); } catch (e) {
           warnByCause(`reach:${message(e)}`, `the held item ${item.id} was not stamped (${message(e)}); the next drain retries`);
         }
         break;
@@ -320,7 +321,7 @@ export function itemBoundOf(deps: SenderDeps, item: { readonly title: string; re
   event: Extract<PushDueFacts['event'], 'reach' | 'arm'>): BoundOf {
   return (id): BoundWrite => {
     const prepared = senderFor(deps).prepare(itemPushPayload(id, item.title));
-    return { prepared, viewing: false, due: pushDue({ event, service: prepared.service, source: 'item',
+    return { prepared, viewing: false, stamp: deps.responseStamp?.(), due: pushDue({ event, service: prepared.service, source: 'item',
       blocking: item.neededBy === 'blocking', viewing: false, settled: false, superseded: false, payload: true }) };
   };
 }

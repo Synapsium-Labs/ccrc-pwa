@@ -23,7 +23,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
 
 const PROJECT = 'demo';
-const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000', precompact: 'refuse', poolset: 'pool-a', acctorder: 'claude-a', profiledigest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
+const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000', precompact: 'refuse', poolset: 'pool-a', acctorder: 'claude-a', profiledigest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', mailhold: '1795000000:coordinator.1' };
 
 /** A full registry row — same field set `run-routes.test.ts`'s own `seed`
  *  writes, so a fixture session reads exactly like a real ccd one. */
@@ -275,7 +275,7 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
   });
 
   it('a route naming a launch-profile field is refused lane-only, naming it, before any fleet act (Overlord W1a, F1)', async () => {
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(7);   // the launch profile's three, the compaction piece's precompact, the pool set's poolset and acctorder (Overlord W1) and the W1 sandbox's profiledigest
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(8);   // the launch profile's three, the compaction piece's precompact, the pool set's poolset and acctorder (Overlord W1), the W1 sandbox's profiledigest and the mid-turn mail hold's mailhold
     for (const field of ROUTE_LANE_ONLY_FIELDS) {
       const h = await harness({ wave: 1 });
       const out = await h.dispatch({ class: 'opus', [field]: LANE_ONLY_VALUE[field] });

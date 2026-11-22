@@ -160,6 +160,9 @@ export const LINEAR_HIERARCHY_DOCUMENTS = Object.freeze({
     + 'issues(filter: { team: { key: { eq: $team } }, state: { type: { nin: ["completed", "canceled"] } } }, '
     + `${HIERARCHY_PAGE}) { nodes { ${HIERARCHY_ISSUE_FIELDS} } ${PAGE_INFO} } }`,
   issueOwned: `query IssueOwned($id: String!) { issue(id: $id) { ${HIERARCHY_ISSUE_FIELDS} } }`,
+  // D-8808 (Task 8.3): the issues attached to one pull request's URL; each node selects its issue's id, identifier and team
+  // key and nothing else (no title, no text), because the team link counts them. The shape is the schema's, constructed.
+  attachmentsForUrl: 'query AttachmentsForUrl($url: String!) { attachmentsForURL(url: $url) { nodes { issue { id identifier team { key } } } } }',
   initiativeCreate: 'mutation InitiativeCreate($input: InitiativeCreateInput!) { '
     + 'initiativeCreate(input: $input) { success initiative { id } } }',
   initiativeUpdate: 'mutation InitiativeUpdate($id: String!, $input: InitiativeUpdateInput!) { '

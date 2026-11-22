@@ -8,9 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
-import { isReviewRoundsRefusal } from '../../shared/refusal.js';
+import { isOverlordRefusal, isReviewRoundsRefusal } from '../../shared/refusal.js';
+import { isOtherLaneKebab } from '../src/coord/otherLanes.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
 import { isPlanKebab } from '../../shared/plan.js';
+import { isLinkingRefusal } from '../../shared/linking.js';
+import { isLinearActionVerb } from '../../shared/ledgers.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -30,6 +33,7 @@ import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
 import { isAutoRollKebab } from '../src/coord/rollTarget.js';
 import { isWakeGateKebab } from '../src/coord/wakeBudget.js';
 import { isRunCloseKebab } from '../src/coord/runClose.js';
+import { isBlockWakeKebab } from '../src/coord/coordCalls.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -45,6 +49,13 @@ import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isReceiptDrop } from '../../shared/responses.js';
+import { isDecisionModelWord } from '../src/coord/decisionModel.js';
+import {
+  EDGE_KINDS, isEdgePredicate, isEdgeState, isProgrammeHealthWord, isRemainingRefusal, isRunSpendState, isUnforecastableReason,
+} from '../../shared/programmeFacts.js';
+import { isServiceClass } from '../../shared/portfolio.js';
+import { isApprovalCensusWord } from '../../shared/approval-census.js';
+import { BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -58,7 +69,14 @@ import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
 import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
 import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
-import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
+import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
+import { isOverlordGateKebab } from '../src/coord/overlordGate.js';
+import { isLadderKebab } from '../src/coord/overlordLadder.js';
+import { isOverlapsKebab } from '../src/coord/overlaps.js';
+import { isDoneTestKebab } from '../src/coord/doneTests.js';
+import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
+import { ACTOR_ISSUERS } from '../../shared/overlord-identity.js';
+import { isLaneArmImport, isLaneArmLane, isLaneArmQuizState, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -564,6 +582,35 @@ describe('the rejection table is total, in both directions', () => {
   const sources = (): string =>
     readdirSync(coordDir).filter((f) => f.endsWith('.ts'))
       .map((f) => readFileSync(path.join(coordDir, f), 'utf8')).join('\n');
+  // The done tests' words are admitted only where they are spelled: in `doneTests.ts` and `doneTestRead.ts`. The same word
+  // quoted in any other coordination file needs a guard of its own (review 2377 F8).
+  const DONE_TEST_FILES = ['doneTests.ts', 'doneTestRead.ts'];
+  const outsideDoneTests = (): string =>
+    readdirSync(coordDir).filter((f) => f.endsWith('.ts') && !DONE_TEST_FILES.includes(f))
+      .map((f) => readFileSync(path.join(coordDir, f), 'utf8')).join('\n');
+  const isDoneTestWordHere = (tok: string, elsewhere: string): boolean =>
+    isDoneTestKebab(tok) && !elsewhere.includes(`'${tok}'`);
+
+  // Gates A, review F9: these words are identifiers only in their declaring coordination file.
+  const outsideIdentityHome = (...homes: string[]): string =>
+    readdirSync(coordDir).filter((f) => f.endsWith('.ts') && !homes.includes(f))
+      .map((f) => readFileSync(path.join(coordDir, f), 'utf8')).join('\n');
+  const isOverlordDoorWordHere = (tok: string, elsewhere: string): boolean =>
+    Object.prototype.hasOwnProperty.call(OVERLORD_DOORS, tok) && !elsewhere.includes(`'${tok}'`);
+  const isActorIssuerWordHere = (tok: string, elsewhere: string): boolean =>
+    (ACTOR_ISSUERS as readonly string[]).includes(tok) && !elsewhere.includes(`'${tok}'`);
+
+  it('CONTROL: door keys and actor issuers are not admitted when another coordination file quotes them', () => {
+    for (const [word, guard] of [['portfolio-rank', isOverlordDoorWordHere], ['account-gate', isActorIssuerWordHere]] as const) {
+      expect(guard(word, "export const x = 'not-this-word';")).toBe(true);
+      expect(guard(word, `export const planted = '${word}';`)).toBe(false);
+      expect(guard(word, `// ${word}, unquoted`)).toBe(true);
+      expect(guard('not-an-identity-word', '')).toBe(false);
+    }
+    const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    expect(self).toContain('|| isOverlordDoorWordHere(tok, outsideDoors)');
+    expect(self).toContain('|| isActorIssuerWordHere(tok, outsideIssuers)');
+  });
 
   it('every declared INGRESS/DONE-AUTHORITY code is emitted somewhere in server/src/coord', () => {
     // 'undeliverable' is the one DELIVERY-group code (MAIL_REJECT_CODES's own
@@ -612,6 +659,19 @@ describe('the rejection table is total, in both directions', () => {
     for (const code of ASK_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
   });
 
+  it('CONTROL (review 2381 N3): a done-test word is admitted only while no other coordination file quotes it', () => {
+    // Planted sources, never the tree: the word alone, quoted in another file, quoted only unquoted, and a word that is not
+    // the done tests' at all.
+    expect(isDoneTestWordHere('lineage-unattributed', "export const x = 'not-this-word';")).toBe(true);
+    expect(isDoneTestWordHere('lineage-unattributed', "export const planted = 'lineage-unattributed';")).toBe(false);
+    expect(isDoneTestWordHere('lineage-unattributed', '// lineage-unattributed in a comment, unquoted')).toBe(true);
+    expect(isDoneTestWordHere('mail-nudge', '')).toBe(false);
+    // The scan asks the scoped check, never the bare guard: this file's own guard chain names it.
+    const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    expect(self).toContain('|| isDoneTestWordHere(tok, elsewhere)');
+    expect(self.includes('|| isDoneTestKebab' + '(tok)')).toBe(false);
+  });
+
   it('every quoted kebab token in server/src/coord that looks like a code is declared', () => {
     // Deliberately over-broad, then filtered by an explicit allowlist of
     // NON-code kebab literals, so a new code cannot slip in unnamed. A token
@@ -640,6 +700,7 @@ describe('the rejection table is total, in both directions', () => {
       'no-test-box',
       'no-runner',
       'x-ccrc-mail-token',   // coord/token.ts's header name
+      'content-type',        // coord/decisionModelHttp.ts's request header name (Overlord W2 decision model A)
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       // D-2545 — the READ-FAILURE family, and the same family as
       // `not-configured` directly above: a fact about THIS BOX, not about the
@@ -806,6 +867,11 @@ describe('the rejection table is total, in both directions', () => {
                                   // exactly like its two siblings above — no
                                   // `refused`/`reject.code` ever carries it, nothing
                                   // switches on it over the wire.
+      'in-place',                // D-6096 (W1-4b, review 2993 F9): `IN_PLACE_EVENT`, the
+                                  // `run_events.detail` the in-place bind journals
+                                  // (`CoordStore.bindInPlace`). Forensic history on the
+                                  // run, like `session-rebound` above: no
+                                  // `refused`/`reject.code` ever carries it.
       'reverse-demotion',        // routing slice 5, Task 2 — one of `RouteMode`'s own
                                   // words (`shared/routing-ladder.ts`'s `RungTarget.mode`),
                                   // compared here only against a run_events.detail token
@@ -843,6 +909,9 @@ describe('the rejection table is total, in both directions', () => {
       'stash-failed',
       'stash-occupied',
       'enter-ignored',
+      // CallerIdentity's in-process ConsoleCaller discriminants, compared by the rank door; never refusal or wire codes.
+      'signed-in',
+      'device-unmeasured',
       // LANDING ORDER WAVE 4 (plan docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md, Task 1):
       // `coord/lineage.ts` spells wave 3b's walk-stop words (`LINEAGE_STOPS`, the radar's vocabulary, written into a
       // lineage file and only read here) and the DETAIL words of `decideLineage`'s answers. A detail is free text
@@ -862,6 +931,9 @@ describe('the rejection table is total, in both directions', () => {
       'partly-measured',
       'land-probe-paused',    // `coord/lineageRead.ts`: the global pause marker's FILE NAME under `$REG`, wave 3b's; a path segment
     ]);
+    const elsewhere = outsideDoneTests();
+    const outsideDoors = outsideIdentityHome('overlordDoors.ts');
+    const outsideIssuers = outsideIdentityHome('schema.ts');
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
@@ -869,6 +941,14 @@ describe('the rejection table is total, in both directions', () => {
         || isRunRefuseCode(tok)
         // LINEAR HIERARCHY WAVE 2 (D-8181) — the plan's words, admitted through their exported guard (`shared/plan.ts`).
         || isPlanKebab(tok)
+        // LINEAR HIERARCHY WAVE 8 (D-8808, D-8809) — `coord/linkingStore.ts` answers the linking routes' refusals by name
+        // (`'team-set'`, `'no-project'`), which the route sends as its `error`. Admitted through L0's guard over
+        // `LINKING_REFUSALS`, never NOT_CODES.
+        || isLinkingRefusal(tok)
+        // THE HIERARCHY ITEMS' VERBS (D-8182, D-8183): `coord/hierarchyRoutes.ts`'s item-act `switch` names an action's verb as a
+        // literal (`'linear-drift'`, `'linear-owner'`). A verb rides an operator item's `action`, never a `refused` or `reject.code`.
+        // Admitted through L0's guard, derived from `LINEAR_ACTION_VERB_MAP`, never NOT_CODES.
+        || isLinearActionVerb(tok)
         // BUILD 9a WAVE 4 — a FOURTH union, checked together and never merged, for
         // the reason the `enter-ignored` note above already states. `LifecycleGapReason`
         // reaches this scanner because `mirrorplan.ts` lives in `server/src/coord` and
@@ -1145,8 +1225,8 @@ describe('the rejection table is total, in both directions', () => {
         // (`'stood-kept'`) and `coord/schema.ts` seeds a lane's row by its name (`'roster-card'`). A word is a stored column
         // or a row key, never a `refused` or `reject.code`; its door's own refusal (`'lane-gated'`, review 2003 F3) is sent by
         // `refuseRoute`. Admitted through L0's guards, derived from `LANE_ARM_IMPORTS`, `LANE_ARM_LANES` and
-        // `LANE_ARM_REFUSALS`, never NOT_CODES.
-        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok)
+        // `LANE_ARM_REFUSALS`, never NOT_CODES; the quiz block's baseline state (`'not-yet'`) through `LANE_ARM_QUIZ_STATES`.
+        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok) || isLaneArmQuizState(tok)
         // THE ANSWER MARKS (Overlord W1, #2870): `coord/answerMarks.ts` names why a row carries no box and the ask detail as
         // literals, and `coord/answerMarkStore.ts` a mark's name. A reason rides `not-markable`'s `detail`, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from its own map and L0's, never NOT_CODES.
@@ -1154,8 +1234,73 @@ describe('the rejection table is total, in both directions', () => {
         // THE RESPONSE RECORD'S RECEIPTS DOOR (Overlord W1): `coord/responsesStore.ts` names a drop word as a literal
         // (`'no-row'`). It rides the door's answer as a `dropped` key, never a `refused` or `reject.code`. Admitted through
         // L0's guard, derived from `RECEIPT_DROPS`, never NOT_CODES.
-        || isReceiptDrop(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word or receipt drop word`).toBe(true);
+        // THE OVERLAPS ARM (Overlord W2 overlaps A): `coord/overlaps.ts` names a pair's kind, source and close, the relay's
+        // refusal word and its reasons as literals. A word rides a `programme_pairs` row or the relay's verdict, never a mail
+        // rejection or a run refusal. Admitted through the exported guard, derived from L0's pair tables and
+        // `RELAY_CONFLICT_WHY_MAP`, never NOT_CODES.
+        || isOverlapsKebab(tok)
+        // THE DONE TESTS (Overlord W2 done tests A): `coord/doneTests.ts` and `coord/doneTestRead.ts` name a predicate, a
+        // done test's refusal and why a target is unmeasurable as literals. A word rides a target's answer or the door's
+        // `bad-request`, never a mail rejection or a run refusal. Admitted through the exported guard, derived from L0's
+        // `DONE_PREDICATES` and that file's own maps, never NOT_CODES, and only while no other coordination file quotes it.
+        || isDoneTestWordHere(tok, elsewhere)
+        || isReceiptDrop(tok)
+        // THE DECISION MODEL (Overlord W2): `coord/decisionModel*.ts` name its outcomes, their reasons, its host kinds, bands
+        // and egress words as literals. A word rides a check or a record, never a `refused` or `reject.code`. Admitted
+        // through `coord/decisionModel.ts#isDecisionModelWord`, derived from L0's lists and that file's, never NOT_CODES.
+        || isDecisionModelWord(tok)
+        // THE DESIGNATION (Overlord W1 designation A): `coord/overlordDesignation.ts` names its refusals by their wire words,
+        // declared once in L0's `OVERLORD_REFUSALS` and answered by the designate door. Admitted through L0's guard, never NOT_CODES.
+        || isOverlordRefusal(tok)
+        // ...and its acts, its store's answers and the read words it takes, through that decider's own exported guard.
+        || isDesignationKebab(tok)
+        // THE LADDER: its effect, narrowing and local decision words come from their owning runtime maps.
+        || isLadderKebab(tok)
+        // THE OVERLORD GATE (W1 gates B): `coord/overlordGate.ts` names a caller's standing, the fence's and the witness's
+        // reasons, what the runner records and the facts' arms as literals. None rides a `refused` or `reject.code` (the
+        // refusal words are `OVERLORD_REFUSALS`'); admitted through that decider's own maps, never NOT_CODES.
+        || isOverlordGateKebab(tok)
+        // THE OTHER WRITE LANES (Overlord W1 other lanes): `coord/otherLanes.ts` names its lanes' `via` column and its verdict's
+        // own kinds as literals. A word rides the lane table or the decider's answer, never a `refused` or `reject.code`; the
+        // refusal words are `OVERLORD_REFUSALS`' (admitted above). Admitted through the exported guard, never NOT_CODES.
+        || isOtherLaneKebab(tok)
+        // THE REMAINING-WORK DOOR (Overlord W2 remaining work A): `coord/programmeFactsStore.ts` names why it refused a
+        // good body (`'too-many-open-edges'`), and `coord/programmeRemaining.ts` an edge target's predicate (`'run-closed'`,
+        // `'pr-merged'`, `'operator-confirms'`). The refusal rides the door's 400 `detail`, the predicate a stored target,
+        // never a `refused` or `reject.code`. Admitted through L0's guards, derived from `REMAINING_REFUSALS` and
+        // `EDGE_PREDICATES`, never NOT_CODES.
+        || isRemainingRefusal(tok) || isEdgePredicate(tok) || isEdgeState(tok)
+        // THE SEALED FORECASTS (Overlord W2 forecasts A): `coord/forecast.ts#forecastProgramme` names why a programme is not
+        // forecast (`'no-remaining'`, `'nothing-left'`, `'too-little-history'`). A reason rides a stored seal's `reason`,
+        // never a `refused` or `reject.code`. Admitted through L0's guard, derived from `UNFORECASTABLE_REASON_MAP`, never NOT_CODES.
+        || isUnforecastableReason(tok)
+        // THE PROGRAMME HEALTH (Overlord W2 forecasts B): `coord/programmeHealth.ts` names the health words, an edge's kind (its state
+        // is main's `isEdgeState`, above), and `coord/programmeFactsStore.ts` a spend row's state as literals. A word rides a `programme_health` or
+        // `run_spend` row or an edge's column, never a `refused` or `reject.code`. Admitted through L0's guards and lists,
+        // derived from `PROGRAMME_HEALTH_WORD_MAP`, `EDGE_KINDS` and `RUN_SPEND_STATE_MAP`, never NOT_CODES.
+        || isProgrammeHealthWord(tok) || (EDGE_KINDS as readonly string[]).includes(tok)
+        || isRunSpendState(tok)
+        // `coord/programmeHealth.ts` also reads a rank's class (`'fixed-date'`), a stored column of the operator's rank row: admitted
+        // through L0's `isServiceClass`, derived from `SERVICE_CLASS_MAP`.
+        || isServiceClass(tok)
+        // THE APPROVAL CENSUS (approvals plan 2026-11-18 PR 1): `coord/approvalCensus*.ts` name a prompt's path (`'hook-skipped'`,
+        // `'refused-at-mint'`, ...) and a row's deny currency (`'not-current'`). A word rides the census read's counts or a
+        // census row's `path`, never a `refused` or `reject.code`. Admitted through L0's guard, derived from
+        // `APPROVAL_CENSUS_PATH_MAP` and `APPROVAL_CENSUS_DENY_CURRENCY_MAP`, never NOT_CODES.
+        || isApprovalCensusWord(tok)
+        // THE UNTRUSTED-BUILD ITEM (approvals plan 2026-11-18 PR 2): `coord/untrustedBuildItem.ts` names the build-trust
+        // reasons that raise an item (`'not-captured'`, ...). A word decides whether an item is raised, never a `refused` or
+        // `reject.code`. Admitted through L0's list, `BUILD_UNTRUSTED_REASONS` (D-8289), never NOT_CODES.
+        || (BUILD_UNTRUSTED_REASONS as readonly string[]).includes(tok)
+        // The door registry's own keys identify routes only there; another quoting file needs its own guard.
+        || isOverlordDoorWordHere(tok, outsideDoors)
+        // Actor issuer literals in coordination are stored in the schema, not mail or run refusal codes.
+        || isActorIssuerWordHere(tok, outsideIssuers)
+        // THE BLOCK WAKE (D-8126): `coord/coordCalls.ts` names `blockWakeDue`'s three answers and the two words of a fact that has
+        // not reached its condition as literals. They decide a parked thread's wake on the block-wake lane, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from `BLOCK_WAKE_VERDICTS`, `BLOCK_WAKE_FACT_WORDS` and `CALL_WAKES`.
+        || isBlockWakeKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, linking refusal or block-wake word`).toBe(true);
     }
   });
 });

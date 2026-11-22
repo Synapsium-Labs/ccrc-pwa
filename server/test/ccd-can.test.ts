@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CCD_ARGV, CCD_CAN, CHILD_ARGV_CAP, COLLECT_CAP, EXPIRE_CAP, ORPHAN_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP,
-  HIBERNATE_HOLD_OK_CAP, POOLS_CAP, PR_STATE_PR_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, ccdCan,
+  HIBERNATE_HOLD_OK_CAP, KEEP_AWAKE_CAP, POOLS_CAP, PR_STATE_PR_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, ccdCan,
 } from '../src/ccdargv.js';
 import type { FleetState } from '../src/fleetstate.js';
 
@@ -24,6 +24,14 @@ describe('ccdCan(state, row) answers by the row\'s own token and default (D-5866
     expect(ccdCan(stateOf(['pr-state', 'caps']), 'prStatePr'), 'the bare verb is not the token').toBe(false);
     expect(ccdCan(stateOf(['pr-state', 'caps']), 'prStateProject'), 'CONTROL: the older form still permits on its verb').toBe(true);
     expect(ccdCan(stateOf([PR_STATE_PR_CAP]), 'prStatePr')).toBe(true);
+  });
+  it('keepAwake refuses on no evidence and answers by keep-awake-v1 alone, never by the keep-awake verb (Overlord W1 ccd arms)', () => {
+    expect(CCD_CAN.keepAwake).toEqual({ token: 'keep-awake-v1', default: 'refuse' });
+    expect(ccdCan(undefined, 'keepAwake')).toBe(false);
+    expect(ccdCan(stateOf(null), 'keepAwake')).toBe(false);
+    expect(ccdCan(stateOf([]), 'keepAwake')).toBe(false);
+    expect(ccdCan(stateOf(['keep-awake', 'caps']), 'keepAwake'), 'the bare verb is not the token').toBe(false);
+    expect(ccdCan(stateOf([KEEP_AWAKE_CAP]), 'keepAwake')).toBe(true);
   });
   it('no evidence (no list, no state) gives the row\'s default', () => {
     for (const s of [stateOf(null), undefined]) {

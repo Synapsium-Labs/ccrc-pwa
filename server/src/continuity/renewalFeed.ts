@@ -23,7 +23,16 @@ import { RENEWAL_LANE_PERIOD_MS, STATE_DEADLINE_S, type GenerationState, type Tr
 import type { GenAction, GenEvent } from './generationMachine.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { SoftAnswer, SoftWait } from './softRenewal.js';
-import type { RenewResult } from './sessionHost.js';
+import type { RenewalPrompt, RenewResult } from './sessionHost.js';
+import type { FleetRole } from '../../../shared/fleetRoles.js';
+
+/** THE FIRST LINE OF A RENEWED GENERATION, BY ROLE (Overlord W1 door process A2, Task 5): the `INJECTED_PROMPTS` row the
+ *  renewal act delivers at `first-prompt` and at `renudge-card`. The Overlord has no shell, so its line names its doors
+ *  (`overlord-first-prompt`, which designation A sends to a new body too); every other role reads its card with `ccrc-api`. */
+export const FIRST_PROMPT_OF_ROLE: Readonly<Record<FleetRole, RenewalPrompt>> = {
+  overlord: 'overlord-first-prompt', auditor: 'renewal-first-prompt', replay: 'renewal-first-prompt', worker: 'renewal-first-prompt',
+  reviewer: 'renewal-first-prompt', coordinator: 'renewal-first-prompt', plain: 'renewal-first-prompt',
+};
 
 /** Why a due generation's renewal does not start this pass. */
 export type PermitWait = 'capability-missing' | 'role-changed' | 'overlord-first' | SoftWait;
@@ -149,7 +158,9 @@ export type RenewalAct =
   | { readonly kind: 'assemble-checkpoint' }
   | { readonly kind: 'raise-item'; readonly why: string; readonly about?: ItemAbout }
   | { readonly kind: 'set-hold-off' }
-  | { readonly kind: 'spot-probe' };
+  | { readonly kind: 'spot-probe' }
+  // The PreCompact arm's route field (the renewal hand-offs, Task 6): planned only on a change, live only.
+  | { readonly kind: 'precompact-field'; readonly value: 'refuse' | 'allow' };
 
 /** What an item says the session is doing now: the `renew` answer the renewal ended on, when it was one that left the
  *  session other than on its current conversation (review 2149 F5), or a stop that did not end it (exit 6, F4). */
@@ -234,6 +245,20 @@ export const RENEWAL_HANDOVER_BODY = 'Your renewal is starting. Write your hando
 /** The spot round's notice (ask 415): one system mail telling the session to answer its round. */
 export const SPOT_PROBE_SUBJECT = 'probe';
 export const SPOT_PROBE_BODY = 'A probe round is open for you. Answer it with `ccrc-api probe`.';
+/** The Overlord's forms of the two mails (door process B1, carrying door A2's ruling `card-body-still-names-ccrc-api`): it has
+ *  no shell, so they name its doors, as its first line does; every other role keeps the `ccrc-api` form. */
+export const OVERLORD_HANDOVER_BODY = 'Your renewal is starting. Write your handover note now with your note handover door.';
+export const OVERLORD_SPOT_PROBE_BODY = 'A probe round is open for you. Answer it with your probe door.';
+/** Each role's handover ask body and spot round body, chosen as `FIRST_PROMPT_OF_ROLE` chooses the first line. */
+export const RENEWAL_MAIL_OF_ROLE: Readonly<Record<FleetRole, { readonly handover: string; readonly spotProbe: string }>> = {
+  overlord: { handover: OVERLORD_HANDOVER_BODY, spotProbe: OVERLORD_SPOT_PROBE_BODY },
+  auditor: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  replay: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  worker: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  reviewer: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  coordinator: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  plain: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+};
 
 /** The states whose deliveries the mail gate holds (`renewing`): from `draining` to `probing` (A3). */
 export const RENEWING_STATES: ReadonlySet<GenerationState> = new Set<GenerationState>(['draining', 'checkpointed', 'clearing', 'carded', 'probing']);

@@ -1,0 +1,8 @@
+[
+  { "raw": "claude-opus-9-1[1m]", "bare": "claude-opus-9-1" },
+  { "raw": "claude-opus-9-1[1m][1m]", "bare": "claude-opus-9-1[1m]" },
+  { "raw": "claude-opus-9-1", "bare": "claude-opus-9-1" },
+  { "raw": "claude-opus-9-1[1m]-x", "bare": "claude-opus-9-1[1m]-x" },
+  { "raw": "[1m]", "bare": "" },
+  { "raw": "", "bare": "" }
+]

@@ -61,3 +61,12 @@ export function waveRepresentative<T extends { readonly id: number; readonly ope
   }
   return best;
 }
+
+/** A run `CoordStore#reconstruct` minted: the one writer that inserts a run with `dispatchedAt` already set, to its own
+ *  `openedAt`, and with no claimant. Every other run is opened `planned` with a claimant and dispatched later
+ *  (`markDispatched`), so it never matches. Its `dispatchedAt` is the rebuild's time, a stand-in that understates the
+ *  wave's age, so nothing measures from it (review 2130 F10). The one owner of the rule (Overlord W2 forecasts A, review
+ *  2265 F8): the portfolio's facts read and the forecast lane's lead history both ask it. */
+export function isRebuiltRun(r: { readonly claimedBy: string | null; readonly dispatchedAt: number | null; readonly openedAt: number }): boolean {
+  return r.claimedBy === null && r.dispatchedAt !== null && r.dispatchedAt === r.openedAt;
+}

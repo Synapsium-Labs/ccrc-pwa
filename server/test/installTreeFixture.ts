@@ -107,12 +107,17 @@ export const TREE_FILES = [
   // ERR_MODULE_NOT_FOUND. Copied, never stubbed, for the GPT lane's reason above.
   'ccd/ccrc-models-probe',
   'deploy/models-op.mjs',
+  // The Anthropic arm of the models op (model-class Anthropic arm A2): `deploy/models-op.mjs` imports it at load, so a
+  // placed tree without it fails every models verb with ERR_MODULE_NOT_FOUND.
+  'deploy/models-anthropic.mjs',
   'deploy/litellm-config.template.yaml',
   'shared/modelenv.mjs',
   'shared/litellm.mjs',
   // The auto-advance plan's pure rules (Codex arm, Task 3): `deploy/models-op.mjs` imports them at load, so a
   // placed tree without this file fails every models verb with ERR_MODULE_NOT_FOUND.
   'shared/model-advance.mjs',
+  // The Anthropic arm's pure rules (model-class Anthropic arm A2): `deploy/models-op.mjs` imports them at load too.
+  'shared/model-aliases.mjs',
   'shared/model-suggest.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any
@@ -152,6 +157,9 @@ export const TREE_FILES = [
   // ccrc history's policy ring (`ccd/history/lib.mjs`, copied whole with `ccd/history`) imports the run-id grammar from here
   // (W4 addendum P10, the shared arm); a placed tree without it fails `status --json` at load, and doctor's history check with it.
   'shared/workflow-ids.mjs',
+  // The weekly quiz runner (run 3212): `ccd-quiz-weekly.service` runs it as `%h/ccrc/deploy/history-quiz-unattended.mjs`, so the
+  // versioned audit's unit row needs it in the placed tree.
+  'deploy/history-quiz-unattended.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would
@@ -181,6 +189,13 @@ export const TREE_FILES = [
   'ccd/lib/delegation-lease.sh',
   // Its fourth library (the Overlord's pool set): read, pinned and published exactly as the others.
   'ccd/lib/pool-set.sh',
+  // Its fifth library (the Overlord's ccd arms): read, pinned and published exactly as the others.
+  'ccd/lib/long-lived.sh',
+  'ccd/lib/door.sh',
+  // Its seventh library (the model-class Anthropic arm): read, pinned and published exactly as the others.
+  'ccd/lib/model-aliases.sh',
+  // The door program (plan question 2): read with `read_regular`, pinned (`__CCD_DOOR_SHA256`) and published beside the body by the same installer.
+  'ccd/door-process.mjs',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -254,6 +269,7 @@ export const TREE_FILES = [
   'ccd/lib/transcript.jq',
   // The roster card's one builder (D4, R-5a, D-8201); `_inst_files` places it beside the reader above.
   'ccd/lib/roster-card.jq',
+  'ccd/lib/mail-hold.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
   // the in-flight manifest's program (session-continuity 6b); placed beside it.

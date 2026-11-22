@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  QUIZ_ITEM_PROGRAMME, QUIZ_RECORD_READY, quizItemText, quizLaneVerdict, quizWeek, type QuizLaneFacts,
+  QUIZ_ITEM_PROGRAMME, QUIZ_RECORD_READY, QUIZ_UNATTENDED_GRACE_DAYS, quizItemText, quizLaneVerdict, quizWeek, type QuizLaneFacts,
 } from '../src/continuity/quiz.js';
 import { runQuizLane, type QuizLanePort } from '../src/continuity/quizLane.js';
-import { insertQuizRun, quizLanePortOf } from '../src/continuity/quizStore.js';
+import { insertQuizRun, quizLanePortOf, ruleQuizRun } from '../src/continuity/quizStore.js';
 import { ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX } from '../../shared/ledgers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
@@ -33,8 +33,8 @@ const MON = Date.UTC(2026, 10, 16, 0, 0, 0);       // Monday 2026-11-16, ISO wee
 const DAY = 86_400_000;
 
 const facts = (over: Partial<QuizLaneFacts> = {}): QuizLaneFacts => ({
-  recordReady: true, week: quizWeek(MON + DAY), recordedAts: { ok: true, value: [] }, baseline: { ok: true, exists: false },
-  itemRaised: { ok: true, value: false }, ...over,
+  recordReady: true, now: MON + 4 * DAY, week: quizWeek(MON + DAY), recordedAts: { ok: true, value: [] }, pendingWaits: { ok: true, value: false },
+  baseline: { ok: true, exists: false }, itemRaised: { ok: true, value: false }, ...over,
 });
 
 describe('quizWeek: the ISO week, in UTC (slug quiz-week-is-utc)', () => {
@@ -80,10 +80,30 @@ describe('quizLaneVerdict (L1)', () => {
   });
 });
 
+describe('the unattended run\'s grace (run 3212)', () => {
+  it(`holds the item until ${QUIZ_UNATTENDED_GRACE_DAYS} days into the week, then raises it`, () => {
+    expect(quizLaneVerdict(facts({ now: MON + QUIZ_UNATTENDED_GRACE_DAYS * DAY - 1 }))).toEqual({ kind: 'hold', why: 'unattended-grace' });
+    expect(quizLaneVerdict(facts({ now: MON + QUIZ_UNATTENDED_GRACE_DAYS * DAY }))).toMatchObject({ kind: 'raise' });
+    expect(QUIZ_UNATTENDED_GRACE_DAYS).toBe(3);
+  });
+  it('a confirmed run still holds the week first, and a failed read still logs', () => {
+    expect(quizLaneVerdict(facts({ now: MON + DAY, recordedAts: { ok: true, value: [MON + 1] } }))).toEqual({ kind: 'hold', why: 'recorded' });
+    expect(quizLaneVerdict(facts({ now: MON + DAY, baseline: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
+  });
+  it('the item says the unattended run runs it, where to read why, and that a hand run is still open', () => {
+    const all = [quizItemText('2026-W47', false).why, ...quizItemText('2026-W47', false).how].join('\n');
+    expect(all).toContain('ccd-quiz-weekly.timer');
+    expect(all).toContain(`confirmed ${QUIZ_UNATTENDED_GRACE_DAYS} days into the week`);
+    expect(all).toMatch(/which shows its last word/);
+    expect(all).toMatch(/headless-on, once, by the unattended run/);
+    expect(all).not.toMatch(/ccrc never runs it/);
+  });
+});
+
 describe('the item says what, how and why, and names every condition', () => {
-  for (const baseline of [false, true]) {
-    it(`fits the item's bounds and carries the four conditions (baseline recorded: ${String(baseline)})`, () => {
-      const t = quizItemText('2026-W47', baseline);
+  for (const [baseline, waits] of [[false, false], [true, false], [false, true], [true, true]] as const) {
+    it(`fits the item's bounds and carries the four conditions (baseline recorded: ${String(baseline)}, a run waits: ${String(waits)})`, () => {
+      const t = quizItemText('2026-W47', baseline, waits);
       expect(t.title.length).toBeLessThanOrEqual(ITEM_TITLE_MAX);
       expect(t.title).toContain('2026-W47');
       expect(t.why.length).toBeLessThanOrEqual(ITEM_TEXT_MAX);
@@ -96,6 +116,14 @@ describe('the item says what, how and why, and names every condition', () => {
       expect(all).toMatch(/by hand/);                                     // 3: the driver by the operator's hand
       expect(all).toMatch(/never a W2 result, a PASS or a measured benefit/); // 4
       expect(all).toMatch(/ccrc quiz-record --report <file> --sha <hex>/);
+      // The record path's real steps (plan `2026-11-17-overlord-quiz-record.md` Task 11): the runbook, the module, the
+      // Confirm on the card, and never inside a W2 window (skip condition 3).
+      expect(all).toContain('quiz-record-runbook.md, in the Overlord programme\'s docs');
+      expect(all).toContain('node --no-warnings ~/ccrc/deploy/history-quiz-single.mjs');
+      expect(all).toMatch(/arms \(it runs step 0b's probes first/);
+      expect(all).toMatch(/find the pending run whose report sha starts as report and ccrc quiz-record printed, and press Confirm/);
+      expect(all).toMatch(/never while a W2 window is open/);
+      expect(all).toMatch(/within 8 days of the arms run/);
     });
   }
 });
@@ -106,56 +134,84 @@ const setup = (recordReady = true) => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   return { coord, port: quizLanePortOf(coord, recordReady) };
 };
-const recordRun = (coord: CoordStore, at: number, sha = 'a'): void => {
-  insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: at, report: {
+/** Records a run (pending), and rules on it unless `rule` is null: a confirmed run is the baseline when it is the first. */
+const recordRun = (coord: CoordStore, at: number, sha = 'a', rule: 'confirm' | 'discard' | null = 'confirm'): void => {
+  const r = insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: at, report: {
     measuredAt: at, reportSha: SHA(sha), questionsSha: SHA('b'), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
     judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
-  } }, (lane) => coord.laneArmSetting(lane));
+  }, extra: { answered: 40, correct: 28, runFailed: 0, absent: 0, arm: 'treatment', settingsMode: 'restricted', pilot: 'skipped-by-ruling', ci: 95, method: 'percentile', bootstrapB: 10000,
+      inputs: { setup_sha256: '1'.repeat(64), frozen_sha256: '2'.repeat(64), arms_summary_sha256: '3'.repeat(64), judged_sha256: '4'.repeat(64) } } });
+  if (!r.ok) throw new Error('insert failed');
+  if (rule !== null) ruleQuizRun(coord.db, { id: r.id, action: rule, at, by: 'device-a' }, (lane) => coord.laneArmSetting(lane));
 };
 const quizItems = (coord: CoordStore) => coord.itemsFor(QUIZ_ITEM_PROGRAMME, MON + 30 * DAY).open;
 
 describe('the lane over the store', () => {
   it('raises nothing while the record path is absent', () => {
     const { coord, port } = setup(false);
-    expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'record-path-absent' });
+    expect(runQuizLane(port, MON + 4 * DAY, () => {})).toEqual({ kind: 'hold', why: 'record-path-absent' });
     expect(quizItems(coord)).toEqual([]);
   });
 
   it('one item a week, none twice, and the next week\'s once more', () => {
     const { coord, port } = setup();
-    expect(runQuizLane(port, MON + DAY, () => {})).toMatchObject({ kind: 'raised' });
-    expect(runQuizLane(port, MON + 2 * DAY, () => {})).toEqual({ kind: 'hold', why: 'raised' });
+    expect(runQuizLane(port, MON + 4 * DAY, () => {})).toMatchObject({ kind: 'raised' });
+    expect(runQuizLane(port, MON + 5 * DAY, () => {})).toEqual({ kind: 'hold', why: 'raised' });
     const first = quizItems(coord);
     expect(first.map((i) => [i.title, i.raisedBy, i.kind, i.neededBy])).toEqual([[quizItemText('2026-W47', false).title, 'ccrc', 'do', 'soon']]);
-    expect(runQuizLane(port, MON + 8 * DAY, () => {})).toMatchObject({ kind: 'raised' });
+    expect(runQuizLane(port, MON + 11 * DAY, () => {})).toMatchObject({ kind: 'raised' });
     expect(quizItems(coord).map((i) => i.title)).toEqual([quizItemText('2026-W47', false).title, quizItemText('2026-W48', false).title]);
   });
 
   it('a dismissed or done item of this week is not raised again', () => {
     const { coord, port } = setup();
-    runQuizLane(port, MON + DAY, () => {});
+    runQuizLane(port, MON + 4 * DAY, () => {});
     coord.db.exec("UPDATE operator_items SET state = 'dismissed'");
-    expect(runQuizLane(port, MON + 2 * DAY, () => {})).toEqual({ kind: 'hold', why: 'raised' });
+    expect(runQuizLane(port, MON + 5 * DAY, () => {})).toEqual({ kind: 'hold', why: 'raised' });
   });
 
   it('none when a run is recorded that week; the title drops "the baseline" once one exists', () => {
     const { coord, port } = setup();
     recordRun(coord, MON + 3_600_000);
-    expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
-    expect(runQuizLane(port, MON + 8 * DAY, () => {})).toMatchObject({ kind: 'raised' });
+    expect(runQuizLane(port, MON + 4 * DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
+    expect(runQuizLane(port, MON + 11 * DAY, () => {})).toMatchObject({ kind: 'raised' });
     expect(quizItems(coord).map((i) => i.title)).toEqual([quizItemText('2026-W48', true).title]);
+  });
+
+  // Review 2449 F2 (ruled: raise-time text is enough): the item's text is fixed when it is raised, so it always says what to do
+  // with a run recorded later in the week, and says exactly that one waits when one does at raise time.
+  it('the item always says to Confirm or Discard a run recorded this week, and says one waits when one does', () => {
+    expect(quizItemText('2026-W47', false).how[0]).toMatch(/^If you recorded a run this week, Confirm or Discard it on the Shadow lanes card/);
+    expect(quizItemText('2026-W47', true, false).how[0]).toMatch(/^If you recorded a run this week, Confirm or Discard it/);
+    expect(quizItemText('2026-W47', false, true).how[0]).toMatch(/^A recorded run is waiting for your Confirm or Discard on the Shadow lanes card/);
+    expect(quizItemText('2026-W47', false, true).how.join('\n')).not.toMatch(/If you recorded a run this week/);
+  });
+
+  // Review 2442 F2 replaced review 2121 F2's pin ("a pending run holds its week"): a session holding the box token could post
+  // one pending run a week and keep the reminder silent, so only a confirmed run closes the week now.
+  it('a pending run never silences its week: the item is raised and says a run waits; a discarded run counts for nothing', () => {
+    const { coord, port } = setup();
+    recordRun(coord, MON + 3_600_000, 'a', null);
+    expect(runQuizLane(port, MON + 4 * DAY, () => {})).toMatchObject({ kind: 'raised' });
+    const [item] = quizItems(coord);
+    expect(item).toMatchObject({ title: quizItemText('2026-W47', false).title, how: quizItemText('2026-W47', false, true).how });
+    expect(item!.how[0]).toMatch(/^A recorded run is waiting for your Confirm or Discard on the Shadow lanes card/);
+    expect(port.recordedAts()).toEqual({ ok: true, value: [] });
+    const fresh = setup();
+    recordRun(fresh.coord, MON + 3_600_000, 'a', 'discard');
+    expect(runQuizLane(fresh.port, MON + 4 * DAY, () => {})).toMatchObject({ kind: 'raised' });
   });
 
   it('a failed read raises nothing', () => {
     const { coord, port } = setup();
     coord.db.exec('DROP TABLE continuity_quiz_runs');
-    expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'unmeasured' });
+    expect(runQuizLane(port, MON + 4 * DAY, () => {})).toEqual({ kind: 'hold', why: 'unmeasured' });
     expect(quizItems(coord)).toEqual([]);
   });
 
   it('a raise that throws is the lane\'s failure, not a silent hold', () => {
     const port: QuizLanePort = { ...setup().port, raise: () => { throw new Error('disk full'); } };
-    expect(() => runQuizLane(port, MON + DAY, () => {})).toThrow(/disk full/);
+    expect(() => runQuizLane(port, MON + 4 * DAY, () => {})).toThrow(/disk full/);
   });
 });
 
@@ -191,30 +247,30 @@ describe('the lane\'s read and its warning (review 2121 F2)', () => {
     recordRun(coord, MON + 3_600_000);
     coord.db.exec("UPDATE continuity_quiz_runs SET claudeBuilds = 'not json'");
     expect(port.recordedAts()).toEqual({ ok: true, value: [MON + 3_600_000] });
-    expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
+    expect(runQuizLane(port, MON + 4 * DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
   });
 
   it('an unmeasured hold warns once, naming the read that failed; no other hold warns', () => {
     const { coord, port } = setup();
     const lines: string[] = [];
-    expect(runQuizLane(port, MON + DAY, (l) => lines.push(l))).toMatchObject({ kind: 'raised' });
-    expect(runQuizLane(port, MON + 2 * DAY, (l) => lines.push(l))).toEqual({ kind: 'hold', why: 'raised' });
+    expect(runQuizLane(port, MON + 4 * DAY, (l) => lines.push(l))).toMatchObject({ kind: 'raised' });
+    expect(runQuizLane(port, MON + 5 * DAY, (l) => lines.push(l))).toEqual({ kind: 'hold', why: 'raised' });
     expect(lines).toEqual([]);
     coord.db.exec('DROP TABLE continuity_quiz_runs');
-    expect(runQuizLane(port, MON + 3 * DAY, (l) => lines.push(l))).toEqual({ kind: 'hold', why: 'unmeasured' });
+    expect(runQuizLane(port, MON + 6 * DAY, (l) => lines.push(l))).toEqual({ kind: 'hold', why: 'unmeasured' });
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^ccrc-server: the quiz lane raised nothing: .*recorded runs.*baseline/);
     const held = setup(false);
     held.coord.db.exec('DROP TABLE continuity_quiz_runs');
     const quiet: string[] = [];
-    expect(runQuizLane(held.port, MON + DAY, (l) => quiet.push(l))).toEqual({ kind: 'hold', why: 'record-path-absent' });
+    expect(runQuizLane(held.port, MON + 4 * DAY, (l) => quiet.push(l))).toEqual({ kind: 'hold', why: 'record-path-absent' });
     expect(quiet).toEqual([]);
   });
 });
 
 describe('the wiring (review 2121 F3)', () => {
   const watcher = (deps: Record<string, unknown>): FleetWatcher =>
-    quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(mkTmp('ccrc-quiz-w-')), ...deps, time: fakeTime({ wallMs: MON + DAY }).ports }) as never, new Bus(), 2000));
+    quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(mkTmp('ccrc-quiz-w-')), ...deps, time: fakeTime({ wallMs: MON + 4 * DAY }).ports }) as never, new Bus(), 2000));
 
   it('sweepQuiz runs the lane over deps.quiz on the wall clock; with no deps.quiz it does nothing', async () => {
     const { coord, port } = setup();

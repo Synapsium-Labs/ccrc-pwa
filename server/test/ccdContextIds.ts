@@ -3,8 +3,9 @@
 
 /** The contexts a manifest row may name: the 08-10 spec's nine, C10 Session host (the session-host ruling Q13,
  *  D-8272: hosting, observing and driving sessions behind one SessionHost interface, home `ccd/lib/sessionhost.sh`
- *  in the file-split plan's Task 7) and K (kernels and platform, no aggregate). */
-export const CCD_CONTEXTS = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'K'] as const;
+ *  in the file-split plan's Task 7), C11 Operator Model (the Overlord's private store, `server/src/operatorModel/`;
+ *  the W1 index's question 4) and K (kernels and platform, no aggregate). */
+export const CCD_CONTEXTS = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'K'] as const;
 export type CcdContext = (typeof CCD_CONTEXTS)[number];
 /** Contexts ccd has and `server/src` and `pwa/src` do not, so the spec's ring-context-map table holds no row for them:
  *  C10 is ccd's SessionHost adapter, and the server declares the port at its consumer, C3 (D-8272). */

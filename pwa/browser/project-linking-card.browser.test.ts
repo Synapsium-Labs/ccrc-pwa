@@ -4,7 +4,10 @@
 //   * nothing in the card or on the page scrolls sideways, and no text is cut short or clipped (no ellipsis, no element
 //     scrolling inside itself), with a long project name that has to wrap;
 //   * the layout follows the card's own width, not the window's (a container query): under 480 a row stacks, from 480 its
-//     name, key and visibility share a line with the template cell under them, from 760 a row is ONE grid line;
+//     name, key and visibility share a line with the template cell under them, from 760 name, key, visibility and the
+//     template cell share ONE grid line. The hierarchy cell sits under that: its owner select takes a line of its own, and
+//     the toggles and the state line share the one under it. So a row is four lines from 480 to under 760 of card width
+//     (cells, template, owner, toggles and state) and three from 760 up (D-8184; the assertions in `describe` below);
 //   * on a phone the key field and Save share a line, and the select and the template button are as wide as the card;
 //   * D-8405: a project the route answers once per checkout directory is ONE row, and the automatic link's line and the
 //     candidates' one-tap buttons (long team names and evidence) wrap inside the key cell, at every width and skin.
@@ -18,6 +21,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import type { ProjectLinkingWire } from '../../shared/linking';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
+import { HIERARCHY_TEXT } from '../src/fleet/hierarchyWords';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
@@ -59,8 +63,29 @@ const PROJECTS = [
 /** D-8405: the route answers one row per checkout directory, so project-a arrives three times; the card draws it once. */
 const SERVED = [...PROJECTS, { ...PROJECTS[0]!, workdir: '/w2/project-a' }, { ...PROJECTS[0]!, workdir: '/w3/project-a' }];
 
+/** The hierarchy answer (D-8184): project-a and project-c share `KEY`, so their owning-project control draws too. */
+const LONG_COORD = 'cc-coord-with-a-rather-long-identifier-b';
+const HIER = {
+  ok: true,
+  coordinators: [{ id: 'cc-coord-a', live: true }, { id: LONG_COORD, live: false }],
+  projects: [...new Set(PROJECTS.map((p) => p.name))].map((project, i) => ({
+    project, teamKey: PROJECTS.find((p) => p.name === project)!.linking.teamKey, initiatives: 'on',
+    // A7: project-a names the long coordinator (its select SHOWS that long value, "<id> (not live)"); project-c, which shares the
+    // key and names no owner, SHOWS the longest empty option the select can now say: "Default: <id> (not live)", the default
+    // rule's long coordinator from `ifUnnamed` (D-8738). Where the inherited owner comes from is a separate note under the
+    // select, no longer part of the option.
+    linearOwner: i === 0 ? LONG_COORD : null,
+    ownerNow: project === 'project-c' ? { id: LONG_COORD, source: 'named', live: false, project: 'project-a', ifUnnamed: { id: LONG_COORD, live: false } }
+      : i === 0 ? { id: LONG_COORD, source: 'named', live: false } : { id: 'cc-coord-a', source: 'default', live: true },
+    ownsTeam: false,
+    state: i === 0 ? 'map-waiting' : i === 1 ? 'migrated' : 'not-migrated', stateAt: NOW - 86_400_000, itemId: i === 0 ? 7 : null,
+    inboundWaiting: i === 0 ? 3 : 0,
+  })),
+};
+
 const FIXTURE: AppFixture = {
   api: {
+    '/api/hierarchy': HIER,
     '/api/accounts': { accounts: [], projected: null, roster: [] },
     '/api/feed': { events: [] },
     '/api/projects': { roots: ['/w'], projects: SERVED },
@@ -90,13 +115,21 @@ interface RowMeasure {
   /** D-8405: the automatic link's line and each candidate's button and evidence line. */
   extras: Box[];
 }
+/** D-8184: one row's hierarchy cell: where it sits, its owner select, and its parts. */
+interface HierMeasure { cell: Box; owner: Box; parts: Box[]; owning: boolean; stateKids: Box[]; reshape: Box | null; reshapeText: string }
+/** D-8184: the card's all-projects act: its box, label, select and button. */
+interface AllMeasure { box: Box; label: Box; select: Box; button: Box }
 interface Measured {
+  all: AllMeasure;
+  hier: Record<string, HierMeasure>;
   viewport: number; pageScrollWidth: number; pageClientWidth: number;
   section: { scrollWidth: number; clientWidth: number; box: Box };
   body: { scrollWidth: number; clientWidth: number; box: Box };
   rows: RowMeasure[];
   ellipsis: string[];
   clipped: string[];
+  /** A7: a select whose shown (selected) option text is wider than its content box, which `scrollWidth` does not see. */
+  clippedSelects: string[];
 }
 
 /** The card's geometry, measured in the page. */
@@ -126,7 +159,24 @@ const measure = (el: Element): Measured => {
       extras: [...r.querySelectorAll('.linking-auto, .linking-candidate button, .linking-candidate p')].map(box),
     };
   });
+  const hier: Record<string, HierMeasure> = {};
+  for (const r of el.querySelectorAll('[data-linking-row]')) {
+    const cell = r.querySelector('[data-linking-hier]');
+    if (cell === null) continue;
+    hier[r.getAttribute('data-linking-row') ?? ''] = {
+      cell: box(cell), owner: box(one(cell, '.linking-owner select')),
+      parts: [...cell.querySelectorAll('.linking-owner, .linking-toggles, .linking-state')].map(box),
+      owning: cell.querySelectorAll('[role="checkbox"]').length === 2,
+      stateKids: [...cell.querySelectorAll('.linking-state > *')].map(box),
+      reshape: cell.querySelector('.linking-reshape') === null ? null : box(one(cell, '.linking-reshape')),
+      reshapeText: cell.querySelector('.linking-reshape')?.textContent ?? '',
+    };
+  }
+  const allEl = one(el, '[data-linking-all]');
+  const all: AllMeasure = { box: box(allEl), label: box(one(allEl, 'label')), select: box(one(allEl, 'select')), button: box(one(allEl, 'button')) };
   return {
+    all,
+    hier,
     viewport: window.innerWidth,
     pageScrollWidth: document.documentElement.scrollWidth,
     pageClientWidth: document.documentElement.clientWidth,
@@ -138,6 +188,20 @@ const measure = (el: Element): Measured => {
     clipped: [...el.querySelectorAll('*')]
       .filter((e) => e.tagName !== 'SELECT' && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0)
       .map((e) => e.tagName.toLowerCase() + '.' + (e.getAttribute('class') ?? '')),
+    // A7: a select's shown value is drawn inside its own box, so `scrollWidth` never trips on it. Measure the selected option's
+    // text in the select's own font against the content box less the platform's disclosure arrow (the system's Select keeps the
+    // native one, `appearance` not reset; 24px is its width plus the gap, measured generously for Chrome, not for the text).
+    clippedSelects: [...el.querySelectorAll('select')].flatMap((s) => {
+      const cs = getComputedStyle(s);
+      const ctx = document.createElement('canvas').getContext('2d')!;
+      // The shorthand serializes empty when the engine cannot express the font as one: say so, never measure in the 10px default.
+      if (cs.font === '') return [`${s.closest('[data-linking-row]')?.getAttribute('data-linking-row') ?? 'all'}: computed font is empty`];
+      ctx.font = cs.font;
+      const text = s.selectedOptions[0]?.textContent ?? '';
+      const room = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+      const need = ctx.measureText(text).width;
+      return need > room ? [`${s.closest('[data-linking-row]')?.getAttribute('data-linking-row') ?? 'all'}: "${text}" needs ${Math.ceil(need)}px of ${Math.floor(room)}px`] : [];
+    }),
   };
 };
 
@@ -146,6 +210,10 @@ const assertContained = (m: Measured, at: string): void => {
   expect(m.section.scrollWidth, `${at}: the section overflows sideways`).toBeLessThanOrEqual(m.section.clientWidth);
   expect(m.ellipsis, `${at}: text is cut short with an ellipsis`).toEqual([]);
   expect(m.clipped, `${at}: an element is wider than its box`).toEqual([]);
+  // A7: every ordinary value shows whole at every width. The one very long coordinator id (LONG_COORD) is checked at 1280 and up
+  // only: no select can show an arbitrarily long id on a phone, where the picker lists it in full.
+  const phone = m.viewport < 1280;
+  expect(m.clippedSelects.filter((c) => !(phone && c.includes(LONG_COORD))), `${at}: a select shows only part of its value`).toEqual([]);
   expect(m.pageScrollWidth, `${at}: the page scrolls sideways`).toBeLessThanOrEqual(m.pageClientWidth);
   expect(m.body.box.left, `${at}: the card starts left of the viewport`).toBeGreaterThanOrEqual(0);
   expect(m.body.box.right, `${at}: the card runs past the viewport`).toBeLessThanOrEqual(m.viewport);
@@ -197,8 +265,8 @@ describe('Settings › Security › Project linking, per width, skin and theme (
               const band = bandOf(cardWidth);
               const { name, key, visibility, template } = r.cells;
               if (band === 'line') {
-                // ONE grid line: the four cells start at the same height.
-                for (const c of [key, visibility, template]) expect(Math.abs(c.top - name.top), `${at}: ${r.name} is not one grid line at ${cardWidth}px`).toBeLessThan(1);
+                // The row's first line: the four cells start at the same height.
+                for (const c of [key, visibility, template]) expect(Math.abs(c.top - name.top), `${at}: ${r.name} is not on the row's first line at ${cardWidth}px`).toBeLessThan(1);
                 expect(key.left).toBeGreaterThan(name.left);
                 expect(template.left).toBeGreaterThan(visibility.left);
               } else if (band === 'three') {
@@ -220,6 +288,55 @@ describe('Settings › Security › Project linking, per width, skin and theme (
                 expect(Math.abs(save!.top - field!.top), `${at}: ${r.name}'s Save is not beside its field (key cell ${Math.round(r.cells.key.width)}px, field ${Math.round(field!.width)}px, Save ${Math.round(save!.width)}px)`).toBeLessThan(8);
               }
             }
+            // D-8184: every project's row has its hierarchy cell inside it; the owning-project control draws for the shared key only.
+            expect(Object.keys(m.hier), `${at}: a hierarchy cell per row`).toEqual(PROJECTS.map((p) => p.name));
+            expect(Object.entries(m.hier).filter(([, h]) => h.owning).map(([n]) => n).sort(), `${at}: the shared key`).toEqual(['project-a', 'project-c']);
+            for (const r of m.rows) {
+              const h = m.hier[r.name]!;
+              expect(h.cell.right, `${at}: ${r.name}'s hierarchy cell runs past its row`).toBeLessThanOrEqual(r.row.right + 0.5);
+              expect(h.cell.top, `${at}: ${r.name}'s hierarchy cell is not under the first line`).toBeGreaterThan(r.cells.name.top + 1);
+              const [owner, toggles, state] = h.parts as [Box, Box, Box];
+              if (cardWidth < 480) {
+                expect(h.owner.width, `${at}: ${r.name}'s owner select is not full width`).toBeGreaterThan(r.row.width - 2);
+                expect(toggles.top).toBeGreaterThanOrEqual(owner.bottom - 0.5);
+                expect(state.top).toBeGreaterThanOrEqual(toggles.bottom - 0.5);
+              } else {
+                // A7: the owner select has the hierarchy cell's first line; the toggles and the state line share the one under it.
+                expect(Math.abs(state.top - toggles.top), `${at}: ${r.name}'s second line at ${cardWidth}px`).toBeLessThan(1);
+                expect(toggles.top, `${at}: ${r.name}'s toggles are not under the owner select`).toBeGreaterThanOrEqual(owner.bottom - 0.5);
+              }
+            }
+            // D-8186: Reshape in Linear draws for the two projects that are not migrated and carry a team key (project-c, project-d), whole
+            // inside the state cell and the row, its words not cut; on a phone it is as wide as the cell.
+            expect(Object.entries(m.hier).filter(([, h]) => h.reshape !== null).map(([n]) => n), `${at}: Reshape in Linear`).toEqual(['project-c', 'project-d']);
+            for (const [n, h] of Object.entries(m.hier)) {
+              if (h.reshape === null) continue;
+              const r = m.rows.find((x) => x.name === n)!;
+              const state = h.parts[2]!;
+              expect(h.reshapeText, `${at}: ${n}'s Reshape words`).toBe(HIERARCHY_TEXT.reshape);
+              expect(h.reshape.left, `${at}: ${n}'s Reshape starts left of its cell`).toBeGreaterThanOrEqual(state.left - 0.5);
+              expect(h.reshape.right, `${at}: ${n}'s Reshape runs past its cell`).toBeLessThanOrEqual(state.right + 0.5);
+              expect(h.reshape.right, `${at}: ${n}'s Reshape runs past its row`).toBeLessThanOrEqual(r.row.right + 0.5);
+              expect(h.reshape.height, `${at}: ${n}'s Reshape has no height`).toBeGreaterThan(0);
+              if (cardWidth < 480) expect(h.reshape.width, `${at}: ${n}'s Reshape is not full width`).toBeGreaterThan(state.width - 2);
+            }
+            // The all-projects act sits at the card's end, under every row, and wraps nothing past the card.
+            const { all } = m;
+            expect(all.box.top, `${at}: the all-projects act is not at the card's end`).toBeGreaterThanOrEqual(m.rows[m.rows.length - 1]!.row.bottom - 0.5);
+            expect(all.box.right, `${at}: the all-projects act runs past the card`).toBeLessThanOrEqual(m.body.box.right + 0.5);
+            if (cardWidth < 480) {
+              expect(all.select.width, `${at}: the all-projects select is not full width`).toBeGreaterThan(all.box.width - 2);
+              expect(all.button.width, `${at}: the all-projects button is not full width`).toBeGreaterThan(all.box.width - 2);
+              expect(all.button.top).toBeGreaterThanOrEqual(all.select.bottom - 0.5);
+            } else {
+              expect(all.button.left, `${at}: the all-projects button is not beside its select`).toBeGreaterThanOrEqual(all.select.right - 0.5);
+              expect(Math.abs(all.button.bottom - all.select.bottom), `${at}: the all-projects button and select do not share a line`).toBeLessThan(2);
+            }
+            // The state line wraps inside its cell, never past it (project-a's reads "3 inbound issues wait for an owner").
+            for (const r of m.rows) {
+              const h = m.hier[r.name]!;
+              for (const k of h.stateKids) expect(k.right, `${at}: ${r.name}'s state line runs past its cell`).toBeLessThanOrEqual(h.parts[2]!.right + 0.5);
+            }
             expect(errors).toEqual([]);
           } finally {
             await ctx.close();
@@ -229,7 +346,38 @@ describe('Settings › Security › Project linking, per width, skin and theme (
     }, 240_000);
   }
 
-  it('at 1280 a row is one grid line wherever the card is 760 px or wider, and the template button wraps under it elsewhere', async () => {
+  for (const width of [360, 1920]) {
+    it(`a failed re-read after a write shows the stale note and Read again, contained, at ${width}px`, async () => {
+      for (const skin of SKINS) {
+        const view: AppView = { skin, theme: 'light', width };
+        const { ctx, page, errors, section } = await open(view);
+        try {
+          // The hierarchy read fails from now on: the write below saves (the fixture answers it), and its re-read is refused.
+          await ctx.route('**/api/hierarchy', (route) => route.abort('failed'));
+          await section.locator('[data-linking-row="project-a"]').getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives }).click();
+          const note = section.locator('.linking-stale');
+          await note.waitFor({ timeout: 30_000 });
+          expect(await note.getByRole('button', { name: HIERARCHY_TEXT.readAgain }).count()).toBe(1);
+          const m = await section.evaluate(measure);
+          assertContained(m, named(view));
+          const box = await note.boundingBox();
+          const card = await section.locator('.linking-card').boundingBox();
+          expect(box!.x, `${named(view)}: the stale note starts left of the card`).toBeGreaterThanOrEqual(card!.x - 0.5);
+          expect(box!.x + box!.width, `${named(view)}: the stale note runs past the card`).toBeLessThanOrEqual(card!.x + card!.width + 0.5);
+          const button = await note.getByRole('button').boundingBox();
+          expect(button!.width, `${named(view)}: Read again keeps its usual size`).toBeLessThan(box!.width);
+          const shots = process.env.CCRC_SHOTS;
+          if (shots) await section.screenshot({ path: path.join(shots, `project-linking-stale-${skin}-${width}.png`) });
+          void page;
+          expect(errors.filter((e) => !/Failed to fetch|net::ERR/.test(e))).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }
+    }, 120_000);
+  }
+
+  it('at 1280 the first line of a row holds its four cells wherever the card is 760 px or wider, and the template button wraps under it elsewhere', async () => {
     const seen: string[] = [];
     for (const skin of SKINS) {
       const view: AppView = { skin, theme: 'light', width: 1280 };
@@ -251,4 +399,81 @@ describe('Settings › Security › Project linking, per width, skin and theme (
     }
     expect(seen.length).toBe(SKINS.length);
   }, 120_000);
+
+  // D-8808 (wave 8, Task 8.6): the workspace picker and candidate rows that name a workspace, a long suggestion's reason and an
+  // Overlord link's line, at every width, in both skins and both themes: all wrap inside the key cell, and nothing scrolls sideways.
+  for (const width of WIDTHS) {
+    it(`the workspace picker, candidates with workspaces and an Overlord link stay inside the key cell at ${width}px`, async () => {
+      const WS = (id: string, name: string, keys: string[]) => ({
+        state: 'connected', outcome: 'ok', org: name, id, name, urlKey: id.slice(0, 4) === '1111' ? 'ws-a' : 'ws-b', user: 'user-a', keyTail: 'abcd', checkedAt: NOW - 60_000,
+        teams: keys.map((key) => ({ key, name: key })),
+      });
+      const long = 'a suggested reason long enough that it has to wrap onto several lines on a phone screen';
+      const fixture: AppFixture = {
+        api: {
+          '/api/hierarchy': { ok: true, coordinators: [], projects: [] },
+          '/api/linear/workspaces': {
+            ok: true, store: 'ok', legacy: null,
+            workspaces: [WS('11111111-1111-4111-8111-111111111111', 'ws-a', ['AAA']), WS('22222222-2222-4222-8222-222222222222', 'ws-b-with-a-rather-long-workspace-name', ['AAA'])],
+          },
+          '/api/accounts': { accounts: [], projected: null, roster: [] },
+          '/api/feed': { events: [] },
+          '/api/projects': {
+            roots: ['/w'],
+            projects: [
+              { name: 'project-a', workdir: '/w/project-a', linking: wire({ teamKey: 'AAA', teamWorkspace: '11111111-1111-4111-8111-111111111111' }) },
+              { name: 'project-b', workdir: '/w/project-b', linking: wire({
+                teamKey: null, teamCandidates: [
+                  { key: 'AAA', name: LONG_TEAM, evidence: { kind: 'pr-attachments', ids: 4, of: 5 }, workspaceId: '11111111-1111-4111-8111-111111111111', workspaceName: 'ws-a' },
+                  { key: 'AAA', name: LONG_TEAM, evidence: { kind: 'suggested', by: 'cc-coord-with-a-long-identifier', why: long }, workspaceId: '22222222-2222-4222-8222-222222222222', workspaceName: 'ws-b-with-a-rather-long-workspace-name' },
+                ],
+              }) },
+              { name: 'project-c', workdir: '/w/project-c', linking: wire({
+                teamKey: 'AAA', teamLink: { source: 'overlord', teamName: LONG_TEAM, evidence: { kind: 'ticket-ids', ids: 1234, of: 1250 }, at: NOW - 60_000, callId: 7 },
+              }) },
+            ],
+          },
+        },
+        fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'coord', coord: { pause: 'clear' } }],
+      };
+      for (const skin of SKINS) for (const theme of THEMES) {
+        const view: AppView = { skin, theme, width };
+        const app = await openApp(browser!, view, fixture);
+        try {
+          await app.page.goto(server!.origin + '/settings/security');
+          const section = app.page.locator('[data-linking="section"]');
+          await section.locator('[data-linking-row]').first().waitFor({ timeout: 30_000 });
+          await section.locator('[data-linking-workspace]').first().waitFor({ timeout: 30_000 });
+          const at = named(view);
+          const m = await section.evaluate((el) => {
+            const box = (e: Element) => { const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; };
+            const rows = [...el.querySelectorAll('[data-linking-row]')].map((r) => {
+              const key = box(r.querySelector('.linking-key')!);
+              const inside = [...r.querySelectorAll('.linking-workspace, .linking-workspace select, .linking-candidate, .linking-candidate p, .linking-candidate button, .linking-auto, .linking-key a')].map(box);
+              return { name: r.getAttribute('data-linking-row') ?? '', key, inside,
+                pickers: r.querySelectorAll('[data-linking-workspace]').length, candidates: r.querySelectorAll('.linking-candidate').length,
+                call: r.querySelectorAll('.linking-key a').length };
+            });
+            return {
+              rows, pageScroll: document.documentElement.scrollWidth, pageClient: document.documentElement.clientWidth,
+              clipped: [...el.querySelectorAll('*')].filter((e) => e.tagName !== 'SELECT' && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0).map((e) => e.tagName.toLowerCase() + '.' + (e.getAttribute('class') ?? '')),
+              ellipsis: [...el.querySelectorAll('*')].filter((e) => getComputedStyle(e).textOverflow === 'ellipsis').length,
+            };
+          });
+          expect(m.rows.map((r) => [r.name, r.pickers, r.candidates, r.call]), `${at}: a picker for a key two workspaces hold, two candidate rows, the call link`)
+            .toEqual([['project-a', 1, 0, 0], ['project-b', 0, 2, 0], ['project-c', 1, 0, 1]]);
+          for (const r of m.rows) for (const b of r.inside) {
+            expect(b.right, `${at}: ${r.name} runs past its key cell`).toBeLessThanOrEqual(r.key.right + 0.5);
+            expect(b.left, `${at}: ${r.name} starts left of its key cell`).toBeGreaterThanOrEqual(r.key.left - 0.5);
+          }
+          expect(m.pageScroll, `${at}: the page scrolls sideways`).toBeLessThanOrEqual(m.pageClient);
+          expect(m.clipped, `${at}: an element is wider than its box`).toEqual([]);
+          expect(m.ellipsis, `${at}: text is cut short`).toBe(0);
+          expect(app.errors.filter((e) => !/Failed to fetch|net::ERR/.test(e))).toEqual([]);
+        } finally {
+          await app.ctx.close();
+        }
+      }
+    }, 240_000);
+  }
 });

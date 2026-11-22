@@ -184,6 +184,10 @@ const HELPER_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_RECALL_SESSION: { cls: 'per-run', why: 'ccd/history/cli.mjs reads it as the session one recall is for, set for that run.' },
   CCRC_SESSION_GENERATION: { cls: 'per-run', why: 'ccd/history/cli.mjs reads it as the calling session\'s generation, which its environment carries for that session alone.' },
   CCRC_MODELS_NOW: { cls: 'fixture-path', why: 'deploy/models-op.mjs reads it as the clock a test pins, in place of the time now.' },
+  CCRC_DOOR_NONCE: { cls: 'handshake', why: 'ccd/door-process.mjs reads it as the launch nonce `_door_spawn` hands it through its 0600 tool-server config, and deletes it from its environment at once.' },
+  CCRC_SESSION_ID: { cls: 'handshake', why: 'ccd/door-process.mjs reads it as the session `_door_spawn` started it for, which `whoami` must name before any call runs.' },
+  CCRC_API: { cls: 'handshake', why: 'ccd/door-process.mjs reads it as the client path `_door_spawn` writes into its tool-server config.' },
+  CCRC_DOOR_DIR: { cls: 'handshake', why: 'ccd/door-process.mjs reads it as the session\'s door directory under the registry, where `_door_spawn` put its config and it keeps the delta.' },
 };
 
 /** The keys ccrc reads from the server's files, where the server reads them (D-6588). */
@@ -586,7 +590,12 @@ const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_RUNTIME_PROBE_S: { cls: 'call-bound', why: 'ccgpt-runtime bounds one probe of a built runtime with it.' },
   CCRC_CODEX_PYTHON: { cls: 'handshake', why: 'ccrc\'s models refresh hands ccrc-models-probe the codex lane\'s interpreter in it, and unsets it for every other row.' },
   CCRC_MODELS_AUTH_LIB: { cls: 'handshake', why: 'ccrc\'s models refresh hands ccrc-models-probe the auth library\'s path in it, and unsets it for every other row.' },
-  CCRC_MODELS_PROBE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s one test seam: a file whose bytes stand in for the network answer.' },
+  CCRC_MODELS_PROBE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s catalogue test seam (one of two; the release lookup has its own): a file whose bytes stand in for the network answer.' },
+  CCRC_MODELS_PROBE_RELEASE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s release-lookup seam (D-8743): a file whose bytes stand in for npm\'s answer for the published Codex release.' },
+  CCRC_ACT_KEY: { cls: 'per-run', why: 'ccrc-api reads it as the act key the door process hands one fenced call\'s child, and sends it only as a header on curl\'s stdin config.' },
+  CCRC_ACT_GENERATION: { cls: 'per-run', why: 'ccrc-api reads it as the generation the door process hands one fenced call\'s child, sent beside the act key.' },
+  CCRC_ACT_COUNTER: { cls: 'per-run', why: 'ccrc-api reads it as the counter the door process raises before one fenced call and hands that call\'s child.' },
+  CCRC_WITNESS_KEY: { cls: 'per-run', why: 'ccrc-api reads it as the witness key (the call digest) the door process hands one fenced call\'s child, sent only as a header on curl\'s stdin config (Overlord W1 door process B1).' },
 };
 
 /** The graph settings ccd-graph-sweep read by its own `: "${NAME:=default}"` line between the graphify r2 wave's GR2 and

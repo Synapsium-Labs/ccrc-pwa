@@ -23,10 +23,17 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
+import type { OperatorModelStore } from './operatorModel/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
+import type { PlanSync } from './linear/planSync.js';
+import type { DriftPass } from './linear/driftPass.js';
+import type { LinearMigration } from './linear/migration.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
+import type { ForecastLanePort } from './coord/forecastLane.js';
+import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
+import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
@@ -159,6 +166,9 @@ export interface Deps {
    *  never runs, which is what a box with no coordination configured should
    *  do. */
   coord?: CoordStore;
+  /** The Overlord's private store (`operator-model.db`, context C11), opened at the root after `coord`. Absent in a test
+   *  that builds no store; nothing in PR A reads it. */
+  operatorModel?: OperatorModelStore;
   /** The flat-file journal under `pool_edges`/`pool_epoch` (account-pool
    *  membership, design 2026-09-18 §5.2). Constructed in `index.ts` beside
    *  `coord`, not inside a route: `CoordStore.setAccountPools` calls
@@ -205,12 +215,32 @@ export interface Deps {
   /** The weekly replay quiz lane's port (Overlord W1a, `continuity/quizStore.ts#quizLanePortOf`), built once in `index.ts`.
    *  Absent (a test, a script): the lane does not run. */
   quiz?: QuizLanePort;
+  /** The forecast lane's port (Overlord W2 forecasts A, `coord/forecastLane.ts`): the coordination store itself, set in
+   *  `index.ts`. Absent: the lane does not run. */
+  forecasts?: ForecastLanePort;
+  /** The decision model's anchor-set lane and its ports (Overlord W2, `coord/decisionModelLane.ts`), built once in `index.ts` over
+   *  coord.db and the authority journal. Absent (a test, a script): the lane does not run. */
+  decisions?: DecisionDeps;
+  /** D-8182: the Linear plan sync, built once in `index.ts` beside the journal; the watcher's `linearPlanSync` lane ticks it. Absent (a test, a script): the lane does nothing. */
+  planSync?: PlanSync | null;
+  /** D-8183: the Linear drift pass, built once in `index.ts` after `planSync`; the watcher's `linearDrift` lane ticks it and the item route's `hand`/`keep` reach `act`. Absent (a test, a script): the lane does nothing and the acts are `unavailable`. */
+  driftPass?: DriftPass | null;
+  /** D-8126 (A9-3): the coordinator skill revision the rollout lane announces (`coord/skillRolloutLane.ts`), set in `index.ts`. Absent (a test, a script): the lane does not run. */
+  skillRolloutRevision?: string;
+  /** D-8186: the per-team migration, built once in `index.ts` after `planSync`; the watcher's `linearMigration` lane ticks it, the
+   *  plan routes' `plan map-propose` and the hierarchy routes' doors reach it. Absent (a test, a script): the lane does nothing and
+   *  its doors are `unavailable`. */
+  linearMigration?: LinearMigration | null;
   /** The Overlord authority journal and its guard (Overlord W1, authority journal plan Tasks 3 and 4), built once in `index.ts`
    *  over `~/.ccrc/overlord-authority.jsonl`, the guard passed to the journal as its `AuthorityGuardPort`. The designation and
    *  ladder stores append through `overlordAuthority.appendInTx`; gates B's step 3 reads `overlordAuthorityGuard.state()`.
    *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
   overlordAuthority?: OverlordAuthorityJournal;
   overlordAuthorityGuard?: OverlordAuthorityGuard;
+  /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
+  ladderWitness?: NarrowingWitness;
+  ladderInputs?: LadderConditionInputs;
+  ladderServerCaps?: readonly string[];
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;
@@ -226,6 +256,10 @@ export interface Deps {
   /** D-8289: the capture queue's transport to the test box, built in `index.ts`. Absent (a test, a script): builds are
    *  recorded and no job is sent. */
   buildCapture?: BuildCaptureTransport;
+  /** Mid-turn mail (plan Task 4.4): called by `POST /api/mail/:id/ack` after an ack lands, never awaited; `index.ts`
+   *  composes it as the watcher's kick of the mailhold row, so a released hold's marker clears at the next tick. Absent
+   *  (a test, a script): nothing is kicked, and the projection's own beat clears it. */
+  onMailAcked?: () => void;
   /** The Linear lookup's test seams (named workspaces S4/S5): the network call and its deadline, read by the preview
    *  route and the workspace create alike so a test reaches neither the network nor an 8 s wait. Absent in
    *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */
@@ -249,4 +283,8 @@ export interface Deps {
  *  WP10 on, `FleetWatcher`'s constructor takes this in place of `Deps`, so the watcher and its lane files hold no
  *  path to the whole store; until then nothing names it. A `Deps` is assignable to it, so `index.ts` hands the same
  *  bag on. */
-export type WatcherDeps = Omit<Deps, 'coord'> & { coord?: WatcherCoordPort };
+export type WatcherDeps = Omit<Deps, 'coord' | 'operatorModel'> & {
+  coord?: WatcherCoordPort;
+  /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store. */
+  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf'>;
+};

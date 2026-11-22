@@ -74,6 +74,13 @@ const treeHex = (hex: string): string => {
  *  remote), and never otherwise. */
 const rescueFlag = (rescue: boolean): string[] => (rescue ? ['--rescue'] : []);
 
+/** A roster account id as `ccd skill-ensure` takes it: the roster's id class, `shared/roster.ts`'s ID_RE. Anything else is a
+ *  programming error (the id comes from a worker's registry row or the roster), and fails toward not sending. */
+const accountIdArg = (id: string): string => {
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error('an account id is a lowercase letter, then lowercase letters, digits or hyphens, at most 32 characters');
+  return id;
+};
+
 /** A loose entry's name as the census prints it: even-length lowercase hex, never empty. Anything else is a programming
  *  error (the census is the only source), and fails toward not sending. */
 const looseHex = (hex: string): string => {
@@ -855,6 +862,10 @@ export const CCD_ARGV = {
    *  both; the url is its own token after `--url`, so a value cannot be read as a flag. */
   projectAddClone: (name: string, url: string) => argv(['project-add', '--name', name, '--url', url]),
   projectAddEmpty: (name: string) => argv(['project-add', '--name', name, '--empty']),
+  /** The self-install of the coordinator and worker skills into ONE account's home (D-8126, wave A7). `--wrapper` LEADS, where
+   *  the agent's gated grant (`REQUIRED_VERB_FLAG`) expects it, and the id is the roster's id class (`accountIdArg`), so a
+   *  path character or a flag-shaped word fails toward not sending; ccd re-checks the class and the roster itself. */
+  skillEnsure: (wrapper: string) => argv(['skill-ensure', '--wrapper', accountIdArg(wrapper)]),
 
   /** The routing record's writer (routing spec 2026-09-14 §5.3). ONE field per
    *  argv: the route that will call it (slice 4's picker, the wave N≥2 dispatch)
@@ -978,6 +989,12 @@ export const CCD_ARGV = {
     if (!isRegistryId(id)) throw new Error('CCD_ARGV.poolAnswer: the session id is not a registry id');
     return argv(['pool-answer', '--session', id]);
   },
+  /** The Overlord's sleep markers (Overlord W1 ccd arms, plan Task 3; spec §3.2, C4): `ccd keep-awake --session <id>
+   *  --state on|off` sets or clears one session's `.no-hibernate` and `.no-roll`, holding keep-awake's own stamp.
+   *  `coordPause`'s and `winSize`'s shape: granted as `['keep-awake','--session']` and enrolled in the agent's
+   *  `REQUIRED_VERB_FLAG`. No caller in this piece: designation A's create and retire call it (X6), pass a
+   *  registry-validated id, add their own `id-argv-census` rows, and ask `ccdCan(state, 'keepAwake')` first. */
+  keepAwake: (id: string, state: 'on' | 'off') => argv(['keep-awake', '--session', id, '--state', state]),
 
   /** NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): one builder per
    *  argv shape of the four read verbs `docs-v1` names. The verb comes first and
@@ -1028,6 +1045,21 @@ export const CCD_ARGV = {
    *  `['docs-log','--project']`, behind `DOCS_LOG_CAP`. The path is a value read by fixed index, never a pathspec. */
   docsLog: (project: string, commit: string, section: DocSectionSlug, path: string) =>
              argv(['docs-log', '--project', project, '--commit', commit, '--section', section, '--path', path]),
+
+  /** One file read by range (X2 spec 2026-11-18 section 4.3, plan P1.2), under its own grant
+   *  `['docs-show-range','--project']`, behind `DOCS_RANGE_CAP`. ONE builder for its four argv shapes, the way
+   *  `docsShowCommitted` and `docsShowDraft` split by the pin's source: `where` is `{commit}` for a committed doc or
+   *  `{branch, head}` for a draft (bare branch, as `docsShowDraft` takes it), `pin` is the pin's wire form
+   *  (`blob:<sha>`, `fp:<sha>` or `stat:<size>:<mtimeNs>`), and `step` is `'prepare'` (one trailing `--prepare`) or
+   *  `{snapshot, offset, length}` (a frame). Every value reaches ccd UNVALIDATED, as for the other docs builders. */
+  docsShowRange: (project: string, where: { commit: string } | { branch: string; head: string },
+                  section: DocSectionSlug, path: string, pin: string,
+                  step: 'prepare' | { snapshot: string; offset: number; length: number }) =>
+                   argv(['docs-show-range', '--project', project,
+                         ...('commit' in where ? ['--commit', where.commit] : ['--draft-branch', where.branch, '--head', where.head]),
+                         '--section', section, '--path', path, '--pin', pin,
+                         ...(step === 'prepare' ? ['--prepare']
+                           : ['--snapshot', step.snapshot, '--offset', String(step.offset), '--length', String(step.length)])]),
 } as const;
 
 /**
@@ -1157,6 +1189,13 @@ export const ROUTE_DEFAULT_CAP = 'route-default-v1';
  *  `ccdCapTokens.ts` are the other spellings. */
 export const BROWSER_ROUTE_CAP = 'browser-route-v1';
 
+/** The `ccd caps` token that says `mailhold` is a routing field this box takes (mid-turn mail spec §3.3, plan PR 3): the
+ *  lane-only marker the mailhold projection writes through `route --set mailhold=…`. An older ccd refuses the field by name
+ *  ("unknown routing field"), so the projection (`coord/mailHoldLane.ts`) sends nothing to a box that does not advertise
+ *  it, and every session there holds nothing. Read with `capSupported` (null refuses). ccd's `echo route-mailhold-v1` and
+ *  `ccdCapTokens.ts` are the other spellings. */
+export const MAILHOLD_ROUTE_CAP = 'route-mailhold-v1';
+
 /** The `ccd caps` token that says this box parses `--child <runId>` on
  *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
  *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec
@@ -1238,6 +1277,12 @@ export const ROUTE_APPLY_CAP = 'route-apply-v1';
  *  This is a note on the token, not a wrapper function — the gate belongs at
  *  that caller's own seam, where its mutation test can red on it. */
 export const WIN_SIZE_CAP = 'win-size-v1';
+
+/** The `ccd caps` token that says this box's ccd has `ccd keep-awake` (Overlord W1 ccd arms, cross-plan ruling X8; plan
+ *  slug keep-awake-token-is-keep-awake-v1: `win-size-v1`'s shape, since a refusing row is never answered by its bare verb).
+ *  Read it with `capSupported`, never `verbSupported`, so a box whose ccd lacks the verb answers `capability-missing`
+ *  (spec Table 11.6) rather than a permit on no evidence. Spelled once in `server/src`. */
+export const KEEP_AWAKE_CAP = 'keep-awake-v1';
 
 /** The `ccd caps` token that says this box has child-workspace reclamation
  *  (spec 2026-09-22 §5.5, wave 3): `ws-audit --reclaim`, `ws-reclaim` with its
@@ -1323,6 +1368,12 @@ export const DOCS_SECTIONS_CAP = 'docs-sections-v2';
  *  G4, W5b). Spelled ONCE in `server/src`; ccd's `echo docs-log-v1` and `ccdCapTokens.ts` are the other two spellings.
  *  Read through `ccdCan`'s `docsLog` row (refuses on no evidence), inside the docs gate's tri-state. */
 export const DOCS_LOG_CAP = 'docs-log-v1';
+
+/** The `ccd caps` token that says this box's ccd has `docs-show-range` at exactly the argv `docsShowRange` builds
+ *  (X2 spec 2026-11-18 section 4.3, P1.2). Spelled ONCE in `server/src`; ccd's `echo docs-range-v1` and
+ *  `ccdCapTokens.ts` are the other two spellings. Read through `ccdCan`'s `docsShowRange` row (refuses on no evidence),
+ *  inside the docs gate's tri-state. */
+export const DOCS_RANGE_CAP = 'docs-range-v1';
 
 /** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
  *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
@@ -1418,6 +1469,12 @@ export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
  *  `SessionHost`): with no token `renew` answers `capability-missing` and sends nothing (`capSupported`, false on no
  *  evidence). ccd's `echo hibernate-fresh` and `server/test/ccdCapTokens.ts` are the other two spellings. */
 export const HIBERNATE_FRESH_CAP = 'hibernate-fresh';
+
+/** The `ccd caps` token that says this box's session hook sends the witness (Overlord W1 door process B1): the call digest of
+ *  each door call, reported before the call runs. The Overlord's witness port answers `unmeasured` until it is advertised, so a
+ *  server updated first refuses the Overlord's writes 502 and fires no latch (`capSupported`, false on no evidence). ccd's
+ *  `echo door-witness-v1` and `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const DOOR_WITNESS_CAP = 'door-witness-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
@@ -1573,13 +1630,16 @@ export const CCD_CAN = {
   delegationAdopt: verbRow('delegation-adopt'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
+  skillEnsure: verbRow('skill-ensure'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),
+  keepAwake: capRow(KEEP_AWAKE_CAP),
   poolAnswer: capRow(POOL_SET_CAP),
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),
   docsShowDraft: capRow(DOCS_CAP),
   docsFetch: capRow(DOCS_CAP),
   docsLog: capRow(DOCS_LOG_CAP),
+  docsShowRange: capRow(DOCS_RANGE_CAP),
 } as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
 
 /** A `CCD_ARGV` row name: what `ccdCan` is asked about. */

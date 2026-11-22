@@ -1,6 +1,6 @@
 import type { KeyFact, NoteKind } from './continuity.js';
 import type { FleetRole } from './fleetRoles.js';
-import type { ItemKind, ItemState, NeededBy } from './ledgers.js';
+import type { ItemKind, ItemState, NeededBy, RatifiedByKind } from './ledgers.js';
 
 /** The card's vocabulary (Overlord design spec §3.3.3, C38; §3.3.9, C50 to C52; the spec is
  *  `docs/superpowers/specs/2026-11-09-overlord-design.md`). Ring L0, context K: pure vocabulary, type-only imports of
@@ -52,8 +52,10 @@ export interface CardRun {
   readonly kind: string;
 }
 
-/** One goal of a programme. A goal the operator has not ratified is untrusted data (C50, §3.8). */
-export interface CardGoal { readonly text: string; readonly ratified: boolean }
+/** One goal of a programme. Every goal is untrusted data, ratified or not (C50, §3.8): its text is session-written, and a
+ *  goal's ratifier may be the coordinator (Overlord W1, portfolio B). `ratifiedBy` names who ratified a ratified goal, so the
+ *  card can say it (review 2240 F8); absent on an unratified one. */
+export interface CardGoal { readonly text: string; readonly ratified: boolean; readonly ratifiedBy?: RatifiedByKind }
 /** One decision recorded in a programme's ledger. */
 export interface CardDecision { readonly at: number; readonly text: string }
 
@@ -201,9 +203,10 @@ export const ANCHOR_CARD_MAX_CHARS = 1_500;
 /** The prompt's anchor after an automatic compaction: the canaries and the instruction only (W0-04 measured a 600-character
  *  UserPromptSubmit context arriving with the prompt). */
 export const ANCHOR_PROMPT_MAX_CHARS = 600;
-/** The anchor's forms: `start` (role, canaries, counts, instruction), `prompt` (canaries and instruction) and `fork` (no
- *  text: the door answers whether the slot is live, and the hook prints its one refusal line). */
-const ANCHOR_FORM_MAP: Readonly<Record<'start' | 'prompt' | 'fork', true>> = { start: true, prompt: true, fork: true };
+/** The anchor's forms: `start` (role, canaries, counts, instruction), `prompt` (canaries and instruction), `fork` (no
+ *  text: the door answers whether the slot is live, and the hook prints its one refusal line) and `delta` (one line, the
+ *  canaries then the counts, which the door process caches for the hook's every prompt: Overlord W1 door process A2). */
+const ANCHOR_FORM_MAP: Readonly<Record<'start' | 'prompt' | 'fork' | 'delta', true>> = { start: true, prompt: true, fork: true, delta: true };
 export type AnchorForm = keyof typeof ANCHOR_FORM_MAP;
 export const ANCHOR_FORMS = Object.keys(ANCHOR_FORM_MAP) as readonly AnchorForm[];
 export function isAnchorForm(v: unknown): v is AnchorForm {

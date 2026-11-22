@@ -12,7 +12,9 @@ import type { ProjectAddOutcome } from '../src/fleet/useProjectRows';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { useProjectAddForm } from '../src/fleet/AddProjectForm';
-import { LINKING_REFUSAL_TEXT } from '../src/lib/refusalWords';
+import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
+import { HIERARCHY_TEXT } from '../src/fleet/hierarchyWords';
+import type { HierarchyAnswer } from '../../shared/plan';
 import { LINKING_ADD_TEXT } from '../src/fleet/projectAddWords';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -348,6 +350,91 @@ describe('Linear team key and the template PR (D-8147)', () => {
     await waitFor(() => expect(save).toHaveBeenCalledWith('repo', { teamKey: 'KEY', override: null }));
     expect(await screen.findByText(`${projectAddedText('repo', 'github')} ${LINKING_ADD_TEXT.keySaved('KEY')}`)).toBeInTheDocument();
     expect(p.onClose).toHaveBeenCalled();
+  });
+
+  it('a chosen owner and an initiatives switch-off are saved after the add (D-8184)', async () => {
+    vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] });
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: 'coord-a', ownsTeam: false } });
+    mount(props());
+    fillClone();
+    fireEvent.change(await screen.findByLabelText(LINKING_ADD_TEXT.owner), { target: { value: 'coord-a' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives }));
+    fireEvent.click(confirm());
+    await waitFor(() => expect(save).toHaveBeenCalledWith('repo', { initiatives: 'off', linearOwner: 'coord-a', ownsTeam: false }));
+    expect(await screen.findByText(`${projectAddedText('repo', 'github')} ${LINKING_ADD_TEXT.hierarchySaved}`)).toBeInTheDocument();
+  });
+
+  it('an owner the box refuses is said in its fixed sentence, and the project is still added (D-8184)', async () => {
+    vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] });
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(400, { ok: false, error: 'write-failed', detail: 'box text' }));
+    mount(props());
+    fillClone();
+    fireEvent.change(await screen.findByLabelText(LINKING_ADD_TEXT.owner), { target: { value: 'coord-a' } });
+    fireEvent.click(confirm());
+    const toastText = await screen.findByText(new RegExp(`^${projectAddedText('repo', 'github')} `));
+    expect(toastText.textContent).toContain(LINKING_ADD_TEXT.hierarchyFailed(LINKING_ROUTE_TEXT['write-failed']));
+    expect(toastText.textContent).not.toContain('box text');
+  });
+
+  it('M2: a hierarchy write or a team-key write with an unknown outcome says it may not have been saved', async () => {
+    vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] });
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed', detail: 'box text' }));
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new TypeError('offline'));
+    mount(props());
+    fillClone();
+    typeIn(keyField(), 'key');
+    fireEvent.change(await screen.findByLabelText(LINKING_ADD_TEXT.owner), { target: { value: 'coord-a' } });
+    fireEvent.click(confirm());
+    const toastText = await screen.findByText(new RegExp(`^${projectAddedText('repo', 'github')} `));
+    expect(toastText.textContent).toContain(LINKING_ADD_TEXT.hierarchyUnknown);
+    expect(toastText.textContent).toContain(LINKING_ADD_TEXT.keyUnknown);
+    expect(toastText.textContent).not.toContain('were not saved');
+    expect(toastText.textContent).not.toContain('was not saved');
+    expect(LINKING_ADD_TEXT.hierarchyUnknown).toMatch(/may not have been saved.*Linear settings/);
+  });
+
+  it('M7: the hierarchy controls are not drawn while the hierarchy read is pending, and appear when it lands', async () => {
+    let land!: (a: HierarchyAnswer) => void;
+    vi.spyOn(api, 'hierarchy').mockImplementation(() => new Promise<HierarchyAnswer>((resolve) => { land = resolve; }));
+    mount(props());
+    await screen.findByLabelText(LINKING_ADD_TEXT.teamKey);
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalled());
+    expect(screen.queryByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeNull();
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
+    await act(async () => { land({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] }); });
+    expect(await screen.findByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeInTheDocument();
+  });
+
+  it('a second opening draws no hierarchy controls while its read is pending (D-8186 A3)', async () => {
+    const answers: HierarchyAnswer = { ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] };
+    const read = vi.spyOn(api, 'hierarchy').mockResolvedValueOnce(answers);
+    const p = props();
+    const r = mount(p);
+    expect(await screen.findByLabelText(LINKING_ADD_TEXT.owner)).toBeInTheDocument();
+    rerenderWith(r, { ...p, open: false });
+    read.mockImplementation(() => new Promise<HierarchyAnswer>(() => undefined));
+    rerenderWith(r, { ...p, open: true });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await screen.findByLabelText(LINKING_ADD_TEXT.teamKey);
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeNull();
+  });
+
+  it('coordinators that cannot be read are said, not a silently missing owner select', async () => {
+    vi.spyOn(api, 'hierarchy').mockRejectedValue(new Error('offline'));
+    mount(props());
+    expect(await screen.findByText(LINKING_ADD_TEXT.ownersUnread)).toBeInTheDocument();
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
+  });
+
+  it('an older server (the hierarchy route answers 404) draws no owner, no initiatives toggle and no failure sentence', async () => {
+    vi.spyOn(api, 'hierarchy').mockRejectedValue(new ApiError(404, { ok: false }));
+    mount(props());
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalled());
+    await screen.findByLabelText(LINKING_ADD_TEXT.teamKey);
+    expect(screen.queryByText(LINKING_ADD_TEXT.ownersUnread)).toBeNull();
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeNull();
   });
 
   it('a team key the box refuses is said in its fixed sentence, and the project is still added', async () => {

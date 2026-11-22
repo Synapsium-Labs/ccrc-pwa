@@ -15,9 +15,10 @@ import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { ReadFailure } from './agent-protocol.js';
 import type { PerfHealth } from './perf.js';
-import type { WorkflowView } from './workflows.js';
+import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
+import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
 
@@ -2397,56 +2398,8 @@ export interface ProjectLinkingWire {
   /** D-8405: the automatic pass's one-tap choices for a project with no key, best first; empty when it found none. The
    *  pass never links on them. Absent: an older server. */
   teamCandidates?: readonly TeamCandidateWire[];
-}
-
-/** D-8405: what the automatic team link read, strongest first. `ticket-ids`: `ids` distinct ticket ids of the team's key
- *  among `of` distinct ids of every known team key, in the project's branches, pull request titles and commits (a
- *  private repository only). `name-match`: the project's name or its repository's name equals the team's name or key,
- *  ignoring case. */
-export type TeamEvidence =
-  | { kind: 'ticket-ids'; ids: number; of: number }
-  | { kind: 'name-match'; matched: 'project' | 'repo'; on: 'name' | 'key' };
-export type TeamEvidenceKind = TeamEvidence['kind'];
-/** D-6048 (ARCH-12): the runtime list, derived from the type. */
-const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true };
-export const TEAM_EVIDENCE_KINDS: readonly TeamEvidenceKind[] = Object.keys(TEAM_EVIDENCE_KIND_MAP) as TeamEvidenceKind[];
-
-/** D-8405: who set a project's team key. */
-export type TeamLinkSource = 'manual' | 'auto';
-/** D-6048 (ARCH-12): the runtime list, derived from the type. */
-const TEAM_LINK_SOURCE_MAP: Record<TeamLinkSource, true> = { manual: true, auto: true };
-export const TEAM_LINK_SOURCES: readonly TeamLinkSource[] = Object.keys(TEAM_LINK_SOURCE_MAP) as TeamLinkSource[];
-
-/** D-8405: a project's team key and who set it. `at` is when (null for a key stored before anyone recorded it). */
-export type TeamLinkWire =
-  | { source: 'manual'; at: number | null }
-  | { source: 'auto'; teamName: string; evidence: TeamEvidence; at: number };
-
-/** D-8405: one team the automatic pass offers for a project, with the evidence that names it. */
-export interface TeamCandidateWire { key: string; name: string; evidence: TeamEvidence }
-
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
-
-/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the two shapes. */
-export function isTeamEvidence(v: unknown): v is TeamEvidence {
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
-  const o = v as Record<string, unknown>;
-  if (o['kind'] === 'ticket-ids') {
-    return Object.keys(o).length === 3 && isCount(o['ids']) && isCount(o['of']) && (o['ids'] as number) <= (o['of'] as number);
-  }
-  if (o['kind'] === 'name-match') {
-    return Object.keys(o).length === 3 && (o['matched'] === 'project' || o['matched'] === 'repo')
-      && (o['on'] === 'name' || o['on'] === 'key');
-  }
-  return false;
-}
-
-/** D-8405: the one guard of `TeamCandidateWire`; `isKey` is the team key's grammar (`isLinearTeamKey`, `./linear.ts`),
- *  passed in because this file imports no runtime module. */
-export function isTeamCandidate(v: unknown, isKey: (k: unknown) => boolean): v is TeamCandidateWire {
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
-  const o = v as Record<string, unknown>;
-  return Object.keys(o).length === 3 && isKey(o['key']) && typeof o['name'] === 'string' && isTeamEvidence(o['evidence']);
+  /** D-8808: the workspace id the team key resolves in; null: none set (the key resolves as before); absent: an older server. */
+  teamWorkspace?: string | null;
 }
 
 /**
@@ -4924,7 +4877,11 @@ export interface HookAskQuestion {
  *  both, since `session-hook.sh` writes exactly one shape per waiting state. */
 export type HookAsk =
   | { questions: HookAskQuestion[] }
-  | { approval: { tool: string; summary: string } };
+  /** `route` (approvals plan 2026-11-18, Task 1.2): where the hook sent the prompt, or the first gate that stopped it,
+   *  as `shared/approval-census.ts#parseApprovalRoute` reads it. ADDITIVE: an older hook writes none.
+   *  `thread` (Task 2.1): `subagent` when the server took the envelope from the hook's per-agent list for the menu the
+   *  pane paints (`server/src/coord/approvalEnvelope.ts#paintedApprovalOf`). ADDITIVE: absent on the hook's own `ask`. */
+  | { approval: { tool: string; summary: string; route?: string; thread?: 'subagent' } };
 
 export type SessionStreamMsg =
   /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
@@ -4991,15 +4948,16 @@ export type SessionStreamMsg =
        *  absence renders the strip as it always did. */
       touchedAt?: number }
   /** D-5560: the workflows Claude Code is running in this session, plus any
-   *  that finished in the last `WORKFLOW_EVICT_MS` (`shared/workflows.ts`).
+   *  that finished in the last `HELPER_FINISHED_KEEP_MS` (ten minutes since H2, D-8872; `shared/workflows.ts`).
    *  Sent on connect whenever the session has a workflow directory (an empty
    *  list included, so a reconnecting client drops rows that finished while it
    *  was away), then on change only; never for a session that has run none.
    *  `unreadable: true` — this box could not list the session's workflow
    *  directory this pass: `workflows` is then the last rows it DID read (or
    *  none), and the panel says so rather than reading an empty list as "nothing
-   *  running". Absent from an older server: no frame, no panel. */
-  | { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true }
+   *  running". Absent from an older server: no frame, no panel. `HelperReportAnswer` (H2, D-8872) is the answer to the
+   *  client's `helper-report` request: one finished helper's report, on demand, never on this frame. */
+  | ({ type: 'workflows'; workflows: WorkflowView[]; unreadable?: true } & HelperFrameMembers) | HelperReportAnswer
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -5015,8 +4973,9 @@ export type SessionStreamMsg =
 /** PWA → server, on the per-session socket. `visible` is the operator's own
  *  report that this session is on screen and focused; the server suppresses
  *  pushes for it while any client says so — for as long as the claim stays
- *  fresh (see the two constants below). */
-export type SessionClientMsg = { type: 'visible'; visible: boolean };
+ *  fresh (see the two constants below). `HelperReportRequest` (H2, D-8872) asks
+ *  for one finished helper's report (`shared/workflows.ts`). */
+export type SessionClientMsg = { type: 'visible'; visible: boolean } | HelperReportRequest;
 
 /**
  * The presence heartbeat, defined ONCE for both halves because they are one
@@ -5532,6 +5491,14 @@ export const MAIL_MAX_ATTEMPTS = 6;
 export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
+
+/** The optional idempotency key on `POST /api/mail` (Overlord wave 164, `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+ *  A sender that may retry a send names one; the ingress keeps one mail per (`fromId`, `clientKey`) and answers a retry of the same
+ *  mail with the original id and `already: true`. The shape is `ccd/ccrc-api`'s `SAFE_RE` (letters, digits, `_`, `-`) with a length
+ *  bound, so the client's `--key` and the route accept the same words; absent or null is no key. */
+export const MAIL_CLIENT_KEY_MAX = 128;
+export const isMailClientKey = (value: unknown): value is string =>
+  typeof value === 'string' && value.length >= 1 && value.length <= MAIL_CLIENT_KEY_MAX && /^[A-Za-z0-9_-]+$/.test(value);
 
 /** Numeric fields rendered into a run hold use this one exact domain at every
  *  JavaScript seam. Safe integers stringify as plain decimal digits; larger
@@ -6335,6 +6302,10 @@ export const MAIL_REJECT_CODES = [
   // docstring already makes for 'paused'); the both-directions membership
   // scan still covers it.
   'duplicate', 'peer-quota',
+  // ingress — the idempotency key (Overlord wave 164): a `clientKey` this sender already used on a DIFFERENT mail.
+  'key-conflict',
+  // ingress — urgent mail (mid-turn mail, spec §3.1): the sender rule's answers, its named run and one outstanding per pair.
+  'urgent-not-allowed', 'urgent-outstanding', 'urgent-unmeasured', 'urgent-wrong-run',
   // delivery
   'undeliverable',
   // done-authority
@@ -6495,11 +6466,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `profiledigest` (Overlord W1 sandbox, spec §3.6 H1) is the sha256 the server expects of the row `profile` names: while it
  * stands, ccd renders the row's surface whole or refuses the spawn. The launch-profile lane writes it (designation's create
  * is its one recorded second writer), and an empty value clears it.
+ * `mailhold` (mid-turn mail spec 2026-11-19 §3.3) is the urgent-mail hold's lease, in `shared/mailHold.ts`'s grammar. Its
+ * one writer is the mail-hold projection lane; ccd refuses it at the mint and from a session's shell, and an empty value
+ * clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest', 'mailhold'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, and the pool set's two (W1),
- *  written by the designation's doors.
+ *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, the pool set's two (W1),
+ *  written by the designation's doors, and the mail-hold projection's `mailhold`.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
@@ -6753,6 +6727,11 @@ export function routeForBrowserCap(r: RouteFields | null, browserOk: boolean): {
  * account", because an unreadable marker or ledger is not a spent one. A
  * workspace with no marker is refused only when the registry cannot be listed.
  *
+ * `self-dispatch` (D-6096) — a plain `POST /api/runs/:id/dispatch` of a run whose bound session IS its claimant: it
+ * would `ensure`, hold and `/clear` the coordinator's own workspace. Refused before any read or fleet act, with a
+ * `detail` naming the other door: the same route with `inPlace: true`, `by`, `byUuid` and the sibling worktree's
+ * `branch`, which binds the run to its claimant with no fleet act at all.
+ *
  * `status-unmeasurable` and `worker-starting` are the dispatch resume arm's
  * live gate (D-5238): the `/clear` is typed only when the fail-closed turn
  * verdict (`turnVerdictFor`, `server/src/turnverdict.ts`) reads `idle`.
@@ -6776,7 +6755,11 @@ export type RunRefuseCode =
   | 'intent-held'   // D-8085: another programme's run holds a landing intent this dispatch names
   // D-8181: the plan's refusals of a run (Linear hierarchy design): the wave names no planned epic, the programme has no
   // plan, the reserved programme, a ticket another run holds or that is dropped, and a plan the coordinator closed.
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed';
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'
+  // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
+  // into an epic with an open declared ticket no run holds must name one.
+  // D-6096: `self-dispatch`, a plain dispatch of a run onto the session that claims it; bind it in place instead.
+  | 'ticket-required' | 'self-dispatch';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6789,6 +6772,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
+  'ticket-required': true, 'self-dispatch': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -7303,6 +7287,11 @@ export interface RunSummary {
    *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
    *  `FLEET_PROTO` is not bumped. */
   runTitle?: string | null;
+  /** D-6096 (migration 117): `true` for a run its coordinator took IN PLACE, as the run's own worker, in a sibling worktree
+   *  (`POST /api/runs/:id/dispatch` with `inPlace: true`). Such a run starts no process, takes no concurrency slot and is
+   *  never closed through its coordinator's workspace. ABSENT for every other run, and on an older server. ADDITIVE;
+   *  `FLEET_PROTO` is not bumped. */
+  inPlace?: boolean;
   /** Who closed the run, from `runs.closedBy` (D-8071, migration 44), or null for a run closed by a session id or before
    *  the column. OPTIONAL on the wire: an older server omits it. Read it ONLY through `closeWords`
    *  (`pwa/src/fleet/closeWords.ts`). ADDITIVE; `FLEET_PROTO` is not bumped. */
@@ -8146,6 +8135,32 @@ export interface MailSummary {
    * means "nothing to say about a park".
    */
   parkedAt?: number | null;
+  /**
+   * Mid-turn mail PR 1 (Overlord wave 171): this delivery's three stored times and its replay count, so a reader can
+   * measure how long a mail waited and how long it stayed unread. `at` above is when the mail row was inserted (the
+   * server's clock).
+   *
+   * `deliveredAt` is the time at the START of the sweep pass that last put the nudge into the recipient's pane
+   * (`mailPass`'s `now`, written by `markDelivered` once the send succeeds; the server's clock), so it is earlier than
+   * the moment the nudge was typed, by the pass's earlier reads and sends. A replay re-dates it: on a replayed row it is
+   * the latest delivery, not the first, and `replayCount` says how many replays there were (0 for none).
+   *
+   * `ingestedAt` is the time of the first `UserPromptSubmit` edge of ANY kind (an operator prompt, another mail's nudge,
+   * a brief, not only this mail's) that the mail sweep sampled from the recipient's hook state after a delivery, on the
+   * FLEET BOX's clock (`markIngested`, from `sampleEdge`, every `MAIL_SWEEP_MS`, 10 s). It is written once and a replay
+   * does not move it, so it can precede `deliveredAt`; a fast turn can overwrite the edge before a sample sees it, so it
+   * can be missing or a later prompt's time.
+   *
+   * `ackedAt` is when an ack committed (`markAcked`, the server's clock): the recipient's, through the ack route, or, for
+   * an operator-message nudge, the nudge lane's own ack at the delivery, so there it equals `deliveredAt`.
+   *
+   * ADDITIVE and OPTIONAL: each is absent until written, absent from an older server, and absent when the stored value is
+   * not the canonical spelling of a positive whole number (zero too, except `replayCount`'s), never zero.
+   */
+  deliveredAt?: number;
+  ingestedAt?: number;
+  ackedAt?: number;
+  replayCount?: number;
 }
 
 /** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
@@ -8173,7 +8188,19 @@ export interface CoordCaps { maxConcurrentWorkers: number }
  *
  *  `running` counts ACTIVE runs only since design 2026-09-14 §7.1 — see
  *  `ACTIVE_RUN_STATES`. */
-export interface CoordCapsUsage { running: number }
+export interface CoordCapsUsage {
+  running: number;
+  /** D-8792 (waiting workers spec 2026-11-19 Part 3): how many of `running`'s runs have a worker measured waiting (awake,
+   *  idle and quiet 30 minutes with nothing running) or gone (asleep, stopped, dead, archived). Reported in shadow and
+   *  live alike: in shadow `running` still counts them against the cap, and only once the operator arms the
+   *  `cap-counts-working` Shadow lanes row does the cap leave them out. ADDITIVE: the caps view sends it, an older server
+   *  omits it, and the console reads it through one reader (`capsUsageWords`). The store's own `capsUsage()` reads no
+   *  worker and omits it. */
+  waiting?: number;
+  /** D-8792: whether the cap leaves `waiting` out, which is true only while the operator has armed the
+   *  `cap-counts-working` row. Sent beside `waiting`; absent or false, the cap counts all of `running`. */
+  workingOnly?: boolean;
+}
 
 /** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
  *  TOGETHER, in one shape and one round trip: a cap without its usage is a
@@ -9293,6 +9320,12 @@ export interface LifecycleMeas {
    *  regular, empty file older than ccd's bound that no process holds), comma-joined; the tail removes them with the
    *  tree. Null: no stale lock passed, an older ccd, or another act. */
   readonly staleLock: string | null;
+  /** A `swap` row's landing relation to the account it left (account organization PR C, #2909): `_org_rel`'s word,
+   *  `same`, `other` or `unknown`. Null: an older ccd, or another act. */
+  readonly org: string | null;
+  /** A rescue's organization near miss (#2909): the lowest score of a `same` candidate that lost to a lower-scored
+   *  `other` landing, as digits. Null: none, a move that was not a rescue, an older ccd, or another act. */
+  readonly orgnear: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -9320,6 +9353,8 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   witness: true,
   heldBy: true,
   staleLock: true,
+  org: true,
+  orgnear: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -12333,7 +12368,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-inbound-v1' | 'plan-ticket-done-v1' | 'continuity-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12400,6 +12435,22 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  hold-failure fallback send an unbound push, with no stamp. A claimed attempt is never retried. W3's hold arming reads
    *  it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
   'push-outbox-v1': true,
+  /** Programme work map WM0 (D-8715): `plan put` takes and stores `phases`, `plan show` answers them (`PlanView.phases`), and
+   *  this server answers `POST /api/programmes/:slug/plan/phases/refs` (`plan phase-ref`: add, remove, carry; `unknown-ref`,
+   *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
+   *  Added by the change that builds the route and the client row, cut after them. */
+  'plan-phases-v1': true, 'plan-inbound-v1': true,   // plan-inbound-v1 (D-8736): `plan take` and `plan triage` answer; `ccrc-api` refuses both `capability-missing` without it
+  /** Programme work map WM1 (D-8727): this server stores a ticket's done time and evidence (`plan_tickets.doneAt` and
+   *  `doneEvidence`), answers `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`; `evidence-unverified`),
+   *  and refuses `ticket-required` at `runs open` in a phased plan. `ccrc-api plan ticket-done` refuses
+   *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the route and
+   *  the client row, cut after them. */
+  'plan-ticket-done-v1': true,
+  /** Overlord W1 (Q33, gates B's R1; door process B1): this server runs the Overlord gate at the continuity start doors with
+   *  the witness bound (`continuity/witnessPorts.ts`), so a designated Overlord's writes are fenced and witnessed, and the
+   *  designation doors may designate and rebind (`DESIGNATE_SERVER_WORDS`). Added by the change that binds the witness, cut
+   *  after it: without the binding, every write door and each card's last page would refuse 502 at step 7a. */
+  'continuity-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
@@ -13220,7 +13271,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -13363,7 +13414,7 @@ export function approvalDigestBytes(hookInput: Readonly<Record<string, unknown>>
 /** A signed ruling's record (spec §6.3 server half, step 5). `sessionId` is the child's REGISTRY id (the request
  *  body's `sessionId`), not Claude Code's `session_id`; `rowId` is the row the `201` named, and the verifier checks
  *  both (D-5488). `expiresAt` is epoch milliseconds, the request window's end (D-5441). */
-export interface ApprovalRulingRecord {
+export interface ApprovalRulingRecordV1 {
   readonly v: 1;
   readonly rowId: number;
   readonly sessionId: string;
@@ -13377,12 +13428,26 @@ export interface ApprovalRulingRecord {
   readonly expiresAt: number;
 }
 
-/** The bytes the server signs and the verifier checks: the record's ten fields, and only those, in canonical form.
- *  `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented second copy, held
- *  equal by `approval-verify.test.ts`. */
+/** Record v2 (approvals plan 2026-11-18, §3.6, PR 3): v1's ten fields and three more, `authority`, `denyCurrent` (the
+ *  child's deny rules were the box's current ones when the server signed) and `family`. Signed over all thirteen. */
+export interface ApprovalRulingRecordV2 extends Omit<ApprovalRulingRecordV1, 'v'> {
+  readonly v: 2; readonly authority: ApprovalRulingAuthority; readonly denyCurrent: boolean; readonly family: ApprovalRulingFamily;
+}
+/** Either record: what the one signing site signs and the ruling read serves. The name is the union (approvals PR 3), so
+ *  the signer (`approvalsign.ts`), which signs whatever record it is handed, is unchanged: the signing path stays outside
+ *  this diff (`consolidation-path-guard.test.ts`'s W3 arm). */
+export type ApprovalRulingRecord = ApprovalRulingRecordV1 | ApprovalRulingRecordV2;
+
+/** The bytes the server signs and the verifier checks: a v1 record's ten fields, or a v2 record's thirteen, and only
+ *  those, in canonical form. `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented
+ *  second copy of v1's bytes, held equal by `approval-verify.test.ts` (v2's copy is PR 3v's). */
 export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
-  return canonicalJson({ v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
-    nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt });
+  const fields: Record<string, unknown> = { v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
+    nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt };
+  // A v2 record's three fields, each only when present: a record that says `v: 2` without them (an older or a forged one)
+  // keeps v1's bytes, which no verifier accepts as v2.
+  if (r.v === 2) for (const k of ['authority', 'denyCurrent', 'family'] as const) if (r[k] !== undefined) fields[k] = r[k];
+  return canonicalJson(fields);
 }
 
 /** `POST /api/approvals`'s body, as the child's hook sends it through `ccrc-api approvals request` (spec §6.3 hook
@@ -13400,8 +13465,9 @@ export interface ApprovalRequestBody {
 }
 export const APPROVAL_REQUEST_MAX_BYTES = 64 * 1024;
 
-/** `201`'s answer to that request: the row id, and the window the hook waits for (D-5441). */
-export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: number }
+/** `201`'s answer to that request: the row id, the window the hook waits for (D-5441), and the park's word decided at
+ *  mint (approvals PR 3; absent from an older server, which the hook reads as `shadow`). */
+export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: number; readonly park?: ApprovalParkWord }
 
 /** `GET /api/approvals/:id/ruling?nonce=`'s answer: the row's state, and the signed ruling once one is taken. `sig` is
  *  the base64 Ed25519 signature over `approvalRulingBytes(record)`. */
@@ -13427,15 +13493,20 @@ export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; rea
  *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
  *  `operator`  the operator answered the dialog (the option-row answer (`POST /api/questions/session-<id>/answer`)), or the painted dialog closed with
  *              no ruling taken: every approval has an answering principal. Terminal.
- *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal. Terminal.
+ *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal, or a `parked` row's park
+ *              reached its horizon or went void. Terminal.
+ *  `parked`    (approvals PR 3, F8-a) the row's window ended unruled while its stored `parkWord` was `live`: the hook
+ *              printed the park deny, the row is on Waiting on you, and a later ruling is recorded on its park and met by
+ *              the retry. Written only by the questions owner's `parkApproval`, asked of `decideApprovalLapse`. NOT a hook
+ *              stop state: the hook's own `parked` arm prints the park deny.
  *  `unknown`   a token this build does not know, read off disk; never written.
  * `declined`, `released`, `operator` and `stale` are `APPROVAL_HOOK_STOP_STATES`: the ruling route answers them with
  * no ruling, and the hook stops on that answer (D-5440).
  */
-export type ApprovalState = 'held' | 'allowed' | 'denied' | 'declined' | 'released' | 'operator' | 'stale' | 'unknown';
+export type ApprovalState = 'held' | 'allowed' | 'denied' | 'declined' | 'released' | 'operator' | 'stale' | 'parked' | 'unknown';
 
 export const APPROVAL_STATE_MAP: Readonly<Record<ApprovalState, true>> = {
-  held: true, allowed: true, denied: true, declined: true, released: true, operator: true, stale: true, unknown: true,
+  held: true, allowed: true, denied: true, declined: true, released: true, operator: true, stale: true, parked: true, unknown: true,
 };
 
 export const APPROVAL_STATES: readonly ApprovalState[] = Object.keys(APPROVAL_STATE_MAP) as ApprovalState[];
@@ -13472,7 +13543,8 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
  *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
  *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
- *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, nor one the installer's
+ *                        digest history names (approvals PR 0), or its `.childshell`
  *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
  *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
  *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
@@ -13482,14 +13554,19 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *  `approval-unreadable` the row could not be read back.
  *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
  *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `deny-not-current`    an allow of a row whose child runs under older deny rules than the box's (approvals PR 0).
  *  `declined`            the claimant handed this row over and may not rule it later.
  *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
  *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
+ *  `park-ruled`          (approvals PR 3, T8-4) the row's park already holds an unspent ruling from a principal.
+ *  `coordinator-denied`  (approvals PR 3, F3) an allow on a key whose park records the coordinator's deny: a deny is
+ *                        final for every authority.
  */
 export const APPROVAL_REFUSALS = [
   'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
   'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
-  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+  'guard-forbidden', 'guard-escalate', 'deny-not-current', 'declined', 'hook-gone', 'already-ruled',
+  'park-ruled', 'coordinator-denied',
 ] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
 
@@ -13555,9 +13632,11 @@ export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
  *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
  *               coordinator that the coordinator never answered, whoever acted after);
  *  `big-call`   a big call the coordinator recorded and carried on from (D-8126): routine and block calls are never lines.
+ *  `parked`     (approvals PR 3) an approval whose window ended unruled and was parked, with its coordinator: on Waiting on
+ *               you, ruled later by its coordinator or the operator. A ruling moved onto the park keeps its allow or deny.
  * A row the operator answered while it was still held is not a line, and neither is a row minted released.
  */
-export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call'] as const;
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call', 'parked'] as const;
 export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
 
 /** Which table a digest line came from, and so which id space `id` is in. */
@@ -13833,7 +13912,8 @@ export function credentialMaskSource(id: CredentialMaskId): string {
   return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
 }
 
-/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513), except the drawer
+ *  (`DRAWER_SECRET_MASK`, D-8694). */
 export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
@@ -13904,11 +13984,14 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
 /** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
- *  secrets, programme ledgers plan PL6), `~`-anchored: Read (and Bash) of the first seven, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  secrets, programme ledgers plan PL6; the Overlord's private store, W1; the door process's directory, which holds its launch nonce, W1 door process A1), `~`-anchored: Read (and Bash) of every one of these fourteen, writes under `ACCOUNT_WRITE_DIRS`' three. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
-  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
-export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**',
+   // Overlord W1 private store A (spec §9.4): the operator's private store, its journal, quarantine, backup copy and restore leftovers
+   '~/.ccrc/operator-model.db*', '~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.torn/**', '~/ccrc-backups/*/operator-model.db*',
+   '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*', '~/.cc-sessions/.door/**'];
+export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**', '~/.cc-sessions/.door/**'];
 /** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
  *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
 export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];
@@ -14223,11 +14306,12 @@ export interface AccountSwitchAnswer {
  *  `auth-in-progress`   a sign-in for the lane is in flight (409, spec §3.9).
  *  `not-a-token-lane`   a stated account for a sign-in lane, whose account `check` measures (409).
  *  `duplicate-id`       the verb found the id taken although the server's roster did not hold it (409): a race the
- *                       reconcile settles. */
+ *                       reconcile settles.
+ *  `org-looks-like-an-id` an organization label shaped like an organization id (400, account organization A3). */
 export const ACCOUNT_WRITE_REFUSALS = [
   'key-charset', 'confirm-mismatch', 'not-discardable', 'lane-exists', 'bad-stated', 'token-unverified',
   'config-dir-exists', 'live-sessions', 'sleeping-sessions', 'upstream', 'last-home-able', 'auth-in-progress',
-  'not-a-token-lane', 'duplicate-id',
+  'not-a-token-lane', 'duplicate-id', 'org-looks-like-an-id',
 ] as const;
 export type AccountWriteRefusal = (typeof ACCOUNT_WRITE_REFUSALS)[number];
 
@@ -14504,6 +14588,9 @@ export interface CallView {
   seenAt: number | null;
   overturnedAt: number | null;
   overturnNote: string | null;
+  /** D-8126 A4: when a cleared big call left the operator's group (`callClearedAt`), on `WaitingView.callsCleared` rows only.
+   *  OPTIONAL on the wire: an older server omits it, and the console falls back to its own reading. ADDITIVE. */
+  clearedAt?: number;
 }
 
 /** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own
@@ -14512,6 +14599,7 @@ export interface CallRecordAnswer { ok: true; id: number; class: CoordCallClass;
 
 // ── the test box connect routes (test box connect spec §2.1, §2.6, §2.10; plan TC12, D-8166) ───────────────────────────
 import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';
+import type { TeamCandidateWire, TeamLinkWire } from './linking.js';
 
 /** The cap word `ccd caps` prints when THIS copy of ccd carries the test box connect surface (the `testbox-admin` verb's
  *  host). The two routes ask the account gate for it; a fleet that does not print it answers `unsupported`. */

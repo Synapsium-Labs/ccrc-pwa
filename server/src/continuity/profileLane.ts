@@ -29,13 +29,14 @@ import { ROUTE_WRITABLE_FIELDS, isRegistryId, type BuildAgreement, type ChildMar
 import { HISTORY_STEER_ON_DIR, type ReadFailure } from '../../../shared/agent-protocol.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
 import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
+import { routeSetOutcome } from '../routeSetOutcome.js';
 import type { CoordStore } from '../coord/store.js';
 import type { RunCcd } from '../coord/ports.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { SessionRecord } from '../registry.js';
-import { roleFactsOf, roleOf } from '../roleOf.js';
+import { designationFactFrom, roleFactsOf, roleOf } from '../roleOf.js';
 import type { UsageRead } from '../usage.js';
 import { plainAutoMemoryOf, profileDigestWriteOf, profileFor } from './profileFor.js';
 
@@ -57,7 +58,7 @@ const CLEARED = '';
 export const PROFILE_LANE_ACTOR = 'launch-profile lane';
 
 /** The store members the pass reaches, declared by this consumer. */
-export type ProfileCoord = Pick<CoordStore, 'laneArmSetting' | 'openCoordinatorIds' | 'run' | 'plainAutoMemorySettings'>;
+export type ProfileCoord = Pick<CoordStore, 'laneArmSetting' | 'openCoordinatorIds' | 'run' | 'plainAutoMemorySettings' | 'designationRead'>;
 
 /** One registry row, as the tick listed it. */
 export interface ProfileRow {
@@ -144,6 +145,10 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     if (child.kind !== 'child') return 'unmeasured';
     try { const r = coord.run(child.runId); return r.ok && r.run !== null ? r.run.kind : 'unmeasured'; } catch { return 'unmeasured'; }
   };
+  // The designation is read once a pass; unmeasured, no row is written (a pending Overlord read as plain would be given a
+  // plain profile): every row counts with `roleUnread`, which the pass line journals once.
+  let designation: ReturnType<typeof designationFactFrom>;
+  try { designation = designationFactFrom(coord.designationRead()); } catch { designation = 'unmeasured'; }
   const byField = zeroFields();
   let would = 0; let written = 0; let failed = 0; let deferred = 0; let unsupported = 0;
   let routeUnread = 0; let roleUnread = 0; let steered = 0; let steerUnread = 0; let memoryUnread = 0;
@@ -151,6 +156,7 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   let builds: BuildAgreement | null = null;   // read once a pass, at the first surfaced row
 
   for (const r of rows) {
+    if (designation === 'unmeasured') { roleUnread += 1; continue; }
     if (!isRegistryId(r.id)) { routeUnread += 1; continue; }   // a listing never builds a refused id; refused here too, before any argv
     if (r.route !== null && r.route.unreadable.some((f) => (PROFILE_ROUTE_FIELDS as readonly string[]).includes(f))) { routeUnread += 1; continue; }
     // A non-child is a coordinator or plain: never decided from an unmeasured fact (review 2024 F2). Its declared intent is
@@ -158,7 +164,7 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     if (r.child.kind === 'none' && openCoordinators === 'unmeasured') { roleUnread += 1; continue; }
     const intent = r.child.kind === 'none' && openCoordinators !== 'unmeasured' && !openCoordinators.has(r.id)
       ? await deps.reads.declaredIntent(r.id) : 'unmeasured';
-    const reading = roleOf(roleFactsOf(r.id, { child: r.child, childRunKind: runKind(r.child), openCoordinators, intentDeclared: intent }));
+    const reading = roleOf(roleFactsOf(r.id, { child: r.child, childRunKind: runKind(r.child), openCoordinators, intentDeclared: intent, designation }));
     if (reading.kind === 'undecided' && reading.between === 'coordinator-or-plain') { roleUnread += 1; continue; }
     let want = profileFor(reading, memory ?? 'off', null, continuityLive);
     const row = FLEET_ROLES[want.profile].launchProfile;
@@ -196,10 +202,10 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     if (deps.act === null || !ccdCan(deps.act.fleetState, 'routeSet')) { unsupported += 1; continue; }
     if (written >= PROFILE_WRITES_PER_PASS) { deferred += 1; continue; }   // a failing row never starves the rest (review 2024 F12)
     const res = await deps.act.runCcd(CCD_ARGV.routeSet(r.id, diff, sweepDec(deps.act.fleetState, PROFILE_LANE_ACTOR)));
+    const out = routeSetOutcome(res);
     // A call that never ran (the agent link dropped) is unmeasured, never ccd's refusal: it is retried next pass all the same.
-    if (res.ran === false) { failed += 1; failures.push(`${r.id}: ccd did not run, so the write is unmeasured`); }
-    else if (res.ok) written += 1;
-    else { failed += 1; failures.push(`${r.id}: ${res.stderr.split('\n')[0]?.trim() || 'no stderr'}`); }
+    if (out.kind === 'written') written += 1;
+    else { failed += 1; failures.push(`${r.id}: ${out.kind === 'unreachable' ? `${out.detail}, so the write is unmeasured` : out.reason}`); }
   }
   const result: ProfileLaneResult = {
     live, continuityLive, would, byField, written, failed, deferred, unsupported, routeUnread, roleUnread, steered, steerUnread,

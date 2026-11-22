@@ -1178,9 +1178,9 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/approvals | 14 approval-released | forbidden: minted released, never mailed":
     {"status": 409, "body": "{\"ok\":false,\"error\":\"approval-released\",\"id\":1,\"releaseReason\":\"forbidden\"}", "effects": {"minted": 1, "row": {"state": "released", "answeredBy": null, "releaseReason": "forbidden"}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals | 15 201 | minted held for the claimant, mailed":
-    {"status": 201, "body": "{\"id\":1,\"waitS\":60}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 1, "journal": null}},
+    {"status": 201, "body": "{\"id\":1,\"waitS\":60,\"park\":\"shadow\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 1, "journal": null}},
   "POST /api/approvals | 15 201 | a subagent's request (its own window)":
-    {"status": 201, "body": "{\"id\":1,\"waitS\":180}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 1, "journal": null}},
+    {"status": 201, "body": "{\"id\":1,\"waitS\":180,\"park\":\"shadow\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 1, "journal": null}},
   "POST /api/approvals/:id/rule | 1 | no coordination store":
     {"status": 501, "body": "{\"ok\":false,\"error\":\"not-configured\"}", "effects": {}},
   "POST /api/approvals/:id/rule | 2 | no box token":

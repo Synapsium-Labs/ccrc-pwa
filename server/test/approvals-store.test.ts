@@ -29,6 +29,23 @@ describe('approvals rows (D-5298)', () => {
     expect({ state: r.state, releaseReason: r.releaseReason }).toEqual({ state: 'released', releaseReason: 'forbidden' });
   });
 
+  // Approvals PR 0 (the coordinator's ruling F5): "deny current" is the row's own fact, beside its class.
+  it('denyCurrent: absent is current (the column\'s default, an older build\'s insert), false is stored and read back', () => {
+    const c = mk();
+    expect(row(c, mint(c)).denyCurrent).toBe(true);
+    expect(row(c, mint(c, { denyCurrent: true })).denyCurrent).toBe(true);
+    const stale = row(c, mint(c, { denyCurrent: false }));
+    expect({ denyCurrent: stale.denyCurrent, class: stale.class, state: stale.state }).toEqual({ denyCurrent: false, class: 'ordinary', state: 'held' });
+    // An older build's insert names no such column, and stores 1.
+    c.db.prepare('INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, class, state, askAt, notifyAt) '
+      + "VALUES ('project-a-quiet-basin', 'project-a-calm-mesa', NULL, ?, ?, '', 'Bash', 'x', 0, 'ordinary', 'held', ?, ?)")
+      .run('d'.repeat(64), 'e'.repeat(32), T0, T0 + 60_000);
+    const older = c.db.prepare('SELECT MAX(id) AS id FROM approvals').get() as { id: number };
+    expect(row(c, older.id).denyCurrent).toBe(true);
+    // The column admits 0 and 1 only.
+    expect(() => c.db.prepare('UPDATE approvals SET denyCurrent = 2 WHERE id = ?').run(older.id)).toThrow(/CHECK/);
+  });
+
   it('a rule takes a held row once; a second principal finds it already ruled', () => {
     const c = mk();
     const id = mint(c);

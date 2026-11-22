@@ -21,7 +21,8 @@ export type DrainRead = { readonly held: false } | { readonly held: true; readon
 export function drainVerdict(row: HibernateRow, live: HibernateLive, now: number): DrainRead {
   const v = hibernateVerdict({
     row: { ...row, bucket: 'idle', held: null },
-    optedOut: false,
+    // A renewal moves the Overlord's own body, so the sleep hold that keeps it awake is set aside here.
+    overlord: false, optedOut: false,
     store: { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
     viewer: false,
     sinceStartMs: Number.MAX_SAFE_INTEGER,

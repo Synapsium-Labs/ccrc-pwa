@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { VIEWER_OPEN_TTL_MS, type FleetSession, type RunState } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
+import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
 type RollActPort = SleepActPort<FleetSession>;
@@ -18,6 +19,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { withBindingsOf } from './bindingsFake.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { FleetState } from '../src/fleetstate.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -74,6 +76,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
       openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => coord.openRunsForSession(...a),
       activeClaims: () => coord.activeClaims(),
       outstandingMailFor: (id: string, n?: number) => coord.outstandingMailFor(id, n),
+      designationRead: () => coord.designationRead(),
     }),
     targets: () => set.targets,
     release: async () => o.release ?? { kind: 'installed', at: INSTALLED },
@@ -832,5 +835,108 @@ describe('rollPass: behind on the Claude Code build (D-8276)', () => {
     const opted = fresh();
     expect(await buildPass(opted, rows, [`${COORD2}.no-roll`])).toEqual([{ id: COORD2, kind: 'skipped', reason: 'no-roll' }]);
     expect(opted.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: the hand-off to the renewal lane (Overlord W1a, the renewal hand-offs, Task 5; spec §3.3.8)', () => {
+  const recOf = (id: string, child: SessionRecord['child'] = { kind: 'none' }): SessionRecord =>
+    ({ id, uuid: `uuid-${id}`, wrapper: 'lane-a', child }) as unknown as SessionRecord;
+  const claimRun = (f: Fake, id: string): void => {
+    f.coord.db.exec("INSERT OR IGNORE INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'P', 1, 'active')");
+    f.coord.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 1, 2, 'project-a', 'working', ?, 1)").run(id);
+  };
+  const live = (f: Fake): void => { f.coord.setLaneArm(CONTINUITY_LANE, 'live', 1); };
+  const handoff = (f: Fake, rows: FleetSession[]) =>
+    rollPass({ ...f.deps, continuity: f.coord }, mem(), rows, rows.map((r) => recOf(r.id)), []);
+
+  it('continuity live: a coordinator claiming an open run is skipped renewal-owns, and nothing is called', async () => {
+    const f = fake();
+    claimRun(f, COORD);
+    live(f);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'renewal-owns' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('continuity live: a session the renewal lane holds a live generation for is renewal-owns, though it claims no open run', async () => {
+    const f = fake();
+    live(f);
+    const s = f.coord.insertStart({ sessionId: COORD, reportId: 'r-1', uuid: 'u', source: 'startup', model: null, rowIncarnation: 'inc',
+      reportedAt: 1, receivedAt: 1 });
+    if (!s.ok) throw new Error('start');
+    f.coord.mintGeneration({ identity: COORD, sessionId: COORD, role: 'coordinator', term: 1, rowIncarnation: 'inc', startId: s.id,
+      startReportedAt: 1, resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'woken', mono: 1, proc: 'p1', now: 1 }, null, true);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'renewal-owns' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('continuity live: a plain session (no open run, no generation) is rolled as today', async () => {
+    const f = fake();
+    live(f);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('continuity shadow: a coordinator claiming an open run is rolled as today', async () => {
+    const f = fake();
+    claimRun(f, COORD);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+  });
+
+  it('continuity live, the designation unreadable: every long-life stays unread (null), so a plain session is held role-unknown', async () => {
+    // Designation A made the designation a role fact; `handoffOf` reads the pass's, and an unmeasured one fails closed. A
+    // long-life read as false instead would pass the hand-off and be skipped later, as designation-unreadable.
+    const f = fake();
+    live(f);
+    f.deps.coord!.designationRead = () => { throw new Error('fixture'); };
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'role-unknown' }]);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: the Overlord and the designation (Overlord W1 designation A, Task 3)', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const boundTo = (id: string): DesignationRead =>
+    ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' } }) });
+  const pendingTo = (id: string): DesignationRead => ({
+    kind: 'not-designated',
+    row: view({ pending: { sessionId: id, kind: 'designate', deadlineAt: 9, since: 1, actor: 'op', generation: null } }),
+  });
+  const read = (f: Fake, d: DesignationRead): void => { f.deps.coord!.designationRead = () => d; };
+
+  it.each([['bound', boundTo], ['pending', pendingTo]] as const)('the %s id is skipped overlord, and nothing is called', async (_n, mk) => {
+    const f = fake();
+    read(f, mk(COORD));
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'overlord' }]);
+    expect(f.calls).toEqual([]);
+    expect(f.lines).toEqual([`ccrc-server: roll-skip ${COORD}: overlord`]);
+  });
+
+  it('every other row is rolled as before, and an ordinary session\'s idle gate does not hold unmeasured', async () => {
+    const f = fake();
+    read(f, boundTo(COORD2));
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('an unmeasured read skips every row designation-unreadable, and the lane reads the designation once a pass', async () => {
+    const f = fake();
+    let reads = 0;
+    f.deps.coord!.designationRead = () => { reads++; return { kind: 'unmeasured', why: 'fixture' }; };
+    const rows = [row(COORD), row(COORD2)];
+    expect(await pass(f, rows)).toEqual([
+      { id: COORD, kind: 'skipped', reason: 'designation-unreadable' },
+      { id: COORD2, kind: 'skipped', reason: 'designation-unreadable' },
+    ]);
+    expect(f.calls).toEqual([]);
+    expect(reads).toBe(1);
+  });
+
+  it('a read that throws is unmeasured too', async () => {
+    const f = fake();
+    f.deps.coord!.designationRead = () => { throw new Error('fixture'); };
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'designation-unreadable' }]);
   });
 });

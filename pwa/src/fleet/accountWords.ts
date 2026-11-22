@@ -623,12 +623,9 @@ const LANE_REFUSAL_TEXT: Readonly<Record<LaneRefusalWord, (id: string, what: str
 /** A refusal's words for a lane act, built from its CODE only (the server's `error` word, its `reason`, its
  *  `verbCode`), never from the response's text (D-7732). `failure` is what the call rejected with: an `ApiError`'s
  *  body, or anything else for a request that did not complete. */
-export function laneActRefusal(act: 'check' | 'switch' | 'placement', id: string, failure: unknown): string {
-  const body = typeof failure === 'object' && failure !== null && 'body' in failure ? (failure as { body: unknown }).body : undefined;
-  const field = (k: string): string | undefined => {
-    const v = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)[k] : undefined;
-    return typeof v === 'string' && CODE_RE.test(v) ? v : undefined;
-  };
+export function laneActRefusal(act: 'check' | 'switch' | 'placement' | 'org', id: string, failure: unknown): string {
+  const body = bodyOf(failure);
+  const field = (k: string): string | undefined => wordIn(body, k);
   const what = act === 'check' ? 'checked' : act === 'switch' ? 'switched' : 'changed';
   const word = field('error');
   if (word === undefined) {
@@ -643,6 +640,16 @@ export function laneActRefusal(act: 'check' | 'switch' | 'placement', id: string
 
 /** A refusal code as a screen may print it: a kebab word, never a sentence. */
 const CODE_RE = /^[a-z][a-z0-9-]{0,47}$/;
+const bodyOf = (failure: unknown): unknown =>
+  typeof failure === 'object' && failure !== null && 'body' in failure ? (failure as { body: unknown }).body : undefined;
+const wordIn = (body: unknown, k: string): string | undefined => {
+  const v = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)[k] : undefined;
+  return typeof v === 'string' && CODE_RE.test(v) ? v : undefined;
+};
+
+/** The refusal's `error` word, held to a word as `laneActRefusal` holds it, or `undefined` (account organization B1:
+ *  the organization row words its own codes first and hands the rest to `laneActRefusal`). */
+export const refusalWordOf = (failure: unknown): string | undefined => wordIn(bodyOf(failure), 'error');
 
 /** The trouble card's move button (spec §4.2): "Move 4 sessions off". */
 export function moveOffLabel(n: number): string {

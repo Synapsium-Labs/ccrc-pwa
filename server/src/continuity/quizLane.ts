@@ -2,8 +2,9 @@
 // renewal lane, the weekly replay quiz"; W1a, the replay quiz piece, plan `w1a-replay-quiz.md` Task 4; W0-28 ruled B). Its
 // rule is L1 (`quiz.ts#quizLaneVerdict`); this file reads the facts through its port, asks the rule and raises.
 //
-// THE LANE REMINDS, IT NEVER RUNS (slug quiz-lane-reminds-not-runs). History's quiz driver refuses inside a pane and the
-// ruling's condition 3 makes it the operator's by hand, so the lane's one effect is one operator item a week, through the
+// THE LANE REMINDS, IT NEVER RUNS (slug quiz-lane-reminds-not-runs). History's quiz driver refuses inside a pane; ccrc's own
+// weekly timer runs it (`deploy/history-quiz-unattended.mjs`, run 3212), never this lane, so the lane's one effect is one
+// operator item a week, raised only once the unattended run's grace has passed with no confirmed run, through the
 // ledger's existing server raise (`raiseItem`, actor `ccrc`). It runs no process, reads no history file, writes no marker
 // and records no run: `continuity-quiz-lane.test.ts` pins its imports. While the record path is absent
 // (`QUIZ_RECORD_READY`, ask 434) it raises nothing.
@@ -15,8 +16,10 @@ import { QUIZ_ITEM_PROGRAMME, quizItemText, quizLaneVerdict, quizWeek, type Quiz
  *  answers its failure rather than throwing; `raise` throws on a write that failed, and the lane's row catches it. */
 export interface QuizLanePort {
   readonly recordReady: boolean;
-  /** When each recorded run was recorded (wall ms). */
+  /** When each confirmed run was recorded (wall ms). */
   recordedAts(): QuizRead<readonly number[]>;
+  /** Whether any recorded run waits for the operator's ruling. */
+  pendingWaits(): QuizRead<boolean>;
   baseline(): LaneArmBaseline;
   /** Whether an item with any of these titles was ever raised on the quiz's programme by `ccrc`, in any state. */
   itemRaised(titles: readonly string[]): QuizRead<boolean>;
@@ -30,12 +33,13 @@ export type QuizLaneResult = { readonly kind: 'hold'; readonly why: QuizLaneHold
 export function runQuizLane(port: QuizLanePort, now: number, log: (line: string) => void): QuizLaneResult {
   const week = quizWeek(now);
   const recordedAts = port.recordedAts();
+  const pendingWaits = port.pendingWaits();
   const baseline = port.baseline();
   const itemRaised = port.itemRaised([quizItemText(week.key, false).title, quizItemText(week.key, true).title]);
-  const verdict = quizLaneVerdict({ recordReady: port.recordReady, week, recordedAts, baseline, itemRaised });
+  const verdict = quizLaneVerdict({ recordReady: port.recordReady, now, week, recordedAts, pendingWaits, baseline, itemRaised });
   if (verdict.kind === 'hold') {
     if (verdict.why === 'unmeasured') {
-      const failed = ([['recorded runs', recordedAts], ['baseline', baseline], ['raised items', itemRaised]] as const)
+      const failed = ([['recorded runs', recordedAts], ['pending runs', pendingWaits], ['baseline', baseline], ['raised items', itemRaised]] as const)
         .flatMap(([what, r]) => (r.ok ? [] : [`${what}: ${r.detail}`]));
       log(`ccrc-server: the quiz lane raised nothing: a read failed (${failed.join('; ')})`);
     }

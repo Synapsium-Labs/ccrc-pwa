@@ -362,6 +362,19 @@ each slice exercises are listed per task.
     `delegationCarrierCheckpoints.ts` and `delegationOldRuleFixture.ts` among them.
 - **Pins it exercises:** the "pure/impure split" row's pure-homes clause, where `DelegationRecovery`'s file must name no
   filesystem, SQLite or store.
+- **The run (2026-11-16, on `origin/main` `9cf263d44`):**
+  - [x] Step 1: Preflight. 19 open heads, none carrying a move; `"ok": true`, `"slots": ["C5"]`, `"refusals": []`.
+  - [x] Step 2: Plan. 11 moved, `destContexts` `["C5"]`, `destUsesSource` `refuse`, `DelegationCheckpointBuilder`,
+    `decodeDelegationCheckpoint`, `validateDelegationCheckpoint` and `DelegationCheckpointError`, `sourceUsesDest` `[]`,
+    `problems` `[]`.
+  - [x] Step 3: Move. No header: the module is L1 by its facts.
+  - [x] Step 4: Gates. All 38 `delegation-*` suites and the ten named ones, the rings, `census-w7` and
+    `single-definition` suites, both typechecks, and the tests-project typecheck printing nothing.
+  - [x] Step 5: Commit, by the 15 files `move` wrote.
+  - [x] Step 6: Verdict on the commit. `pure: true`, 11 moved, `differing: []`, `newlyExported` empty;
+    `delegation-durability.ts` and `delegation-db-projection.ts` (+1 each) and the 11 tests and fixtures change on
+    import lines alone. The source measures 1,039 code lines (delta -221 against the merge-base), and
+    `delegation-recovery.ts` 229.
 
 ### Task 6: The closing PR: the caps, and the prose the moves could not touch
 

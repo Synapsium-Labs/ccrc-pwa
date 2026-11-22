@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { CARD_HISTORY, gatherCardFacts, type CardFactsDeps } from '../src/continuity/cardFacts.js';
 import { intentOfCheckpoint } from '../src/continuity/declaredIntent.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf, snapshotFactsJson } from '../src/continuity/card.js';
@@ -35,12 +36,29 @@ const raise = (c: CoordStore, program: string, raisedBy: string, title: string, 
 const gather = (c: CoordStore, over: Partial<CardFactsDeps> = {}): Promise<{ facts: CardFacts; renderer: string }> =>
   gatherCardFacts(deps(c, over), ME, NOW);
 
+describe('gatherCardFacts: each goal is ratified only when its version\'s verdict is (Overlord W1, portfolio B)', () => {
+  it('a pin and a definition of done that rest on an unanswered item, or on nothing recorded, read not ratified; the operator\'s ratify flips them', async () => {
+    const c = store();
+    openRun(c, 'prog-a', ME, 2);
+    c.setSpecPin('prog-a', 'docs/spec.md', 'Ship the card.', NOW - 1_000, null, { kind: 'coordinator' });
+    c.db.prepare('UPDATE programs SET ratifiedBy = NULL WHERE slug = ?').run('prog-a');  // a pin from before the column
+    const item = raise(c, 'prog-a', ME, 'which list?');
+    const mod = c.addModification('prog-a', { text: 'new list', ruling: null, itemId: item, pr: null, doneWhen: ['it ships'] }, NOW - 900);
+    const goalsOf = async (): Promise<unknown> => value((await gather(c)).facts.ledger)[0]!.goals;
+    expect(await goalsOf()).toEqual([{ text: 'Ship the card.', ratified: false }, { text: 'it ships', ratified: false }]);
+    expect(c.ratifyGoalsVersion('prog-a', { pin: { inShortAt: NOW - 1_000 } }, NOW, 'phone-a 0123abcd')).toEqual({ ok: true, changed: true });
+    expect(c.ratifyGoalsVersion('prog-a', { modification: mod }, NOW, 'phone-a 0123abcd')).toEqual({ ok: true, changed: true });
+    // Who ratified rides each ratified goal, for the card to say (review 2240 F8).
+    expect(await goalsOf()).toEqual([{ text: 'Ship the card.', ratified: true, ratifiedBy: 'operator' }, { text: 'it ships', ratified: true, ratifiedBy: 'operator' }]);
+  });
+});
+
 describe('gatherCardFacts: each fact is read from its rows', () => {
   it('a coordinator: its open runs, its programme ledger, its claims, its raised items, its outstanding mail', async () => {
     const c = store();
     const r1 = openRun(c, 'prog-a', ME, 2);
     openRun(c, 'prog-b', OTHER);
-    c.setSpecPin('prog-a', 'docs/spec.md', 'Ship the card.', NOW - 1_000, ['the card door answers']);
+    c.setSpecPin('prog-a', 'docs/spec.md', 'Ship the card.', NOW - 1_000, ['the card door answers'], { kind: 'coordinator' });
     c.addModification('prog-a', { text: 'drop the badge', ruling: 'agreed', itemId: null, pr: null }, NOW - 900);
     const mine = raise(c, 'prog-a', ME, 'pick a name');
     const theirs = raise(c, 'prog-a', OTHER, 'pick a colour', NOW - 4_000);
@@ -57,7 +75,9 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
     expect(value(f.runs)).toEqual([{ id: r1, programme: 'prog-a', wave: 2, waveOf: 3, state: 'planned', planPath: null, kind: 'work' }]);
     const ledger = value(f.ledger);
     expect(ledger.map((p) => p.slug)).toEqual(['prog-a']);
-    expect(ledger[0]!.goals).toEqual([{ text: 'Ship the card.', ratified: false }, { text: 'the card door answers', ratified: false }]);
+    // (Question 1, operator item 328: yes.) A coordinator's own pin counts, so its goals read ratified, by the coordinator.
+    expect(ledger[0]!.goals).toEqual([
+      { text: 'Ship the card.', ratified: true, ratifiedBy: 'coordinator' }, { text: 'the card door answers', ratified: true, ratifiedBy: 'coordinator' }]);
     expect(ledger[0]!.decisions).toEqual([{ at: NOW - 900, text: 'drop the badge (ruling: agreed)' }]);
     expect(ledger[0]!.openItems.map((i) => i.id)).toEqual([mine, theirs]);
     expect(value(f.claims)).toEqual([{ id: (claim as { claims: { id: number }[] }).claims[0]!.id, paths: ['server/src/a.ts'], runId: r1 }]);
@@ -270,10 +290,75 @@ describe('gatherCardFacts: a read that fails is a fact naming what failed, never
 describe('cardRoleOf: every role is drawn by its FLEET_ROLES renderer', () => {
   it('worker, reviewer, coordinator and plain, from the facts that decide them', () => {
     const at = (child: ChildMark, kind: 'work' | 'review' | 'unmeasured', open: boolean, intent: boolean) =>
-      cardRoleOf(roleFactsOf(ME, { child, childRunKind: kind, openCoordinators: new Set(open ? [ME] : []), intentDeclared: intent }));
+      cardRoleOf(roleFactsOf(ME, { child, childRunKind: kind, openCoordinators: new Set(open ? [ME] : []), intentDeclared: intent, designation: { kind: 'none' } }));
     expect(at({ kind: 'child', runId: 7 }, 'review', false, false)).toEqual({ role: 'reviewer', roleWhy: 'a child of run 7, a review run', renderer: 'reviewer' });
     expect(at({ kind: 'none' }, 'unmeasured', true, true)).toEqual({ role: 'coordinator', roleWhy: 'it claims an open run', renderer: 'coordinator' });
     expect(at({ kind: 'none' }, 'unmeasured', false, false).renderer).toBe('plain');
+  });
+});
+
+describe('gatherCardFacts: the designation (Overlord W1 designation A, Task 3, X5)', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const pending = (kind: 'designate' | 'rebind'): DesignationRead => ({ kind: 'not-designated', row: view({
+    pending: { sessionId: ME, kind, deadlineAt: 9, since: 1, actor: 'op', generation: null } }) });
+  const live: DesignationRead = { kind: 'designated', sessionId: ME, term: 5, row: view({ bound: { sessionId: ME, generation: 'g1' } }) };
+  let n = 0;
+  /** An `overlord` generation of the bound session, minted the way the lane's restart does: against the live one. */
+  const mintOverlord = (c: CoordStore): number => {
+    n += 1;
+    const s = c.insertStart({ sessionId: ME, reportId: `ro-${n}`, uuid: 'u', source: 'resume', model: null, rowIncarnation: null, reportedAt: NOW, receivedAt: NOW });
+    if (!s.ok) throw new Error('start');
+    const gens = c.liveGenerations();
+    if (!gens.ok) throw new Error(gens.detail);
+    const prev = gens.rows.find((g) => g.identity === 'overlord') ?? null;
+    const m = c.mintGeneration({ identity: 'overlord', sessionId: ME, role: 'overlord', term: 5, rowIncarnation: null, startId: s.id, startReportedAt: NOW,
+      resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'renewed', mono: 1, proc: 'p', now: NOW },
+    prev === null ? null : { term: prev.term, n: prev.n, state: prev.state, shadowState: prev.shadowState, walk: prev.walk }, true);
+    if (!m.ok) throw new Error(m.kind);
+    return m.id;
+  };
+
+  it('a pending body (a designate or a rebind attempt) and a bound one read the Overlord, whatever else holds', async () => {
+    for (const read of [pending('designate'), pending('rebind'), live]) {
+      const c = store();
+      openRun(c, 'prog-a', ME);   // it claims an open run: a coordinator, were it not the Overlord
+      c.designationRead = () => read;
+      const { facts } = await gather(c);
+      expect(facts.role, read.kind).toBe('overlord');
+    }
+  });
+
+  it('an unmeasured designation leaves the role unread (the registry-unread arm) and the checkpoint unmeasured', async () => {
+    for (const bad of [(): DesignationRead => ({ kind: 'unmeasured', why: 'x' }), (): DesignationRead => { throw new Error('locked'); }]) {
+      const c = store();
+      c.designationRead = bad;
+      const { facts } = await gather(c);
+      expect(facts.role).toBe('undecided');
+      expect(facts.checkpoint).toEqual({ kind: 'unmeasured', what: 'the checkpoint' });
+    }
+  });
+
+  it('a restart of the Overlord: the card finds the live overlord generation, and the checkpoint of the one it replaced', async () => {
+    const c = store();
+    c.designationRead = () => live;
+    const first = mintOverlord(c);
+    expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
+    expect(c.putCheckpoint({ generationId: first, notes: [], rulings: [], at: NOW - 9,
+      handover: { n: 1, dropped: 0, note: { threads: [], cautions: ['c'], tone: 't' } } }).ok).toBe(true);
+    mintOverlord(c);
+    expect(value((await gather(c)).facts.checkpoint)).toMatchObject({ at: NOW - 9, handover: { generation: 1, cautions: ['c'] } });
+  });
+
+  it('a rebind: the old body is overlord, so the new (pending) body\'s card looks under its own id, not the old body\'s generation', async () => {
+    const c = store();
+    c.designationRead = () => live;
+    mintOverlord(c);
+    c.designationRead = () => ({ kind: 'designated', sessionId: 'overlord-old-owl', term: 5, row: view({
+      bound: { sessionId: 'overlord-old-owl', generation: 'g1' }, pending: { sessionId: ME, kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null } }) });
+    expect((await gather(c)).facts.checkpoint).toEqual({ kind: 'read', value: null });
   });
 });
 

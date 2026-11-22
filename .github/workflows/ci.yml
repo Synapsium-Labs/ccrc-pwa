@@ -225,8 +225,10 @@ concurrency:
 jobs:
   # D-6926: a pull request that is not a ledger pull request (head branch `ledger/<programme>`) may not
   # modify or delete an existing file under docs/superpowers/programs/ or docs/superpowers/plans/; it adds
-  # a per-task note instead, and a `Ledger-Edit: <reason>` trailer on the HEAD commit is the escape, written
-  # to the step summary. Its OWN job, so an internal error or a violation fails only this check and never
+  # a per-task note instead (docs/superpowers/programs/<programme>/, D-8719), and a `Ledger-Edit: <reason>`
+  # trailer on the HEAD commit is the escape, written to the step summary. D-8719's layout arm, in the same script,
+  # refuses a new file under docs/superpowers/specs/ or plans/ outside the repo's review judge's layout, on every
+  # branch and with no escape. Its OWN job, so an internal error or a violation fails only this check and never
   # skips the test jobs that `needs: select`. ARMED (LEDGER_GUARD_MODE=enforce): it ran warn-only while the
   # open pull requests that edited a ledger landed or moved to a trailer, and was armed once every open pull
   # request passed in enforce mode. `warn` (it reports and exits 0, and `continue-on-error` holds) stays the
@@ -1608,6 +1610,10 @@ jobs:
           test/history-rss-preload.test.ts
           test/history-redact-profiles.test.ts
           test/history-touched.test.ts
+          test/history-fts-fold.test.ts
+          test/history-quiz-single-characterization.test.ts
+          test/history-quiz-single.test.ts
+          test/history-quiz-unattended.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 

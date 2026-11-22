@@ -1,0 +1,8 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 600,
+  "d": "D-8783",
+  "reason": "X2 P1 (D-8783): the docs-show-range verb and its snapshot cache in the docs helper (P1.2, the range read D-8764 puts in ccd, the anti-corruption layer that alone reads a worktree and runs git), and draft_facts keeping st_mtime_ns (P1.5); measured +598 net code lines at the wave's tip (its fix round, against the merge-base 9d40ef89b), maxDelta 600",
+  "added": "2026-11-20",
+  "createdAt": "2026-11-20"
+}

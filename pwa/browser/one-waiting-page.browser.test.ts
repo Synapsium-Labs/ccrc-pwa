@@ -73,6 +73,7 @@ const FIXTURE: AppFixture = {
     '/api/runs': RUNS, '/api/claims': [], '/api/waiting': { ok: true, waiting: WAITING },
     '/api/programmes/prog-a/goals': { ok: true, goals: goals('prog-a') },
     '/api/programmes/prog-b/goals': { ok: true, goals: goals('prog-b') },
+    '/api/programmes/prog-a/plan': { ok: true, plan: { program: 'prog-a', planned: false, initiatives: [], epics: [], doneWhen: [] } },
     '/api/programmes/prog-a/secrets': { ok: true, program: 'prog-a', slots: [] },
   },
   fleetFrames: [

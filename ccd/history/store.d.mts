@@ -70,6 +70,10 @@ export function parentOf(db: DatabaseSync, nodeId: string): string | null;
 // ── W1-B2 Task 19: a registered recovery step (RB6) and the stored version (RB13, RB17) ──
 export function recoverOpenOn(db: DatabaseSync): boolean;
 export const FTS_GATE_SQL: Readonly<{ table: string; backfill: string; rebuild: string }>;
+// ── D-8726 (history-fts-fold-once): each FTS5 index's structure record ──
+export const FTS_STRUCTURE_SQL: Readonly<{ table: string; blobs: string; nodes: string }>;
+export function ftsStructureOn(db: DatabaseSync, table: 'blobs_fts' | 'nodes_fts'): import('./fts-structure.mjs').FtsStructure;
+export function ftsSegmentsOn(db: DatabaseSync): { blobs: number | null; nodes: number | null };
 export function ftsGateFactsOn(db: DatabaseSync): { probe: 'present' | 'absent' | 'threw'; table: boolean; rebuilding: boolean; completed: boolean };
 export function recoverStepAt(dbFile: string): 'open' | 'none' | 'absent' | 'unmeasured';
 export function storedVersionAt(dbFile: string): Presence<number>;

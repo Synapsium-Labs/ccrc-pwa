@@ -11,7 +11,7 @@ import {
   generationsPass, type EmptyTries, type GenReadings, type GenerationsDeps, type PlannedAct, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import { runRenewalActs } from '../src/continuity/renewalActs.js';
-import { RENEWAL_HANDOVER_SUBJECT } from '../src/continuity/renewalFeed.js';
+import { OVERLORD_HANDOVER_BODY, OVERLORD_SPOT_PROBE_BODY, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import type { DeliverResult, ReceiptRead, RenewalPrompt, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
 import type { DrainRead } from '../src/continuity/renewalDrain.js';
 import { snapshotFactsJson } from '../src/continuity/card.js';
@@ -30,7 +30,7 @@ const U2 = '22222222-2222-4222-8222-222222222222';
 const U3 = '33333333-3333-4333-8333-333333333333';
 const PERIOD = 30_000;
 
-const usage = (ctxTokens: number, ctxWindow: number): UsageRead => ({ kind: 'reading', usage: {
+const usage = (ctxTokens: number, ctxWindow: number): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts: 1, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow, cost: null, cacheExpiresAt: null, stale: false,
 } });
 const FREE: DrainRead = { held: false };
@@ -200,19 +200,32 @@ describe('the renewal act, live (Task 4)', () => {
     expect(f.s.db.prepare('SELECT state FROM continuity_generations WHERE identity = ?').get(COORD)).toEqual({ state: 'draining' });
   });
 
-  it('the lane\'s real gather: a soft trigger waits unmeasured on the operator mark, and no soft renewal starts', async () => {
+  it('the lane\'s real gather: a soft trigger of a coordinator with no operator mark starts (the hand-offs piece: no mark is no activity)', async () => {
     const f = await atRest();
     const g = f.gen();
     // Past the least age, on the observed clock.
     f.s.db.prepare('UPDATE continuity_generations SET mintedObservedMs = ? WHERE id = ?').run(-LEAST_AGE_MS, g.id);
-    // A soft due, stored as THREE would store one; the gather's operator mark reads unmeasured until the hand-offs piece.
+    // A soft due, stored as THREE would store one. The gather reads the coordinator's `operator-at-programme` mark: prog-a has
+    // none, a measured "no activity", which opens the break, so the unmeasured wait the renewal act left is gone.
+    const soft: GenReadings = { usage: usage(10_000, 1_000_000), compactions: { kind: 'absent' }, turn: { ok: false, reason: 'absent' } as never,
+      behind: { kind: 'measured', value: true }, drain: FREE };
+    const r = await f.cycle(() => soft);
+    expect(r.waits).toEqual({});
+    expect(state(f)).toEqual({ state: 'draining', shadowState: null });
+    expect(g.id).toBe(f.gen().id);
+  });
+
+  it('the lane\'s real gather: a soft trigger waits no-break while prog-a\'s operator mark is young (the hand-offs piece)', async () => {
+    const f = await atRest();
+    const g = f.gen();
+    f.s.db.prepare('UPDATE continuity_generations SET mintedObservedMs = ? WHERE id = ?').run(-LEAST_AGE_MS, g.id);
+    expect(f.s.putOperatorMark('prog-a', f.t.ports.clock.wall())).toEqual({ ok: true });
     const soft: GenReadings = { usage: usage(10_000, 1_000_000), compactions: { kind: 'absent' }, turn: { ok: false, reason: 'absent' } as never,
       behind: { kind: 'measured', value: true }, drain: FREE };
     const r = await f.cycle(() => soft);
     expect(f.gen().dueClass).toBe('soft');
-    expect(r.waits).toMatchObject({ unmeasured: 1 });
+    expect(r.waits).toMatchObject({ 'no-break': 1 });
     expect(state(f)).toEqual({ state: 'active', shadowState: null });
-    expect(g.id).toBe(f.gen().id);
   });
 
   it('renew refused (exit 3): a proven generation goes back to active with a hold-off, and no retry is made', async () => {
@@ -493,6 +506,23 @@ describe('the renewal act, live (Task 4)', () => {
     const cp = f.s.db.prepare('SELECT generationId FROM continuity_checkpoints').all();
     expect(cp).toEqual([{ generationId: g.id }]);
   });
+
+  it('a restarted Overlord\'s notes (keyed by its session id) reach its seal (review 2349 F2)', async () => {
+    const f = await atRest();
+    const g = f.gen();
+    // The generation's identity is `overlord`, its session the body's session: the note door writes under the session id.
+    f.s.db.prepare("UPDATE continuity_generations SET identity = 'overlord' WHERE id = ?").run(g.id);
+    const note = f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread',
+      waitsOn: 'nothing', next: 'carry on', revises: null, closes: false, at: f.t.ports.clock.wall() });
+    expect(note.ok).toBe(true);
+    f.s.stepGeneration(g.id, genExpectOf(f.gen()), { ...GEN_ACTIVE, state: 'draining', cls: 'soft' }, true, f.t.ports.clock.wall());
+    await f.cycle(() => hardCap());
+    f.t.advance(STATE_DEADLINE_S.checkpointed * 1000);
+    await f.cycle();
+    const cp = f.s.db.prepare('SELECT notes FROM continuity_checkpoints WHERE generationId = ?').get(g.id) as { notes: string } | undefined;
+    expect(cp).toBeDefined();
+    expect(JSON.parse(cp!.notes)).toHaveLength(1);
+  });
 });
 
 describe('the renewal act, shadow (Task 4; Review Focus 3)', () => {
@@ -522,5 +552,50 @@ describe('the renewal act, shadow (Task 4; Review Focus 3)', () => {
     expect(f.mails).toEqual([]);
     expect(f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open).toEqual([]);
     expect(f.gen().state).toBe('active');
+  });
+});
+
+describe('the renewal mails by role (Overlord W1 door process B1: RENEWAL_MAIL_OF_ROLE)', () => {
+  it("an overlord's handover ask and spot round name its doors and no ccrc-api; a coordinator's keep the ccrc-api form", async () => {
+    const mails: string[] = [];
+    const target = (sessionId: string, role: 'overlord' | 'coordinator') =>
+      ({ genId: 1, identity: sessionId, sessionId, role, n: 2, startId: 3, cls: null, episode: 0 }) as never;
+    const logs: string[] = [];
+    const r = await runRenewalActs({ coord: {} as never, host: {} as never, mail: (to, subject, body) => { mails.push(`${to} ${subject}: ${body}`); return true; },
+      now: () => 0, log: (l) => logs.push(l) }, [
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'ask-handover' } },
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'spot-probe' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'ask-handover' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'spot-probe' } },
+    ] as never);
+    expect(logs).toEqual([]);
+    expect(r.mailed).toBe(4);
+    expect(mails).toEqual([
+      `lane-a-overlord ${RENEWAL_HANDOVER_SUBJECT}: ${OVERLORD_HANDOVER_BODY}`, `lane-a-overlord ${SPOT_PROBE_SUBJECT}: ${OVERLORD_SPOT_PROBE_BODY}`,
+      `${COORD} ${RENEWAL_HANDOVER_SUBJECT}: ${RENEWAL_HANDOVER_BODY}`, `${COORD} ${SPOT_PROBE_SUBJECT}: ${SPOT_PROBE_BODY}`,
+    ]);
+    expect(mails.slice(0, 2).join('\n')).not.toContain('ccrc-api');
+    expect(OVERLORD_HANDOVER_BODY).toContain('note handover door');
+    expect(OVERLORD_SPOT_PROBE_BODY).toContain('probe door');
+  });
+});
+
+describe('the first line by role (Overlord W1 door process A2, Task 5: FIRST_PROMPT_OF_ROLE)', () => {
+  it('an overlord generation\'s first prompt and re-nudge deliver overlord-first-prompt; a coordinator\'s, renewal-first-prompt', async () => {
+    const delivered: string[] = [];
+    const host = { deliver: async (id: string, p: RenewalPrompt): Promise<DeliverResult> => { delivered.push(`${id}: ${p}`); return { kind: 'sent' }; } } as unknown as SessionHost;
+    const target = (sessionId: string, role: 'overlord' | 'coordinator') =>
+      ({ genId: 1, identity: sessionId, sessionId, role, n: 2, startId: 3, cls: null, episode: 0 }) as never;
+    const logs: string[] = [];
+    const r = await runRenewalActs({ coord: {} as never, host, mail: () => true, now: () => 0, log: (l) => logs.push(l) }, [
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'first-prompt' } },
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'renudge-card' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'first-prompt' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'renudge-card' } },
+    ]);
+    expect(logs).toEqual([]);
+    expect(r.delivered).toBe(4);
+    expect(delivered).toEqual(['lane-a-overlord: overlord-first-prompt', 'lane-a-overlord: overlord-first-prompt',
+      `${COORD}: renewal-first-prompt`, `${COORD}: renewal-first-prompt`]);
   });
 });

@@ -5,6 +5,7 @@ import { TIMER_HOLD_CAP_MS, TIMER_MAIL_SENDER } from '../../../shared/continuity
 import type { StallArm } from '../../../shared/stall-watch.js';
 import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';
 import { sessionRoleOf } from '../roleOf.js';
+import { actsOnClaimant } from './rundefs.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
 import { stallWatchSays, turnWordOf } from '../sessionReading.js';
@@ -142,8 +143,14 @@ export function stallDelivery(to: StallRecipient, arming: StallArming): 'send' |
 /** A rung's delivery: a wave-2 arm is shadow until `stall-watch-w2-live` is touched, whatever its recipient's markers
  *  say (planning departure `w2-arms-ship-dark` (D-3605)); otherwise `stallDelivery`. `mailDisabled` is not a delivery: it is
  *  the verdict filter's hold. */
-export function stallNotifyDelivery(arm: StallArm, to: StallRecipient, arming: StallArming): 'send' | 'shadow' {
-  return STALL_ARM_WAVE[arm] === 2 && arming.w2Live !== true ? 'shadow' : stallDelivery(to, arming);
+export function stallNotifyDelivery(arm: StallArm, to: StallRecipient, arming: StallArming, rung: 1 | 2 | 3 = 1): 'send' | 'shadow' {
+  return stallRungWave(arm, rung) === 2 && arming.w2Live !== true ? 'shadow' : stallDelivery(to, arming);
+}
+
+/** The wave whose arming a rung answers to: `coord-ball`'s mail rungs (2 and 3) are wave 2, its operator push (rung 1)
+ *  stays wave 1; every other arm reads `STALL_ARM_WAVE`. */
+export function stallRungWave(arm: StallArm, rung: 1 | 2 | 3): 1 | 2 {
+  return arm === 'coord-ball' && rung >= 2 ? 2 : STALL_ARM_WAVE[arm];
 }
 
 // ── observation details ──────────────────────────────────────────────────────────────────────────────────────
@@ -181,7 +188,11 @@ export function parseStallDetail(detail: string | null): Omit<StallNotice, 'at'>
 
 export interface StallRunRow { readonly id: number; readonly kind: string; readonly state: string; readonly sessionId: string;
   readonly claimedBy: string | null; readonly dispatchedAt: number | null; readonly program: string; readonly wave: number;
-  readonly waveOf: number | null; readonly project: string; readonly workspace: string | null }
+  readonly waveOf: number | null; readonly project: string; readonly workspace: string | null;
+  /** D-6096: the run is an in-place run (`CoordStore.bindInPlace`): its `sessionId` is its claimant and no worker was
+   *  started (`dispatchedAt` is null). Such a run is no WORKER subject (`actsOnClaimant`); its session is judged as a
+   *  coordinator. */
+  readonly inPlace?: true }
 /** `runId` is null for run-less mail: a session notice, or a peer's mail that wave 2's per-session read carries. */
 export interface StallMailRow { readonly id: number; readonly at: number; readonly runId: number | null; readonly fromId: string;
   readonly toId: string; readonly kind: string; readonly subject: string }
@@ -211,6 +222,10 @@ function stallOutranks(a: StallRunRow, b: StallRunRow): boolean {
 export function stallSubjects(rows: readonly StallRunRow[]): StallSubject[] {
   const bySession = new Map<string, StallRunRow[]>();
   for (const r of rows) {
+    // D-6096: an in-place run has no worker to judge, and its session is its claimant. Taking it as a worker subject
+    // would hold `unmeasured` (no `dispatchedAt`) every sweep AND hide the session from the coordinator rungs. The shared
+    // predicate also takes a run bound to its own claimant with `inPlace` unset, as after a rebuild.
+    if (actsOnClaimant(r)) continue;
     const group = bySession.get(r.sessionId);
     if (group === undefined) bySession.set(r.sessionId, [r]);
     else group.push(r);
@@ -626,6 +641,7 @@ export type StallNotify =
   | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string }
   | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 3; readonly key: number; readonly to: 'operator'; readonly because: StallR3Cause }
   | { readonly act: 'notify'; readonly arm: 'limit-cap' | 'dialog-cap' | 'coord-ball'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'coord-ball'; readonly rung: 2 | 3; readonly key: number; readonly to: 'worker' }
   | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string; readonly because: StallW2Cause }
   | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'operator'; readonly because: StallW2Cause }
   | { readonly act: 'notify'; readonly arm: 'coord-deaf' | 'mail-stuck' | 'marker-unreadable' | 'coord-blocked'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
@@ -660,9 +676,9 @@ const STALL_VERDICT_KEBABS: ReadonlySet<string> = new Set([
 export interface StallFacts { readonly ball: 'worker' | 'coordinator'; readonly episodeKeyMs: number; readonly capKeyMs: number; readonly quietSince: number | null;
   readonly workerLast: StallMailRow | null; readonly inboundLast: StallMailRow | null; readonly lastExchangeAt: number | null }
 
-const VERDICT_NONE: StallVerdict = { act: 'none' };
+export const VERDICT_NONE: StallVerdict = { act: 'none' };
 
-function holdVerdict(why: StallHold): StallVerdict {
+export function holdVerdict(why: StallHold): StallVerdict {
   return { act: 'hold', why };
 }
 
@@ -737,7 +753,7 @@ function stallReactivatedAt(input: StallInput): number {
 /** When the coordinator-ball cap's 30 h starts: the run's newest relevant mail, or its re-activation when that is later
  *  (`coord-ball-restarts-on-reactivation` (D-3789)). ONE definition: the verdict times the cap from it, and the push
  *  names it. Null when no relevant mail exists, and then the cap never fires. */
-function stallCoordBallFrom(input: StallInput, f: StallFacts): number | null {
+export function stallCoordBallFrom(input: StallInput, f: StallFacts): number | null {
   return f.lastExchangeAt === null ? null : Math.max(f.lastExchangeAt, stallReactivatedAt(input));
 }
 
@@ -834,7 +850,7 @@ function rungDueAt(rungAt: number, liveSince: number, gap: number): number {
  *  (`stallDelivery` treats the two alike), so the shadow accounting reads the same answer either way. */
 const STALL_RUNG_RECIPIENTS: Record<StallArm, readonly StallRecipient[]> = {
   quiet: ['worker', 'coordinator', 'operator'],
-  'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
+  'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator', 'worker', 'worker'],
   'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'], 'coord-blocked': ['operator', 'operator'],
   'orphan-d': ['worker', 'operator'],
   restarted: ['worker', 'coordinator'],
@@ -866,7 +882,7 @@ export function stallArmHasRung(arm: StallArm, rung: 1 | 2 | 3): boolean {
 function rungDoneAt(input: Pick<StallInput, 'notices' | 'arming'>, arm: StallArm, rung: 1 | 2 | 3, key: number): number | null {
   const rows = input.notices.filter((n) => n.arm === arm && n.rung === rung && n.key === key);
   const liveRow = rows.some((n) => n.mode === 'live');
-  const shadowStands = rows.some((n) => n.mode === 'shadow') && stallNotifyDelivery(arm, rungRecipient(arm, rung), input.arming) === 'shadow';
+  const shadowStands = rows.some((n) => n.mode === 'shadow') && stallNotifyDelivery(arm, rungRecipient(arm, rung), input.arming, rung) === 'shadow';
   if (!liveRow && !shadowStands) return null;
   const live = rows.filter((n) => n.mode === 'live');
   const timed = live.length > 0 ? live : rows;
@@ -925,7 +941,7 @@ export function stallMailDisabledHold(v: StallVerdict, arming: StallArming): Sta
   if (v.act === 'measure-coordinator') return stallNotifyDelivery('quiet', 'coordinator', arming) === 'send' ? holdVerdict('mail-disabled') : v;
   if (v.act !== 'notify') return v;
   if (v.to === 'operator') return v;
-  return stallNotifyDelivery(v.arm, v.to, arming) === 'send' ? holdVerdict('mail-disabled') : v;
+  return stallNotifyDelivery(v.arm, v.to, arming, v.rung) === 'send' ? holdVerdict('mail-disabled') : v;
 }
 
 /** The dead arm is due once its first-seen time is DEAD_GRACE_MS old and no row records it on this episode. */
@@ -1667,6 +1683,9 @@ export interface StallSessionInput {
   readonly notices: readonly StallNotice[];  // worker: runEvents(run.id); else []
   readonly arming: StallArming;
   readonly coordinationPaused: boolean;
+  /** The session's role is long-lived (Table 3.3.9a, from `roleFactsOf`): the restarted arm's rung 1 reaches it run-less too
+   *  (Overlord W1a, the renewal hand-offs, Task 7). Absent: not long-lived. */
+  readonly longLived?: boolean;
 }
 
 /** The one gate word mail-stuck reads. It is typed against Task 10's Record, so a rename there is a compile error
@@ -1689,7 +1708,7 @@ export function stallSessionHold(input: StallSessionInput, now: number): StallVe
 
 /** The holds' one body. `holdDialog` is hold 2b: true for D, E and failed (`stallSessionHold`), false for mail-stuck,
  *  which fires whatever its delivery's gate (spec §5.2), so a mail held behind a harness dialog is still reported. */
-function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: boolean): StallVerdict | null {
+export function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: boolean): StallVerdict | null {
   const r = input.run;
   if (input.role === 'worker' && r !== null
     && (!isRunState(r.state) || r.state === 'unknown' || (r.kind !== 'work' && r.kind !== 'review'))) return holdVerdict('run-unnamed');
@@ -1708,7 +1727,7 @@ function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: bo
 }
 
 /** The measured live word and its stamp, or null when any part of it is unmeasured. */
-function stallSessionLive(input: StallSessionInput): { readonly word: string; readonly since: number } | null {
+export function stallSessionLive(input: StallSessionInput): { readonly word: string; readonly since: number } | null {
   const w = input.worker;
   if (w.present !== true || !w.live.ok || w.live.since === null) return null;
   return { word: w.live.word, since: w.live.since };
@@ -1728,7 +1747,7 @@ function stallRunBound(input: StallSessionInput): boolean {
 }
 
 /** The watch's newest self-mail to this session with exactly this subject, on any run or none. */
-function stallSelfMail(input: StallSessionInput, subject: string): StallMailRow | null {
+export function stallSelfMail(input: StallSessionInput, subject: string): StallMailRow | null {
   return newestMail(input.mail, (m) => m.fromId === STALL_SENDER && m.toId === input.sessionId && m.subject === subject);
 }
 
@@ -1828,7 +1847,7 @@ function stallRestartedInner(input: StallSessionInput, now: number): StallVerdic
  *  text (it names what the worker was told was lost) would no longer be readable. Once rung 1 is recorded, rung 2
  *  alone is judged, for as long as the marker still reads as the candidate. */
 function stallRestartedRungs(input: StallSessionInput, now: number): StallVerdict[] {
-  if (!stallRunBound(input)) return [VERDICT_NONE];
+  if (!stallRunBound(input)) return stallRestartedRunLess(input, now);
   const held = stallSessionHold(input, now);
   if (held !== null) return [held];
   const m = stallCurrentMark(input);
@@ -1843,6 +1862,24 @@ function stallRestartedRungs(input: StallSessionInput, now: number): StallVerdic
   if (r === null || r.claimedBy === null || input.coordinationPaused) return out.length > 0 ? out : [VERDICT_NONE];
   out.push({ act: 'notify', arm: 'restarted', rung: 2, key, to: 'coordinator', coordinatorId: r.claimedBy });
   return out;
+}
+
+/** Restarted for a long-lived session that is no run's worker (Overlord W1a, the renewal hand-offs, Task 7; W0-21, Proposal
+ *  12; slug lost-task-nudge-is-the-d5-arm): a resumed coordinator takes no turn on Claude Code's notice that its background
+ *  tasks did not survive, so the arm tells it, as it tells a run worker. Rung 1 only, run-less: keyed on its mail subject
+ *  (`stallRestartedSubject`, one per restart), so a second sweep sends nothing; no heads-up, since it has no claimant. A
+ *  session that is not long-lived gets none, and a run worker keeps its own two rungs above, so a child is never mailed
+ *  twice. The arm's markers decide shadow or live, unchanged (`stallNotifyDelivery`). */
+function stallRestartedRunLess(input: StallSessionInput, now: number): StallVerdict[] {
+  if (input.longLived !== true || input.role === 'worker') return [VERDICT_NONE];
+  const held = stallSessionHold(input, now);
+  if (held !== null) return [held];
+  const m = stallCurrentMark(input);
+  if (m === null || !stallOrphanDCandidate(m) || m.restartAt === null || now - m.restartAt > BACKLOG_HORIZON_MS) return [VERDICT_NONE];
+  if (stallSessionLive(input) === null) return [VERDICT_NONE];
+  const key = m.restartAt;
+  if (stallSelfRungDone(input, 'restarted', key, stallRestartedSubject(key))) return [VERDICT_NONE];
+  return [{ act: 'notify', arm: 'restarted', rung: 1, key, to: 'worker' }];
 }
 
 /** The first restarted verdict of this sweep only (rung 1 while it is unrecorded, else rung 2). The lane calls
@@ -2093,7 +2130,7 @@ export function stallCoordBusySince(input: StallSessionInput): number | null {
 }
 
 /** Every queued delivery to the coordinator whose mail this read holds, longest held first. */
-function stallCoordHeld(input: StallSessionInput): StallCoordHeld[] {
+export function stallCoordHeld(input: StallSessionInput): StallCoordHeld[] {
   const out: StallCoordHeld[] = [];
   for (const d of input.deliveries) {
     if (d.toId !== input.sessionId) continue;
@@ -2141,6 +2178,16 @@ function stallCoordBlockedInner(input: StallCoordBlockedInput, now: number): { r
 export function stallCoordBlockedStep(input: StallCoordBlockedInput, now: number): { readonly verdict: StallVerdict; readonly episode: StallCoordEpisode | null } {
   const r = stallCoordBlockedInner(input, now);
   return { verdict: stallMailDisabledHold(r.verdict, input.session.arming), episode: r.episode };
+}
+
+/** The notice the rung mails. The subject reads as the watch's own notice (`stall:coord-ball:<key>:r<rung>`) and
+ *  differs per rung: the run-less dedupe and `coordBall.ts`'s done test both key on the exact subject, so
+ *  rung 3 must not share rung 2's. */
+export function stallCoordBallMail(n: { readonly key: number; readonly rung: 2 | 3 }): StallNoticeText {
+  return {
+    subject: `stall:coord-ball:${stallInt(n.key)}:r${n.rung}`,
+    body: 'You have open runs and nothing waits on the operator. Continue per coordinator clause 21; re-read `runs list` and `goals show`.',
+  };
 }
 
 /** The arm's push. Sanitised ids, integers, kinds and server-formatted UTC only: never a subject or a body. */
@@ -2339,6 +2386,7 @@ function stallFailedReportMail(input: StallSessionInput, err: string, because: '
 
 export function stallSessionMail(input: StallSessionInput, n: StallNotify, now: number): StallNoticeText {
   if (n.to === 'worker') {
+    if (n.arm === 'coord-ball') return stallCoordBallMail({ key: n.key, rung: n.rung });
     if (n.arm === 'orphan-d') return stallOrphanDMail(input);
     if (n.arm === 'orphan-e') return stallOrphanEMail(input, now);
     if (n.arm === 'restarted') return stallRestartedMail(input);

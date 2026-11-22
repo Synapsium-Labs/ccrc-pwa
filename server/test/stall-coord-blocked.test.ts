@@ -11,6 +11,7 @@ import {
   COORD_BLOCKED_HELD_MS, COORD_BLOCKED_OLD_MS, COORD_BLOCKED_STRETCH_MS, MAIL_STUCK_MS, STALL_ARMS, rungRecipient,
   stallCoordBlockedPushText, stallCoordBlockedStep, stallCoordBusySince, stallCoordGate, stallNotifyDelivery, stallPushRoute,
 } from '../src/coord/stall.js';
+import { stallR7Breach } from '../src/coord/coordBall.js';
 import type {
   StallArming, StallCoordBlockedInput, StallCoordEpisode, StallDeliveryRow, StallMailRow, StallNotify, StallRunRow,
   StallSessionInput, StallVerdict, StallWorker, TurnMark, TurnMarkRead,
@@ -349,5 +350,35 @@ describe('coord-blocked: the push text names the gate reason in operator words',
     const t = stallCoordBlockedPushText(input({ mail: [mailRow(501, MAIL_AT, 'bad id; rm', 'question')] }), n(), NOW);
     expect(t.body).not.toContain('bad id; rm');
     expect(t.body).toContain('(unprintable)');
+  });
+});
+
+describe('coord-blocked: the R7 count (stallR7Breach)', () => {
+  const dialog = (word = 'busy'): StallWorker => liveAt(word, STRETCH_AT, { dialogPending: true });
+  it('a pending dialog holding mail on a pinned programme is a breach', () => {
+    expect(stallR7Breach(input({ worker: dialog() }), true, NOW)).toBe(true);
+  });
+  it('an unpinned programme is none', () => {
+    expect(stallR7Breach(input({ worker: dialog() }), false, NOW)).toBe(false);
+  });
+  it('a live waiting word with no pending dialog is none: the gate must come through dialogPending', () => {
+    expect(stallR7Breach(input({ worker: liveAt('waiting', STRETCH_AT) }), true, NOW)).toBe(false);
+  });
+  it('no held mail is none: the episode is the count\'s unit', () => {
+    expect(stallR7Breach(input({ worker: dialog(), deliveries: [] }), true, NOW)).toBe(false);
+  });
+  it('a coordinator that claims no run is none: R7 counts a coordinator working a programme', () => {
+    expect(stallR7Breach(input({ worker: dialog(), runs: [] }), true, NOW)).toBe(false);
+  });
+  it('a young episode is none: the count starts at the held threshold, as the push does (review 2817 R9)', () => {
+    expect(stallR7Breach(input({ worker: dialog() }), true, MAIL_AT + COORD_BLOCKED_HELD_MS - 1)).toBe(false);
+    expect(stallR7Breach(input({ worker: dialog() }), true, MAIL_AT + COORD_BLOCKED_HELD_MS)).toBe(true);
+  });
+  it('held mail from someone other than a child is none: the count is a child kept waiting (review 2817 R9)', () => {
+    const peer = { worker: dialog(), mail: [mailRow(501, MAIL_AT, PEER, 'question', 67)], deliveries: [delivery(901, 501)] };
+    expect(stallR7Breach(input(peer), true, NOW)).toBe(false);
+  });
+  it('the push itself is unchanged by the count', () => {
+    expect(verdict(input({ worker: dialog() }))).toEqual(fire(MAIL_AT));
   });
 });

@@ -14,7 +14,7 @@ import { Bus } from '../src/bus.js';
 import { NO_SESSION, type GateDecision } from '../src/auth/gate.js';
 import { decideLaneArmBody, decideLaneArmImport, decideLaneArmPost, laneArmConfirmKey, laneArmRowViewOf, rosterCardFieldOf } from '../src/coord/laneArm.js';
 import { W1A_ARM_ROWS } from '../src/continuity/quiz.js';
-import { insertQuizRun } from '../src/continuity/quizStore.js';
+import { insertQuizRun, ruleQuizRun } from '../src/continuity/quizStore.js';
 import {
   LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_REFUSALS, LANE_ARM_TEXT, ROSTER_CARD_SHADOW_LOG, RUNS_ROSTER_CARD_FIELD, laneArmGate,
   type LaneArmLane,
@@ -52,6 +52,18 @@ const get = (app: FastifyInstance) => app.inject({ method: 'GET', url: '/api/coo
 const post = (app: FastifyInstance, payload: unknown) =>
   app.inject({ method: 'POST', url: '/api/coord/lane-arm', payload: payload as Record<string, unknown> });
 const rosterRow = (body: { lanes: { lane: string }[] }) => body.lanes.find((l) => l.lane === 'roster-card');
+
+
+/** The replay quiz's baseline as the record path makes it: a run recorded pending, then confirmed by the operator. */
+const confirmedBaseline = (coord: CoordStore, sha: string) => {
+  const r = insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 1, report: {
+    measuredAt: 1, reportSha: sha.repeat(64), questionsSha: 'd'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
+    judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
+  }, extra: { answered: 40, correct: 28, runFailed: 0, absent: 0, arm: 'treatment', settingsMode: 'restricted', pilot: 'skipped-by-ruling', ci: 95, method: 'percentile', bootstrapB: 10000,
+      inputs: { setup_sha256: '1'.repeat(64), frozen_sha256: '2'.repeat(64), arms_summary_sha256: '3'.repeat(64), judged_sha256: '4'.repeat(64) } } });
+  if (!r.ok) throw new Error('insert failed');
+  return ruleQuizRun(coord.db, { id: r.id, action: 'confirm', at: 2, by: 'device-a' }, (lane) => coord.laneArmSetting(lane));
+};
 
 describe('the Shadow lanes store (D-8274)', () => {
   it('a fresh database seeds the roster card shadow, never written, nothing imported', async () => {
@@ -123,7 +135,13 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
       lane: 'launch-profile', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }, {
       lane: 'anchor-slot', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
-    }] });
+    }, {
+      lane: 'approval-park', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }, {
+      lane: 'working-idle-sleep', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }, {
+      lane: 'cap-counts-working', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }], quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] }, unattended: { state: 'none' } } });
   });
 
   it('Live without a key answers 409 confirm-required with the facts and the key; with the key it is written', async () => {
@@ -180,10 +198,7 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
   it('the renewal act lifted the continuity row\'s gate: its Live asks for the confirm key like any row, and no row is gated (review 2003 F3)', async () => {
     const { app, coord } = await setup();
     // The replay quiz's baseline (W0-28) stands first, so what answers here is the row's own gate, not the baseline guard.
-    expect(insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 1, report: {
-      measuredAt: 1, reportSha: 'c'.repeat(64), questionsSha: 'd'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
-      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
-    } }, (lane) => coord.laneArmSetting(lane))).toMatchObject({ ok: true, baseline: true });
+    expect(confirmedBaseline(coord, 'c')).toMatchObject({ ok: true, baseline: true });
     const first = await post(app, { lane: 'continuity', choice: 'live' });
     expect(first.statusCode).toBe(409);
     expect(first.json()).toMatchObject({ ok: false, error: 'confirm-required', lane: 'continuity' });
@@ -192,10 +207,19 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(confirmed.statusCode).toBe(200);
     expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'live' });
     expect((await post(app, { lane: 'continuity', choice: 'shadow' })).statusCode).toBe(200);
-    // The gate mechanism stays for a row that needs one; today no row has one.
-    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot'] as const) expect(laneArmGate(lane)).toBeNull();
+    // The gate mechanism stays for a row that needs one; approvals PR 3's park row has one until PR 3v.
+    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot', 'working-idle-sleep', 'cap-counts-working'] as const) expect(laneArmGate(lane)).toBeNull();
+    expect(laneArmGate('approval-park')).not.toBeNull();
     expect(LANE_ARM_REFUSALS).toContain('lane-gated');
     expect(REFUSAL_STATUS['lane-gated']).toBe(409);
+  });
+
+  it('approvals PR 3: Live on the park row is refused lane-gated while its gate stands, and nothing is written', async () => {
+    const { app, coord } = await setup();
+    const res = await post(app, { lane: 'approval-park', choice: 'live' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'lane-gated' });
+    expect(coord.laneArmSetting('approval-park')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
   });
 
   it('a Live stored on the continuity row reads live in the view, as the roster card\'s does; a gate, where one stands, keeps a stored Live shadow (review 2006 N1)', async () => {
@@ -306,11 +330,13 @@ describe('arming a W1a lane waits for the quiz baseline (W0-28)', () => {
     }
   });
 
-  it('a lane that is not a W1a row (roster-card) is unaffected', () => {
-    expect(W1A_ARM_ROWS).not.toContain('roster-card');
-    for (const b of [MISSING, { ok: false, detail: 'x' } as const]) {
-      expect(decide('roster-card', 'live', b)).toMatchObject({ kind: 'confirm' });
-      expect(decide('roster-card', 'live', b, 'roster-card:shadow:0')).toEqual({ kind: 'write', lane: 'roster-card', choice: 'live' });
+  it('a lane that is not a W1a row (roster-card, working-idle-sleep, cap-counts-working) is unaffected', () => {
+    for (const lane of ['roster-card', 'working-idle-sleep', 'cap-counts-working'] as const) {
+      expect(W1A_ARM_ROWS).not.toContain(lane);
+      for (const b of [MISSING, { ok: false, detail: 'x' } as const]) {
+        expect(decide(lane, 'live', b)).toMatchObject({ kind: 'confirm' });
+        expect(decide(lane, 'live', b, `${lane}:shadow:0`)).toEqual({ kind: 'write', lane, choice: 'live' });
+      }
     }
   });
 
@@ -327,10 +353,7 @@ describe('arming a W1a lane waits for the quiz baseline (W0-28)', () => {
     expect(coord.laneArmSetting('anchor-slot')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
     expect(LANE_ARM_REFUSALS).toContain('baseline-missing');
     expect(REFUSAL_STATUS['baseline-missing']).toBe(409);
-    const recorded = insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 1, report: {
-      measuredAt: 1, reportSha: 'a'.repeat(64), questionsSha: 'b'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
-      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
-    } }, (lane) => coord.laneArmSetting(lane));
+    const recorded = confirmedBaseline(coord, 'a');
     expect(recorded).toMatchObject({ ok: true, baseline: true });
     const ok = await post(app, { lane: 'anchor-slot', choice: 'live', confirm: 'anchor-slot:shadow:0' });
     expect(ok.statusCode).toBe(200);
@@ -350,5 +373,35 @@ describe('arming a W1a lane waits for the quiz baseline (W0-28)', () => {
     const { app, coord } = await setup();
     expect((await post(app, { lane: 'roster-card', choice: 'live', confirm: 'roster-card:shadow:0' })).statusCode).toBe(200);
     expect(coord.laneArmSetting('roster-card')).toMatchObject({ choice: 'live' });
+  });
+});
+
+// The replay quiz's block on the card (plan `2026-11-17-overlord-quiz-record.md` Task 12): the GET and the POST's answer carry
+// the baseline (recorded with its date, not yet, or unreadable) and the pending runs, oldest first.
+describe('the Shadow lanes card\'s quiz block', () => {
+  it('not yet with no runs; a pending run listed; once confirmed the baseline is recorded with its date', async () => {
+    const { app, coord } = await setup();
+    expect((await get(app)).json()).toMatchObject({ ok: true, quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] } } });
+    const r = insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 7, report: {
+      measuredAt: 6, reportSha: 'e'.repeat(64), questionsSha: 'd'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
+      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
+    }, extra: { answered: 39, correct: 27, runFailed: 1, absent: 0, arm: 'treatment', settingsMode: 'fallback', pilot: 'skipped-by-ruling', ci: 95,
+      method: 'percentile', bootstrapB: 10000, inputs: { setup_sha256: '1'.repeat(64), frozen_sha256: '2'.repeat(64), arms_summary_sha256: '3'.repeat(64), judged_sha256: '4'.repeat(64) } } });
+    if (!r.ok) throw new Error('insert failed');
+    expect((await get(app)).json()).toMatchObject({ quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [
+      { id: r.id, recordedAt: 7, reportShaPrefix: 'e'.repeat(12), recordedBy: 'operator', measuredAt: 6, score: 0.7, lo: 0.6, hi: 0.8,
+        questions: 40, families: 6, answered: 39, runFailed: 1, absent: 0 },
+    ] } } });
+    ruleQuizRun(coord.db, { id: r.id, action: 'confirm', at: 8, by: 'device-a' }, (lane) => coord.laneArmSetting(lane));
+    expect((await get(app)).json()).toMatchObject({ quizBaseline: { baseline: { state: 'recorded', at: 7 }, pending: { ok: true, runs: [] } } });
+    expect((await post(app, { lane: 'roster-card', choice: 'shadow' })).json()).toMatchObject({ quizBaseline: { baseline: { state: 'recorded', at: 7 } } });
+  });
+
+  it('an unreadable quiz table shows the baseline and the pending runs as unreadable, never as not yet', async () => {
+    const { app, coord } = await setup();
+    coord.db.exec('DROP TABLE continuity_quiz_runs');
+    const body = (await get(app)).json() as { quizBaseline: { baseline: { state: string }; pending: { ok: boolean } } };
+    expect(body.quizBaseline.baseline.state).toBe('unreadable');
+    expect(body.quizBaseline.pending.ok).toBe(false);
   });
 });

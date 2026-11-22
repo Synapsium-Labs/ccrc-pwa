@@ -52,7 +52,7 @@ STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # independently as this branch's Task 5). The pairing is now a mechanism, not a
 # convention — install-session-hooks.test.ts derives the expected set from the
 # hook's own case block and fails on any divergence.
-EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart","SessionEnd"]'
+EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart","SessionEnd","PreModelSwitch","PostModelSwitch"]'
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 
@@ -186,7 +186,7 @@ _child_deny_json() {
     heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
   fi
   up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
-  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps ws-lease-mark delegation-adopt roll claude; do
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps keep-awake ws-lease-mark delegation-adopt roll claude; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   for v in update rollback rollout; do
@@ -200,9 +200,41 @@ _child_deny_json() {
   done
   printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
 }
+# THE DENY FILE'S DIGEST HISTORY (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md §3.2.1). Every child
+# records the digest of the deny file it was spawned with (`$REG/<id>.deny-settings`), and a running Claude Code pins a
+# `--settings` file's content at start, so a child spawned before a changed list carries the older digest for life. This
+# file lists every digest the managed file has had, one `<digest> <epoch ms>` line each, newest last, at most
+# CHILD_DENY_DIGESTS_MAX lines (`server/src/coord/approvalDenyFloor.ts` holds the reader's copy of both names). The hook
+# routes a child whose digest the history names, and the server holds its prompt and refuses its allow.
+# THIS IS ITS ONE WRITER. A run that rewrites the deny file first records the OUTGOING file's digest (a regular file,
+# never a symlink's target), then the incoming one; any run records the current file's digest. Each is added only when it
+# is not the last line already (the coordinator's plan-review ruling F1, 2026-11-18), so an unchanged file whose digest is
+# last writes nothing, and a box whose file predates the history records it once. Children spawned under a deny file
+# older than the first run that kept this history are not named, and route only once respawned, renewed or rolled.
+# Lines not of the shape are dropped when it rewrites. Written to a temporary file and
+# renamed over, so a symlink at the name is replaced, never followed. With no sha256 tool, no line is written: those
+# children are refused as before, the safe direction. `--remove` leaves it, as it leaves the deny file (D-5392).
+CHILD_DENY_DIGESTS="$HOME/.cc-sessions/child-deny.digests"
+CHILD_DENY_DIGESTS_MAX=32
+# The tools are the hook's own `_apr_sha256`'s, in its order: `shasum -a 256` ships on macOS and with perl on Linux,
+# and node is the fallback. This file cannot source ccd's platform block, so it spells no GNU-only tool.
+_child_deny_sha256() {   # <file> -> 64 lowercase hex on stdout; rc 1 with no tool or an unreadable file
+  local s=""
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 < "$1" 2>/dev/null) || return 1
+  elif command -v node >/dev/null 2>&1; then
+    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' < "$1" 2>/dev/null) || return 1
+  else return 1; fi
+  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$s"
+}
+_child_deny_epoch_ms() {
+  local e="${EPOCHREALTIME:-}" s f
+  if [[ -n "$e" ]]; then s="${e%%[.,]*}" f="${e#*[.,]}000"; printf '%s%s' "$s" "${f:0:3}"; else printf '%s000' "$(date +%s)"; fi
+}
 # --remove leaves the file alone (D-5392): it is the BOX's, and `ccrc account remove`
 # runs `--remove --homes <one home>`, so deleting it here stripped every other account's
 # children of the deny layer. `ccrc uninstall`'s `_uninst_cc_sessions` is its one remover.
+deny_out=""
 if [[ "$MODE" != remove ]]; then
   # The parent by expansion, never `dirname`: `ccrc doctor --fix` re-runs this script on the
   # doctor's own PATH, which carries no `dirname` (its delegation-hooks --fix fixture holds it).
@@ -212,9 +244,37 @@ if [[ "$MODE" != remove ]]; then
   # Byte-level converge, as the homes above: an unchanged file keeps its bytes (and so
   # its digest, which every child's `.deny-settings` was recorded against).
   elif [[ -L "$CHILD_DENY_FILE" || ! -f "$CHILD_DENY_FILE" || "$(cat "$CHILD_DENY_FILE")" != "$deny_next" ]]; then
+    # The outgoing file's digest, taken before the rename: the history below records it ahead of the incoming one.
+    if [[ -f "$CHILD_DENY_FILE" && ! -L "$CHILD_DENY_FILE" ]]; then deny_out=$(_child_deny_sha256 "$CHILD_DENY_FILE") || deny_out=""; fi
     deny_tmp="$CHILD_DENY_FILE.tmp.$$"
     printf '%s\n' "$deny_next" > "$deny_tmp" && mv -f "$deny_tmp" "$CHILD_DENY_FILE" \
       || { rm -f "$deny_tmp"; echo "install-session-hooks: could not write $CHILD_DENY_FILE" >&2; rc=1; }
+  fi
+fi
+
+if [[ "$MODE" != remove && -f "$CHILD_DENY_FILE" && ! -L "$CHILD_DENY_FILE" ]]; then
+  if ! deny_sum=$(_child_deny_sha256 "$CHILD_DENY_FILE"); then
+    echo "install-session-hooks: could not take the sha256 of $CHILD_DENY_FILE; $CHILD_DENY_DIGESTS is not updated" >&2
+  else
+    deny_hist=() deny_line=""
+    if [[ -f "$CHILD_DENY_DIGESTS" && ! -L "$CHILD_DENY_DIGESTS" ]]; then
+      while IFS= read -r deny_line || [[ -n "$deny_line" ]]; do
+        [[ "$deny_line" =~ ^[0-9a-f]{64}\ [0-9]{1,16}$ ]] && deny_hist+=("$deny_line")
+      done < "$CHILD_DENY_DIGESTS"
+    fi
+    deny_added=0
+    for deny_d in "$deny_out" "$deny_sum"; do
+      [[ -n "$deny_d" ]] || continue
+      deny_last=""; (( ${#deny_hist[@]} == 0 )) || deny_last="${deny_hist[${#deny_hist[@]}-1]}"
+      [[ "${deny_last%% *}" != "$deny_d" ]] || continue
+      deny_hist+=("$deny_d $(_child_deny_epoch_ms)"); deny_added=1
+    done
+    if (( deny_added )); then
+      (( ${#deny_hist[@]} <= CHILD_DENY_DIGESTS_MAX )) || deny_hist=("${deny_hist[@]: -CHILD_DENY_DIGESTS_MAX}")
+      deny_hist_tmp="$CHILD_DENY_DIGESTS.tmp.$$"
+      printf '%s\n' "${deny_hist[@]}" > "$deny_hist_tmp" && mv -f "$deny_hist_tmp" "$CHILD_DENY_DIGESTS" \
+        || { rm -f "$deny_hist_tmp"; echo "install-session-hooks: could not write $CHILD_DENY_DIGESTS" >&2; rc=1; }
+    fi
   fi
 fi
 
@@ -235,11 +295,14 @@ _account_deny_json() {
     rules+=("Bash(ccrc account $w:*)")
   done
   rules+=('Bash(ccd-account-auth:*)' 'Bash(ccd account-pane:*)')
+  # shellcheck disable=SC2088  # a deny rule's path keeps its literal tilde: Claude Code expands it, not bash
   for p in '~/.cc-secrets/**' '~/.ccrc/auth-scratch/**' '~/.ccrc/codex/*/runtime.env' '~/.ccrc/agent.env' \
-           '~/.ccrc/linear/**' '~/.ccrc/linear.key' '~/.ccrc/operator-secrets/**'; do
+           '~/.ccrc/linear/**' '~/.ccrc/linear.key' '~/.ccrc/operator-secrets/**' \
+           '~/.ccrc/operator-model.db*' '~/.ccrc/privacy-journal.log' '~/.ccrc/privacy-journal.torn/**' '~/ccrc-backups/*/operator-model.db*' \
+           '~/.ccrc/coordination-restore.stage/*/operator-model.db*' '~/.ccrc/coordination-restore.foreign/*/operator-model.db*' '~/.cc-sessions/.door/**'; do
     rules+=("Read($p)")
   done
-  for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done
+  for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**' '~/.cc-sessions/.door/**'; do rules+=("Edit($p)"); done
   # shellcheck disable=SC2088  # a deny rule's path keeps its literal tilde: Claude Code expands it, not bash
   for p in '~/.ccrc/accounts.json' '~/.ccrc/accounts.sh'; do rules+=("Edit($p)"); done   # ACCOUNT_ROSTER_FILES
   for p in 'node deploy/account-op.mjs' 'node ./deploy/account-op.mjs' './deploy/account-op.mjs'; do rules+=("Bash($p:*)"); done   # ACCOUNT_OP_RUNS

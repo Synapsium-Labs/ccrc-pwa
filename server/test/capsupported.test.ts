@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, KEEP_AWAKE_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -108,6 +108,18 @@ describe('capSupported', () => {
     expect(capSupported(state(['win-size']), WIN_SIZE_CAP)).toBe(false);
     expect(capSupported(state([WIN_SIZE_CAP]), WIN_SIZE_CAP)).toBe(true);
     expect(verbSupported(state(null), ['win-size'])).toBe(true);
+  });
+
+  it('spells the keep-awake token exactly once in server/src, and reads it with the REFUSING default (Overlord W1 ccd arms)', () => {
+    // The win-size case above is the shape this copies (cross-plan ruling X8, plan slug keep-awake-token-is-keep-awake-v1):
+    // the other two spellings are ccd's own `echo keep-awake-v1` and `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS. A box
+    // whose ccd lacks the verb answers `capability-missing` (spec Table 11.6), never a permit on no evidence.
+    expect(KEEP_AWAKE_CAP).toBe('keep-awake-v1');
+    expect(literalSpellings(KEEP_AWAKE_CAP)).toBe(1);
+    expect(capSupported(state(null), KEEP_AWAKE_CAP)).toBe(false);
+    expect(capSupported(undefined, KEEP_AWAKE_CAP)).toBe(false);
+    expect(capSupported(state(['keep-awake']), KEEP_AWAKE_CAP), 'the bare verb is not the token').toBe(false);
+    expect(capSupported(state([KEEP_AWAKE_CAP]), KEEP_AWAKE_CAP)).toBe(true);
   });
 
   it('spells the reclaim-pause token exactly once in server/src, and reads it with the REFUSING default', () => {

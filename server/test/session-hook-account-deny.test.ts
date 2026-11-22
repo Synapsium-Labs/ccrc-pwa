@@ -169,6 +169,35 @@ describe('the account arm denies on every session (D-6202)', () => {
     ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
   });
 
+  it.each(CALLERS)('%s: the door process\'s directory is refused in the quoted, `$HOME` and path forms, and by Read, Grep, Glob and the edit tools (Overlord W1 door process A1, ruled F4)', (_c, id, extra) => {
+    // A top-level session reaches the arm only through the prefilter's `.door` fragment; a child through its own list.
+    for (const command of [
+      'cat ~/.cc-sessions/.door/lane-a-project-a/mcp.json', "cat '~/.cc-sessions/.door/lane-a-project-a/mcp.json'",
+      'cat "$HOME/.cc-sessions/.door/lane-a-project-a/mcp.json"', 'cat $HOME/.cc-sessions/.door/lane-a-project-a/mcp.json',
+      'cat "${HOME}"/.cc-sessions/.door/lane-a-project-a/mcp.json', 'cat /srv/home/.cc-sessions/.door/lane-a-project-a/mcp.json',
+      'cat ~/.cc-sessions//.door/lane-a-project-a/mcp.json', 'ls ~/.cc-sessions/.door', 'grep -r nonce ~/.cc-sessions/.door',
+      'echo x > ~/.cc-sessions/.door/lane-a-project-a/delta', 'cd x && head ~/.cc-sessions/.door/lane-a-project-a/mcp.json',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    for (const [tool, input] of [
+      ['Read', { file_path: `${home}/.cc-sessions/.door/lane-a-project-a/mcp.json` }], ['Read', { file_path: '~/.cc-sessions/./.door/lane-a-project-a/mcp.json' }],
+      ['Grep', { pattern: 'nonce', path: '~/.cc-sessions/.door' }], ['Glob', { pattern: '~/.cc-sessions/.door/*/mcp.json' }],
+      ['Write', { file_path: '~/.cc-sessions/.door/lane-a-project-a/delta', content: 'y' }],
+    ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+    // A registry field beside it, read around a swap, stays open.
+    expect(fire(id, 'Bash', { command: 'cat ~/.cc-sessions/lane-a-project-a.wrapper' }, extra)).toBeNull();
+  });
+
+  it.each(CALLERS)('%s: every file door process A2 writes under the door directory is refused: the config, the delta cache and both temp files', (_c, id, extra) => {
+    for (const name of ['mcp.json', 'mcp.json.tmp', 'delta', 'delta.tmp']) {
+      const f = `~/.cc-sessions/.door/lane-a-project-a/${name}`;
+      for (const command of [`cat ${f}`, `cat "$HOME/.cc-sessions/.door/lane-a-project-a/${name}"`, `cp ${f} /tmp/x`, `echo x > ${f}`]) {
+        expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+      }
+      for (const [tool, input] of [['Read', { file_path: f }], ['Edit', { file_path: f, old_string: 'a', new_string: 'b' }],
+        ['Write', { file_path: f, content: 'y' }]] as const) expect(fire(id, tool, input, extra), `${tool} ${name}`).not.toBeNull();
+    }
+  });
+
   it.each(CALLERS)('%s: a direct delete under the store is refused, whatever verb deletes it (the PL6 follow-up: the Remove door is the operator\'s)', (_c, id, extra) => {
     for (const command of [
       'rm ~/.ccrc/operator-secrets/prog-a/x.secret', 'rm -f "$HOME/.ccrc/operator-secrets/prog-a/x.json"', 'rm -rf ~/.ccrc/operator-secrets',
@@ -202,6 +231,58 @@ describe('the account arm denies on every session (D-6202)', () => {
       ['Read', { file_path: '~/.ccrc/accounts.json' }], ['Grep', { pattern: 'x', path: '~/.ccrc/accounts.sh' }], ['Read', { file_path: `${CWD}/deploy/account-op.mjs` }],
       ['Edit', { file_path: `${CWD}/deploy/account-op.mjs`, old_string: 'a', new_string: 'b' }],
     ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).toBeNull();
+  });
+
+  it.each(CALLERS)('%s: the operator private store, its journal, quarantine, backup copy and restore leftovers are refused; the rest of ~/.ccrc stays open (Overlord W1 private store A, spec §9.4)', (_c, id, extra) => {
+    for (const command of [
+      'cat ~/.ccrc/operator-model.db', 'sqlite3 "$HOME/.ccrc/operator-model.db-wal"', 'cat ${HOME}/.ccrc/operator-model.db-shm', "cat '~/.ccrc/operator-model.db.tmp-journal'",
+      'cat ~/.ccrc//operator-model.db', 'cat "${HOME}"/.ccrc/operator-model.db', 'cp ~/.ccrc/operator-model.db /tmp/k',
+      'cat ~/ccrc-backups/20261115-120000/operator-model.db', 'cat "$HOME/ccrc-backups/20261115-120000/operator-model.db.tmp"', 'cat $HOME/ccrc-backups/20261115-120000/operator-model.db.tmp-journal',
+      'cat ~/.ccrc/privacy-journal.log', 'tail -f "$HOME/.ccrc/privacy-journal.log"', 'cat ~/.ccrc/privacy-journal.torn/20261115.torn', 'ls ~/.ccrc/privacy-journal.torn',
+      'cat ~/.ccrc/coordination-restore.stage/new/operator-model.db', 'cat "$HOME/.ccrc/coordination-restore.foreign/0123456789abcdef/operator-model.db-wal"',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    for (const [tool, input] of [
+      ['Read', { file_path: '~/.ccrc/operator-model.db' }], ['Read', { file_path: `${home}/.ccrc/operator-model.db-wal` }], ['Read', { file_path: '~/.ccrc/./operator-model.db-shm' }],
+      ['Read', { file_path: '~/ccrc-backups/20261115-120000/operator-model.db' }], ['Read', { file_path: '~/ccrc-backups/20261115-120000/operator-model.db.tmp' }],
+      ['Read', { file_path: '~/.ccrc/privacy-journal.log' }], ['Read', { file_path: '~/.ccrc/privacy-journal.torn/20261115.torn' }], ['Grep', { pattern: 'x', path: '~/.ccrc/privacy-journal.torn' }],
+      ['Read', { file_path: '~/.ccrc/coordination-restore.stage/new/operator-model.db' }], ['Read', { file_path: '~/.ccrc/coordination-restore.foreign/0123456789abcdef/operator-model.db' }],
+      ['Write', { file_path: '~/ccrc-backups/20261115-120000/operator-model.db', content: 'y' }],
+    ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+    for (const command of ['ls ~/.ccrc', 'cat ~/.ccrc/privacy-journal.log.md', 'ls ~/ccrc-backups', 'cat ~/ccrc-backups/20261115-120000/coord.db']) {
+      expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
+    }
+    expect(fire(id, 'Read', { file_path: '~/.ccrc/coord.db' }, extra)).toBeNull();
+    expect(fire(id, 'Read', { file_path: '~/ccrc-backups/20261115-120000/coord.db' }, extra)).toBeNull();
+  });
+
+  // Review 2251 F4 (the coordinator's ruling): the operator's words get two arms beyond the account guard's parity. Both are
+  // accident guards, as CLAUDE.md says of the whole arm: `bash -c` with an assembled string, a script file or another
+  // interpreter still runs past them.
+  it.each(CALLERS)('%s: a cd into ~/.ccrc followed by the store\'s or the journal\'s name is refused (F4)', (_c, id, extra) => {
+    for (const command of [
+      'cd ~/.ccrc && sqlite3 operator-model.db', 'cd "$HOME/.ccrc"; cat privacy-journal.log', 'cd ~/.ccrc/ && cp operator-model.db-wal /tmp/x',
+      'cd ${HOME}/.ccrc && ls privacy-journal.torn', 'cd ~/.ccrc\nsqlite3 ./operator-model.db .dump',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/after a cd into ~\/\.ccrc/);
+    for (const command of ['cd ~/.ccrc && sqlite3 coord.db', 'cd ~/.ccrc && ls', 'cd ~/.ccrc && cat privacy-journal.log.md', 'cd server && cat operator-model.db']) {
+      expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
+    }
+  });
+
+  it.each(CALLERS)('%s: a reader or copier given a glob under ~/.ccrc that can match the store or the journal, or ~/.ccrc whole, is refused (F4)', (_c, id, extra) => {
+    for (const command of [
+      'sqlite3 ~/.ccrc/*.db', 'cat "$HOME"/.ccrc/*.log', 'cp ~/.ccrc/* /tmp/x', 'cat ~/.ccrc/operator-*', 'sqlite3 ~/.ccrc/{coord,operator-model}.db',
+      'cat ~/.ccrc/priv?cy-journal.log', 'cp ~/.ccrc/*.db-wal /tmp/x', 'grep -l x ~/.ccrc/[op]*',
+      'nl ~/.ccrc/*.log', 'python3 script.py ~/.ccrc/*.db', 'vim ~/.ccrc/operator-*',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/a glob under ~\/\.ccrc/);
+    for (const command of [
+      'cp -r ~/.ccrc /tmp/x', 'tar czf /tmp/x.tgz ~/.ccrc', 'tar czf /tmp/x.tgz -C ~ .ccrc', 'rsync -a ~/.ccrc/ /tmp/x', 'grep -r token ~/.ccrc',
+      'cp -a "$HOME/.ccrc/." /tmp/x', 'zip -r /tmp/x.zip ~/.ccrc', 'cp -r -t /tmp/x ~/.ccrc', 'cp -rt /tmp/x ~/.ccrc/',
+      'cp --target-directory=/tmp/x -r ~/.ccrc',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/a copy or recursive read of ~\/\.ccrc/);
+    for (const command of [
+      'ls ~/.ccrc', 'ls ~/.ccrc/*.db', 'cat ~/.ccrc/*.json', 'sqlite3 ~/.ccrc/coord.db', 'cp ~/.ccrc/coord.db /tmp/x', 'cat ~/.ccrc/coord.db*',
+      'grep -r token server/src', 'cp -r ~/.ccrc-old /tmp/x', 'ls ~/.ccrc/update-*.json', 'cp /tmp/notes ~/.ccrc/', 'rsync -a /tmp/x/ ~/.ccrc/',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
   });
 
   it.each(CALLERS)('%s: a name that only begins like the store, and the store\'s source, stay open (plan PL6)', (_c, id, extra) => {

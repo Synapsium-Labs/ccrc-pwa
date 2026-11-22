@@ -105,39 +105,31 @@ export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
  *  only, a letter first, 32 characters at most. Its readers today:
  *  `deploy/models-op.mjs`, which re-exports it as ACCOUNT_ID_RE, and
  *  `deploy/models-canary.mjs` check an `--id` against it before any path is
- *  built, and PUSH_HEAD below reads a push line's lane with it. The agent's
- *  `models` op (plan §3.10, W4) will validate against it too; no agent code
- *  reads it yet. `server/test/models-lane-id-parity.test.ts` holds the four
- *  spellings equal. */
+ *  built, PUSH_HEAD below reads a push line's lane with it, and the `models`
+ *  op's one lane guard (`isModelsLaneId`, `shared/agent-protocol.ts`) checks a
+ *  lane against it on the agent and on both server arms before anything runs.
+ *  `server/test/models-lane-id-parity.test.ts` holds the four spellings equal. */
 export const MODELS_LANE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** The two words `ccrc models <here> …` reads as box-wide subcommands, never as
  *  a lane id (deviation B-4): `ccd/ccrc`'s MODELS_RESERVED in bash, here for
- *  node and TypeScript. No runtime code reads it yet: the agent's `models` op
- *  (plan §3.10, W4) will refuse them as a lane. Its one reader today is the
- *  same test, which pins it equal to the bash list. */
+ *  node and TypeScript. The `models` op's lane guard (`isModelsLaneId`,
+ *  `shared/agent-protocol.ts`) refuses them as a lane, and the same test pins
+ *  it equal to the bash list. */
 export const MODELS_RESERVED_IDS = Object.freeze(['refresh', 'litellm']);
 
-/** D-8406: the directory under `~/.ccrc` that holds every lane's model files, and the names of the two a reader
- *  outside the models verbs needs — the class registry and the catalogue — each spelled ONCE, here.
- *  `deploy/models-op.mjs` builds its paths from them, the fleet's read grant admits exactly them
- *  (`isLaneModelsReadName`, `agent/src/whitelist.ts`), and the server reads them by them
- *  (`server/src/laneModels.ts`), so the three cannot come to name different files. */
+/** D-8406: the directory under `~/.ccrc` that holds every lane's model files, and the names of two of them, the class
+ *  registry and the catalogue, each spelled ONCE, here. `deploy/models-op.mjs` builds its paths from them. Since R3b nothing outside the models verbs reads these files:
+ *  the server asks the fleet's `models` op (`show`), and the agent's file read admits no file under `~/.ccrc/models`. */
 export const MODELS_DIR_NAME = 'models';
 /** `<id>.classes.json`: the lane's class registry (§4.1). */
 export const registryFileName = (id) => `${id}.classes.json`;
 /** `<id>.json`: the lane's catalogue (§4.2). */
 export const catalogueFileName = (id) => `${id}.json`;
-
-/** D-8406: whether `name` is one of the two lane files the console may read — `registryFileName` or
- *  `catalogueFileName` of a lane id `MODELS_LANE_ID_RE` accepts and `MODELS_RESERVED_IDS` does not hold. A lane id
- *  has no dot, so `<id>.effort.json`, `<id>.windows.json` and every other sibling are refused by shape. Pure. */
-export function isLaneModelsReadName(name) {
-  if (typeof name !== 'string') return false;
-  const id = [registryFileName(''), catalogueFileName('')]
-    .filter((suffix) => name.endsWith(suffix)).map((suffix) => name.slice(0, -suffix.length))[0];
-  return id !== undefined && MODELS_LANE_ID_RE.test(id) && !MODELS_RESERVED_IDS.includes(id);
-}
+/** `<id>.aliases.json`: an Anthropic lane's aliases file, the id each class's alias resolves to and where that reading
+ *  comes from (model-class Anthropic arm, Task A2.3). It sits beside the advance file; a lane that carries a class
+ *  registry has none. `deploy/models-op.mjs` writes it and `rm` reaps it. */
+export const aliasesFileName = (id) => `${id}.aliases.json`;
 
 /** The longest models notice `/api/notify` sends to the phone (auto-advance
  *  plan W2 Task 12). A CEILING, not a promise that every well-formed line
@@ -197,7 +189,8 @@ export function modelsPushOf(message) {
  *  Task 12, D-5211): pure, no I/O, no Fastify, no push call. The box token
  *  proves only "a process on the fleet box" (`deploy/notify.sh`'s own header),
  *  so the route sends a message to the phone only when `modelsPushOf` reads it
- *  AND its lane is a row of `roster` whose `exec.kind` is `codex`. The roster
+ *  AND its lane is a row of `roster` whose `exec.kind` is `codex` or whose `telemetry` is `anthropic` (D-8751: an
+ *  Anthropic lane's class moves are pushed in the same line shape). The roster
  *  arrives as a PARAMETER, anything with a `get(laneId)` that answers the
  *  lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`, is
  *  one), so this file reads no file and imports nothing.
@@ -208,7 +201,8 @@ export function modelsPushOf(message) {
  *    `not-a-model-line`  no shape of `modelsPushOf` matched (or not a string)
  *    `over-cap`          longer than MODELS_PUSH_MAX, so `modelsPushOf` refused it
  *    `unknown-lane`      a model line of a lane the roster has no row for
- *    `not-a-codex-lane`  a model line of a row whose exec kind is not codex.
+ *    `not-a-codex-lane`  a model line of a row that is neither codex-kind nor an Anthropic lane (the word is kept
+ *                        so an older reader's vocabulary holds).
  *  The last two also carry the `lane` (grammar-checked, so safe to print), for
  *  the operator's remedy. The roster is asked only about a line that matched,
  *  once. The tag is per lane AND class (D-5212): a phone REPLACES a
@@ -228,7 +222,7 @@ export function modelsPushDecision(message, roster) {
   if (line === null) return { verdict: 'refused', reason: overCap(message) ? 'over-cap' : 'not-a-model-line' };
   const row = roster.get(line.lane);
   if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane', lane: line.lane };
-  if (row.exec.kind !== 'codex') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
+  if (row.exec.kind !== 'codex' && row.telemetry !== 'anthropic') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
   return { verdict: 'pushable', lane: line.lane, cls: line.cls, kind: line.kind, tag: `models-advance:${line.lane}:${line.cls}` };
 }
 
@@ -313,6 +307,13 @@ function requestShapeOf(raw) {
   return out;
 }
 
+/** D-8743: a plain `X.Y.Z` of decimal numbers, no leading zero, each at most six digits: the one shape a catalogue's
+ *  `clientVersion` takes. This is the server's reader, in its own language; on the box the version's grammar is the
+ *  Codex auth library's `CLIENT_VERSION_RE` (ccd/ccgpt-auth.py, which the probe's release lookup and request program
+ *  load), and the probe's normaliser, which loads no library, checks the value it is handed with the same bound. */
+const PLAIN_VERSION_RE = /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/;
+const isPlainVersion = (v) => typeof v === 'string' && PLAIN_VERSION_RE.test(v);
+
 /** `(json: unknown) => Catalogue`. Validates a catalogue read off disk and
  *  fills its optional fields. Refuses the WHOLE file on a model with no `id`
  *  (§11): a partial catalogue would retire every model the probe happened to
@@ -353,6 +354,9 @@ export function parseCatalogue(json) {
   });
   const out = { probe, fetchedAt, stale: json['stale'] === true, models };
   if (typeof json['lastError'] === 'string') out.lastError = json['lastError'];
+  // D-8743: kept on a Codex catalogue only, as a plain X.Y.Z, and otherwise ABSENT: a catalogue fetched before the
+  // field, or through the probe's test seam, has none.
+  if (probe === 'codex' && isPlainVersion(json['clientVersion'])) out.clientVersion = json['clientVersion'];
   return out;
 }
 
@@ -733,13 +737,14 @@ export function classOfModel(reg, modelId) {
  *  `model` is the registry's slot as it stands (`null`: the class is unavailable on this lane by nature); `label` is
  *  the catalogue row's `label` for that id (`parseCatalogue` fills it with the id when the probe gave none), or `null`
  *  when there is no catalogue, no row for the id, or no model. Never a name this file spells: a model advance changes
- *  the registry, and the label follows it with no code change. Pure. */
+ *  the registry, and the label follows it with no code change. `efforts` (D-8686) is that row's effort levels as
+ *  `parseCatalogue` kept them, `null` where `label` is. Pure. */
 export function laneClassModels(reg, catalogue) {
   const out = {};
   for (const c of CLASSES) {
     const model = reg.classes[c];
     const row = model === null || catalogue === null ? undefined : catalogue.models.find((m) => m.id === model);
-    out[c] = { model, label: row === undefined ? null : row.label };
+    out[c] = { model, label: row === undefined ? null : row.label, efforts: row === undefined ? null : [...row.efforts] };
   }
   return out;
 }

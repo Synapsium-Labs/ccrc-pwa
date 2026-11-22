@@ -599,6 +599,21 @@ describe('GET /api/asks', () => {
     expect(neither.json()).toMatchObject({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
   });
 
+  it("answers each row's revision, raised after a release (Overlord W2 row revisions, Task 4)", async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    const { app: built, coord } = await openArmedApp(home);
+    app = built;
+    const now = Date.now();
+    const id = seedOneHeldAsk(coord, now);
+    const read = async (): Promise<unknown> =>
+      ((await getAsks(`?parent=${PARENT}&fromUuid=${PARENT_UUID}`, TOK)).json() as { asks: unknown[] }).asks;
+    expect(await read()).toEqual([expect.objectContaining({ id, state: 'held', revision: 0 })]);
+    expect(coord.releaseAsk(id, now + 1)).toBe(true);
+    expect(await read()).toEqual([expect.objectContaining({ id, state: 'released', revision: 1 })]);
+  });
+
   it('a box-token caller with no ?fromUuid= is refused, not answered for every parent', async () => {
     const home = mkTmp('ccrc-asks-');
     seed(home, CHILD, CHILD_UUID);

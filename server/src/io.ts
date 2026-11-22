@@ -2,14 +2,16 @@ import { constants as fsConstants, createReadStream, watch, type FSWatcher } fro
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ReadFailure, TestboxAdminAsked, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
+import type { ModelsAction, ModelsAsked, ReadFailure, TestboxAdminAsked, TestboxCaptureReply, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../shared/testbox-admin.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
 import { measureHeadroom, measurePressure } from '../../agent/src/pressure.js';
 import { measureBackup } from '../../agent/src/backup.js';
 import type { BackupRead } from '../../shared/backup.js';
-import { measureTestbox, syncTestboxTools } from '../../agent/src/testboxOp.js';
+import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools } from '../../agent/src/testboxOp.js';
+import { makeModelsSpawn, modelsEnv, runModelsOp } from '../../agent/src/modelsop.js';
+import type { ModelClass } from '../../shared/models.js';
 import type { HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
@@ -279,6 +281,14 @@ export interface FleetIO {
   /** The `testbox-tools-sync` op, the `testbox` op's one write: the box is sent the fleet host's own release and
    *  versions. Takes nothing. Failure contract: as `testboxMeasured`. */
   testboxToolsSync(): Promise<TestboxSyncAsked>;
+  /** The `testbox-capture` op (build capture runner spec 2026-11-22 §2.5): one capture job for `build`, a Claude Code
+   *  version the caller has already read, sent to the test box, answered with the op's outcome. The adapter does not read
+   *  the outcome: `server/src/testboxCapture.ts` maps it onto the capture lane's port.
+   *  Failure contract: never rejects. Three answers say no job went out: `no-op` is an agent too old to list the op (never
+   *  sent it), `not-started` a frame that never left (the link was down), and `busy` the agent's one capture gate held by
+   *  another capture. `unanswered` is an ask that failed after the send, the deadline, or a reply in no shape
+   *  `readTestboxCaptureReply` knows (a job may have gone out). None is ever `ok`. */
+  testboxCapture(build: string): Promise<CaptureAsked>;
   /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
    *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
    *  `refused` (nothing sent), an agent that does not list the op is `unsupported` (never sent it), a frame that never left
@@ -286,6 +296,13 @@ export interface FleetIO {
    *  (the outcome is UNKNOWN: the caller says so and never retries). A local fleet's adapter answers `unsupported`: the
    *  server's local arm (`testboxAdmin.ts`) spawns the verb itself there and never asks this member. */
   testboxAdmin(sub: TestboxAdminSub, fields: TestboxAdminFields): Promise<TestboxAdminAsked>;
+  /** The `models` op (auto-advance spec 2026-10-13 §2.7; plan W4 as re-planned, D-8687, D-8693):
+   *  runs `ccrc models <lane> show`, or `hold|release|revert <class>`, on ITS box, and answers how it ended.
+   *  Failure contract: never rejects. The builder's refusal is `refused` (nothing ran or was sent); an agent that does not
+   *  list the op, an older agent answering `bad-request`, and the bare `localIO` (no configured home) are `unsupported`;
+   *  a frame that never left, or a launcher that could not start, is `not-started`; a held agent gate is `busy`; a fault
+   *  after the send, the deadline, or a reply off `readModelsOpAnswer`'s grammar is `lost` (UNKNOWN). */
+  models(lane: string, action: ModelsAction, cls?: ModelClass): Promise<ModelsAsked>;
 }
 
 /** The `testbox` op as a seam answers it, or why there is none (D-7411). */
@@ -297,6 +314,11 @@ export type MeasuredTestbox =
 export type TestboxSyncAsked =
   | { ok: true; reply: TestboxToolsSyncReply }
   | { ok: false; reason: 'no-op' | 'unanswered' };
+
+/** The `testbox-capture` op as a seam answers it, or why there is none (build capture runner spec §2.5). */
+export type CaptureAsked =
+  | { readonly ok: true; readonly reply: TestboxCaptureReply }
+  | { readonly ok: false; readonly reason: 'no-op' | 'not-started' | 'busy' | 'unanswered' };
 
 /** The `backup` read as a seam answers it (D-7858), or why there is none. */
 export type MeasuredBackup =
@@ -544,8 +566,12 @@ export const localIO: FleetIO = {
   // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
   testboxMeasured: () => localTestbox(os.homedir()),
   testboxToolsSync: () => localTestboxSync(os.homedir()),
+  testboxCapture: (build) => localTestboxCapture(build, os.homedir()),
   // The server's local arm spawns the verb itself (`testboxAdmin.ts#localTestboxAdminOps`); this seam is the agent arm's.
   testboxAdmin: async () => ({ kind: 'unsupported' }),
+  // The bare localIO has no configured home: `localIOFor(home)` runs the local arm, so nothing here ever spawns against
+  // the process home.
+  models: async () => ({ kind: 'unsupported' }),
 };
 
 /** The `testbox` op's body on `home` (D-7411): the one implementation, so the two adapters cannot disagree. */
@@ -555,6 +581,22 @@ export async function localTestbox(home: string): Promise<MeasuredTestbox> {
 /** The `testbox-tools-sync` op's body on `home` (D-7411). */
 export async function localTestboxSync(home: string): Promise<TestboxSyncAsked> {
   try { return { ok: true, reply: await syncTestboxTools(home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
+
+/** The `testbox-capture` op's body on `home` (build capture runner spec §2.5): the agent's own `captureTestbox` with the
+ *  real seams, as `localTestbox` runs the `testbox` op's; it reads the host's settings through `home`'s launcher. No gate
+ *  here: the capture lane sends one job at a time. */
+export async function localTestboxCapture(build: string, home: string): Promise<CaptureAsked> {
+  try { return { ok: true, reply: await captureTestbox(build, realTestboxSeams(), home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
+
+/** The `models` op's local arm on `home` (D-8687, D-8693): the agent's own body (`runModelsOp`, the builder again, the
+ *  absolute `<home>/.local/bin/ccrc`, the bounded port with `{HOME, PATH, LANG}` and no stdin), as `localTestbox` runs
+ *  the `testbox` op's. `modelsEnv` copies PATH and LANG only, so the server's own environment (its tokens) never reaches
+ *  the child. No gate here: the lane-files lock guards every writer, and `readLaneModels` coalesces a lane's concurrent
+ *  reads. Never rejects: a throw answers `not-started`. */
+export async function localModels(home: string, lane: string, action: ModelsAction, cls?: ModelClass): Promise<ModelsAsked> {
+  try { return await runModelsOp(makeModelsSpawn(modelsEnv(home)), home, lane, action, cls); } catch { return { kind: 'not-started' }; }
 }
 
 /** The agent's own measurer on `home`: the one implementation of the `disk` op's arithmetic, so the two adapters
@@ -570,5 +612,7 @@ export function localIOFor(home: string): FleetIO {
   return {
     ...localIO, statfsMeasured: () => measureLocalDisk(home),
     testboxMeasured: () => localTestbox(home), testboxToolsSync: () => localTestboxSync(home),
+    testboxCapture: (build) => localTestboxCapture(build, home),
+    models: (lane, action, cls) => localModels(home, lane, action, cls),
   };
 }

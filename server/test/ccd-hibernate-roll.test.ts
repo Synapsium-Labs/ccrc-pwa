@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness, boxed } from './ccdWsHelpers.js';
-import { eventsOf } from './lifecycleHelpers.js';
+import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-hibernate-roll-'); });
@@ -629,7 +629,451 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(news(), 'the wake spawned nothing: the dispatched swap spawns it').toEqual([]);
   });
 
+  // The Overlord W1 ccd arms, PR C2, Step 1 (characterization, green before the pick is wired): the real `_wake_ceiling_move`
+  // (D-8123), not R2's stub, CAN fire on a fresh start's wake. The account is at its ceiling, another has measured room, and
+  // the wake dispatches the move and spawns nothing, so no receipt is written and the verb answers 7 with the old uuid back.
+  it('C2 Step 1: the REAL _wake_ceiling_move fires on a fresh start\'s wake at the ceiling: a move dispatched, no spawn, exit 7', () => {
+    claimed();
+    const lim = (w: string, five: number): void => {
+      const t = Math.floor(Date.now() / 1000);
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+        JSON.stringify({ five, seven: five, ts: t, fiveResetAt: t + 10_000, sevenResetAt: t + 400_000 }));
+    };
+    lim('claude', 99); lim('claude-a', 10);
+    const detached = '_svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };';
+    const r = fresh('--roll --fresh', detached);
+    unproven(r, false);
+    expect(calls().some((l) => l.startsWith('detached ') && l.includes(`swap '${ID}' 'claude-a'`)), calls().join('\n')).toBe(true);
+    expect(news(), 'the wake spawned nothing: the dispatched swap spawns it').toEqual([]);
+    expect(fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8')).toMatch(new RegExp(`wake-rescue ${ID}: claude \\(ceiling five=99 seven=99\\) -> claude-a`));
+  });
+
   it('caps advertises hibernate-fresh', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('hibernate-fresh');
+  });
+});
+
+// The Overlord W1 ccd arms (plan `w1-ccd-arms.md` Task 2, question 1, slug fresh-start-passes-keep-awake-no-roll): designate
+// and rebind set `.no-roll` on the Overlord's body through `ccd keep-awake`, and that body renews by `hibernate --roll --fresh`.
+// The fresh start passes ONE `.no-roll`: a regular, readable file, not a link, holding exactly keep-awake's stamp. Every other
+// `.no-roll` still refuses it, and a plain `--roll` refuses every one. The line tests `-L` too (slug
+// no-roll-line-refuses-a-dangling-link), so a plain `--roll` refuses a dangling link it passed before.
+describe('the Overlord W1 ccd arms: the fresh start passes keep-awake\'s own .no-roll, and nothing else', () => {
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const news = (): string[] => calls().filter((l) => /^tmux new-session/.test(l));
+  const uuidNow = (): string => fs.readFileSync(regPath('uuid'), 'utf8').trim();
+  const claimed = (): void => { idle(); h.sh(`_reg_claim ${ID}`); };
+  const fresh = (): { rc: number; err: string; out: string } =>
+    run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, SPAWNS, REAL);
+  const untouched = (r: { rc: number; err: string }, word: string): void => {
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toMatch(new RegExp(`^ccd: session-busy: ${word} — .*no-roll`));
+    expect(has('hibernated')).toBe(false);
+    expect(has('fresh')).toBe(false);
+    expect(killAt()).toBe(-1);
+    expect(news()).toEqual([]);
+    expect(uuidNow()).toBe(UUID);
+  };
+
+  it('a plain --roll with a dangling .no-roll link refuses opted-out (the tightening: it proceeded while the line tested -e alone)', () => {
+    idle();
+    fs.symlinkSync(path.join(h.home, 'nowhere'), regPath('no-roll'));
+    const r = roll();
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toMatch(/^ccd: session-busy: opted-out — .*no-roll/);
+    expect(has('hibernated')).toBe(false);
+    expect(killAt()).toBe(-1);
+  });
+
+  it('--roll --fresh with .no-roll written by ccd keep-awake on proceeds: the act lands and the wake starts a new conversation', () => {
+    claimed();
+    expect(h.sh(`cmd_keep_awake --session ${ID} --state on`)).toBe(`awake ${ID}`);
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+    expect(uuidNow()).not.toBe(UUID);
+    expect(news(), 'one spawn').toHaveLength(1);
+    expect(news()[0]).toContain(`--session-id '${uuidNow()}'`);
+    expect(fs.readFileSync(regPath('no-roll'), 'latin1'), 'the marker stands for the next renewal').toBe('keep-awake v1');
+  });
+
+  it('a plain --roll with keep-awake\'s own .no-roll still refuses opted-out: the roll lane never rolls the Overlord', () => {
+    claimed();
+    h.sh(`cmd_keep_awake --session ${ID} --state on`);
+    const r = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, SPAWNS, REAL);
+    untouched(r, 'opted-out');
+  });
+
+  it.each([
+    ['an empty', () => { fs.writeFileSync(regPath('no-roll'), ''); }],
+    ['a foreign-bytes', () => { fs.writeFileSync(regPath('no-roll'), 'opted out by hand\n'); }],
+    ['the stamp and a newline', () => { fs.writeFileSync(regPath('no-roll'), 'keep-awake v1\n'); }],
+    ['a linked (to the stamp)', () => { fs.writeFileSync(path.join(h.home, 'stamp'), 'keep-awake v1'); fs.symlinkSync(path.join(h.home, 'stamp'), regPath('no-roll')); }],
+    ['a dangling-link', () => { fs.symlinkSync(path.join(h.home, 'nowhere'), regPath('no-roll')); }],
+    ['a mode-000 (the stamp)', () => { fs.writeFileSync(regPath('no-roll'), 'keep-awake v1'); fs.chmodSync(regPath('no-roll'), 0o000); }],
+  ])('--roll --fresh with %s .no-roll refuses opted-out with nothing touched', (_what, set) => {
+    claimed();
+    set();
+    try { untouched(fresh(), 'opted-out'); } finally { try { fs.chmodSync(regPath('no-roll'), 0o644); } catch { /* a link */ } }
+  });
+
+  it('a plain hibernate with keep-awake\'s .no-hibernate refuses opted-out', () => {
+    idle();
+    h.sh(`cmd_keep_awake --session ${ID} --state on`);
+    const r = run(ID);
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toMatch(/^ccd: session-busy: opted-out — .*no-hibernate/);
+    expect(has('hibernated')).toBe(false);
+  });
+});
+
+// A PROVEN RENEWAL ENDS A SET-SIDE CROSSING (Overlord W1 ccd arms, Task 5; spec §3.4 C46, "Every renewal clears the
+// crossing marker"; slug crossing-ends-after-the-receipt). Only after the consuming spawn's receipt proved the fresh start,
+// and only for a session whose side reads `set <spelling>`: every other exit keeps the operator's crossing, an unreadable
+// or malformed set keeps it, and a project side's crossing is the tick's, as today. On `main` before the arm, `--roll
+// --fresh` left every marker (Step 1's characterization, now its exit-0 case flipped).
+describe('the Overlord W1 ccd arms: a proven fresh start ends a set-side crossing, and nothing else does', () => {
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const claimed = (): void => { idle(); h.sh(`_reg_claim ${ID}`); };
+  const fresh = (extra = '', stubs = REAL): { rc: number; err: string; out: string } =>
+    run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, `${SPAWNS} ${extra}`, stubs);
+  const CROSS = '1700000000 pool-b lane-b';
+  const cross = (): void => { fs.writeFileSync(regPath('crosspool'), `${CROSS}\n`); };
+  const ended = (): string[] => (fs.existsSync(path.join(reg(), 'swap.log')) ? fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8') : '')
+    .split('\n').filter((l) => l.includes(`crosspool-ended ${ID}:`));
+  const side = (): string => h.sh(`_session_pool_side ${ID}`);
+  const kept = (): void => {
+    expect(fs.readFileSync(regPath('crosspool'), 'utf8')).toBe(`${CROSS}\n`);
+    expect(ended()).toEqual([]);
+  };
+
+  it('a proven start (exit 0) with a set side ends the marker, with the tick\'s own line and the reason renewal', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a,pool-b');
+    expect(side()).toBe('set pool-a,pool-b');
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(has('crosspool')).toBe(false);
+    expect(ended()).toHaveLength(1);
+    expect(ended()[0]).toMatch(new RegExp(`crosspool-ended ${ID}: renewal$`));
+  });
+
+  it('a plain --roll (no --fresh) with a set side keeps the marker', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const r = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, SPAWNS, REAL);
+    expect(r.rc, r.err).toBe(0);
+    kept();
+  });
+
+  it('exit 3 (refused before the act) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    fs.writeFileSync(regPath('hold'), 'keep');
+    expect(fresh().rc).toBe(3);
+    kept();
+  });
+
+  it('exit 4 (the wake failed, back to sleep) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    fs.writeFileSync(path.join(h.home, 'wake-fails'), '');
+    const r = run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`);
+    expect(r.rc, r.err).toBe(4);
+    kept();
+  });
+
+  it('exit 5 (not restored) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const unwritable = 'cmd_ensure() { echo "ensure $*" >> "$HOME/ccd-calls"; rm -f -- "$REG/$1.hibernated"; '
+      + 'mkdir -p -- "$REG/$1.hibernated"; echo "ccd: spawn failed" >&2; return 5; };';
+    const r = run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, unwritable);
+    expect(r.rc, r.err).toBe(5);
+    kept();
+  });
+
+  it('exit 6 (the pane could not be killed) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const stuck = 'eval "$(declare -f tmux | sed \'1s/^tmux/_tmux_stub/\')"; '
+      + 'tmux() { [[ "${1:-}" == kill-session ]] && { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _tmux_stub "$@"; }; '
+      + '_alive() { return 0; };';
+    const r = fresh(stuck);
+    expect(r.rc, r.err).toBe(6);
+    kept();
+  });
+
+  it('exit 7 (the start was not proven) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const moved = '_wake_ceiling_move() { echo "move $1" >> "$HOME/ccd-calls"; WAKE_MOVE_TARGET=lane-b; return 0; };';
+    const r = fresh(moved);
+    expect(r.rc, r.err).toBe(7);
+    kept();
+  });
+
+  it.each([
+    ['set-unreadable (a directory)', () => { fs.mkdirSync(regPath('poolset')); }],
+    ['set-unreadable (a dangling link)', () => { fs.symlinkSync(path.join(h.home, 'nowhere'), regPath('poolset')); }],
+    ['set-malformed', () => { fs.writeFileSync(regPath('poolset'), 'Pool A'); }],
+  ])('a proven start with a %s side keeps it', (_what, set) => {
+    claimed(); cross(); set();
+    expect(side()).toMatch(/^set-(unreadable|malformed)$/);
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    kept();
+  });
+
+  it('a proven start with a named project side keeps it (the tick ends a project crossing)', () => {
+    claimed(); cross();
+    fs.mkdirSync(path.join(reg(), 'pools'), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'pools', 'project-a'), 'pool-a\n');
+    expect(side()).toMatch(/^named /);
+    expect(fresh().rc).toBe(0);
+    kept();
+  });
+
+  it('a proven start with an untagged project side keeps it', () => {
+    claimed(); cross();
+    expect(side()).toBe('untagged');
+    expect(fresh().rc).toBe(0);
+    kept();
+  });
+
+  it('a proven start with a set side and no marker says nothing', () => {
+    claimed(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    expect(fresh().rc).toBe(0);
+    expect(has('crosspool')).toBe(false);
+    expect(ended()).toEqual([]);
+  });
+});
+
+// The Overlord W1 ccd arms, PR C2 (plan `w1-ccd-arms.md` Task 7): the fresh start picks the account it wakes on from the
+// route record's ordered list (`acctorder`), last in the re-measure, and writes `wrapper` before `.fresh` and the uuid.
+// The REAL `cmd_ensure` and `_spawn_start`, the settle stubbed, as the W1a rows above run them; the roster is the fixture's
+// (`claude`, `claude-a`, `claude-b`, `gpt`, `claude-d`), and the session runs on `claude`.
+describe('the Overlord W1 ccd arms, PR C2: the fresh start wakes on the account the pick names', () => {
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const news = (): string[] => calls().filter((l) => /^tmux new-session/.test(l));
+  const lim = (w: string, five: number): void => {
+    const t = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+      JSON.stringify({ five, seven: five, ts: t, fiveResetAt: t + 10_000, sevenResetAt: t + 400_000 }));
+  };
+  const claimed = (list: string | null): void => {
+    idle(); h.sh(`_reg_claim ${ID}`);
+    if (list !== null) h.sh(`_reg_set ${ID} acctorder '${list}'`);
+  };
+  const fresh = (extra = ''): { rc: number; err: string; out: string } =>
+    run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, `${SPAWNS} ${extra}`, REAL);
+
+  const bin = (w: string): string => `/.local/bin/${w}'`;
+
+  const swaps = (): Array<Record<string, unknown>> => eventsOf(h.home, 'swap');
+  const log = (): string => { try { return fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8'); } catch { return ''; } };
+  /** `_reg_set`'s writes of the named fields, in order, to `$HOME/writes` (the write order is the safety property). */
+  const WRITES = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+    + '_reg_set() { case "$2" in wrapper|fresh|uuid) echo "$2 $3" >> "$HOME/writes" ;; esac; _reg_set_real "$@"; };';
+  const writes = (): string[] => fs.readFileSync(path.join(h.home, 'writes'), 'utf8').split('\n').filter(Boolean);
+  const moving = (): void => { claimed('claude-b'); lim('claude-b', 20); };
+
+  it('a pick that moves: wrapper before .fresh and the uuid, the wake spawns under the new account, and after the receipt one swap row and the side effects', () => {
+    moving();
+    const rw = 'state=open kind=near since=1 reset=0 wrapper=claude';
+    h.sh(`_reg_set ${ID} swapblocked x; _reg_set ${ID} rescuewait '${rw}'; _reg_set ${ID} limitwait 'state=open since=1'
+      _reg_set ${ID} swappin claude; _reg_set ${ID} swappinnote x; _reg_set ${ID} swappinexp 9; _reg_set ${ID} stranded x`);
+    const r = fresh(WRITES);
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+    const w = writes();
+    expect(w[0], 'wrapper is the first of the three').toBe('wrapper claude-b');
+    expect(w.slice(1, 3).map((l) => l.split(' ')[0])).toEqual(['fresh', 'uuid']);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+    expect(news(), 'one spawn').toHaveLength(1);
+    expect(news()[0]).toContain(bin('claude-b'));
+    expect(news()[0]).toMatch(/--session-id '[0-9a-f-]{36}'/);
+    const u2 = h.reg(ID, 'uuid');
+    const sw = swaps();
+    expect(sw, 'one swap row').toHaveLength(1);
+    expect(sw[0]).toMatchObject({ outcome: 'done' });
+    expect(measOf(sw[0]!)).toMatchObject({ from: 'claude', wrapper: 'claude-b', uuid: u2, org: 'unknown' });
+    expect(decOf(sw[0]!)).toMatchObject({ reason: 'fresh-pick' });
+    for (const f of ['swapblocked', 'swappin', 'swappinnote', 'swappinexp', 'stranded']) expect(has(f), f).toBe(false);
+    expect(h.reg(ID, 'rescuewait')).toMatch(/^state=closed .* end=swap$/);
+    expect(h.reg(ID, 'limitwait')).toMatch(/^state=closed since=1 end=swap until=\d+$/);
+    expect(h.reg(ID, 'home'), 'home is never the pick\'s').toBe('claude');
+    expect(has('lastswap'), 'no lastswap').toBe(false);
+    expect(log()).toContain(`hibernate ${ID}: fresh start, uuid ${UUID} -> ${u2}, account claude -> claude-b\n`);
+    expect(log()).toContain(`fresh-pick ${ID}: claude -> claude-b step=1\n`);
+  });
+
+  it('a stay: the current account, a log line that says stay (review 2360 F6), and no swap row', () => {
+    claimed('claude-b');
+    const r = fresh(WRITES);
+    expect(r.rc, r.err).toBe(0);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(writes().some((l) => l.startsWith('wrapper ')), 'no wrapper write').toBe(false);
+    expect(news()[0]).toContain(bin('claude'));
+    expect(swaps()).toEqual([]);
+    expect(log()).toMatch(new RegExp(`hibernate ${ID}: fresh start, uuid ${UUID} -> [0-9a-f-]{36}, stay on claude\n`));
+    expect(log()).not.toContain('fresh-pick');
+  });
+
+  it('a move between two Anthropic lanes writes no moved note; from a non-Anthropic current account it writes one', () => {
+    moving(); h.sh(`_reg_set ${ID} typed '1000 since'`);
+    expect(fresh().rc).toBe(0);
+    expect(h.reg(ID, 'typed'), 'claude -> claude-b: the floor stays').toBe('1000 since');
+  });
+
+  it('from a non-Anthropic current account (gpt) the move writes the moved note', () => {
+    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    moving(); h.sh(`_reg_set ${ID} wrapper gpt; _reg_set ${ID} typed '1000 since'`);
+    // The live status is read from the current lane's own config directory.
+    const dir = path.join(h.home, '.claude-gpt', 'sessions'); fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(path.join(h.home, '.claude', 'sessions', `${PID}.json`), path.join(dir, `${PID}.json`));
+    expect(h.sh('_is_anthropic_backend gpt; echo $?')).toBe('1');
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+    expect(Number((h.reg(ID, 'typed') ?? '').split(' ')[0]), 'the floor moved to now').toBeGreaterThan(1000);
+  });
+
+  // A concurrent wake (the real `cmd_ensure`, as the W1a rows run it) planted right after the `wrapper` write, before `.fresh`.
+  const RACE = `_alive() { grep -q new-session "$HOME/ccd-calls" 2>/dev/null; }; `
+    + 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+    + `_reg_set() { _reg_set_real "$@"; local rc=$?; if [[ "$2" == wrapper && ! -e "$HOME/woke-once" ]]; then : > "$HOME/woke-once"; ( cmd_ensure ${ID} ) >/dev/null 2>&1; fi; return $rc; };`;
+
+  it('a concurrent wake between the wrapper write and .fresh resumes the old uuid, leaves no receipt: exit 7, old uuid and wrapper back, no swap row', () => {
+    moving();
+    const r = fresh(RACE);
+    expect(r.rc, r.err).toBe(7);
+    expect(r.err).toContain('roll-fresh-unproven');
+    expect(news().some((l) => l.includes(`--resume '${UUID}'`)), 'the concurrent wake resumed the OLD conversation').toBe(true);
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(has('fresh')).toBe(false);
+    expect(swaps()).toEqual([]);
+    expect(log()).not.toContain('fresh-pick');
+  });
+
+  it('a wrapper write that fails: no wake, exit 4, the old wrapper and uuid back', () => {
+    moving();
+    const failing = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+      + '_reg_set() { [[ "$2" == wrapper && "$3" == claude-b ]] && return 1; _reg_set_real "$@"; };';
+    const r = fresh(failing);
+    expect(r.rc, r.err).toBe(4);
+    expect(news()).toEqual([]);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(has('fresh')).toBe(false);
+    expect(swaps()).toEqual([]);
+  });
+
+  it('a wake that fails (exit 4) puts back the old wrapper, then the old uuid, with no swap row, and logs it', () => {
+    moving();
+    const r = fresh(`${WRITES} _spawn_start() { echo "ccd: spawn failed" >&2; return 5; };`);
+    expect(r.rc, r.err).toBe(4);
+    expect(r.err).toContain('roll-wake-failed');
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(writes().slice(-2), 'the put-back: the account first, then the uuid it names (review 2360 F3)').toEqual(['wrapper claude', `uuid ${UUID}`]);
+    expect(log()).toMatch(new RegExp(`hibernate ${ID}: roll wake failed \\(rc \\d+\\), back to sleep, account back to claude\n`));
+    expect(swaps()).toEqual([]);
+    expect(log()).not.toContain('fresh-pick');
+  });
+
+  it('an unproven wake (exit 7, the wake moved it at the ceiling) puts back the old wrapper and uuid, with no swap row', () => {
+    moving();
+    const r = fresh(`${WRITES} _wake_ceiling_move() { WAKE_MOVE_TARGET=claude-d; return 0; };`);
+    expect(r.rc, r.err).toBe(7);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(writes().slice(-2), 'the put-back: the account first, then the uuid it names (review 2360 F3)').toEqual(['wrapper claude', `uuid ${UUID}`]);
+    expect(log()).toMatch(new RegExp(`fresh start unproven \\(marker read [^)]*\\), uuid back to ${UUID}, account back to claude\n`));
+    expect(swaps()).toEqual([]);
+  });
+
+  it('exit 7 keeps a wrapper written since the pick (a move came first): only the uuid goes back (review 2360 F8)', () => {
+    moving();
+    const r = fresh(`_wake_ceiling_move() { _reg_set_real ${ID} wrapper claude-d; WAKE_MOVE_TARGET=claude-d; return 0; }; ${WRITES}`);
+    expect(r.rc, r.err).toBe(7);
+    expect(h.reg(ID, 'wrapper'), 'the move\'s account stands').toBe('claude-d');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(writes().filter((l) => l === 'wrapper claude'), 'no put-back of the account').toEqual([]);
+    expect(log()).toContain(`, uuid back to ${UUID}, account kept at claude-d\n`);
+    expect(swaps()).toEqual([]);
+  });
+
+  it('exit 5 with the uuid reading the new one keeps the new wrapper', () => {
+    moving();
+    const unwritable = 'cmd_ensure() { rm -f -- "$REG/$1.hibernated"; mkdir -p -- "$REG/$1.hibernated"; echo "ccd: spawn failed" >&2; return 5; };';
+    const r = fresh(unwritable);
+    expect(r.rc, r.err).toBe(5);
+    expect(h.reg(ID, 'uuid')).not.toBe(UUID);
+    expect(h.reg(ID, 'wrapper'), 'the account follows the new uuid').toBe('claude-b');
+    expect(swaps()).toEqual([]);
+  });
+
+  it('exit 5 with the uuid reading the old one writes the old wrapper back', () => {
+    moving();
+    // The chain fails at its uuid write (so the uuid still reads the old one), and the put-back cannot write .hibernated.
+    const failing = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+      + '_reg_set() { [[ "$2" == uuid && "$3" != ' + UUID + ' ]] && return 1; '
+      + 'if [[ "$2" == hibernated && -e "$HOME/act-done" ]]; then return 1; fi; [[ "$2" == hibernated ]] && : > "$HOME/act-done"; _reg_set_real "$@"; };';
+    const r = fresh(failing);
+    expect(r.rc, r.err).toBe(5);
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'wrapper'), 'the account follows the old uuid').toBe('claude');
+    expect(swaps()).toEqual([]);
+  });
+
+  it('a busy pane with a list nobody can take refuses busy, not unplaced: the pick is last', () => {
+    claimed('claude-b'); fs.writeFileSync(path.join(reg(), 'claude-disabled'), ''); fs.writeFileSync(path.join(reg(), 'claude-b-disabled'), '');
+    live('busy');
+    const r = fresh();
+    expect(r.rc).toBe(3);
+    expect(r.err).toContain('ccd: session-busy: busy');
+    expect(r.err).not.toContain('unplaced');
+  });
+
+  it('a refusal (unplaced) leaves everything untouched, but for _authdead\'s D-3524 expiry of a stale marker', () => {
+    claimed('claude-a,claude-b');
+    fs.writeFileSync(path.join(reg(), 'claude-disabled'), ''); fs.writeFileSync(path.join(reg(), 'claude-b-disabled'), '');
+    // claude-a's auth-dead marker predates its credential file, so `_authdead` (its one owner) expires it: the one write
+    // the pick may make (C1's ruling, review 2336 F1). claude-a then has no load figure, so nothing picks it.
+    const cred = path.join(h.home, h.sh('_ccrc_secrets_file claude-a'));
+    fs.mkdirSync(path.dirname(cred), { recursive: true }); fs.writeFileSync(cred, 'x');
+    fs.writeFileSync(path.join(reg(), 'claude-a-authdead'), '1000000000 auth-401');
+    h.sh(`_reg_set ${ID} degraded opus; touch -d @1700000000 "$REG/${ID}.degraded"`);
+    const snap = (): string[] => fs.readdirSync(reg()).sort().map((f) => `${f} ${fs.lstatSync(path.join(reg(), f)).mtimeMs}`);
+    const before = snap();
+    const callsBefore = calls().length;
+    const r = fresh();
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toBe(`ccd: session-busy: unplaced — no account on the ordered list can take it: claude-a load; claude-b disabled; nothing was touched\n`);
+    expect(snap(), 'the registry is byte- and time-identical but for the expired marker').toEqual(before.filter((l) => !l.startsWith('claude-a-authdead ')));
+    expect(fs.existsSync(path.join(reg(), 'claude-a-authdead')), 'the expired marker went').toBe(false);
+    expect(eventsOf(h.home, 'hibernate')).toEqual([]);
+    expect(calls().slice(callsBefore).filter((l) => /kill-session|systemctl|new-session/.test(l))).toEqual([]);
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+  });
+
+  it('an unmeasured wrapper with a list standing refuses unplaced', () => {
+    claimed('claude-b'); lim('claude-b', 20); fs.rmSync(regPath('wrapper'));
+    // The live status is read through the wrapper's config directory, so the pane check is stubbed to reach the pick.
+    const r = fresh('_idle_for_keystroke() { return 0; };');
+    expect(r.rc).toBe(3);
+    expect(r.err).toContain(`ccd: session-busy: unplaced — the session's account on ${reg()}/${ID}.wrapper cannot be read`);
+    expect(has('hibernated')).toBe(false);
+  });
+
+  it('the same bytes give the same verdict under LC_ALL=C and en_US.UTF-8', () => {
+    claimed('claude-b'); fs.writeFileSync(path.join(reg(), 'claude-disabled'), ''); fs.writeFileSync(path.join(reg(), 'claude-b-disabled'), '');
+    const c = fresh('export LC_ALL=C;');
+    const u = fresh('export LC_ALL=en_US.UTF-8;');
+    expect(c.rc).toBe(3);
+    expect(u).toEqual(c);
+  });
+
+  it('caps advertises fresh-pick-v1', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('fresh-pick-v1');
   });
 });

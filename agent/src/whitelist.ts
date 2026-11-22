@@ -3,7 +3,6 @@ import path from 'node:path';
 import { CCRC_DIR_NAME, HISTORY_STEER_ON_DIR, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 import { isRegistryId } from '../../shared/api.js';
 import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
-import { MODELS_DIR_NAME, isLaneModelsReadName } from '../../shared/models.mjs';
 
 /**
  * Everything a connection needs to evaluate the path/exec whitelists — the
@@ -116,32 +115,10 @@ function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarg
 }
 
 /**
- * D-8406: a lane's class registry and catalogue in `~/.ccrc/models` (`registryFileName`, `catalogueFileName`), the two
- * files the session's model picker names a class's model from (`server/src/laneModels.ts`). READ mode only, and exact
- * names only: `isLaneModelsReadName` (`shared/models.mjs`) admits those two shapes for a lane id and nothing else, so
- * the directory stays unlistable and its other files (effort, windows, advance, the classes TSV) unread. Neither file
- * holds a secret: model ids, labels, efforts and prices, the class map and the lane's endpoint, which the endpoint gate
- * keeps free of a user name or password (`BASE_URL_OK`).
- *
- * `isCcrcNodeFile`'s two conditions, one directory down: the canonical target must be `<canonical ~/.ccrc>/models/<the
- * literal basename>`, so a live symlink at either name (onto `agent.env`, say) or a `models` directory that is a
- * symlink is refused, never answered with its target's bytes. A dangling symlink canonicalises onto its own literal
- * path and is admitted, and the read then fails on it, as it does for a node file.
- *
- * This is the approved models design's first read path (auto-advance spec §2.7, before D14 moved its panel onto the
- * planned `models` op): the op is unbuilt, and the picker needs only these two reads. When the op lands, its `show`
- * carries the same facts and this grant is retired with the reader that uses it.
- */
-function isLaneModelsFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
-  const base = path.basename(path.resolve(targetPath));
-  return isLaneModelsReadName(base) && canonicalTarget === path.join(canonicalCcrc, MODELS_DIR_NAME, base);
-}
-
-/**
  * Whitelist check for ALL file ops. Reads: `.cc-sessions/`, `.cc-limits/`,
  * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root,
- * plus exactly the `~/.ccrc` node files `NODE_FILES` names by name (`isCcrcNodeFile`), and a lane's two model files
- * (`isLaneModelsFile`, D-8406).
+ * plus exactly the `~/.ccrc` node files `NODE_FILES` names by name (`isCcrcNodeFile`). No file under `~/.ccrc/models`:
+ * the lane-models read grant (D-8406) is retired (R3b), and the server reads a lane's models through the `models` op.
  * Writes: `.cc-clips/` under $HOME only. Returns the canonical path to operate on when
  * allowed, `null` otherwise — canonicalizing here means every downstream fs
  * call in fileops.ts/tail.ts already has symlink-escapes resolved.
@@ -172,8 +149,7 @@ export async function checkPath(
     isUnder(canonicalTarget, path.join(canonicalHome, '.cc-clips')) ||
     isUnder(canonicalTarget, canonicalRoot) ||
     underClaudeGlob(canonicalHome, canonicalTarget) ||
-    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget) ||
-    isLaneModelsFile(canonicalCcrc, targetPath, canonicalTarget);
+    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget);
 
   return readAllowed ? canonicalTarget : null;
 }
@@ -445,6 +421,7 @@ export const REQUIRED_VERB_FLAG = {
   'win-size': '--session', 'ws-reclaim': '--expect',
   'reclaim-pause': '--state', 'ws-expire': '--expect',
   'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project', 'docs-log': '--project',
+  'docs-show-range': '--project',
   'ws-collect': '--expect',
   'ws-orphan': '--expect',
   'ws-title': '--session',
@@ -455,8 +432,10 @@ export const REQUIRED_VERB_FLAG = {
   'scope-sweep-busy': '--state',
   'delegation-adopt': '--state',
   'project-add': '--name',
+  'skill-ensure': '--wrapper',
   'pane-scope-stop': '--state',
   'pool-answer': '--session',
+  'keep-awake': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -742,6 +721,12 @@ export const EXEC_WHITELIST = {
     // whole argument surface (g29 is the other side), so the wire cannot widen it to another form; an older agent
     // without this row refuses it `forbidden`, which the server reads as `ran: false`, never as an answer.
     ['pool-answer', '--session'],
+    // The Overlord's sleep markers (Overlord W1 ccd arms, plan Task 3; spec §3.2, C4): `ccd keep-awake --session <id>
+    // --state on|off` sets or clears one session's `.no-hibernate` and `.no-roll`, holding keep-awake's own stamp. A
+    // registry-file write and unlink, non-destructive, on `coord-pause`'s argument: the server may write only `~/.cc-clips`
+    // there, so the markers are raised through this verb or not at all. ENROLLED in `REQUIRED_VERB_FLAG` on `--session`
+    // (g30 is the other side), so the wire cannot reach it with a positional tail. Forbidden to every session.
+    ['keep-awake', '--session'],
     // NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): the four
     // verbs `docs-v1` names, each ENROLLED in `REQUIRED_VERB_FLAG` above on the
     // flag that is its whole argument surface (g16-g19 are the other side).
@@ -759,6 +744,9 @@ export const EXEC_WHITELIST = {
     // One doc's history (rich-docs spec G4; the server sends it behind its own cap token): read-only, 8 tokens, ENROLLED above on
     // `--project` like the four; ccd dies with usage on any other shape.
     ['docs-log',   '--project'],
+    // One file's bytes above the show caps, as a snapshot prepare and then frames (X2 P1, behind `docs-range-v1`):
+    // read-only on the project, ENROLLED above on `--project`; its argv shapes are ccd's (a usage die on any other).
+    ['docs-show-range', '--project'],
     // THE CHILD TEMP-ROOT COLLECTOR (child reclamation spec 2026-09-22 §5.10): the fourth destructive verb, and the third
     // the SERVER sends with no human in the path — on a witnessed child temp root whose workspace is gone. Granted on its
     // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides
@@ -807,6 +795,12 @@ export const EXEC_WHITELIST = {
     // re-proves the name and the url (two exact github.com shapes) on the box; the clone is the agent's only way to a
     // `git clone`, since `git` is a forbidden exec command.
     ['project-add', '--name'],
+    // SELF-INSTALL OF THE SKILLS (D-8126, wave A7): `skill-ensure --wrapper <id>` runs the two skill installers the deploy ships
+    // against ONE rostered account's config dir and prints one JSON line; the server calls it where a dispatch measured the
+    // worker skill absent. Granted on `--wrapper` and ENROLLED in `REQUIRED_VERB_FLAG` above for `project-add`'s reason: the
+    // flag is the verb's whole argument surface, and a bare grant would admit every positional form it might grow. ccd
+    // re-proves the id class and the roster on the box and refuses anything else at exit 2 before it writes a byte.
+    ['skill-ensure', '--wrapper'],
   ],
 } as const satisfies ExecWhitelist;
 

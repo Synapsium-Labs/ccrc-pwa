@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { RUN_KINDS, type ChildMark } from '../../../shared/api.js';
 import { FLEET_ROLE_NAMES } from '../../../shared/fleetRoles.js';
-import type { RoleFactInputs, RoleReading } from '../../src/roleOf.js';
+import type { DesignationFact, RoleFactInputs, RoleReading } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 import { mulberry32 } from '../fakeTime.js';
 
@@ -20,14 +20,16 @@ export type RoleOfModule = typeof import('../../src/roleOf.js');
 const ROLE_ID = 'project-a-lane-a';
 const CHILD7: ChildMark = { kind: 'child', runId: 7 };
 
-/** Every combination of the inputs: three child marks, four run kinds, three open sets, three intents (108). */
+const NO_DESIGNATION: DesignationFact = { kind: 'none' };
+
+/** Every combination of the inputs: three child marks, four run kinds, three open sets, three intents (108), with no designation. */
 export function roleFactInputCases(): RoleFactInputs[] {
   const opens = [new Set([ROLE_ID, 'other']), new Set(['other']), 'unmeasured'] as const;
   const out: RoleFactInputs[] = [];
   for (const child of [{ kind: 'none' }, CHILD7, { kind: 'unreadable' }] as ChildMark[])
     for (const childRunKind of [...RUN_KINDS, 'unmeasured'] as const)
       for (const openCoordinators of opens)
-        for (const intentDeclared of [true, false, 'unmeasured'] as const) out.push({ child, childRunKind, openCoordinators, intentDeclared });
+        for (const intentDeclared of [true, false, 'unmeasured'] as const) out.push({ child, childRunKind, openCoordinators, intentDeclared, designation: NO_DESIGNATION });
   return out;
 }
 
@@ -65,12 +67,23 @@ export function roleFactsOfCases(m: RoleOfModule): Record<string, SuiteCase> {
       }
     },
     'membership and intent map to the three words, and an unmeasured fact never reads no': () => {
-      const base: RoleFactInputs = { child: { kind: 'none' }, childRunKind: 'unmeasured', openCoordinators: 'unmeasured', intentDeclared: 'unmeasured' };
+      const base: RoleFactInputs = { child: { kind: 'none' }, childRunKind: 'unmeasured', openCoordinators: 'unmeasured', intentDeclared: 'unmeasured',
+        designation: NO_DESIGNATION };
       expect(m.roleFactsOf(ROLE_ID, base)).toMatchObject({ claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured' });
       expect(m.roleFactsOf(ROLE_ID, { ...base, openCoordinators: new Set([ROLE_ID]), intentDeclared: true }))
         .toMatchObject({ claimsOpenRun: 'yes', declaredIntent: 'yes' });
       expect(m.roleFactsOf(ROLE_ID, { ...base, openCoordinators: new Set(['other']), intentDeclared: false }))
         .toMatchObject({ claimsOpenRun: 'no', declaredIntent: 'no' });
+    },
+    'the designation input reads through designationFactOf: pending and live are the Overlord, whatever else holds': () => {
+      const base: RoleFactInputs = { child: CHILD7, childRunKind: 'work', openCoordinators: new Set([ROLE_ID]), intentDeclared: true, designation: NO_DESIGNATION };
+      const row = (live: string | null, pending: string | null): DesignationFact => ({ kind: 'row', live, pending, pendingKind: pending === null ? null : 'designate', term: 2 });
+      expect(m.roleFactsOf(ROLE_ID, base).designation).toBe('none');
+      expect(m.roleFactsOf(ROLE_ID, { ...base, designation: row(null, ROLE_ID) }).designation).toBe('pending');
+      expect(m.roleFactsOf(ROLE_ID, { ...base, designation: row(ROLE_ID, null) }).designation).toBe('live');
+      expect(m.roleFactsOf(ROLE_ID, { ...base, designation: row('other', null) }).designation).toBe('none');
+      expect(m.roleOf(m.roleFactsOf(ROLE_ID, { ...base, designation: row(null, ROLE_ID) }))).toEqual(roleIs('overlord'));
+      expect(m.roleOf(m.roleFactsOf(ROLE_ID, { ...base, designation: row('other', null) }))).toEqual(roleIs('worker'));
     },
   };
 }
@@ -79,10 +92,12 @@ const ROLE_FACTS_SET: MutantSet<RoleOfModule> = {
   modulePath: path.join(ROOT, 'server/src/roleOf.ts'),
   mutants: [
     { id: 'R1', old: "childRunKind: i.child.kind === 'child' ? i.childRunKind : 'unmeasured',", new: 'childRunKind: i.childRunKind,' },
-    { id: 'R2', old: "i.openCoordinators === 'unmeasured' ? 'unmeasured' : word(", new: "i.openCoordinators === 'unmeasured' ? 'no' : word(" },
+    // R2 and R5 read `claimsOpenRunOf`, the one decider `roleFactsOf` calls since D-8808 (review 2997 A4).
+    { id: 'R2', old: "openCoordinators === 'unmeasured' ? 'unmeasured' : word(", new: "openCoordinators === 'unmeasured' ? 'no' : word(" },
     { id: 'R3', old: "v ? 'yes' : 'no'", new: "v ? 'yes' : 'unmeasured'" },
     { id: 'R4', old: 'declaredIntent: word(i.intentDeclared),', new: "declaredIntent: 'unmeasured'," },
-    { id: 'R5', old: 'word(i.openCoordinators.has(sessionId))', new: 'word(i.openCoordinators.size > 0)' },
+    { id: 'R5', old: 'word(openCoordinators.has(sessionId))', new: 'word(openCoordinators.size > 0)' },
+    { id: 'R6', old: 'designation: designationFactOf(sessionId, i.designation),', new: "designation: 'none'," },
   ],
   suite: roleFactsOfCases,
 };
@@ -209,20 +224,20 @@ export const M = <T>(value: T): Rd<T> => ({ kind: 'measured', value });
 
 /** Table 3.3.11b written out per role: Renew now, the hard rows, then the soft rows, each in the table's order. */
 export const ROWS_WRITTEN: Record<FleetRoleName, readonly Trig[]> = {
-  overlord: ['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'entry-retired', 'term-raised',
-    'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long', 'soft-ceiling', 'turns',
-    'two-compactions', 'idle', 'daily-backstop', 'new-install', 'probe-failed', 'compaction-refused', 'class-changed',
-    'evaluation-due'],
+  overlord: ['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'resumed-other-org', 'entry-retired',
+    'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long', 'soft-ceiling',
+    'turns', 'two-compactions', 'idle', 'daily-backstop', 'new-install', 'probe-failed', 'compaction-refused',
+    'class-changed', 'evaluation-due'],
   auditor: [], replay: [], worker: [], reviewer: [],
   coordinator: ['operator', 'hard-cap', 'not-local', 'resumed-long', 'two-compactions', 'new-install', 'probe-failed',
     'compaction-refused', 'wave-boundary'],
   plain: [],
 };
-const HARD_WRITTEN = new Set<Trig>(['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'entry-retired',
-  'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long']);
+const HARD_WRITTEN = new Set<Trig>(['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'resumed-other-org',
+  'entry-retired', 'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long']);
 
-const BOOL_FIELDS = ['backstopDue', 'installBehind', 'probeFailedUnfixed', 'modelDrift', 'entryRetired', 'termRaised',
-  'accountOutsideSet', 'classUnservable', 'accountLoadMove', 'compactionRefused', 'classChanged', 'evaluationDue',
+const BOOL_FIELDS = ['startOtherOrg', 'backstopDue', 'installBehind', 'probeFailedUnfixed', 'modelDrift', 'entryRetired',
+  'termRaised', 'accountOutsideSet', 'classUnservable', 'accountLoadMove', 'compactionRefused', 'classChanged', 'evaluationDue',
   'notLocal', 'waveBoundary'] as const;
 
 /** A base where nothing fires: a 1M window (hard cap 250k), no context, no idle, every flag measured false. */
@@ -272,6 +287,7 @@ export function expectedRenewal(i: RIn): { due: boolean; why?: Trig; cls?: 'hard
     'daily-backstop': and(b(i.backstopDue)), 'new-install': and(b(i.installBehind)),
     'probe-failed': and(b(i.probeFailedUnfixed)), 'model-drift': and(b(i.modelDrift)),
     'resumed-other-class': and(res === null ? null : res.resumed && res.otherClass),
+    'resumed-other-org': and(b(i.startOtherOrg)),
     'entry-retired': and(b(i.entryRetired)), 'term-raised': and(b(i.termRaised)),
     'account-outside-set': and(b(i.accountOutsideSet)), 'class-unservable': and(b(i.classUnservable)),
     'account-load': and(b(i.accountLoadMove)), 'compaction-refused': and(b(i.compactionRefused)),

@@ -1164,7 +1164,7 @@ describe('the read-back — a class the pane already runs is recorded, never typ
   it('a FRESH sidecar running the pending class: recorded applied, the counters cleared, ONE line, nothing typed', () => {
     sidecar(reading('claude-opus-5-5'));
     h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
-    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus model=claude-opus-5-5');
     expect(h.reg(ID, 'routetries')).toBeNull();
     expect(h.reg(ID, 'routeskip')).toBeNull();
     expect(h.reg(ID, 'routenote')).toBeNull();
@@ -1180,7 +1180,7 @@ describe('the read-back — a class the pane already runs is recorded, never typ
   it('the `[1m]` model id is the same family', () => {
     sidecar(reading('claude-opus-5-5[1m]'));
     h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
-    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus model=claude-opus-5-5');
   });
 
   it('a STALE sidecar (older than USAGE_FRESH_S) counts for nothing: the give-up note stands', () => {
@@ -1612,14 +1612,14 @@ describe('the read-back\'s second witness — the transcript\'s own acknowledged
     fs.utimesSync(p, R - 10, R - 10);
     tick();
     expect(reads(), 'a transcript last written before the reading holds nothing newer: not read').toBe(3);
-    expect(h.reg(ID, 'routeapplied'), 'and the fresh reading answers').toBe('class=opus');
+    expect(h.reg(ID, 'routeapplied'), 'and the fresh reading answers').toBe('class=opus model=claude-opus-5-5');
   });
 
   it('control: an acknowledgement of another class OLDER than the fresh reading does not overrule it', () => {
     sidecarAt(nowS() - 60, 'claude-opus-5-5');
     writeTranscript([cmd(nowS() - 120, 'model', 'sonnet'), ack(nowS() - 120, SESSION('Sonnet 5'))]);
     tick();
-    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus model=claude-opus-5-5');
     expect(readbackLines()).toEqual([expect.stringContaining('(sidecar model claude-opus-5-5')]);
   });
 

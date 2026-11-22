@@ -1,31 +1,44 @@
 // Docs W5 Export (spec 2026-10-01 4.7, 4.14, 4.17; native Docs reader W5, Export): what an export holds, pure and built.
 // Task 1, the words and the name (M4.EX5's and M4.EX18's maps, M4.EX9). Task 2, the stylesheet (M4.EX10, M4.EX14 as
 // refinement (b) reads it). Task 3, the provenance and the colouring (M4.T7, M4.EX5, M4.EX6, M4.EX18). Task 5, the
-// builder (M4.EX1-EX4, M4.EX7, M4.EX10, M4.EX18). Placeholders only: project `demo`, branch `main`,
+// builder (M4.EX1-EX4, M4.EX7, M4.EX10, M4.EX18). Completion plan Task 9 (C2): the builder's mockup arm over the real
+// snapshot (M5.EX1, M5.EX5, M5.EX7 through the builder) and `exportStateFor`'s class-`html` rows (M5.EX6). Placeholders
+// only: project `demo`, branch `main`,
 // `example-org/example-repo`, `/repo/...`, `https://a.example`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import {
   DOCS_RASTER_TYPES, docsApi, entryView, type DocPin, type DocsEntry, type DocsPageLocation, type DocsShowOk,
   type DocsTreeOk, type DraftsFacts,
 } from '../../shared/docs';
+import { exportStateFor } from '../src/docs/DocsHead';
+import { ExportSheet } from '../src/docs/ExportSheet';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { detachUrls } from '../src/docs/docsLinks';
 import {
-  DOC_IMAGE_TEXT, DOC_LINK_INERT_SENTENCE, ENTRY_BADGE_TEXT, EXPORT_MISSING_SENTENCE, EXPORT_PLAIN_SENTENCE, EXPORT_TEXT, fillSentence,
+  DOC_IMAGE_TEXT, DOC_LINK_INERT_SENTENCE, ENTRY_BADGE_TEXT, EXPORT_MISSING_SENTENCE, EXPORT_PLAIN_SENTENCE, EXPORT_TEXT,
+  EXPORT_WAIT_TEXT, MOCKUP_TEXT, fillSentence,
 } from '../src/docs/docsText';
+import { GATE_BODY, READER_BODY, type ExportBody, type MockupLoadEnd } from '../src/docs/exportBody';
+import { extractMockupRefs, startMockupLoad } from '../src/docs/mockup/load';
+import { parseMockup } from '../src/docs/mockup/parse';
+import { planMockupAssets } from '../src/docs/mockup/plan';
+import { MOCKUP_CENSUS_ROW_CAP, MOCKUP_MAX_ASSET_BYTES } from '../src/docs/mockup/policy';
+import type { MockupAssetReader, MockupAssetResult } from '../src/docs/mockup/ports';
 import { buildExport, type ExportBodyInput, type ExportInput, type ExportLimits, type ExportResult } from '../src/docs/export/buildExport';
 import { exportColouring, type ExportColouring } from '../src/docs/export/colouring';
 import { createExportAssets, type ExportAssets } from '../src/docs/export/exportAssets';
 import { exportLinkTarget } from '../src/docs/export/exportMarkdown';
+import { exportInputOf, type ExportRequest } from '../src/docs/export/exportInput';
 import { exportFilename } from '../src/docs/export/filename';
 import {
   DOCS_EXPORT_CSP, DOCS_EXPORT_MAX_BYTES, EXPORT_FILENAME_MAX, EXPORT_PREFIX, type ExportMissing, type ExportPlain,
 } from '../src/docs/export/policy';
-import { colouringNotes, exportProvenance, missingNotes, type ExportProvenance } from '../src/docs/export/provenance';
+import { colouringNotes, exportProvenance, exportWorktreeLabel, missingNotes, type ExportProvenance } from '../src/docs/export/provenance';
 import { EXPORT_CSS, exportStylesheetPart } from '../src/docs/export/stylesheet';
-import { pinFor } from '../src/docs/useDocsVisit';
+import { pinFor, type FileSlot } from '../src/docs/useDocsVisit';
 import type { Highlighter } from '../src/lib/highlightProtocol';
 import {
   UNREQUESTED_ENTRY, checkHighlightHtml, codeBlocksOf, createHighlightStore, type CheckedHighlightHtml, type CodeBlockText,
@@ -147,7 +160,7 @@ function leafAt(url: string): Leaf {
 function provenanceAt(tree: DocsTreeOk, url: string, show: DocsShowOk | null = null): ExportProvenance {
   const page = leafAt(url);
   const pin = pinFor(tree, page);
-  if (pin === null) throw new Error(`fixture: ${url} opens nothing`);
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error(`fixture: ${url} opens nothing`);
   return exportProvenance({ tree, page, pin, show, exportedAt: NOW, readAt: NOW - 1000, plainView: true });
 }
 
@@ -170,6 +183,36 @@ const DRAFT_STATES: [string, Partial<DocsEntry>][] = [
   ['typechange', { draft: draftOf('typechange', { kind: 'symlink', fp: null }) }],
   ['withheld', { draft: draftOf('modified', { fp: null }) }],
 ];
+
+describe('the export\'s worktree label has ONE owner, exportWorktreeLabel in provenance.ts (review minor 5)', () => {
+  it('is the label the draft banner, the Source fact and the ccrc:worktree meta carry, for every class of worktree', () => {
+    const cases: Array<[{ readonly path: string; readonly class: 'main' | 'workspace' | 'other' }, string]> = [
+      [{ path: '/repo/demo', class: 'main' }, 'main checkout'],
+      [{ path: '/repo/demo/.ws/ws-a/', class: 'workspace' }, 'workspace ws-a'],
+      [{ path: '/repo/elsewhere/wt-b', class: 'other' }, 'another worktree'],
+    ];
+    for (const [worktree, want] of cases) {
+      const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holderAt(worktree) });
+      const p = provenanceAt(tree, '/docs/demo/specs/a.md?ref=main');
+      expect(exportWorktreeLabel(tree)).toBe(want);
+      expect(metaOf(p, 'ccrc:worktree')).toBe(want);
+      expect(p.banner).toContain(`uncommitted changes from ${want} on main`);
+      expect(factOf(p, 'Source')).toContain(want);
+    }
+    expect(exportWorktreeLabel(treeOk())).toBe('another worktree');
+  });
+
+  it('no other file of Export builds the label: the choice between closedWorktreeLabel and the other-worktree words stands once, in provenance.ts', () => {
+    const dir = path.join(import.meta.dirname, '..', 'src', 'docs');
+    const files = [
+      ...readdirSync(path.join(dir, 'export')).filter((f) => /\.tsx?$/.test(f)).map((f) => path.join(dir, 'export', f)),
+      path.join(dir, 'ExportSheet.tsx'),
+    ];
+    const holders = files.filter((f) => /closedWorktreeLabel\(|worktreeOther/.test(readFileSync(f, 'utf8')));
+    expect(holders.map((f) => path.relative(dir, f))).toEqual([path.join('export', 'provenance.ts')]);
+    expect(readFileSync(path.join(dir, 'export', 'provenance.ts'), 'utf8').match(/closedWorktreeLabel\(/g)).toHaveLength(1);
+  });
+});
 
 describe('exportProvenance: what the file says it is (spec 4.17 "Provenance", "Drafts"; M4.T7, M4.EX5, M4.EX6)', () => {
   it('a committed leaf: project, repo path, served ref and how, the full commit, its permalink, its source, the time and the view', () => {
@@ -460,7 +503,7 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     const url = '/docs/demo/specs/a.md?ref=main';
     const page = leafAt(url);
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
     const provenance = exportProvenance({ tree, page, pin, show: null, exportedAt: NOW, readAt: NOW, plainView: true });
     const { doc, text } = await built(inputOf(treeBody(HOSTILE, tree, url), { provenance, title: HOSTILE_H1 }), WIDE);
     for (const tag of ['script', 'iframe', 'object', 'embed', 'base', 'form', 'button', 'svg', 'link']) {
@@ -739,14 +782,15 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     const page = leafAt(url);
     const pin = pinFor(tree, page);
     const xPin = pinFor(tree, leafAt('/docs/demo/specs/x.png?ref=main'));
-    if (pin === null || xPin === null) throw new Error('fixture');
+    if (pin === null || xPin === null || (pin.kind === 'draft' && pin.fp === null)
+      || (xPin.kind === 'draft' && xPin.fp === null)) throw new Error('fixture');
     expect(xPin.kind).toBe('draft');
     const provenance = exportProvenance({ tree, page, pin, show: null, exportedAt: NOW, readAt: NOW, plainView: true });
     const assets = createExportAssets();
     const raster = { s: 'loaded', asset: { kind: 'raster', bytes: PNG, mime: 'image/png' } } as const;
     assets.track(docsApi.file('demo', xPin)).report(raster);
     const yPin = pinFor(tree, leafAt('/docs/demo/specs/y.png?ref=main'));
-    if (yPin === null) throw new Error('fixture');
+    if (yPin === null || (yPin.kind === 'draft' && yPin.fp === null)) throw new Error('fixture');
     assets.track(docsApi.file('demo', yPin)).report(raster);
     const { doc } = await built(inputOf(treeBody('![x](x.png) ![y](y.png)\n', tree, url), { provenance, assets }), WIDE);
     expect(doc.querySelectorAll('article img')).toHaveLength(2);
@@ -799,5 +843,485 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     const plain = await built(inputOf({ kind: 'plain', text: '# not formatted', note: 'Formatting took longer than 2 s; shown as plain text.' }));
     expect(plain.doc.querySelector('.ccrc-export-note')?.textContent).toBe('Formatting took longer than 2 s; shown as plain text.');
     expect(plain.doc.querySelector('pre.ccrc-export-plain')?.textContent).toBe('# not formatted');
+  });
+});
+
+// ---- Completion plan Task 9 (C2): the builder's mockup arm, over the real snapshot --------------------------------------
+
+/** A file's reply: its bytes (or text), a failure word, or `STALL`, a read that never answers (an asset still loading). */
+type MockupFiles = Record<string, Uint8Array<ArrayBuffer> | string | { failed: string } | typeof STALL>;
+const STALL = Symbol('a read that never answers');
+const lenOfFile = (f: MockupFiles[string]): number => (typeof f === 'string' ? f.length : f instanceof Uint8Array ? f.length : 1);
+const specsRepo = (name: string): string => `docs/superpowers/specs/${name}`;
+const NO_LIMIT: ExportLimits = { maxBytes: 1e9, imageWaitMs: 1000 };
+
+interface MockupOpts {
+  /** The page is opened as a draft (`?ref=main`, a draft row for `m.html`). */
+  readonly draftPage?: boolean;
+  /** Assets that also have a draft side (a draft page opens them as drafts). */
+  readonly draftAssets?: readonly string[];
+  /** How the attempt's load ends: `ended` (aborted); the default is the real load over the fake reader. */
+  readonly end?: 'ended';
+  /** A change to the loaded result (a hostile MIME on a loaded entry). */
+  readonly edit?: (r: MockupAssetResult) => MockupAssetResult;
+  /** More listed files (a link target's document). */
+  readonly more?: readonly string[];
+}
+
+/** The page parsed by the real parser, planned and loaded over a fake reader, and handed to `exportInputOf` as the header
+ *  would, for the leaf `specs/m.html`. */
+async function mockupRequest(html: string, files: MockupFiles = {}, o: MockupOpts = {}): Promise<ExportRequest> {
+  const parsed = parseMockup(html);
+  if (!parsed.ok) throw new Error('the pre-scan refused the fixture');
+  const entries = [
+    entry('specs', 'm.html', o.draftPage === true ? { draft: draftOf('modified') } : {}),
+    ...Object.entries(files).map(([path, f]) => entry('specs', path, {
+      committed: { kind: 'file', blob: BLOB_1, size: lenOfFile(f) },
+      ...(o.draftAssets?.includes(path) === true ? { draft: draftOf('modified', { size: lenOfFile(f) }) } : {}),
+    })),
+    ...(o.more ?? []).map((path) => entry('specs', path)),
+  ];
+  const tree = treeOk({ entries, drafts: holder() });
+  const page = leafAt(o.draftPage === true ? '/docs/demo/specs/m.html?ref=main' : '/docs/demo/specs/m.html');
+  const pin = pinFor(tree, page);
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
+  const plan = planMockupAssets(extractMockupRefs(parsed.doc, 'specs/m.html').refs, { project: 'demo', pin, tree });
+  const reader: MockupAssetReader = {
+    read: async (p) => {
+      const f = files[p.path];
+      if (f === undefined) return { kind: 'failed', failure: 'not-found' };
+      if (f === STALL) return new Promise<never>(() => {});
+      if (typeof f === 'string') return { kind: 'ok', bytes: new TextEncoder().encode(f) };
+      return f instanceof Uint8Array ? { kind: 'ok', bytes: f } : { kind: 'failed', failure: f.failed };
+    },
+  };
+  // The view's own wiring (`MockupView`): the real load, its end, and `now`, the load as it stands.
+  const load = startMockupLoad(plan, reader, new AbortController().signal);
+  const loadedEnd = load.result
+    .then((result): MockupLoadEnd => ({ s: 'loaded', result: o.edit === undefined ? result : o.edit(result) }));
+  const settled = o.end === 'ended' ? Promise.resolve<MockupLoadEnd>({ s: 'ended' }) : loadedEnd;
+  return {
+    page, tree, assets: null, readAt: NOW,
+    source: { kind: 'mockup', pin, show: fileResponse(html).show, doc: parsed.doc, assets: { plan, settled, now: load.now } },
+  };
+}
+
+async function mockupInput(html: string, files: MockupFiles = {}, o: MockupOpts = {}): Promise<ExportInput> {
+  return exportInputOf(await mockupRequest(html, files, o), { exportedAt: NOW, theme: null });
+}
+
+async function builtMockup(html: string, files: MockupFiles = {}, o: MockupOpts = {}, limits: ExportLimits = NO_LIMIT) {
+  const b = await built(await mockupInput(html, files, o), limits);
+  const frames = b.doc.querySelectorAll('iframe');
+  const srcdoc = frames[0]?.getAttribute('srcdoc') ?? '';
+  return { ...b, srcdoc, inner: new DOMParser().parseFromString(srcdoc, 'text/html') };
+}
+
+const mockupPage = (body: string, head = ''): string =>
+  `<!doctype html><html><head><meta charset="utf-8">${head}</head><body>${body}</body></html>`;
+const listOf = (doc: Document, label: string): string[] =>
+  [...doc.querySelectorAll(`section[aria-label="${label}"] li`)].map((li) => li.textContent ?? '');
+
+describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX1, M5.EX5, M5.EX7)', () => {
+  it('the file has exactly one iframe, sandbox="", whose srcdoc is the inner document with the CSP meta first in head (M5.EX1)', async () => {
+    const { text, doc, inner, srcdoc } = await builtMockup(mockupPage('<h1>Title</h1><p id="p">body</p>'));
+    expect(text.startsWith(EXPORT_PREFIX)).toBe(true);
+    expect(text.match(/<iframe/gi)).toHaveLength(1);
+    expect(text.match(/srcdoc=/gi)).toHaveLength(1);
+    const frames = doc.querySelectorAll('iframe');
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.hasAttribute('sandbox')).toBe(true);
+    expect(frames[0]?.getAttribute('sandbox')).toBe('');
+    expect(frames[0]?.getAttribute('title')).toBe('Snapshot of m.html');
+    expect(srcdoc.startsWith(EXPORT_PREFIX)).toBe(true);
+    const first = inner.head.firstElementChild;
+    expect(first?.tagName).toBe('META');
+    expect(first?.getAttribute('http-equiv')).toBe('Content-Security-Policy');
+    expect(first?.getAttribute('content')).toBe(DOCS_EXPORT_CSP);
+    expect(inner.getElementById('p')?.textContent).toBe('body');
+    // The wrapper holds its own CSP meta first after the charset, and the one doctype.
+    expect(doc.head.children[1]?.getAttribute('content')).toBe(DOCS_EXPORT_CSP);
+    expect(doc.querySelector('.ccrc-export-facts dt')?.textContent).toBe('Project');
+  });
+
+  it('carries the provenance and the draft banner as wrapper chrome, outside the frame, on a draft page', async () => {
+    const { doc } = await builtMockup(mockupPage('<p>x</p>'), {}, { draftPage: true });
+    const banner = doc.body.firstElementChild;
+    expect(banner?.className).toBe('ccrc-export-draft');
+    expect(banner?.textContent).toContain('Draft, not committed.');
+    expect(doc.querySelector('iframe')?.closest('.ccrc-export-draft')).toBeNull();
+    const committed = await builtMockup(mockupPage('<p>x</p>'));
+    expect(committed.doc.querySelector('.ccrc-export-draft')).toBeNull();
+    // The notes name what rests on the file's own policy.
+    expect([...committed.doc.querySelectorAll('.ccrc-export-notes li')].map((l) => l.textContent)).toContain(EXPORT_TEXT.mockupCss);
+  });
+
+  it('lists each inlined file by repo path, size and committed or draft, one the author hides on screen included, and each asset left out (M5.EX5)', async () => {
+    const html = mockupPage(
+      '<img id="a" src="a.png" alt="a"><img id="h" class="hide" src="hidden.png" alt="h"><img id="g" src="gone.png" alt="g"><img id="x" src="https://x.example/p.png">',
+      '<style>.hide { display: none }</style>',
+    );
+    const { doc, inner, result } = await builtMockup(html, { 'a.png': BIG(1500), 'hidden.png': BIG(10) }, { draftPage: true, draftAssets: ['hidden.png'] });
+    expect(listOf(doc, EXPORT_TEXT.mockupInlined)).toEqual([
+      `${specsRepo('a.png')} (2 KiB, committed)`, `${specsRepo('hidden.png')} (1 KiB, uncommitted draft)`,
+    ]);
+    expect(listOf(doc, EXPORT_TEXT.mockupOmitted)).toEqual([specsRepo('gone.png'), 'https://x.example/p.png']);
+    expect(inner.getElementById('h')?.getAttribute('src')?.startsWith('data:image/png;base64,')).toBe(true);
+    expect(inner.getElementById('g')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.refused);
+    expect(result.mockup).toEqual({
+      inlined: [{ path: specsRepo('a.png'), size: 1500, draft: false }, { path: specsRepo('hidden.png'), size: 10, draft: true }],
+      omitted: [specsRepo('gone.png'), 'https://x.example/p.png'],
+    });
+  });
+
+  it('lists the links as escaped text, through the link table: a hostile target is text, never markup (spec 5.6.9 step 5)', async () => {
+    const hostile = 'https://link.example/q?a=1&b="<b>x</b>';
+    const html = mockupPage(
+      `<a id="e" href="${hostile.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}">far</a> <a id="d" href="other.md#x">doc</a> `
+      + '<a id="n" href="gone.md">gone</a> <a id="f" href="#top">frag</a> <a id="j" href="javascript:alert(1)">js</a>',
+    );
+    const { doc, inner, text } = await builtMockup(html, {}, { more: ['other.md'] });
+    expect(listOf(doc, EXPORT_TEXT.mockupLinks)).toEqual([hostile, 'other.md#x', 'gone.md', '#top', 'javascript:alert(1)']);
+    expect(doc.querySelectorAll('section[aria-label="Links in this page"] b')).toHaveLength(0);
+    const [far, d, gone, frag, js] = [...doc.querySelectorAll('section[aria-label="Links in this page"] li')];
+    expect(far?.querySelector('a')?.getAttribute('href')).toBe(new URL(hostile).href);
+    expect(far?.querySelector('a')?.getAttribute('target')).toBe('_blank');
+    expect(d?.querySelector('a')?.getAttribute('href')).toBe(`${GH}/blob/${COMMIT_A}/docs/superpowers/specs/other.md`);
+    expect(d?.querySelector('a')?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(gone?.querySelector('a')).toBeNull();
+    expect(gone?.querySelector('.ccrc-export-inert')?.getAttribute('title')).toBe(`not in this listing at ${SHORT_A}`);
+    expect(frag?.querySelector('a')).toBeNull();
+    expect(js?.querySelector('a')).toBeNull();
+    // As written in the file: escaped, so the raw text never forms an element.
+    expect(text).toContain('a=1&amp;b=&quot;&lt;b&gt;x&lt;/b&gt;');
+    expect(text).not.toContain('b="<b>');
+    // Inside the frame no link keeps an href, and its target moved into title.
+    expect(inner.querySelectorAll('a[href], area[href]')).toHaveLength(0);
+    expect(inner.getElementById('e')?.getAttribute('title')).toBe(hostile);
+  });
+
+  it('the cap is the FINAL file\'s bytes: with a page heavy in " and & and assets totalling MOCKUP_MAX_ASSET_BYTES, the file fits and later assets are omitted in DOM order, each listed (M5.EX7)', async () => {
+    const names = ['a.png', 'b.png', 'c.png', 'd.png', 'e.png'];
+    const one = MOCKUP_MAX_ASSET_BYTES / names.length;
+    const files: MockupFiles = Object.fromEntries(names.map((n) => [n, BIG(one)]));
+    const html = mockupPage(`<p>${'&"'.repeat(60_000)}</p>${names.map((n) => `<img id="${n[0]}" src="${n}" alt="${n[0]}">`).join('')}`);
+    const maxBytes = 3_500_000;
+    const { result, doc, inner } = await builtMockup(html, files, {}, { maxBytes, imageWaitMs: 1000 });
+    expect(result.size).toBe(result.bytes.length);
+    expect(result.size).toBeLessThanOrEqual(maxBytes);
+    // Measured before it is escaped into the attribute, the inner document with a second asset would have fit.
+    const url = 'data:image/png;base64,'.length + 4 * Math.ceil(one / 3);
+    expect(inner.documentElement.outerHTML.length + url).toBeLessThan(maxBytes);
+    const srcs = ['a', 'b', 'c', 'd', 'e'].map((id) => inner.getElementById(id)?.getAttribute('src') ?? null);
+    expect(srcs.map((s) => s?.startsWith('data:image/png;base64,') ?? false)).toEqual([true, false, false, false, false]);
+    for (const id of ['b', 'c', 'd', 'e']) expect(inner.getElementById(id)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
+    expect(listOf(doc, EXPORT_TEXT.mockupInlined)).toEqual([`${specsRepo('a.png')} (${Math.ceil(one / 1024)} KiB, committed)`]);
+    expect(listOf(doc, EXPORT_TEXT.mockupOmitted)).toEqual(['b.png', 'c.png', 'd.png', 'e.png'].map(specsRepo));
+  }, 120_000);
+
+  // Review I1: a file is omitted only when NONE of its uses was written; the builder derives the inlined list, and so the
+  // draft count that makes Save ask, from the files it handed in minus `omitted`.
+  const FIVE_USES = mockupPage(
+    ['i1', 'i2', 'i3', 'i4', 'i5'].map((id) => `<img id="${id}" src="big.png" alt="${id}">`).join(''),
+  );
+
+  it('a draft image used five times, three of them written under the size bound, is listed as inlined and counts as a draft (review I1)', async () => {
+    const { result, inner } = await builtMockup(FIVE_USES, { 'big.png': BIG(2 * 1024 * 1024) }, { draftPage: true, draftAssets: ['big.png'] });
+    expect(inner.querySelectorAll('img[src^="data:image/png;base64,"]')).toHaveLength(3);
+    expect(result.mockup).toEqual({
+      inlined: [{ path: specsRepo('big.png'), size: 2 * 1024 * 1024, draft: true }],
+      omitted: [],
+    });
+  }, 120_000);
+
+  it('the sheet\'s first Save tap on that file shows the draft confirm and saves nothing (review I1)', async () => {
+    const request = await mockupRequest(FIVE_USES, { 'big.png': BIG(2 * 1024 * 1024) }, { draftPage: true, draftAssets: ['big.png'] });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    render(<ExportSheet request={request} onClose={() => {}} load={async () => ({ buildExport })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Save / }, { timeout: 60_000 }));
+    expect(click).not.toHaveBeenCalled();
+    expect(screen.getByText('This file includes 1 uncommitted file from main checkout.')).toBeInTheDocument();
+  }, 120_000);
+
+  it('a stylesheet cut by the size bound lists its nested file as omitted too, never as inlined (review I1)', async () => {
+    const MIB = 1024 * 1024;
+    const html = mockupPage(
+      `${['i1', 'i2', 'i3'].map((id) => `<img id="${id}" src="big.png" alt="${id}">`).join('')}<link rel="stylesheet" href="s.css">`,
+    );
+    const { result } = await builtMockup(html, { 'big.png': BIG(2 * MIB), 's.css': 'p{background:url(bg.png)}', 'bg.png': BIG(2 * MIB) });
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('big.png')]);
+    expect(result.mockup?.omitted).toEqual([specsRepo('s.css'), specsRepo('bg.png')]);
+  }, 120_000);
+
+  it('the provenance says how many diagrams appear as source: "2 diagrams", "1 diagram", and nothing when there are none (base 5.6.9; review minor 6)', async () => {
+    const diagrams = (n: number): string => mockupPage(
+      '<h1>T</h1>' + Array.from({ length: n }, (_, i) => `<pre class="mermaid">graph TD; A${i}-->B</pre>`).join(''),
+    );
+    const noteIn = (b: Awaited<ReturnType<typeof builtMockup>>): string[] =>
+      [...b.doc.querySelectorAll('.ccrc-export-notes li')].map((l) => l.textContent ?? '');
+    const two = await builtMockup(diagrams(2));
+    expect(noteIn(two)).toContain('2 diagrams appear as source');
+    expect(two.result.notes).toContain('2 diagrams appear as source');
+    const one = await builtMockup(diagrams(1));
+    expect(noteIn(one)).toContain('1 diagram appears as source');
+    expect(one.result.notes).toContain('1 diagram appears as source');
+    const none = await builtMockup(diagrams(0));
+    expect(noteIn(none).some((n) => /as source/.test(n))).toBe(false);
+    expect(none.result.notes.some((n) => /as source/.test(n))).toBe(false);
+    // The note is the closed word, filled with the count only.
+    expect(fillSentence(EXPORT_TEXT.mockupDiagrams, { m: 3, s: 's', es: '' })).toBe('3 diagrams appear as source');
+  });
+
+  it('the size cut keeps assets in document order: a stylesheet first on the page, with its nested file, is kept before the page images that come later (review minor 7)', async () => {
+    // A stylesheet's nested file sits right after the stylesheet's own use, as the srcdoc build orders uses; the plan lists
+    // the nested file after every page use. Room for the stylesheet with its background and one more file at most.
+    const html = mockupPage(
+      '<img id="a" src="a.png" alt="a"><img id="b" src="b.png" alt="b"><img id="c" src="c.png" alt="c">',
+      '<link rel="stylesheet" href="s.css">',
+    );
+    const files: MockupFiles = { 's.css': 'p{background:url(bg.png)}', 'bg.png': BIG(200_000), 'a.png': BIG(200_000), 'b.png': BIG(200_000), 'c.png': BIG(200_000) };
+    const whole = await builtMockup(html, files);
+    const one = await builtMockup(html, { ...files, 'bg.png': BIG(100), 'a.png': BIG(100), 'b.png': BIG(100), 'c.png': BIG(100) });
+    const maxBytes = one.result.size + 360_000;
+    expect(whole.result.size).toBeGreaterThan(maxBytes);
+    const { result, inner } = await builtMockup(html, files, {}, { maxBytes, imageWaitMs: 1000 });
+    expect(result.size).toBeLessThanOrEqual(maxBytes);
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('s.css'), specsRepo('bg.png')]);
+    expect(result.mockup?.omitted).toEqual(['a.png', 'b.png', 'c.png'].map(specsRepo));
+    expect(inner.querySelector('link')?.getAttribute('href')?.startsWith('data:text/css;base64,')).toBe(true);
+    for (const id of ['a', 'b', 'c']) expect(inner.getElementById(id)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
+  }, 60_000);
+
+  it('an attempt whose settled REJECTS reads as ended: every asset is listed as did-not-load, and the build neither throws nor waits out the clock (review minor 8)', async () => {
+    const input = await mockupInput(mockupPage('<img id="a" src="a.png" alt="a">'), { 'a.png': BIG(100) });
+    if (input.body.kind !== 'mockup') throw new Error('not a mockup');
+    const rejecting: ExportInput = {
+      ...input, body: { ...input.body, assets: { ...input.body.assets, settled: Promise.reject(new Error('the load failed')) } },
+    };
+    const { result, inner } = await built(rejecting, { maxBytes: 1e9, imageWaitMs: 60_000 }).then((b) => ({
+      result: b.result, inner: new DOMParser().parseFromString(b.doc.querySelector('iframe')?.getAttribute('srcdoc') ?? '', 'text/html'),
+    }));
+    expect(inner.getElementById('a')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.failed);
+    expect(result.mockup?.inlined).toEqual([]);
+    expect(result.mockup?.omitted).toEqual([specsRepo('a.png')]);
+  }, 10_000);
+
+  it('a stripped body that is over the limit on its own gives too-large; one with room for no asset lists every asset as left out', async () => {
+    const html = mockupPage(`<p>${'x'.repeat(100_000)}</p><img src="a.png" alt="a">`);
+    const input = await mockupInput(html, { 'a.png': BIG(3000) });
+    expect(await buildExport(input, { maxBytes: 50_000, imageWaitMs: 1000 })).toEqual({ ok: false, why: 'too-large' });
+    const full = await builtMockup(html, { 'a.png': BIG(3000) });
+    const room = await builtMockup(html, { 'a.png': BIG(3000) }, {}, { maxBytes: full.result.size - 1000, imageWaitMs: 1000 });
+    expect(room.result.mockup?.inlined).toEqual([]);
+    expect(room.result.mockup?.omitted).toEqual([specsRepo('a.png')]);
+    expect(room.inner.querySelector('img')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
+  });
+
+  it('a wait that passes imageWaitMs keeps every asset that has loaded and words only the ones still loading (base decision 3, 4.17; review 2361 F2)', async () => {
+    const html = mockupPage('<img id="a" src="a.png" alt="a"><img id="b" src="b.png" alt="b"><img id="c" src="c.png" alt="c">');
+    const partial = await builtMockup(html, { 'a.png': BIG(100), 'b.png': STALL, 'c.png': BIG(100) }, {}, { maxBytes: 1e9, imageWaitMs: 50 });
+    for (const id of ['a', 'c']) expect(partial.inner.getElementById(id)?.getAttribute('src')?.startsWith('data:image/png;base64,')).toBe(true);
+    expect(partial.inner.getElementById('b')?.hasAttribute('src')).toBe(false);
+    expect(partial.inner.getElementById('b')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
+    expect(partial.result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('a.png'), specsRepo('c.png')]);
+    expect(partial.result.mockup?.omitted).toEqual([specsRepo('b.png')]);
+    // Nothing loaded yet: every asset is still loading, never "no room left".
+    const stalled = await builtMockup(html, { 'a.png': STALL, 'b.png': STALL, 'c.png': STALL }, {}, { maxBytes: 1e9, imageWaitMs: 15 });
+    for (const id of ['a', 'b', 'c']) {
+      expect(stalled.inner.getElementById(id)?.hasAttribute('src')).toBe(false);
+      expect(stalled.inner.getElementById(id)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
+    }
+    expect(stalled.result.mockup?.inlined).toEqual([]);
+    expect(stalled.result.mockup?.omitted).toEqual(['a.png', 'b.png', 'c.png'].map(specsRepo));
+    const ended = await builtMockup(html, { 'a.png': BIG(100), 'b.png': BIG(100), 'c.png': BIG(100) }, { end: 'ended' });
+    expect(ended.inner.getElementById('a')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.failed);
+    expect(ended.result.mockup?.inlined).toEqual([]);
+  });
+
+  // Review 2372 M-d: three states of a load read at the deadline, as it stands.
+  const DEADLINE: ExportLimits = { maxBytes: 1e9, imageWaitMs: 50 };
+
+  it('at the deadline, a stylesheet that finished while an earlier one still loads is inlined; its own reference is not a row yet, so it is neutralised and listed (review 2372 M-d)', async () => {
+    const html = mockupPage('<p id="p">x</p>', '<link rel="stylesheet" href="s1.css"><link rel="stylesheet" href="s2.css">');
+    const { result, inner, srcdoc } = await builtMockup(html, { 's1.css': STALL, 's2.css': 'p{background:url(bg.png)}', 'bg.png': BIG(100) }, {}, DEADLINE);
+    // s2 completed, but its references are fed only after s1's (row order), so bg.png was never planned, read or held.
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('s2.css')]);
+    expect(result.mockup?.omitted).toEqual([specsRepo('s1.css'), specsRepo('bg.png')]);
+    const kept = [...inner.querySelectorAll('link')];
+    expect(kept, 'the stylesheet still loading has no data: URL, so its link goes').toHaveLength(1);
+    const css = atob((kept[0]?.getAttribute('href') ?? '').replace(/^data:text\/css;base64,/, ''));
+    expect(css).toBe('p{background:url("data:,")}');
+    expect(srcdoc).not.toContain('bg.png');
+  });
+
+  it('at the deadline, a draft asset that loaded beside one still loading is inlined as a draft, and the sheet\'s first Save tap still asks (review 2372 M-d)', async () => {
+    const html = mockupPage('<img id="d" src="d.png" alt="d"><img id="s" src="s.png" alt="s">');
+    const files: MockupFiles = { 'd.png': BIG(100), 's.png': STALL };
+    const o: MockupOpts = { draftPage: true, draftAssets: ['d.png'] };
+    const { result, inner } = await builtMockup(html, files, o, DEADLINE);
+    expect(result.mockup).toEqual({ inlined: [{ path: specsRepo('d.png'), size: 100, draft: true }], omitted: [specsRepo('s.png')] });
+    expect(inner.getElementById('s')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
+    const request = await mockupRequest(html, files, o);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const load = async (): Promise<{ buildExport: typeof buildExport }> => ({ buildExport: (i) => buildExport(i, DEADLINE) });
+    render(<ExportSheet request={request} onClose={() => {}} load={load} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Save / }, { timeout: 10_000 }));
+    expect(click).not.toHaveBeenCalled();
+    expect(screen.getByText('This file includes 1 uncommitted file from main checkout.')).toBeInTheDocument();
+  });
+
+  it('at the deadline, the size cut applies to the load as it stands: the loaded files that fit are kept in document order, the next one is cut, and the one still loading keeps its own word (review 2372 M-d)', async () => {
+    const html = mockupPage('<img id="a" src="a.png" alt="a"><img id="b" src="b.png" alt="b"><img id="c" src="c.png" alt="c">');
+    const files: MockupFiles = { 'a.png': BIG(200_000), 'b.png': STALL, 'c.png': BIG(200_000) };
+    const whole = await builtMockup(html, files, {}, DEADLINE);
+    expect(whole.result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('a.png'), specsRepo('c.png')]);
+    const maxBytes = whole.result.size - 1000;
+    const { result, inner } = await builtMockup(html, files, {}, { maxBytes, imageWaitMs: DEADLINE.imageWaitMs });
+    expect(result.size).toBeLessThanOrEqual(maxBytes);
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('a.png')]);
+    expect(inner.getElementById('a')?.getAttribute('src')?.startsWith('data:image/png;base64,')).toBe(true);
+    expect(inner.getElementById('b')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
+    expect(inner.getElementById('c')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
+    expect(result.mockup?.omitted).toEqual([specsRepo('b.png'), specsRepo('c.png')]);
+  }, 60_000);
+
+  it.each([MOCKUP_CENSUS_ROW_CAP, MOCKUP_CENSUS_ROW_CAP + 1])(
+    'the saved file lists at most MOCKUP_CENSUS_ROW_CAP assets left out, then one closed line for the rest, and the result keeps every one (D-8712): %i',
+    async (n) => {
+      const html = mockupPage(Array.from({ length: n }, (_, i) => `<img src="https://ext.example/i${i}.png" alt="">`).join(''));
+      const { doc, inner, result } = await builtMockup(html);
+      // Every placeholder stays: the cap is the list's, and an image past its 500th row keeps its alt (review 2372 M-e).
+      const images = [...inner.querySelectorAll('img')];
+      expect(images).toHaveLength(n);
+      expect(images.filter((img) => img.hasAttribute('src'))).toHaveLength(0);
+      expect(images.filter((img) => img.getAttribute('alt') !== EXPORT_MISSING_SENTENCE.external)).toHaveLength(0);
+      expect(images.at(-1)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.external);
+      const shown = listOf(doc, EXPORT_TEXT.mockupOmitted);
+      expect(shown).toHaveLength(Math.min(n, MOCKUP_CENSUS_ROW_CAP));
+      expect(shown[0]).toBe('https://ext.example/i0.png');
+      expect(shown.at(-1)).toBe(`https://ext.example/i${Math.min(n, MOCKUP_CENSUS_ROW_CAP) - 1}.png`);
+      expect(result.mockup?.omitted).toHaveLength(n);
+      const closing = doc.querySelector(`section[aria-label="${EXPORT_TEXT.mockupOmitted}"] p`)?.textContent ?? null;
+      expect(closing).toBe(n > MOCKUP_CENSUS_ROW_CAP ? fillSentence(MOCKUP_TEXT.moreNotListed, { n: n - MOCKUP_CENSUS_ROW_CAP }) : null);
+    },
+  );
+
+  it('an attempt that settles inside the wait is inlined; the wait is awaited, not polled', async () => {
+    const input = await mockupInput(mockupPage('<img id="a" src="a.png" alt="a">'), { 'a.png': BIG(100) });
+    const { inner } = await built(input, { maxBytes: 1e9, imageWaitMs: 5000 }).then((b) => ({
+      inner: new DOMParser().parseFromString(b.doc.querySelector('iframe')?.getAttribute('srcdoc') ?? '', 'text/html'),
+    }));
+    expect(inner.getElementById('a')?.getAttribute('src')?.startsWith('data:image/png;base64,')).toBe(true);
+  });
+
+  it('a page the pre-scan refused exports its source as <pre> text with the refused-export note, and no frame (spec 5.6.9 step 1)', async () => {
+    const source = '<!doctype html><div>'.repeat(3) + '<p>source & "text"</p>';
+    const { doc } = await built(inputOf({ kind: 'plain', text: source, note: EXPORT_TEXT.mockupRefused }), WIDE);
+    expect(doc.querySelector('.ccrc-export-note')?.textContent).toBe('This page was too complex to render, so this file holds its source as text.');
+    expect(doc.querySelector('pre.ccrc-export-plain')?.textContent).toBe(source);
+    expect(doc.querySelectorAll('iframe')).toHaveLength(0);
+  });
+
+  it('inlines with the table\'s MIME for the row, never a type the loaded entry carries (M5.EX1 through the builder)', async () => {
+    const edit = (r: MockupAssetResult): MockupAssetResult =>
+      ({ ...r, assets: new Map([...r.assets].map(([k, v]) => [k, { ...v, mime: 'text/html' }])) });
+    const { inner } = await builtMockup(mockupPage('<img id="a" src="a.png" alt="a">'), { 'a.png': BIG(50) }, { edit });
+    const src = inner.getElementById('a')?.getAttribute('src') ?? '';
+    expect(src.startsWith('data:image/png;base64,')).toBe(true);
+    expect(src).not.toContain('text/html');
+  });
+
+  it('never carries a script, an on* attribute or an external URL, in the wrapper or the frame, over planted ones (M5.EX1 through the builder)', async () => {
+    const html = mockupPage(
+      '<script>fetch("https://x.example/s")</script><script src="https://x.example/s.js"></script>'
+      + '<p id="p" onclick="fetch(\'https://x.example/o\')" onmouseover="x()">t</p>'
+      + '<img id="i" src="https://x.example/p.png" alt="i"><iframe srcdoc="<p>n</p>" src="https://x.example/f"></iframe>'
+      + '<a id="a" href="https://link.example/l" ping="https://x.example/ping">l</a><form action="https://x.example/f"><button formaction="https://x.example/g">b</button></form>'
+      + '<svg><image href="https://x.example/i.png"/><use href="https://x.example/u.svg#a"/></svg>',
+      '<link rel="prefetch" href="https://x.example/l"><meta http-equiv="refresh" content="0;url=https://x.example/r"><base href="https://x.example/">'
+      + '<style>p { background: url(https://x.example/b.png) } @import url(https://x.example/a.css);</style>',
+    );
+    const { doc, inner, srcdoc } = await builtMockup(html);
+    for (const d of [doc, inner]) {
+      expect(d.querySelectorAll('script'), 'script').toHaveLength(0);
+      for (const el of d.querySelectorAll('*')) {
+        for (const a of el.getAttributeNames()) {
+          if (el.tagName === 'IFRAME' && (a === 'srcdoc' || a === 'sandbox' || a === 'title' || a === 'style')) continue;
+          expect(a.startsWith('on'), `${el.tagName} ${a}`).toBe(false);
+          expect(el.getAttribute(a), `${el.tagName} ${a}`).not.toContain('x.example');
+        }
+      }
+    }
+    expect(doc.querySelectorAll('iframe')).toHaveLength(1);
+    expect(inner.querySelectorAll('iframe, object, embed, base, link')).toHaveLength(0);
+    expect(inner.querySelectorAll('[action], [formaction], [ping], [href]:not(a), svg image[href], svg use[href]')).toHaveLength(0);
+    expect(inner.querySelectorAll('meta[http-equiv]')).toHaveLength(1);
+    expect(srcdoc).not.toContain('x.example');
+    expect(srcdoc).not.toMatch(/<script/i);
+    // The link's target: not in an attribute of the frame (only its title), and listed once outside it.
+    expect(inner.getElementById('a')?.hasAttribute('href')).toBe(false);
+    expect(listOf(doc, EXPORT_TEXT.mockupLinks)).toEqual(['https://link.example/l']);
+  });
+});
+
+describe('exportStateFor for a mockup, class html (spec 4.17 "When it is offered"; M5.EX6)', () => {
+  const tree = treeOk({ entries: [entry('specs', 'm.html')] });
+  const HTML = '<p>m</p>';
+  const doc = new DOMParser().parseFromString(HTML, 'text/html');
+  const assets = { plan: {} as never, settled: Promise.resolve<MockupLoadEnd>({ s: 'ended' }), now: (): never => { throw new Error('not read here'); } };
+  const page = leafAt('/docs/demo/specs/m.html');
+  const pin = pinFor(tree, page);
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
+  const file = (over: Partial<FileSlot> = {}): FileSlot =>
+    ({ s: 'ok', pin, answer: { ...fileResponse(HTML), contentClass: 'html' }, receivedAt: 0, ...over }) as FileSlot;
+  const state = (body: ExportBody | null, p = page, t = tree, f: FileSlot = file()) =>
+    exportStateFor(p, t, f, { body, store: null, settled: true, assets: null });
+
+  it('no body is disabled "Preparing…"; the gate is disabled "Render the mockup first"', () => {
+    expect(state(null)).toEqual({ s: 'waiting', why: 'preparing' });
+    expect(EXPORT_WAIT_TEXT.preparing).toBe('Preparing…');
+    expect(state(GATE_BODY)).toEqual({ s: 'waiting', why: 'render-first' });
+    expect(EXPORT_WAIT_TEXT['render-first']).toBe('Render the mockup first');
+  });
+
+  it('a plain body or a mockup body for the shown text is ready, with the body\'s own objects', () => {
+    const plain: ExportBody = { kind: 'plain', text: HTML, note: EXPORT_TEXT.mockupRefused };
+    const ready = state(plain);
+    expect(ready).toMatchObject({ s: 'ready', source: { kind: 'plain', pin, body: plain } });
+    const mockup: ExportBody = { kind: 'mockup', text: HTML, doc, assets };
+    const m = state(mockup);
+    expect(m.s).toBe('ready');
+    if (m.s !== 'ready' || m.source.kind !== 'mockup') throw new Error('not a mockup source');
+    expect(m.source.doc).toBe(doc);
+    expect(m.source.assets).toBe(assets);
+    expect(m.source.pin).toBe(pin);
+  });
+
+  it('a body for other text, or another kind of body, is "Preparing…" again', () => {
+    expect(state({ kind: 'plain', text: 'other', note: 'n' })).toEqual({ s: 'waiting', why: 'preparing' });
+    expect(state({ kind: 'mockup', text: 'other', doc, assets })).toEqual({ s: 'waiting', why: 'preparing' });
+    expect(state(READER_BODY)).toEqual({ s: 'waiting', why: 'preparing' });
+    expect(state({ kind: 'text', text: HTML, lang: null })).toEqual({ s: 'waiting', why: 'preparing' });
+  });
+
+  it('frame=full, a file slot with no answer, the class cap and a file at another pin keep the rules every class has', () => {
+    const mockup: ExportBody = { kind: 'mockup', text: HTML, doc, assets };
+    expect(state(mockup, { ...page, frame: 'full' })).toEqual({ s: 'absent' });
+    expect(state(mockup, page, tree, { s: 'too-large', pin, size: 9, cap: 8 })).toEqual({ s: 'absent' });
+    expect(state(mockup, page, tree, { s: 'loading', pin })).toMatchObject({ s: 'updating' });
+    expect(state(mockup, page, tree, { s: 'none' })).toMatchObject({ s: 'updating' });
+    const moved = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'm.html')] });
+    expect(state(mockup, page, moved)).toMatchObject({ s: 'updating', to: COMMIT_B });
+    const version = leafAt(`/docs/demo/specs/m.html?at=${COMMIT_B}`);
+    const versionPin = pinFor(tree, version);
+    if (versionPin === null || (versionPin.kind === 'draft' && versionPin.fp === null)) throw new Error('fixture');
+    expect(state(mockup, version, tree, file({ pin: versionPin }))).toMatchObject({ s: 'ready', source: { kind: 'mockup', pin: { commit: COMMIT_B } } });
+    expect(state(mockup, version)).toMatchObject({ s: 'updating' });
+  });
+
+  it('a class other leaf still offers no Export', () => {
+    const other = treeOk({ entries: [entry('specs', 'o.pdf')] });
+    const p = pageAt('/docs/demo/specs/o.pdf');
+    expect(exportStateFor(p, other, { s: 'none' }, { body: null, store: null, settled: true, assets: null })).toEqual({ s: 'absent' });
   });
 });

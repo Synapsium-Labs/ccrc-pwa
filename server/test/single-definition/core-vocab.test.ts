@@ -304,6 +304,28 @@ describe('one boardHome (board-placement wave 2, Task 1)', () => {
 });
 
 
+describe('one decision-model catalogue (Overlord W2, decision model A, Task 1)', () => {
+  // The catalogue of questions a decision model may be asked, and the side of a row's arming move that the authority grammar
+  // and the deciders share (review 2262 F21), each have one home in L0. A second catalogue is a second set of revisions.
+  const CATALOGUE = /\b(?:export\s+)?const\s+DECISION_QUESTIONS\b/;
+  const SIDE = /\binterface\s+DecisionRowSide\b|\btype\s+DecisionRowSide\s*=/;
+
+  it('DECISION_QUESTIONS and DecisionRowSide are each defined in exactly one file, shared/decisionModel.ts', () => {
+    expect(ALL.filter((f) => CATALOGUE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/decisionModel.ts']);
+    expect(ALL.filter((f) => SIDE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/decisionModel.ts']);
+  });
+
+  it('CONTROL: the two patterns see a definition and pass an import', () => {
+    expect(CATALOGUE.test('export const DECISION_QUESTIONS: X = {')).toBe(true);
+    expect(SIDE.test('export interface DecisionRowSide {')).toBe(true);
+    expect(CATALOGUE.test("import { DECISION_QUESTIONS } from './decisionModel.js';")).toBe(false);
+    expect(SIDE.test("import type { DecisionRowSide } from './decisionModel.js';")).toBe(false);
+    expect(SIDE.test("import { type DecisionRowSide, type DecisionRowId } from './decisionModel.js';")).toBe(false);
+    expect(SIDE.test('type DecisionRowSide = { mode: string };')).toBe(true);
+  });
+});
+
+
 describe('one repoLabel (board-placement wave 2, Task 1)', () => {
   // The three-state `ProjectRepoWire` switch. The card row and the session
   // view both render it; a second `state === 'named'` is a second renderer.
@@ -816,8 +838,19 @@ describe('Build 7 nouns', () => {
     // The answer marks (Overlord W1): `answerMarkStore.ts` is `answer_marks`' one writer and its read, in the same idiom.
     // The Overlord authority journal (Overlord W1, H27): `overlordAuthorityJournal.ts` is `overlord_authority_head`'s one writer,
     // inside its caller's transaction, and its read; it names the handle by `import type`, and every method takes it as an argument.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts',
-      'responsesStore.ts']);
+    // The designation (Overlord W1, C2): `overlordDesignationStore.ts` is `overlord_designation`'s SQL, in `ledgersStore.ts`' idiom.
+    // The ladder (Overlord W1, C5): `overlordLadderStore.ts` is `overlord_ladder`'s and `overlord_latches`' SQL, in the same idiom.
+    // Overlaps (Overlord W2): `claimCollisions.ts` is `claim_collisions`' one writer and its read, and `programmePairsStore.ts`
+    // is `programme_pairs`' writers and reads, in `answerMarkStore.ts`' idiom.
+    // The decision-model records (Overlord W2): `decisionModelStore.ts` is `decision_records`' and `decision_days`' SQL, in
+    // `ledgersStore.ts`' idiom; the one caller reaches it through the `DecisionAskStore` port and never holds the handle.
+    // The Overlord gate (W1 gates B): `overlordGateStore.ts` is the guarded act counter and `overlord_fence_refusals`' one writer,
+    // in the same idiom; it names the handle by `import type`, and every function takes it as an argument.
+    // The admission wake (D-6095, capacity Task 4): `admissionWakeTx.ts` is its one write, the observation row, the mail and
+    // the woken stamp in one transaction, in `rundefsTx.ts`' idiom (`queueStallNotice`), beside it while that file is frozen.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
+      'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts',
+      'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts', 'approvalParkStore.ts', 'admissionWakeTx.ts', 'skillRolloutTx.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
@@ -875,7 +908,7 @@ describe('one MAIL_PACE: the mail gate pace has one home (Overlord spec §6.4)',
     const code = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'FleetWatcher.mailPass'));
     // The facts come from the one assembly, `roleFactsOf`, with the run kind and declared intent unmeasured: intent
     // stays unread until the commit that reads it (spec §6.4).
-    expect(code.match(/\bmailPaceOf\(roleOf\(roleFactsOf\(d\.toId,\s*\{\s*child:[^,]+,\s*childRunKind:\s*'unmeasured',\s*openCoordinators:\s*coordinators,\s*intentDeclared:\s*'unmeasured'\s*\}\)\)\)/g))
+    expect(code.match(/\bmailPaceOf\(roleOf\(roleFactsOf\(d\.toId,\s*\{\s*child:[^,]+,\s*childRunKind:\s*'unmeasured',\s*openCoordinators:\s*coordinators,\s*intentDeclared:\s*'unmeasured',\s*designation\s*\}\)\)\)/g))
       .toHaveLength(1);
     expect(code.match(/\broleOf\(/g)).toHaveLength(1);
   });
@@ -1018,5 +1051,78 @@ describe('store.ts docstrings that describe their own callers', () => {
     // The omission itself, called out by name, so the regression that started
     // this has a line of its own rather than only a derived one.
     expect(narrow, 'runHealth stopped reading the narrow predicate').toContain('runHealth');
+  });
+});
+
+// ── the Overlord gate's words have one home (Overlord W1 gates B, plan w1-gates.md Task 6; spec §11.2) ──────────────
+//
+// The gate's own words are spelled where the gate decides: `not-the-overlord`, `stale-designation` and `card-unread` as string
+// literals only in `coord/overlordGate.ts`, with two measured exceptions pinned below for `stale-designation` (the
+// private-store message door and the prompt door, both older than the gate). `stale-generation` and `unwitnessed` are pinned
+// holder lists. Literals only, comments excluded: a string literal, a template without substitutions or a type's literal
+// member, read with the repo's one parser wrapper. A door that refuses with a gate word of its own instead of asking the
+// runner turns this red. Loaded dynamically so this file's import block, and the lines cited from it, stay where they are.
+describe('the Overlord gate words have one home (W1 gates B, Task 6)', () => {
+  const SERVER_SRC = sources(path.join(ccrcRoot, 'server', 'src')).map(rel).sort();
+  const GATE = 'server/src/coord/overlordGate.ts';
+  type Loaded = { literalsIn: (text: string) => Set<string>; held: Map<string, Set<string>> };
+  let loaded: Promise<Loaded> | undefined;
+  const load = (): Promise<Loaded> => (loaded ??= import('../scan/parse.js').then(({ ts }) => {
+    type N = Parameters<typeof ts.forEachChild>[0];
+    const literalsIn = (text: string): Set<string> => {
+      const out = new Set<string>();
+      const visit = (n: N): void => {
+        if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) out.add(n.text);
+        ts.forEachChild(n, visit);
+      };
+      visit(ts.createSourceFile('x.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
+      return out;
+    };
+    return { literalsIn, held: new Map(SERVER_SRC.map((f) => [f, literalsIn(readFileSync(path.join(ccrcRoot, f), 'utf8'))])) };
+  }));
+  /** The files whose literals hold the word, optionally with some files' text replaced (a planted copy). */
+  const holders = async (word: string, replaced: Record<string, string> = {}): Promise<string[]> => {
+    const { literalsIn, held } = await load();
+    return SERVER_SRC.filter((f) => (f in replaced ? literalsIn(replaced[f]!) : held.get(f)!).has(word));
+  };
+
+  it('the scan reads every server/src file, and finds the gate file holding its words (a zero would make the rest vacuous)', async () => {
+    expect(SERVER_SRC.length).toBeGreaterThan(100);
+    expect(SERVER_SRC).toContain(GATE);
+    for (const w of ['not-the-overlord', 'stale-designation', 'card-unread', 'stale-generation', 'unwitnessed']) expect(await holders(w), w).toContain(GATE);
+  });
+  it("'not-the-overlord' and 'card-unread' are string literals only in coord/overlordGate.ts", async () => {
+    expect(await holders('not-the-overlord')).toEqual([GATE]);
+    expect(await holders('card-unread')).toEqual([GATE]);
+  });
+  it("'stale-designation' is held by the gate and by exactly two older doors (measured; the plan expected the gate alone)", async () => {
+    expect(await holders('stale-designation')).toEqual([GATE, 'server/src/operatorModel/messages.ts', 'server/src/server.ts']);
+  });
+  it("'stale-generation' is held exactly by the pinned list: the gate, the delegation lease's three files, retire, and the continuity claim door's two", async () => {
+    expect(await holders('stale-generation')).toEqual([
+      'server/src/continuity/actKey.ts',
+      'server/src/continuity/routes.ts',
+      'server/src/coord/delegation-lease-state.ts',
+      'server/src/coord/delegationLeaseDoor.ts',
+      GATE,
+      'server/src/retire.ts',
+    ]);
+  });
+  it("'unwitnessed' is held by the gate and by door process B's two files that name its verdict arm and its recorded outcome (hookReports.ts answers the gate's WitnessVerdict; witnessPorts.ts acts on it; hookReportStore.ts imports the gate's outcome type, review 2870 F10; none refuses a route)", async () => {
+    expect(await holders('unwitnessed')).toEqual([
+      'server/src/continuity/hookReports.ts', 'server/src/continuity/witnessPorts.ts', GATE,
+    ]);
+  });
+  it('CONTROL: a planted refuseRoute(reply, gate word) in another file is red, in each word', async () => {
+    for (const w of ['not-the-overlord', 'stale-designation', 'card-unread']) {
+      const planted = `${readFileSync(path.join(ccrcRoot, 'server/src/continuity/routes.ts'), 'utf8')}\nexport const planted = (reply: never) => refuseRoute(reply, '${w}');\n`;
+      expect(await holders(w, { 'server/src/continuity/routes.ts': planted }), w).toContain('server/src/continuity/routes.ts');
+    }
+  });
+  it('CONTROL: a word in a comment or a docstring is not a literal (the scan excludes comments)', async () => {
+    const { literalsIn } = await load();
+    const t = "// refuseRoute(reply, 'card-unread')\n/** 'card-unread' */\nexport const x = 1;\n";
+    expect(literalsIn(t).has('card-unread')).toBe(false);
+    expect(literalsIn("export const y = 'card-unread';").has('card-unread')).toBe(true);
   });
 });

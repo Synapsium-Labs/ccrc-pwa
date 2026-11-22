@@ -259,14 +259,14 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
   it('a pinned programme with no item still has its goals in the list', async () => {
     const r = await rig();
     r.coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-c', 'C', 0, 'active')").run();
-    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
+    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null, { kind: 'coordinator' });
     const w = ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting;
     expect(w.goals.map((g) => g.program)).toContain('prog-c');
   });
 
   it('serves one programme\'s goals', async () => {
     const r = await rig();
-    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null, { kind: 'coordinator' });
     const res = await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, goals: { program: 'prog-a', specPath: 'docs/superpowers/specs/2026-11-01-x-design.md', inShort: 'What it builds.' } });
@@ -274,7 +274,7 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
 
   it('the read answers the goals and the programme\'s open items, and nothing else of an item (the goals-read-v1 shape)', async () => {
     const r = await rig();
-    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.'], { kind: 'coordinator' });
     const open = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main ships.', neededBy: 'blocking' });
     raise(r, { program: 'prog-b', runId: null, raisedBy: 'lane-b', title: 'Another programme' });
     const body = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as { ok: true; goals: unknown } & GoalsRead;
@@ -323,7 +323,7 @@ async function armed(): Promise<{ app: FastifyInstance; coord: CoordStore }> {
   const base = testDeps(home, recorder().run);
   app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true }, mailToken: BOX, coord });
   coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'A', 0, 'active')").run();
-  coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+  coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.'], { kind: 'coordinator' });
   return { app, coord };
 }
 
@@ -369,6 +369,18 @@ describe('GET /api/items/:id (D-8194)', () => {
   it('a malformed id is a bad request', async () => {
     const r = await rig();
     for (const id of ['0', 'abc', '-1', '01']) expect((await read(r, id)).statusCode).toBe(400);
+  });
+
+  it("answers the item's revision, here and on GET /api/waiting, raised after a tick (Overlord W2 row revisions, Task 4)", async () => {
+    const r = await rig();
+    const id = raise(r);
+    const waitingItem = async (): Promise<unknown> =>
+      ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting.items.find((i) => i.id === id);
+    expect((await read(r, id)).json()).toMatchObject({ ok: true, item: { id, state: 'open', revision: 0 } });
+    expect(await waitingItem()).toMatchObject({ id, revision: 0 });
+    expect((await tick(r, id)).statusCode).toBe(200);
+    expect((await read(r, id)).json()).toMatchObject({ ok: true, item: { id, state: 'checking', revision: 1 } });
+    expect(await waitingItem()).toMatchObject({ id, revision: 1 });
   });
 });
 
@@ -832,6 +844,23 @@ describe('big calls on the waiting view, the goals read and the run record (D-81
     const w = await waitingOf(r);
     expect(w.calls).toEqual([]);
     expect(w.callsCleared!.map((c) => c.id)).toEqual([old]);
+  });
+
+  // Fix round 1 of A4 (review 2792 F3, the coordinator's ruling): a cleared row carries when it left the group, read by
+  // `callClearedAt`, its one owner: the Seen for a seen call, the ageing time for an aged one. An open row carries none.
+  it('a cleared call carries clearedAt from callClearedAt; an open call carries none', async () => {
+    const r = await rig();
+    const madeAt = Date.now() - 8 * 86_400_000;
+    const aged = record(r, {}, madeAt);
+    const open = record(r);
+    const seenOne = record(r, { chosen: 'demo-w1' });
+    expect((await seen(r, seenOne)).statusCode).toBe(200);
+    const seenAt = r.coord.callById(seenOne)!.seenAt!;
+    const w = await waitingOf(r);
+    expect(w.calls!.map((c) => [c.id, 'clearedAt' in c])).toEqual([[open, false]]);
+    const byId = new Map(w.callsCleared!.map((c) => [c.id, c.clearedAt]));
+    expect(byId.get(aged)).toBe(madeAt + 7 * 86_400_000);
+    expect(byId.get(seenOne)).toBe(seenAt);
   });
 
   it('the goals read\'s bigCalls holds at most 20 of the programme\'s big calls, newest first', async () => {

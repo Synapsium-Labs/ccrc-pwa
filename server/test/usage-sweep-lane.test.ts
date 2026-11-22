@@ -100,6 +100,19 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     expect(usageReadCount()).toBe(afterFirst);
   });
 
+  it('the spend read of a session whose turn marker the forecast lane has not read yet carries unread, never fresh (Overlord W2 forecasts B, fix round 2, F2-a)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-usage-spend', 'claude');
+    writeUsage(home, 'demo-usage-spend');
+    const watcher = makeWatcher(home, localIO);
+    expect(watcher.liveSpendReading('demo-usage-spend')).toEqual({ kind: 'not-ready' });
+
+    await watcher.tick();   // the usage sweep runs; the forecast lane has no port here, so no marker is read
+
+    expect(watcher.liveSpendReading('demo-usage-spend')).toMatchObject({ kind: 'reading', cost: 1.25, turn: { kind: 'unread' } });
+  });
+
   it('an UNREADABLE read this sweep keeps the previous reading rather than dropping the row', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);

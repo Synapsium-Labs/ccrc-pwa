@@ -6,7 +6,7 @@
 //
 // An item's state is its `state` column only (plan PL5b R2): `Came back` is an OPEN item whose latest coordinator move was
 // a return, read from its history, never from a field that keeps the last round's value.
-import { shapeProgramSlug, type FleetSession, type RunSummary } from '../../../shared/api';
+import { shapeProgramSlug, type CallView, type FleetSession, type RunSummary } from '../../../shared/api';
 import { CLEARED_WINDOW_MS, orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -14,6 +14,7 @@ import { isRunClosed, sessionProgramme } from '../fleet/runWords';
 import { needsYou, needsYouCount } from './needsYou';
 import { waitingPath } from '../lib/routes';
 import type { AskMarkRow } from '../../../shared/answerMarks';
+import { isRatificationWhy, isRatifiedByKind, type GoalsView, type Ratification, type RatificationWhy, type RatifiedBy } from '../../../shared/ledgers';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
 export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
@@ -60,12 +61,36 @@ export const CLEARED_SHOWN = 5;
 export const showAllWord = (n: number): string => `Show all ${n}`;
 export const SHOW_FEWER_WORD = 'Show fewer';
 
-/** One row of the Recently cleared trail: an item the coordinator confirmed, or (answer marks B) an ask the operator has that is
- *  not live. `at` is when it cleared (an item's `closedAt`, an ask's last change of state); an ask's `program` is null when its
- *  child is in no programme. */
+/** One row of the Recently cleared trail: an item the coordinator confirmed, (answer marks B) an ask the operator has that is
+ *  not live, or (D-8126) a big call that left "Calls made for you". `at` is when it cleared (an item's `closedAt`, an ask's last
+ *  change of state, a call's `callClearedOn`); an ask's `program` is null when its child is in no programme. */
 export type ClearedEntry =
   | { readonly kind: 'item'; readonly item: ItemView; readonly at: number; readonly program: string }
-  | { readonly kind: 'ask'; readonly ask: AskMarkRow; readonly at: number; readonly program: string | null };
+  | { readonly kind: 'ask'; readonly ask: AskMarkRow; readonly at: number; readonly program: string | null }
+  | { readonly kind: 'call'; readonly call: CallView; readonly at: number; readonly program: string };
+
+/** When a cleared call left the operator's group (D-8126): `clearedAt` as the server decided it (`callClearedAt`, review 2792 F3),
+ *  or, from an older server that omits it, the console's own reading: the operator's Seen or Overturn, the earlier of the two,
+ *  and for a call that aged out with neither, when it was made. */
+export function callClearedOn(c: CallView): number {
+  if (c.clearedAt !== undefined) return c.clearedAt;
+  const acts = [c.seenAt, c.overturnedAt].filter((t): t is number => t !== null);
+  return acts.length === 0 ? c.at : Math.min(...acts);
+}
+
+/** How a cleared call left the operator's group (review 2792 F8), by the same reading as `callClearedOn`: the act whose time is
+ *  the server's `clearedAt` (Overturn first at the same instant), else aged out; from an older server, the earlier of Overturn
+ *  and Seen, or neither, when it aged out. */
+export type CallClearedHow = 'seen' | 'overturned' | 'aged';
+export const CALL_CLEARED_WORD: Readonly<Record<CallClearedHow, string>> = { seen: 'seen', overturned: 'overturned', aged: 'aged out' };
+export function callClearedHow(c: CallView): CallClearedHow {
+  if (c.clearedAt !== undefined) return c.overturnedAt === c.clearedAt ? 'overturned' : c.seenAt === c.clearedAt ? 'seen' : 'aged';
+  if (c.overturnedAt !== null && (c.seenAt === null || c.overturnedAt <= c.seenAt)) return 'overturned';
+  return c.seenAt !== null ? 'seen' : 'aged';
+}
+
+/** The order of kinds at the same instant on the trail: an item, then an ask, then a call. */
+const CLEARED_KIND_RANK: Readonly<Record<ClearedEntry['kind'], number>> = { item: 0, ask: 1, call: 2 };
 
 /** The Recently cleared trail opened whole, by programme (D-8194): one group per programme in the order of its newest clear (the
  *  trail is newest first), each holding its rows in the trail's order. The asks in no programme are one group, `null`. */
@@ -83,19 +108,46 @@ export const itemRefWord = (id: number): string => `item ${id}`;
 export const clearedCountWord = (n: number): string => `${n} cleared`;
 
 /** What the Recently cleared trail draws (D-8194): the items cleared inside `CLEARED_WINDOW_MS` of the page clock, the edge
- *  included as the server's list includes it, and (answer marks B) the asks the operator has that are not live and changed
- *  state inside the same window, together, newest first (an item before an ask at the same instant, then the id breaks a
- *  tie). The server sends the same window; this read keeps a list heard a while ago from showing what has since aged out. A
- *  copy: the inputs are not touched. */
-export function clearedTrail(items: readonly ItemView[], now: number, asks: readonly AskMarkRow[] = []): ClearedEntry[] {
+ *  included as the server's list includes it, (answer marks B) the asks the operator has that are not live and changed state
+ *  inside the same window, and (D-8126) the big calls that cleared inside it, together, newest first (an item, then an ask,
+ *  then a call at the same instant, then the id breaks a tie). The server sends the same window; this read keeps a list heard a
+ *  while ago, or the device's saved copy, from showing what has since aged out. A copy: the inputs are not touched. */
+export function clearedTrail(items: readonly ItemView[], now: number, asks: readonly AskMarkRow[] = [], calls: readonly CallView[] = []): ClearedEntry[] {
   const entries: ClearedEntry[] = [
     ...items.filter((i) => i.closedAt !== null && i.closedAt >= now - CLEARED_WINDOW_MS)
       .map((item) => ({ kind: 'item' as const, item, at: item.closedAt ?? 0, program: item.program })),
     ...asks.filter((a) => a.live !== true && a.at >= now - CLEARED_WINDOW_MS).map((ask) => ({ kind: 'ask' as const, ask, at: ask.at, program: ask.program })),
+    ...calls.map((call) => ({ kind: 'call' as const, call, at: callClearedOn(call), program: call.program })).filter((e) => e.at >= now - CLEARED_WINDOW_MS),
   ];
-  const idOf = (e: ClearedEntry): number => (e.kind === 'item' ? e.item.id : e.ask.id);
-  return entries.sort((a, b) => b.at - a.at || (a.kind === b.kind ? 0 : a.kind === 'item' ? -1 : 1) || idOf(b) - idOf(a));
+  const idOf = (e: ClearedEntry): number => (e.kind === 'item' ? e.item.id : e.kind === 'ask' ? e.ask.id : e.call.id);
+  return entries.sort((a, b) => b.at - a.at || CLEARED_KIND_RANK[a.kind] - CLEARED_KIND_RANK[b.kind] || idOf(b) - idOf(a));
 }
+
+/** Where a call a link names stands in the Recently cleared trail (D-8808): `null` when the trail holds no such call, else whether
+ *  it lies beyond the newest `CLEARED_SHOWN` (the trail must then start expanded) and its programme (whose group must start
+ *  open when the expanded trail is grouped). */
+export function clearedCallPlace(trail: readonly ClearedEntry[], id: number): { beyond: boolean; program: string | null } | null {
+  const at = trail.findIndex((e) => e.kind === 'call' && e.call.id === id);
+  const found = trail[at];
+  return found === undefined ? null : { beyond: at >= CLEARED_SHOWN, program: found.program };
+}
+
+/** What the FOLDED trail draws (D-8808, review 3222 A-i): the newest `CLEARED_SHOWN` entries, and, when the call a link names lies
+ *  beyond them, that call's entry after them, so a notice saying the row is marked below never outlives the row. */
+export function clearedFolded(trail: readonly ClearedEntry[], place: { beyond: boolean } | null, id: number | null): ClearedEntry[] {
+  const shown = trail.slice(0, CLEARED_SHOWN);
+  const extra = place !== null && place.beyond && id !== null ? trail.find((e) => e.kind === 'call' && e.call.id === id) : undefined;
+  return extra === undefined ? shown : [...shown, extra];
+}
+
+/** The programme groups Show all opens (D-8808, review 3222 A-i): the named call's own, so the row stays drawn; none otherwise. */
+export const clearedOpenOnShowAll = (place: { program: string | null } | null): ReadonlySet<string | null> =>
+  new Set(place === null ? [] : [place.program]);
+
+/** A key that changes when the target's place in the trail does (D-8808), so the trail can tell a new place and expand to it,
+ *  keeping the operator's own Show all and open groups (review 3217 A2). */
+export const clearedCallPlaceKey = (place: { beyond: boolean; program: string | null } | null): string =>
+  place === null ? 'none' : `${place.beyond ? 'beyond' : 'shown'}:${place.program ?? ''}`;
 
 /** What a pill's colour means; a pill always says it in words too, so no state is read out of colour alone. */
 export type PillTone = 'blocking' | 'soon' | 'later' | 'checking' | 'stale' | 'bounced' | 'ask';
@@ -459,3 +511,76 @@ export const placeWords = (place: ItemPlace): string => `${place.index + 1} of $
  *  place is kept: never "3 of 6, ", carry C, D-7951; review 1408 F3). */
 export const positionWords = (place: ItemPlace | null, title: string): string =>
   (place === null ? '' : title === '' ? placeWords(place) : `${placeWords(place)}, ${title}`);
+
+/** A goals version's verdict in the operator's words (Overlord W1, portfolio B). `itemId` is the item a modification cites.
+ *  A coordinator's own write counts as ratified (the operator's ruling of 2026-11-16, question 1). Total over both lists. */
+const RATIFIED_WORDS: Readonly<Record<RatifiedBy['kind'], string>> = {
+  operator: 'Ratified by you', coordinator: 'Ratified by the coordinator', item: 'Ratified by the answer to the item it cites',
+};
+const NOT_RATIFIED_WORDS: Readonly<Record<RatificationWhy, (itemId: number | null) => string>> = {
+  'source-does-not-ratify': () => 'Not ratified: written by the coordinator',
+  'effect-unmeasured': (id) => `Not ratified: rests on item ${id}'s answer, which does not ratify goals yet`,
+  'item-not-answered': (id) => `Not ratified: item ${id} has not been answered`,
+  unreadable: () => 'Not ratified: what it rests on could not be read',
+  unrecorded: () => 'Not recorded',
+  absent: () => 'Not recorded',
+};
+/** The one word for a verdict this build cannot name: a reason or a source kind a newer server sent (review 2240 F5). */
+export const RATIFICATION_UNREADABLE_WORDS = 'Could not read whether this is ratified';
+/** Whether this build can name every part of a verdict: its source (null, or a kind it knows) and, when not ratified, its
+ *  reason. The one test both `ratificationWords` and `ratifyOffered` ask, through the shared guards (own keys only, so
+ *  `toString` and `__proto__` are unknown words, not inherited ones). */
+const ratificationKnown = (r: Ratification): boolean => {
+  const source: unknown = r.source;
+  const sourceKnown = source === null || (typeof source === 'object' && isRatifiedByKind((source as { kind?: unknown }).kind));
+  return sourceKnown && (r.ratified ? source !== null : isRatificationWhy(r.why));
+};
+export const ratificationWords = (r: Ratification, itemId: number | null): string =>
+  !ratificationKnown(r) ? RATIFICATION_UNREADABLE_WORDS
+    : r.ratified ? RATIFIED_WORDS[r.source.kind] : NOT_RATIFIED_WORDS[r.why](itemId);
+
+/** Whether a version's verdict offers the Ratify button: only an unratified one this build can read whole, and not an
+ *  `absent` one (an older server that has no door to ratify through). Never for a word it cannot name. */
+export const ratifyOffered = (r: Ratification): boolean => ratificationKnown(r) && !r.ratified && r.why !== 'absent';
+
+/** Where the stored definition of done is drawn (review 2240 F4: the operator never ratifies a list they were not shown):
+ *  under the pin's verdict, under the modification's row that wrote it, or `alone` when the writer is not recorded, not
+ *  readable, absent from an older server, or not one of the versions the panel shows. Null when there is no list. */
+export type DoneWhenPlacement = { at: 'pin' } | { at: 'modification'; id: number } | { at: 'alone' };
+export function doneWhenPlacement(g: GoalsView): DoneWhenPlacement | null {
+  if (g.doneWhen === undefined || g.doneWhen === null || g.doneWhen.length === 0) return null;
+  const v: unknown = g.doneWhenVersion;
+  if (typeof v !== 'object' || v === null) return { at: 'alone' };
+  const pin = (v as { pin?: unknown }).pin;
+  if (typeof pin === 'object' && pin !== null) {
+    const stamp = (pin as { inShortAt?: unknown }).inShortAt;
+    return g.inShortAt !== null && g.inShort !== null && stamp === g.inShortAt ? { at: 'pin' } : { at: 'alone' };
+  }
+  const id = (v as { modification?: unknown }).modification;
+  return typeof id === 'number' && g.modifications.some((m) => m.id === id) ? { at: 'modification', id } : { at: 'alone' };
+}
+
+/** What a failed ratify means to the Goals card. `unavailable` takes the Ratify button away and says why: a 404, which is an
+ *  older server without the door (an unknown route answers `not-found` too, and the door's own `not-found` cannot meet a
+ *  version the panel drew, since no pin or modification is ever deleted), `not-configured`, or `auth-off` while sign-in is
+ *  dark. `changed` (`goals-changed`) reads the goals again. */
+export type RatifyFailure = { kind: 'unavailable'; text: string } | { kind: 'changed' } | { kind: 'other' };
+export const RATIFY_UNAVAILABLE_TEXT: Readonly<Record<'not-found' | 'not-configured' | 'auth-off', string>> = {
+  'not-found': 'This server does not offer ratifying goals.',
+  'not-configured': 'This server does not offer ratifying goals.',
+  'auth-off': 'Ratifying goals needs sign-in, which is off on this server.',
+};
+/** The refusal codes that mean something to the Goals card, read through this table rather than a literal branch each
+ *  (the ARCH-13b ratchet, `pwa/test/refusal-literal-ratchet.test.ts`); every other code is `other`. */
+const RATIFY_FAILURE_OF_CODE: Readonly<Record<'not-configured' | 'auth-off' | 'goals-changed', RatifyFailure>> = {
+  'not-configured': { kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-configured'] },
+  'auth-off': { kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['auth-off'] },
+  'goals-changed': { kind: 'changed' },
+};
+export function ratifyFailureOf(status: number | null, body: unknown): RatifyFailure {
+  if (status === 404) return { kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-found'] };
+  const code = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
+  return typeof code === 'string' && Object.hasOwn(RATIFY_FAILURE_OF_CODE, code)
+    ? (RATIFY_FAILURE_OF_CODE as Record<string, RatifyFailure>)[code]!
+    : { kind: 'other' };
+}

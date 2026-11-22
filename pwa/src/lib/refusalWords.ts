@@ -8,8 +8,8 @@ import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, TESTBOX_ADMIN_ROUTE_REFUSALS, TESTBOX_PARITY_REQUIRED_SENTENCE, type SwapRefusal, type TestboxAdminRouteRefusal } from '../../../shared/api';
 import { TESTBOX_ADMIN_CODE_SENTENCE } from '../../../shared/testbox-admin';
 import type { LinkingRefusal } from '../../../shared/linking';
-import type { RouteRefusal } from '../../../shared/refusal';
-import { ANSWER_MAX } from '../../../shared/ledgers';
+import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
+import { ANSWER_MAX, type LinearItemAct } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
 
 /** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
@@ -59,6 +59,10 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // this code (dialog.ts's `turnRunning`, send.ts's own doc); it holds the nudge
   // for a minute and counts no attempt.
   'turn-running': 'Claude is in the middle of a turn — the message waits until it finishes.',
+  // Overlord W1a hand-offs: the console's prompt route refuses, before anything is typed, while the session is between
+  // conversations: a renewal, or a long-lived session's start or wake before its card is read (review 2312 F7). The failed
+  // bubble keeps the text and Retry resends it.
+  renewing: 'Between conversations (starting or renewing) — your message is kept; send it again in a moment.',
 };
 
 /**
@@ -80,6 +84,17 @@ export const sendErrorText = (code: string, submittable?: boolean): string =>
   (code === 'verify-failed' && submittable === true)
     ? VERIFY_FAILED_COLLAPSED
     : (SEND_ERROR_TEXT[code] ?? code);
+
+/** The Renew now door's two words of its own (Overlord W1a hand-offs), keyed by the L0 words. */
+export const RENEW_NOW_REFUSAL_TEXT: Readonly<Record<Exclude<HandoffRefusal, 'renewing'>, string>> = {
+  'renew-not-long-lived': 'This session has no long-lived conversation to renew.',
+  'renew-pending': 'A Renew now for this session is already waiting.',
+};
+export const RENEW_NOW_RECORDED_TEXT = 'Renew now recorded: the session renews once its turn ends.';
+/** The door's answer for a press while the `continuity` row is shadow (review 2312 F1, F5): recorded, and nothing renews. */
+export const RENEW_NOW_SHADOW_TEXT = 'Renew now recorded in shadow: no renewal happens while continuity is in shadow.';
+/** A failed Renew now in words: the door's own sentence, else the PWA's generic failure text. */
+export const renewNowText = (err: unknown): string => refusalText(err, RENEW_NOW_REFUSAL_TEXT) ?? failedTo('renew', err);
 
 /** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
  *  answer a different question — not "why didn't my message send" but "why
@@ -292,6 +307,17 @@ const API_ERROR_TEXT: Record<string, string> = {
   // D-8181: a plan verb (and the plan sync before each write) refuses text a public repository's tracker must not carry;
   // the box names the class in its own detail, which is never shown.
   'linear-text-public': 'This text names a ticket id, a person or a private name, and this project is public, so it was not saved or sent. Say it in words a stranger could read.',
+  // D-8182: the hierarchy item route answers it when the item's action does not take that act.
+  'item-act-mismatch': 'That item does not take this action, so nothing was changed. Reload the item and choose again.',
+  // D-8183: `plan triage` answers `not-linear-owner` to a caller that does not own the team's Linear issues, and `plan triage` and
+  // `plan take` answer `issue-not-inbound` for an issue that is not waiting for that caller; the box names neither the owner nor the issue.
+  'not-linear-owner': 'Only the Linear owner of this team decides what becomes of an issue filed in Linear, so nothing was changed. Ask the owner, or name another one on the project.',
+  'issue-not-inbound': 'That issue is not waiting for this decision: it was already decided, or it was not handed to you. Nothing was changed.',
+  // D-8736: Hand on a persistent-drift item answers it when the object's project has no Linear owner to hand it to; the item stays open.
+  'no-linear-owner': 'This project has no Linear owner to hand it to, so the item stays open. Name a Linear owner for the project, or keep the plan.',
+  // D-8183: the Linear proxy answers it to a session that creates a ticket in a team the plan manages, or updates one the plan bound;
+  // the plan files and writes those tickets itself.
+  'plan-owned': 'The plan owns the tickets of this Linear team, so nothing was written to Linear. File the work through the plan instead.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a
@@ -376,6 +402,10 @@ export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
   'ticket-slug-public': 'This repository is public, so a workspace name cannot be just a ticket id. Name the workspace in words.',
   'template-failed': 'The template pull request could not be opened. Nothing was changed. Try again.',
   'override-private-public': 'GitHub reads this repository as public, so it cannot be set to Private: a private rule would write ticket ids into a public repository. Choose Automatic or Public.',
+  'team-unknown': 'That team and workspace pair is not in any connected Linear workspace. Choose a workspace that holds the key, or check the workspace key.',
+  'team-set': 'This project already has a Linear team, so a suggestion is not needed.',
+  'team-ambiguous': 'More than one connected Linear workspace has that team key. Choose the workspace, then link it.',
+  'not-a-coordinator': 'Only a coordinator of a programme can suggest a Linear team. Nothing was recorded.',
 };
 
 /** The words the linking POST routes answer beside the fixed table (D-8147): not in `LINKING_REFUSAL_TEXT`, because
@@ -388,6 +418,42 @@ export const LINKING_ROUTE_TEXT: Readonly<Record<'write-failed' | 'bad-request',
 
 /** A linking route's failure in words: the route words first, then every other refusal's sentence. */
 export const linkingErrorText = (err: unknown): string => refusalText(err, LINKING_ROUTE_TEXT) ?? apiErrorText(err);
+
+/** The migration's own refusals (D-8186): `POST /api/projects/:project/hierarchy/migrate` answers `no-team-key`, `migration-in-flight`
+ *  and `unreachable` (no readable Linear key serves the team, or its Linear owner is not measured; nothing was written). `no-team-key` is said here for the migration, not as the
+ *  template sentence of `LINKING_REFUSAL_TEXT`, which names the template pull request. */
+export const MIGRATE_REFUSAL_TEXT: Readonly<Record<'no-team-key' | 'migration-in-flight' | 'unreachable', string>> = {
+  'no-team-key': "Set this project's Linear team key first, then reshape the team in Linear. Nothing was changed.",
+  'migration-in-flight': 'Teams are reshaped one team at a time: another team\'s migration is still open, or this team is already migrated. Nothing was changed.',
+  unreachable: 'ccrc could not find a readable Linear key for this team, or could not measure its Linear owner, so nothing was asked of Linear. Check the workspace in Settings, then try again.',
+};
+/** The migration's refusal in its fixed sentence, or null for a word that is not one of its own. */
+export const migrateRefusalText = (err: unknown): string | null => refusalText(err, MIGRATE_REFUSAL_TEXT);
+
+/** `POST /api/items/:id/linear`'s words that have no sentence above (D-8184, D-8186); its other refusals read `linkingErrorText`. On an
+ *  item act `migration-in-flight` is Put back after the team's next migration started: refused for good (review 2892 A3). */
+export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found' | 'migration-in-flight', string>> = {
+  'not-found': 'The server does not know that item. Reload the page.',
+  'migration-in-flight': 'The team\'s next migration has started, so this one can no longer be put back. Nothing was changed.',
+};
+/** The words an item act's refusal says the same for every act: `unreachable` is the owner's measurement failing on Hand and
+ *  Return alike (nothing was changed; D-8186, D-8808); `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
+const LINEAR_ITEM_ALL_ACTS_TEXT = (): Readonly<Record<string, string>> => ({
+  ...LINEAR_ITEM_REFUSAL_TEXT,
+  'not-open': LEDGER_REFUSAL_TEXT['not-open'],
+  unreachable: 'The Linear owner could not be measured, so nothing was changed. Try again.',
+});
+/** The sentences only one act says, read through `refusalText` like the rest. Return's two owner refusals keep the map and the
+ *  note (the item stays open); Hand's `no-linear-owner` stays in `LINKING_REFUSAL_TEXT`. */
+const LINEAR_ITEM_ACT_TEXT: Readonly<Partial<Record<LinearItemAct, Readonly<Record<string, string>>>>> = {
+  return: {
+    'no-linear-owner': "This project has no Linear owner to return the map to, so the map and your note are kept. Name a Linear owner for the project, then return it again.",
+    'team-ambiguous': 'More than one connected Linear workspace has this team key, so the map and your note are kept. Choose the project\'s workspace in Settings, then return it again.',
+  },
+};
+/** An item act's refusal in words: the act's own sentences first, then the words every act shares, then the linking sentences. */
+export const linearItemErrorText = (err: unknown, act: LinearItemAct): string =>
+  refusalText(err, { ...LINEAR_ITEM_ALL_ACTS_TEXT(), ...(LINEAR_ITEM_ACT_TEXT[act] ?? {}) }) ?? linkingErrorText(err);
 
 /** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
  *  code). `null`: the answer did not carry it, so the fixed sentence above is what is said. */
@@ -588,7 +654,7 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
   | 'not-a-secret-item' | 'bad-slot' | 'stored-not-ticked' | 'secret-not-one-line' | 'slot-busy' | 'secret-not-stored'
-  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'rank-changed' | 'not-markable' | 'unknown-ask'
+  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'rank-changed' | 'goals-changed' | 'not-markable' | 'unknown-ask'
   | 'ask-unreadable' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
@@ -619,6 +685,7 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'not-big': 'That call is not a big one, so there is nothing to mark as seen. The list will update.',
   // The portfolio's rank door (Overlord W1): the rank changed since this screen read it, in another tab or window.
   'rank-changed': 'The order of the programmes changed since this screen read it, so your order was not saved. Read it again and reorder.',
+  'goals-changed': 'The goals changed since this screen showed them, so nothing was ratified. They have been read again: check them and ratify again.',
   // The answer-mark door (Overlord W1): the row left the operator's list, or carries no box.
   'not-markable': 'This row has left your list, so it cannot be marked any more. The list will update.',
   // Its ask arm (answer marks B): an ask the server no longer holds, or one this box could not read.

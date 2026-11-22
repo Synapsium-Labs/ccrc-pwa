@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DOCS_MAX_ANSWER_BYTES, DOCS_MAX_DOC_BYTES, DOCS_MAX_FILE_BYTES, DOCS_MAX_IMAGE_BYTES, DOCS_MAX_IMAGES_PER_PAGE,
-  DOCS_MAX_LISTING_WIRE_BYTES,
+  DOCS_MAX_LISTING_WIRE_BYTES, DOCS_VERBS, type DocsVerb,
 } from '../../shared/docs.js';
 import { DOCS_LANE_BYTES, DOCS_LANE_QUEUE, showWire } from '../src/docs/policy.js';
 import { docsHelperSource, pyLiteral } from './docsHelperPy.js';
@@ -37,8 +37,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
 const readRel = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
 
-const DOCS_BUDGET_VERBS = ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log'] as const;
-type DocsBudgetVerb = (typeof DOCS_BUDGET_VERBS)[number];
+/** Every docs verb has a helper deadline and a runner row: the list is shared/docs.ts's, never a copy (X2 P1: the
+ *  range verb joined it rather than keeping a deadline of its own). */
+const DOCS_BUDGET_VERBS = DOCS_VERBS;
+type DocsBudgetVerb = DocsVerb;
 
 /** The one match of `re` (a `g` regex) in `text`; throws on zero or on more than one. */
 function exactlyOne(text: string, re: RegExp, what: string): RegExpMatchArray {
@@ -114,10 +116,10 @@ const helperSrc = (): string => docsHelperSource();
 const HEADROOM_S = 5;
 
 describe('docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets)', () => {
-  it('the five CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / 15 000 / 60 000 / 20 000 ms', () => {
+  it('the six CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / 15 000 / 60 000 / 20 000 / 30 000 ms', () => {
     expect(DOCS_BUDGET_VERBS.map((v) => [v, runnerMs(v)])).toEqual([
       ['docs-index', 20_000], ['docs-tree', 20_000], ['docs-show', 15_000], ['docs-fetch', 60_000],
-      ['docs-log', 20_000],
+      ['docs-log', 20_000], ['docs-show-range', 30_000],
     ]);
   });
 
@@ -141,6 +143,37 @@ describe('docs runner budgets outlast the helper (row 47, spec section 2 (a) Bud
     const margin = runnerMs('docs-show') / 1000
       - (helperDeadlinesIn(helperSrc())['docs-show'] + pyIntIn(helperSrc(), 'KILL_GRACE_S') + HEADROOM_S);
     expect(margin).toBe(1);
+  });
+});
+
+describe('docs-show-range: one deadline bounds the whole verb, and the runner budget outlasts it (X2 P1)', () => {
+  // The range verb's lock waits and its copy read the same Deadline as its git calls (the cache's `dl`), so its
+  // helper deadline bounds the whole verb; a prepare that runs it out then waits at most RANGE_ABORT_LOCK_WAIT_S to give
+  // its place back.
+  it('docs-show-range: helper deadline + RANGE_ABORT_LOCK_WAIT_S + KILL_GRACE_S + 5 s < the runner budget, strictly', () => {
+    const sumS = helperDeadlinesIn(helperSrc())['docs-show-range'] + pyIntIn(helperSrc(), 'RANGE_ABORT_LOCK_WAIT_S')
+      + pyIntIn(helperSrc(), 'KILL_GRACE_S') + HEADROOM_S;
+    expect(sumS, 'the agent may kill ccd before a range prepare ends on its own deadline').toBeLessThan(runnerMs('docs-show-range') / 1000);
+  });
+
+  // The real sequential worst case: the verb's deadline fires, the helper waits RANGE_ABORT_LOCK_WAIT_S to give the
+  // prepare's place back, the redactor still runs (REDACT_BUDGET_MS, outside the deadline), the kill grace passes, and the
+  // agent keeps its own 5 s: 20 + 2 + 1 + 0.9 + 5 = 28.9 s against 30 s. A 2.5 s abort wait would make it 30.4 s and red.
+  it('docs-show-range: helper deadline + KILL_GRACE_S + RANGE_ABORT_LOCK_WAIT_S + REDACT_BUDGET_MS + 5 s < the runner budget, strictly', () => {
+    const helper = helperSrc();
+    const sumS = helperDeadlinesIn(helper)['docs-show-range'] + pyIntIn(helper, 'KILL_GRACE_S')
+      + pyIntIn(helper, 'RANGE_ABORT_LOCK_WAIT_S') + pyIntIn(helper, 'REDACT_BUDGET_MS') / 1000 + HEADROOM_S;
+    expect(sumS, 'the agent may kill ccd while a range prepare gives its place back or its redactor runs')
+      .toBeLessThan(runnerMs('docs-show-range') / 1000);
+  });
+
+  it('the verb builds its one Deadline from its HELPER_DEADLINE_S row and hands it to the cache, and the lock wait and the copy read it', () => {
+    const src = helperSrc();
+    expect(src).toContain("dl = Deadline(HELPER_DEADLINE_S['docs-show-range'])");
+    expect(src).toContain('cache = range_open_dir(range_cache_dir(ctx))._replace(dl=dl)');
+    expect(src).toContain('        if deadline and cache.dl is not None:\n            wait = min(wait, cache.dl.left())');
+    expect(src).toContain('            if cache.dl is not None and cache.dl.left() <= 0:\n                raise fail(\'prepare-busy\')');
+    expect(src).not.toMatch(/\bRANGE_DEADLINE_S\b/);
   });
 });
 
@@ -219,12 +252,14 @@ describe('CONTROL: each extractor refuses zero and two, so no case above can pas
   });
 
   it('helperDeadlinesIn: a missing verb, an extra key, a non-integer and a second binding', () => {
-    const ok = "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}\n";
-    expect(helperDeadlinesIn(ok)).toEqual({ 'docs-index': 12, 'docs-tree': 12, 'docs-show': 7, 'docs-fetch': 45, 'docs-log': 10 });
-    expect(() => helperDeadlinesIn("HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}\n"))
+    const ok = "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20}\n";
+    expect(helperDeadlinesIn(ok)).toEqual({
+      'docs-index': 12, 'docs-tree': 12, 'docs-show': 7, 'docs-fetch': 45, 'docs-log': 10, 'docs-show-range': 20,
+    });
+    expect(() => helperDeadlinesIn("HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}\n"))
       .toThrow(/exactly the docs verbs/);
     expect(() => helperDeadlinesIn(
-      "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-x':1}\n",
+      "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20,'docs-x':1}\n",
     )).toThrow(/exactly the docs verbs/);
     expect(() => helperDeadlinesIn(ok.replace(':7,', ':7.5,'))).toThrow(/integer seconds/);
     expect(() => helperDeadlinesIn(`${ok}HELPER_DEADLINE_S={}\n`)).toThrow(/bound 2 times/);

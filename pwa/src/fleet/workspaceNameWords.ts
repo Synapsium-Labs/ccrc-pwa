@@ -11,6 +11,7 @@
 // NEVER A GATE. Every fallback keeps the title the operator typed and leaves the create open: "Linear is a lookup,
 // never a gate" (design §In short). A refusal here is the GRAMMAR's (`NameRefusal`), never Linear's.
 import { LINEAR_FAILURES, type LinearFailure } from '../../../shared/linear';
+import { LINEAR_PROJECTS_SETTINGS_PATH } from '../../../shared/ledgers';
 import {
   NAME_REFUSAL_TEXT, deriveWorkspaceSlug, offlineTitle, parseLinearRef, sanitizeTitle, type NameRefusal,
 } from '../../../shared/slug';
@@ -150,9 +151,10 @@ export function confirmLabel(p: NamePreview, door: { empty: string; named: (shor
   return door.named(p.short);
 }
 
-/** Where the field's Settings pointer goes: Settings → Security, which holds the Linear section. Held equal to the
- *  route table's own path for that page by `add-workspace-sheet.test.tsx`. */
-export const LINEAR_SETTINGS_PATH = '/settings/security';
+/** Where the field's Settings pointer goes: Settings → Security, which holds the Linear section. The one definition is
+ *  `shared/ledgers.ts`'s (D-8808: the server's item text names it too); held equal to the route table's own path for that
+ *  page by `add-workspace-sheet.test.tsx`. */
+export const LINEAR_SETTINGS_PATH = LINEAR_PROJECTS_SETTINGS_PATH;
 
 /**
  * Why the NEW-SESSION door cannot take a name for this pick, or `null` when it can (named workspaces S8, design §2.1).

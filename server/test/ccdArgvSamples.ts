@@ -131,6 +131,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   projectPoolClear: ['demo'],
   projectAddClone: ['demo', 'https://github.com/o/r.git'],
   projectAddEmpty: ['demo'],
+  skillEnsure: ['lane-a'],   // D-8126, one roster id
   // Routing slice 1: the record's one writer besides ccd. The sample carries
   // a real field=value so `whitelist-subset.test.ts`'s layer 2 proves the flagged shape is reachable under
   // the granted `['route','--session']` prefix.
@@ -151,6 +152,8 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   winSize: ['demo-quiet-basin', 'smallest'],
   // Overlord W1 pool set (plan Task 6): the read-only pool answer, its id refused by the builder unless a registry id.
   poolAnswer: ['demo-quiet-basin'],
+  // Overlord W1 ccd arms (plan Task 3): the sleep markers' verb, server-composed, `win-size`'s `--session`-first shape.
+  keepAwake: ['demo-quiet-basin', 'on'],
   // NATIVE DOCS READER wave 2. Read-only verbs, one grant each; the two
   // `docs-show` builders share `['docs-show','--project']`. The `null` tails
   // are the samples, so `whitelist-subset.test.ts`'s layer 2c pins the shortest argv of `docsTree` and
@@ -162,4 +165,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   docsFetch: ['demo', null],
   // NATIVE DOCS READER W5b-1: one doc's history, its own grant `['docs-log','--project']`.
   docsLog: ['demo', 'a'.repeat(40), 'specs', 'a.md'],
+  // X2 P1.2: one builder, four argv shapes, its own grant `['docs-show-range','--project']`. The sample is the committed
+  // prepare; `whitelist-subset.test.ts` pins the other three shapes token for token.
+  docsShowRange: ['demo', { commit: 'a'.repeat(40) }, 'specs', 'a.md', `blob:${'d'.repeat(40)}`, 'prepare'],
 };

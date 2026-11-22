@@ -122,7 +122,7 @@ export interface ApprovalCtx extends ApprovalRoots {
  *  operator's `claude …` switch verbs join it, so a session never rolls, installs or selects a Claude Code build.
  *  No account verb is here: account switching and the auto-swap are never blocked (operator ruling 2026-10-19). */
 export const FORBIDDEN_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
 // ── roots ──────────────────────────────────────────────────────────────────
 
@@ -928,5 +928,67 @@ export function approvalClass(tool: string, input: Record<string, unknown>, rawC
     return 'ordinary';
   } catch {
     return 'escalate';                                                         // every doubt goes to the operator
+  }
+}
+
+// ── the census's two facts (approvals plan 2026-11-18, §3.1 and Task 1.4; F7) ─────────────────────────────────
+
+/** The plain Bash command a census fact reads, or `null`: the same ceilings `approvalClass` keeps before it parses
+ *  (size, non-ASCII, a credential path, a NUL), so no fact is computed over a request the classifier left unread. */
+function censusCommand(tool: string, input: Record<string, unknown>): string | null {
+  if (tool !== 'Bash') return null;
+  if (stringLeaves(input).reduce((n, s) => n + s.length, 0) > APPROVAL_INPUT_MAX_BYTES) return null;
+  const command = input.command;
+  if (typeof command !== 'string' || command.includes('\0')) return null;
+  if (stringLeaves(input).some((s) => NON_ASCII.test(s)) || CREDENTIAL_RE.test(command)) return null;
+  return command;
+}
+
+/** A request's statements' command words, in order, from the classifier's own statement list (`parse(lex(…))`): the
+ *  plain command name of each simple command, and `=` for a standalone assignment. `null` when the command is not one
+ *  the statement grammar can list (a pipeline, a substitution, a quoted command name, any other tool): the
+ *  census keeps the words, never an operand. */
+export function approvalCommandWords(tool: string, input: Record<string, unknown>): readonly string[] | null {
+  const command = censusCommand(tool, input);
+  if (command === null) return null;
+  try {
+    return parse(lex(command)).flatMap((ao) => ao.cmds.map((c) => (c.assign !== null ? '=' : commandName(c.words[0]))));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `literalInRoot` (§3.1, F7): EVERY ARGUMENT IS A LITERAL PATH INSIDE A ROOT. Computed once, at mint, beside the class;
+ * PR 6's family decider reuses it for its literal rule, so the census's gate and the family never disagree.
+ *  - Bash only, and only a command the statement grammar lists (no pipeline, substitution or unquoted expansion).
+ *  - No assignment and no redirect in any statement.
+ *  - Every word after a command's name is a literal: no glob (`cat *`), no variable (`cat "$X"`), no `~` (`cat ~/x`).
+ *  - A literal that starts with `-` is an option word, not a path, and stands as it is.
+ *  - Every other literal has no `..` component and resolves, from the request's trusted `cwd` when relative, AT or
+ *    inside one of the child's own roots (a read of the worktree itself is in it). Lexical, as the classifier is.
+ * Any doubt is `false`. It never widens the class: it is a fact for the census, and a precondition PR 6 adds to.
+ */
+export function literalInRoot(tool: string, input: Record<string, unknown>, rawCtx: ApprovalCtx): boolean {
+  const command = censusCommand(tool, input);
+  if (command === null) return false;
+  const ctx: ApprovalCtx = { ...rawCtx, cwd: rawCtx.cwd !== null && isAbsNormal(rawCtx.cwd) ? rawCtx.cwd : null };
+  try {
+    for (const ao of parse(lex(command))) {
+      for (const c of ao.cmds) {
+        if (c.assign !== null || c.redirs.length > 0) return false;
+        commandName(c.words[0]);
+        for (const w of c.words.slice(1)) {
+          const t = litText(w);
+          if (t === null) return false;
+          if (t.startsWith('-')) continue;
+          if (t === '' || /(?:^|\/)\.\.(?:\/|$)/.test(t)) return false;
+          if (!insideRoots(resolvePath(t, ctx.cwd, ctx), ctx, false)) return false;
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
   }
 }

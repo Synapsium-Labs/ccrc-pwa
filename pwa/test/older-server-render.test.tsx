@@ -35,12 +35,19 @@ const HEAD_DOORS = /<button[^>]*(?:class="docs-door"|accounts-door|class="mail-b
 /** The strip's no-lane placeholder, a door to the Accounts place, which a phone no longer draws: the bottom bar's Accounts door is
  *  that door (PL10 fix round 1, review 1466 F3, the coordinator's ruling on 15104). jsdom renders a phone. */
 const STRIP_PLACEHOLDER = /<div class="accounts-strip" role="link"[^>]*><span class="accounts-strip-empty">[^<]*<\/span><\/div>/g;
-/** The card's role cell (D-8142): a coordinator row, whose frame carries `role: 'coordinator'` as a current server's does,
- *  now says the word first on its context line. A head-only addition, declared like the doors: the base drew no such cell.
- *  Where the cell was the line's only content the base drew no context line, so the empty line goes with it. A row with no
- *  `role` field (an older server) draws neither, which the count below pins. */
-const ROLE_ONLY_LINE = /<span class="sess-meta sess-meta--context"><span class="sess-role"[^>]*>coordinator<\/span><\/span>/g;
-const ROLE_CELL = /<span class="sess-role"[^>]*>coordinator<\/span>/g;
+/** The card's role cell (D-8142, D-8817): a coordinator row, whose frame carries `role: 'coordinator'` as a current server's does,
+ *  now draws the role badge first on its context line, an image named "coordinator" over the design system's icon. A head-only
+ *  addition, declared like the doors: the base drew no such cell. Where the cell was the line's only content the base drew no
+ *  context line, so the empty line goes with it. A row with no `role` field (an older server) draws neither, which the count
+ *  below pins. */
+const ROLE_CELL = /<span role="img" aria-label="coordinator"[^>]*class="[^"]*\bsess-role\b[^"]*"[^>]*><svg[\s\S]*?<\/svg><\/span>/g;
+const ROLE_ONLY_LINE = new RegExp(`<span class="sess-meta sess-meta--context">${ROLE_CELL.source}<\\/span>`, 'g');
+/** The programme box's kicker (D-8817): the base drew the icon bare with the class `pg-ico`, then the word "Programme" and a
+ *  middot; the head draws the icon inside an image named "Programme" and neither the word nor the middot. Both sides are
+ *  brought to one shape: the head's wrapper is unwrapped, the base's word, middot and icon class are removed. */
+const PROGRAMME_ICON = /<span role="img" aria-label="Programme" title="Programme" class="[^"]*\bpg-ico\b[^"]*">(<svg[\s\S]*?<\/svg>)<\/span>/g;
+const BASE_PROGRAMME_WORD = '<span class="pg-word">Programme</span><span class="pg-sep" aria-hidden="true">·</span>';
+const BASE_KICKER_ICON = 'class="block flex-none pg-ico"';
 /** The programme box's title door (PL10, D26 amended), round the title span the base drew. */
 /** The console's face after the fleet head's wordmark (the Overlord face plan, Task 8), once per fleet head. The base
  *  predates it. */
@@ -90,12 +97,20 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '')
         .replace(FACE_MARK, '').replace(FACE_GROUP, '$1');
       expect(baseline.views[view].match(ROLE_CELL), `${view}: the base drew no role cell`).toBeNull();
+      // The badge is stripped below as a declared head-only addition, so it is counted FIRST: the world has two coordinators
+      // (`coord`, `coord-e`) and each view draws exactly two badges, each on one of their rows, so a badge drawn on a worker's
+      // row, or on a row with no `role`, turns this red instead of being stripped with the rest.
+      expect((html.match(ROLE_CELL) ?? []).length, `${view}: one role badge per coordinator row, none elsewhere`).toBe(2);
+      const badged = html.split('<div class="sess-line"').filter((row) => new RegExp(ROLE_CELL.source).test(row))
+        .map((row) => /aria-label="([^"]*)"><span aria-hidden="true">/.exec(row.slice(row.indexOf('sess-label')))?.[1]);
+      expect(badged.sort(), `${view}: the badged rows are the coordinators`).toEqual(['coord', 'coord-e']);
       expect(old, `${view}: no other delegation attribute`).not.toContain('data-delegation');
       for (const word of ['inferred', 'Unowned work', 'Offline coordinator', 'delegated']) {
         expect(html, `${view}: no "${word}"`).not.toContain(word);
       }
-      expect(renumberIds(old.replace(ROLE_ONLY_LINE, '').replace(ROLE_CELL, '')), `${view}: the base's markup, byte for byte, less its three head doors, the phone's strip placeholder and the coordinator role cell`)
-        .toBe(renumberIds(baseline.views[view].replace(HEAD_DOORS, '').replace(STRIP_PLACEHOLDER, '')));
+      expect(renumberIds(old.replace(ROLE_ONLY_LINE, '').replace(ROLE_CELL, '').replace(PROGRAMME_ICON, '$1')), `${view}: the base's markup, byte for byte, less its three head doors, the phone's strip placeholder, the coordinator role badge and the programme kicker's word`)
+        .toBe(renumberIds(baseline.views[view].replace(HEAD_DOORS, '').replace(STRIP_PLACEHOLDER, '')
+          .split(BASE_PROGRAMME_WORD).join('').split(BASE_KICKER_ICON).join('class="block flex-none"')));
     }
   });
 });

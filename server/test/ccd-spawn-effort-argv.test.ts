@@ -10,6 +10,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ccdSource, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { parseAliases, serializeAliases } from '../../shared/model-aliases.mjs';
+import { seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-spawn-effort-'); });
@@ -137,5 +139,158 @@ describe('the settle types no effort command (D-8149)', () => {
     const src = ccdSource();
     expect(src).not.toMatch(/^\s*_inject_spawn_effort\b/m);
     expect(src).not.toMatch(/&&\s*_inject_spawn_effort/);
+  });
+});
+
+// Task A3.5 (model classes, Anthropic arm; D23, D-8746, spec §2.5.5): the effort a home saved under an older id of a class's family is
+// ORPHANED when the class's alias moves on. ccd carries it to the current id at launch, session-only (`--effort`), and only when the
+// routing record says `auto` ("the lane decides"): the saved level is the lane's decision. Every other composition is unchanged.
+describe('an orphaned saved effort is carried at launch, only under auto (D23, D-8746)', () => {
+  const modelsDir = (): string => path.join(h.home, '.ccrc', 'models');
+  /** One aliases file for `claude`: opus's current id, its row's levels, and the orphaned level (null for none). */
+  const plantAliases = (o: { id?: string; orphan?: string | null; efforts?: string[] | null; orphanOn?: string; unlaunchable?: boolean } = {}): void => {
+    const id = o.id ?? 'claude-opus-9-1';
+    const classes: Record<string, unknown> = {};
+    for (const c of ['fable', 'opus', 'sonnet', 'haiku']) {
+      const cid = c === 'opus' ? id : `claude-${c}-9-1`;
+      const orphaned = c === (o.orphanOn ?? 'opus') && o.orphan ? { id: 'claude-opus-8-1', level: o.orphan } : null;
+      classes[c] = { id: cid, source: 'cache', evidenceAt: null, idSince: null, seenAt: null, cacheTarget: cid, seenId: null, unobserved: false,
+        unlaunchable: o.unlaunchable && c === 'opus' ? { needs: '9.9.9', laneVersion: null } : null, row: { id: cid, label: null, efforts: o.efforts === undefined ? ['low', 'medium', 'high', 'xhigh'] : o.efforts, defaultEffort: null, minVersion: null },
+        rowFrom: 'own', heldRow: null, orphaned };
+    }
+    fs.mkdirSync(modelsDir(), { recursive: true });
+    fs.writeFileSync(path.join(modelsDir(), 'claude.aliases.json'), serializeAliases(parseAliases({
+      v: 1, at: '2026-11-01T00:00:00Z', cache: { format: 'current', fetchedAt: '2026-11-01T00:00:00Z' }, stale: false, classes })));
+  };
+  /** `spawnBoth` on a clean call log (it asserts two lines, and a block spawns more than once). */
+  const both = (): string[] => { fs.rmSync(path.join(h.home, 'ccd-calls'), { force: true }); return spawnBoth('myid'); };
+  const swapLog = (): string => { const f = path.join(h.home, '.cc-sessions', 'swap.log'); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : ''; };
+
+  it('an orphaned level is carried under auto', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    plantAliases({ orphan: 'xhigh' });
+    const [primary, retry] = both();
+    expect(effortFlags(primary!)).toEqual(['xhigh']);
+    expect(effortFlags(retry!)).toEqual(['xhigh']);
+    expect(primary).toContain(`--model opus --effort xhigh --resume '${UUID}'`);
+    // the stamp keeps the RECORD's word, so the applier finds nothing pending and types nothing
+    expect(h.reg('myid', 'routeapplied')).toBe('class=opus effort=auto');
+    expect(h.sh('_route_apply_pending myid; echo rc=$?')).toBe('rc=1');
+    expect(h.sh('_route_pending_word myid')).toBe('');
+    // and the record itself is untouched: ccrc writes no level of its own
+    expect(h.reg('myid', 'effort')).toBe('auto');
+  });
+
+  it('no orphan, auto composes none', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    plantAliases({ orphan: null });
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    expect(h.reg('myid', 'routeapplied')).toBe('class=opus effort=auto');
+    // the other no-orphan shapes: no aliases file at all, an unreadable one, and an orphan under ANOTHER class
+    fs.rmSync(modelsDir(), { recursive: true, force: true });
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    fs.mkdirSync(path.join(modelsDir(), 'claude.aliases.json'), { recursive: true });
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    fs.rmSync(modelsDir(), { recursive: true, force: true });
+    plantAliases({ orphan: 'xhigh', orphanOn: 'sonnet' });
+    for (const l of both()) expect(effortFlags(l), 'the class served is opus: sonnet\'s orphan is not its').toEqual([]);
+    // control: the same files with the orphan on the served class carry it
+    plantAliases({ orphan: 'xhigh' });
+    for (const l of both()) expect(effortFlags(l)).toEqual(['xhigh']);
+  });
+
+  it('a record level wins over an orphan', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort medium');
+    plantAliases({ orphan: 'xhigh' });
+    for (const l of both()) expect(effortFlags(l)).toEqual(['medium']);
+    expect(h.reg('myid', 'routeapplied')).toBe('class=opus effort=medium');
+    h.sh('_reg_set myid effort auto');
+    for (const l of both()) expect(effortFlags(l), 'control: the same orphan is carried once the record says auto').toEqual(['xhigh']);
+  });
+
+  it('SPAWN_EFFORT wins over an orphan when the record has no effort', () => {
+    seed('myid'); h.sh('_reg_set myid class opus');
+    plantAliases({ orphan: 'xhigh' });
+    for (const l of both()) expect(effortFlags(l)).toEqual(['high']);
+    // and with no record at all
+    h.sh('rm -f "$REG/myid.class"');
+    for (const l of both()) expect(effortFlags(l)).toEqual(['high']);
+    h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    for (const l of both()) expect(effortFlags(l), 'control: the same orphan is carried once the record says auto').toEqual(['xhigh']);
+  });
+
+  it('an id move changes no composed effort', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort high');
+    plantAliases({ id: 'claude-opus-9-1' });
+    const before = both();
+    const stampBefore = h.reg('myid', 'routeapplied');
+    // the alias moves on, and the home's saved level is now orphaned: the same record composes the same argv
+    plantAliases({ id: 'claude-opus-9-2', orphan: 'low' });
+    const after = both();
+    expect(after).toEqual(before);
+    expect(h.reg('myid', 'routeapplied')).toBe(stampBefore);
+    expect(effortFlags(after[0]!)).toEqual(['high']);
+    // the box default rides unchanged across the move too (a record with no effort)
+    h.sh('rm -f "$REG/myid.effort"');
+    plantAliases({ id: 'claude-opus-9-1' });
+    const dBefore = both();
+    plantAliases({ id: 'claude-opus-9-2', orphan: 'low' });
+    expect(both()).toEqual(dBefore);
+    h.sh('_reg_set myid effort auto');
+    expect(effortFlags(both()[0]!), 'control: under auto the same move DOES surface the orphan, which is the carry and nothing else').toEqual(['low']);
+  });
+
+  it('a level the current id does not list is not carried, and nothing is said', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    plantAliases({ orphan: 'max', efforts: ['low', 'high'] });   // a level the row does not offer would not be a launch Claude Code accepts
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    plantAliases({ orphan: 'high', efforts: ['low', 'high'] });
+    for (const l of both()) expect(effortFlags(l), 'control: a listed level is carried').toEqual(['high']);
+    plantAliases({ orphan: 'high', efforts: null });   // a row with no effort field cannot rule it out
+    for (const l of both()) expect(effortFlags(l)).toEqual(['high']);
+    plantAliases({ orphan: 'high', efforts: [] });   // a model that takes none takes no carried level either
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    expect(swapLog()).not.toMatch(/route-refuse/);
+  });
+
+  it('a held class carries no orphaned level (the session runs the held id, not the alias\'s current one)', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    plantAliases({ orphan: 'xhigh' });
+    for (const l of both()) expect(effortFlags(l), 'control: unheld, the orphan is carried').toEqual(['xhigh']);
+    const adv = seedAnthropicAdvance() as { classes: Record<string, { hold: unknown }> };
+    adv.classes.opus!.hold = { at: '2026-11-02T00:00:00Z', by: 'hand', model: 'claude-opus-8-1' };
+    fs.writeFileSync(path.join(modelsDir(), 'claude.advance.json'), serializeAdvance(adv as unknown as Parameters<typeof serializeAdvance>[0]));
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    adv.classes.opus!.hold = null;   // released: carried again
+    fs.writeFileSync(path.join(modelsDir(), 'claude.advance.json'), serializeAdvance(adv as unknown as Parameters<typeof serializeAdvance>[0]));
+    for (const l of both()) expect(effortFlags(l)).toEqual(['xhigh']);
+  });
+
+  it('an unlaunchable id carries no orphaned level', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    plantAliases({ orphan: 'xhigh', unlaunchable: true });
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    plantAliases({ orphan: 'xhigh' });
+    for (const l of both()) expect(effortFlags(l), 'control: launchable, the same orphan rides').toEqual(['xhigh']);
+  });
+
+  it('explicit effort is unchanged beside a held or unlaunchable class', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort medium');
+    plantAliases({ orphan: 'xhigh', unlaunchable: true });
+    for (const l of both()) expect(effortFlags(l)).toEqual(['medium']);
+    h.sh('rm -f "$REG/myid.effort"');
+    for (const l of both()) expect(effortFlags(l)).toEqual(['high']);
+  });
+
+  it('a Codex lane and a lane with no class carry nothing', () => {
+    twoLanes();
+    plantAliases({ orphan: 'xhigh' });
+    seed('myid', 'lane-a'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    fs.copyFileSync(path.join(modelsDir(), 'claude.aliases.json'), path.join(modelsDir(), 'lane-a.aliases.json'));
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    seed('myid'); h.sh('rm -f "$REG/myid.class"; _reg_set myid effort auto');
+    for (const l of both()) expect(effortFlags(l), 'auto with no class served: no class to carry for').toEqual([]);
+    h.sh('_reg_set myid class opus');
+    for (const l of both()) expect(effortFlags(l), 'control: the Anthropic lane, same file, with a class').toEqual(['xhigh']);
   });
 });

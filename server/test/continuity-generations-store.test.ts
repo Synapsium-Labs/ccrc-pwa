@@ -50,10 +50,12 @@ describe('continuity_generations: the migration and its seed', () => {
   });
 
   it('the Shadow lanes card lists the new lane, after the roster card, with its words', () => {
-    expect(LANE_ARM_LANES).toEqual(['roster-card', 'continuity', 'launch-profile', 'anchor-slot']);   // launch profiles PR B, then the anchor, append a row each
+    // launch profiles PR B, the anchor, approvals PR 3's park, the waiting workers' sleep (D-8790), then the dispatch
+    // cap's switch (D-8792), append a row each
+    expect(LANE_ARM_LANES).toEqual(['roster-card', 'continuity', 'launch-profile', 'anchor-slot', 'approval-park', 'working-idle-sleep', 'cap-counts-working']);
     const s = store();
     const v = laneArmViewOf((lane) => s.laneArmSetting(lane));
-    expect(v.lanes.map((l) => [l.lane, l.stored, l.live])).toEqual([['roster-card', 'shadow', false], ['continuity', 'shadow', false], ['launch-profile', 'shadow', false], ['anchor-slot', 'shadow', false]]);
+    expect(v.lanes.map((l) => [l.lane, l.stored, l.live])).toEqual([['roster-card', 'shadow', false], ['continuity', 'shadow', false], ['launch-profile', 'shadow', false], ['anchor-slot', 'shadow', false], ['approval-park', 'shadow', false], ['working-idle-sleep', 'shadow', false], ['cap-counts-working', 'shadow', false]]);
     expect(LANE_ARM_TEXT.rows[CONTINUITY_LANE].legend).toBe('Renew long-lived sessions');
   });
 });
@@ -321,5 +323,42 @@ describe('the due columns, the accumulator and the hold-off', () => {
     const r = s.startsOf(ID, 2);
     expect(r.ok && r.rows.map((x) => [x.source, x.reportedAt])).toEqual([['compact', NOW + 9], ['startup', NOW + 5]]);
     expect(s.startsOf('lane-b-other', 5)).toEqual({ ok: true, rows: [] });
+  });
+});
+
+describe('closedSpotProbes (Overlord W1, renewal readings PR A)', () => {
+  /** One question row of a round of the minted generation, written as the lane and the door would have left it. */
+  const probe = (s: CoordStore, gid: number, i: number, over: Record<string, unknown>): void => {
+    const row = { kind: 'spot', book: 'closed', grade: 'pass', depthTokens: 50_000, modelClass: 'opus', askedAt: NOW + i, ...over };
+    s.db.prepare('INSERT INTO continuity_probes (roundId, qid, sessionId, generationId, kind, cls, question, expected, depthTokens, modelClass, '
+      + 'askedAt, answeredAt, grade, book) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(`r${i}`, 'p1', ID, gid, row.kind, 'thread', `q${i}`, 'x', row.depthTokens as number | null, row.modelClass as string | null, row.askedAt,
+        NOW + i + 1, row.grade as string | null, row.book as string | null);
+  };
+
+  it('answers only closed spots of the class graded pass or fail with a depth, in asked order, never an unmeasured grade (F6)', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    const gid = only(s).id;
+    probe(s, gid, 3, { grade: 'fail' });
+    probe(s, gid, 1, {});
+    probe(s, gid, 2, { grade: 'unmeasured' });
+    probe(s, gid, 4, { book: 'open' });
+    probe(s, gid, 5, { book: 'unmeasured', grade: 'unmeasured' });
+    probe(s, gid, 6, { modelClass: 'sonnet' });
+    probe(s, gid, 7, { kind: 'compaction' });
+    probe(s, gid, 8, { depthTokens: null });
+    probe(s, gid, 9, { grade: null, book: null });
+    expect(s.closedSpotProbes('opus')).toEqual({ ok: true, spots: [
+      { depthTokens: 50_000, grade: 'pass', closed: true, modelClass: 'opus', at: NOW + 1 },
+      { depthTokens: 50_000, grade: 'fail', closed: true, modelClass: 'opus', at: NOW + 3 },
+    ] });
+    expect(s.closedSpotProbes('haiku')).toEqual({ ok: true, spots: [] });
+  });
+
+  it('answers `{ ok: false }` on a closed database', () => {
+    const s = store();
+    s.db.close();
+    expect(s.closedSpotProbes('opus')).toMatchObject({ ok: false });
   });
 });

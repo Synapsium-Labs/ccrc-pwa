@@ -370,13 +370,36 @@
 .linking-candidates { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
 .linking-candidate { display: grid; gap: calc(var(--pad-card) / 8); min-width: 0; }
 .linking-candidate button { width: auto; max-width: 100%; justify-self: start; }
+/* D-8808: the workspace picker under the key field. */
+.linking-workspace { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.linking-hier { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.linking-hier .opt { min-width: 0; }
+.linking-state { align-content: start; }
+/* D-8186: "Reshape in Linear" fills its cell on a phone and sits inline, at its own width, from a laptop's card up (Task 5.1's table). */
+.linking-reshape { width: 100%; max-width: 100%; }
+.linking-all { display: grid; gap: calc(var(--pad-card) / 2); margin-top: var(--pad-card); padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); min-width: 0; }
+.linking-all select, .linking-all button { width: 100%; max-width: 100%; }
+.linking-all p { margin: 0; overflow-wrap: anywhere; }
+.linking-stale { display: grid; gap: calc(var(--pad-card) / 2); justify-items: start; min-width: 0; margin-bottom: var(--pad-card); }
+.linking-stale p { margin: 0; overflow-wrap: anywhere; }
+.linking-stale button { width: auto; max-width: 100%; }
 .linking-result { min-width: 0; }
 .linking-result p { margin: 0; overflow-wrap: anywhere; }
 @container (min-width: 480px) {
   .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
-  .linking-template, .linking-result { grid-column: 1 / -1; }
+  .linking-template, .linking-result, .linking-hier { grid-column: 1 / -1; }
+  .linking-hier { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
+  /* A7: the owner select's value is a coordinator id, and its default option names the owner, whether it is live and, for an
+     inherited owner, the project it comes from: far wider than a third of the card. It takes the hierarchy cell's whole first
+     line; the toggles and the state line share the line under it. */
+  .linking-owner { grid-column: 1 / -1; }
+  .linking-all { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+  .linking-all label, .linking-all p { grid-column: 1 / -1; }
+  .linking-all button { width: auto; }
 }
 @container (min-width: 760px) {
   .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); }
+  .linking-reshape { width: auto; justify-self: start; }
   .linking-template { grid-column: auto; }
+  .linking-hier { grid-column: 1 / -1; }
 }

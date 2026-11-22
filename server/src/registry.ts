@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
-import { readHookState } from './hookstate.js';
+import { readHookState, type HookState } from './hookstate.js';
 import { mapBounded } from './bounded.js';
 import type { RegistryRowCache } from './registryRowCache.js';
 import { rowTemperature, hotRowReuse, type RowKey } from './rowTemperature.js';
@@ -723,6 +723,18 @@ function packedStamp(raw: string | null): { at: number; rest: string } | null {
   return { at, rest: sp === -1 ? '' : trimmed.slice(sp + 1).trim() };
 }
 
+/** `$REG/<id>.spawn`'s ONE parser (D-8126 wave A7, review 2807 F2): `<epoch> <rc>`, exactly the grammar ccd's own
+ *  readers hold (`_ws_lane_cannot_spawn`: two unsigned integers, whitespace around them). `_spawn` writes the record
+ *  ALWAYS, before returning, so any other shape (an empty or torn write, a hand edit, a sign, an exponent, a fraction)
+ *  is no record: never a verdict, and never `rc: NaN`, which renders `null` on the wire while typing as `number`. */
+const SPAWN_RECORD_RE = /^\s*(\d+)\s+(\d+)\s*$/;
+export function spawnRecordOf(raw: string | null): { at: number; rc: number } | null {
+  const m = raw === null ? null : SPAWN_RECORD_RE.exec(raw);
+  if (m === null) return null;
+  const at = Number(m[1]); const rc = Number(m[2]);
+  return Number.isSafeInteger(at) && Number.isSafeInteger(rc) ? { at, rc } : null;
+}
+
 function manifestBytes(raw: string | null): number | null {
   if (raw === null) return null;
   try {
@@ -1055,8 +1067,6 @@ async function buildRecord(
   // `listedField`'s own remembering, for the one plain field read measured: a failed read is never cached.
   if (hibernatedRead !== null && !hibernatedRead.ok && hibernatedRead.reason === 'unreadable') plainUnreadable = true;
   const swapStamp = packedStamp(swapBlockedRaw);
-  const spawnStamp = packedStamp(spawnRaw);
-  const spawnRc = spawnStamp === null ? null : numOrNull(spawnStamp.rest);
 
   const lifecycleUnmeasured: LifecycleField[] = [];
   for (const [f, read] of [
@@ -1279,12 +1289,8 @@ async function buildRecord(
                 : { at: p.at, reason: p.rest === '' ? STRANDED_NO_REASON : p.rest };
             })())
       : (strandedRead.reason === 'absent' ? null : (strandedListed ? { at: 0, reason: STRANDED_UNREADABLE } : null)),
-    // An rc that does not parse is not a verdict. `_spawn` writes the stamp
-    // ALWAYS, before returning, so an unparseable one means the stamp never
-    // landed whole, not an ambiguous outcome — and `rc: NaN` on the wire
-    // renders as `null` while
-    // typing as `number`, the silent lie `numOrNull` exists to refuse.
-    spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
+    // A record that does not parse is not a verdict (`spawnRecordOf`, the one parser).
+    spawn: spawnRecordOf(spawnRaw),
     lastEnd: parseLastEnd(lastEndRaw),
     hibernatedAt: hibernatedAtOf(hibernatedRead, stopStamp),
     lifecycleUnmeasured,
@@ -1679,25 +1685,32 @@ export const UNMEASURED_ASK_AT = -1;
  * for a six-line pure-registry+hookstate read.
  */
 export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string): Promise<number> {
+  const hs = await freshHookState(io, cfg, childId);
+  return hs === null ? UNMEASURED_ASK_AT : hs.updatedAt;
+}
+
+/** The child's hook state read fresh from its registry row and file, the ladder `freshAskAt` answers from: null when the
+ *  row, its identity or the file cannot be measured. The operator's press asks it too (approvals PR 3c, review 3022 F1):
+ *  whether hook state still names the prompt a held entry was held for, at the press, not as the last tick cached it. */
+export async function freshHookState(io: FleetIO, cfg: CcrcConfig, childId: string): Promise<HookState | null> {
   const read = await readSessionRecord(io, cfg, childId);
   switch (read.kind) {
     case 'found': break;
-    case 'absent': case 'unmeasurable': case 'unlistable': return UNMEASURED_ASK_AT;
+    case 'absent': case 'unmeasurable': case 'unlistable': return null;
     // An id `isRegistryId` refuses (spec §2.3) is a child this box did not
     // measure, exactly as the two above: it answers as they do, by design.
     // Its pins are `readSessionRecord`'s zero-listing case and, end to end,
     // `POST /api/questions/ask-<n>/rule`'s `child-unmeasurable` for a stored
     // non-registry `childId`.
-    case 'bad-id': return UNMEASURED_ASK_AT;
+    case 'bad-id': return null;
     default: {
       const _x: never = read;
       return _x;
     }
   }
   const identity = measuredIdentity(read.record);
-  if (identity === null) return UNMEASURED_ASK_AT;
-  const hs = await readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
-  return hs === null ? UNMEASURED_ASK_AT : hs.updatedAt;
+  if (identity === null) return null;
+  return readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
 }
 
 /** `$REG/<id>.hibernated`'s body (D-5242): `<epoch-seconds>` and, after one space, the idle hours `ccd hibernate`

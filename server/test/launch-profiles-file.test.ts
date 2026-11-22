@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FLEET_ROLE_NAMES } from '../../shared/fleetRoles.js';
+import { HOOK_EVENTS } from '../../shared/hook-events.js';
 import { launchRowOf } from '../src/continuity/launchProfile.js';
 
 const FILE = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
@@ -15,10 +16,11 @@ const FILE = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
 /** The projection is `launchRowOf` (Overlord W1 sandbox Task 2): the one function the file, ccd's digest, the route field
  *  `profiledigest` and the sandbox check all call (Review Focus 4). A row with no surface is W1a's five keys: `env`,
  *  `settings`, `autoMemory`, `compactionSettings` (`compaction.settings` or `{}`) and `compactText` (the role's compaction
- *  instructions, `compactInstructionsFor`); `aboveHardCapPts` stays server-side. A surfaced row adds what ccd renders. */
+ *  instructions, `compactInstructionsFor`), and `longLived` (`FLEET_ROLES`'s column); `aboveHardCapPts` stays server-side. A surfaced row adds what ccd renders. */
 const projection = (): unknown => Object.fromEntries([...FLEET_ROLE_NAMES].sort().map((r) => [r, launchRowOf(r)]));
 const expectedText = (): string => `${JSON.stringify(projection(), null, 2)}\n`;
-const FIVE = ['autoMemory', 'compactText', 'compactionSettings', 'env', 'settings'];
+/** W1a's five keys, and `longLived` (Overlord W1 ccd arms, Task 4): the column ccd's hold-down and `/model` skip read. */
+const FIVE = ['autoMemory', 'compactText', 'compactionSettings', 'env', 'longLived', 'settings'];
 const SURFACED = [...FIVE, 'flags', 'memory', 'remoteControl', 'stagedSkills', 'surfaceSettings'].sort();
 
 /** Every string and number in a JSON value, keys included. */
@@ -86,5 +88,13 @@ describe('ccd/lib/launch-profiles.json is the role table, projected (H1)', () =>
       }
     }
     expect(fs.readFileSync(FILE, 'utf8')).not.toContain("'");
+  });
+  it("the overlord row registers ccrc's hook on every HOOK_EVENTS event, the model events included (door process B2)", () => {
+    // A new hook event changes the row, so the Overlord's digest moves with it: a running Overlord reads
+    // `launch-profile-unmet` until its next start (the plan's sequencing note, ruled F13).
+    const hooks = (JSON.parse(fs.readFileSync(FILE, 'utf8')) as Record<string, { surfaceSettings: { hooks: Record<string, unknown> } }>)
+      .overlord!.surfaceSettings.hooks;
+    expect(Object.keys(hooks).sort()).toEqual([...HOOK_EVENTS].sort());
+    expect(Object.keys(hooks)).toEqual(expect.arrayContaining(['PreModelSwitch', 'PostModelSwitch']));
   });
 });
