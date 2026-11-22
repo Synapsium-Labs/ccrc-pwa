@@ -68,7 +68,9 @@ describe('the base commands', () => {
     for (const go of GO_TO) {
       expect(`go-${matchRoute(go.path)?.route.id}`, `${go.title} → ${go.path}`).toBe(go.id);
     }
-    expect(GO_TO.map((g) => g.path)).toContain('/');
+    // The Fleet's own path (Overlord W1 home): `/` is the home, which no Go to offers (Go home is its own command).
+    expect(GO_TO.map((g) => g.path)).toContain('/fleet');
+    expect(GO_TO.map((g) => g.path)).not.toContain('/');
     expect(GO_TO.map((g) => g.id)).toContain('go-docs');
     const ids = new Set(baseCommands().map((c) => c.id));
     for (const go of GO_TO) expect(ids.has(go.id), go.id).toBe(true);
@@ -144,6 +146,8 @@ describe("the ids are W2's door table's", () => {
       'toggle-inspector',
       // D-8121: the ⋯ menu's Browser tools item, the session's own browser MCP choice.
       'session-browser',
+      // Overlord W1 home, Task 3: the Overlord's place (a top route, offered only under its word) and Go home (the wordmark).
+      'go-overlord', 'go-home',
     ].sort());
   });
 });
@@ -152,6 +156,7 @@ describe('the session commands (W2 Task S2d)', () => {
   const ctx = (session: CommandContext['session']): CommandContext => ({
     path: '/s/project-a-one', sessions: [], runs: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {}, setCharacter: () => {},
     openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session, inspector: null,
+    home: { place: 'fleet', why: 'not-advertised' }, overlordShown: false,
   });
 
   it('are offered only while a session screen hosts its flows, and only where the flows offer the item', () => {
@@ -239,7 +244,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
     // D-8121 reads it without session-browser the same way; its own rank row and place are pinned below.
     // The Overlord face plan's Switch character is read without the same way; its place is pinned below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character');
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character'
+      // Overlord W1 home: Go to Overlord and Go home are read without the same way; their own rows are pinned in their case.
+      && id !== 'go-overlord' && id !== 'go-home');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
@@ -259,6 +266,30 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // D-8121: the one command whose title holds "browser", placed right after Change effort, as the menu places it.
     expect(rankCommands('browser', baseCommands()).map((c) => c.id)).toEqual(['session-browser']);
     expect(empty.indexOf('session-browser'), 'after Change effort').toBe(empty.indexOf('session-effort') + 1);
+  });
+
+  // Overlord W1 home, Task 3 (plan question 9, ruled F4): its own case, away from the lines other waves add above.
+  it('Go to Overlord is offered only under overlord-v1, by g o; Go home runs g h and lands where the home is', () => {
+    const nav: string[] = [];
+    const ctx = (overlordShown: boolean, home: CommandContext['home']): CommandContext => ({
+      path: '/fleet', sessions: [], runs: [], navigate: (h) => { nav.push(h); }, setSkin: () => {}, setTheme: () => {}, setCharacter: () => {},
+      openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session: null, inspector: null,
+      home, overlordShown,
+    });
+    const ids = (c: CommandContext): string[] => available(baseCommands(), c).map((x) => x.id);
+    expect(ids(ctx(false, { place: 'fleet', why: 'not-advertised' }))).not.toContain('go-overlord');
+    expect(ids(ctx(true, { place: 'overlord', why: 'designated' }))).toContain('go-overlord');
+    const byId = (id: string) => baseCommands().find((c) => c.id === id)!;
+    expect(byId('go-overlord').keys).toEqual(['g', 'o']);
+    expect(byId('go-fleet').keys).toEqual(['g', 'f']);
+    expect(byId('go-home').keys).toEqual(['g', 'h']);
+    expect(ids(ctx(false, { place: 'fleet', why: 'not-advertised' }))).toContain('go-home');
+    byId('go-home').run(ctx(true, { place: 'overlord', why: 'designated' }));
+    byId('go-home').run(ctx(true, { place: 'fleet', why: 'rung-off' }));
+    byId('go-fleet').run(ctx(false, { place: 'fleet', why: 'none' }));
+    expect(nav).toEqual(['/overlord', '/fleet', '/fleet']);
+    expect(rankCommands('home', baseCommands()).map((c) => c.id)[0]).toBe('go-home');
+    expect(rankCommands('overlord', baseCommands()).map((c) => c.id)).toEqual(['go-overlord']);
   });
 
   // Go to Waiting on you (desktop-polish PL5a): its own case, away from the lines other waves add to the one above.
