@@ -30,7 +30,7 @@ import type { ActorRefused, AuthorityAppender } from './overlordDesignationStore
 import type { ConsoleCaller, RecordedActor } from '../auth/callerIdentity.js';
 import { consoleSubject, isAccountGateOperator, isRecordedActor } from '../auth/attributionIdentity.js';
 import { authorityDirection, type OverlordAuthorityMove } from './overlordAuthority.js';
-import type { CurrentRung, LadderWriterRefusal } from './overlordLadder.js';
+import { LANE_RAISER_MAP, type CurrentRung, type LadderWriterRefusal, type LaneRaiserName } from './overlordLadder.js';
 import {
   LADDER_CAUSE_MAP, LADDER_DEFAULT_RUNG, isLadderCauseKey, isRung, rungRank,
   type LadderNotice, type Rung,
@@ -63,9 +63,8 @@ export type LadderWrite =
 /** The server's own lanes that raise a latch (Table 7.5a's "raised by", for a row a lane raises). A lane is no caller: it has
  *  no strength, so it is never an `ActorWire`, and it only ever brakes (renewal readings PR C, slug
  *  lane-raises-the-latch-as-a-lane). Only `laneRaiser` makes one, frozen and remembered, so a structurally equal literal is
- *  refused as a copy of a minted actor is. The row records the lane's name in `raisedBy`. */
-const LANE_RAISER_MAP = { 'renewal-lane': 'the renewal readings, for probes-failed-twice' } as const;
-export type LaneRaiserName = keyof typeof LANE_RAISER_MAP;
+ *  refused as a copy of a minted actor is. The row records the lane's name in `raisedBy`. The names are the ladder's
+ *  vocabulary (`overlordLadder.ts#LANE_RAISER_MAP`). */
 export interface LaneRaiser { readonly kind: 'lane'; readonly lane: LaneRaiserName }
 const LANE_RAISERS = new WeakSet<object>();
 export function laneRaiser(lane: LaneRaiserName): LaneRaiser {
