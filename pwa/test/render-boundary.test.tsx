@@ -136,12 +136,12 @@ describe('the two screen fallbacks', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("ScreenFallback says the screen could not be shown, and Back to the fleet navigates to '/'", () => {
+  it("ScreenFallback says the screen could not be shown, and Back to the fleet navigates to the Fleet's path", () => {
     navigate('/runs?x=1');
     render(<ScreenFallback />);
     expect(screen.getByText('This screen could not be shown.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to the fleet' }));
-    expect(location.pathname + location.search).toBe('/');
+    expect(location.pathname + location.search).toBe('/fleet');
     expect(screen.queryByRole('button', { name: 'Reload' }), 'a render error offers no reload').toBeNull();
   });
 

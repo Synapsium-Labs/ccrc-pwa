@@ -7,7 +7,7 @@
 // server/test/fleet.test.ts and pwa/test/archive-screen.test.tsx); see
 // task-19-report.md.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { App } from '../src/app';
@@ -83,6 +83,33 @@ describe('App /archive route', () => {
     render(<App />);
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
     expect(screen.queryByText(/nothing is archived/i)).not.toBeInTheDocument();
+  });
+});
+
+// Overlord W1 home, Task 2 (the characterization): the Fleet moved from `/` to `/fleet`, and draws there exactly what `/` drew
+// before the home: the fleet column, the placeholder in the pane, `data-view="fleet"`. `/` now lands there itself while no
+// Overlord is designated, with the same column, and leaves no `/` in history.
+describe('the Fleet keeps a path of its own (Overlord W1 home)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('/fleet draws the fleet column and the placeholder, and / replaces itself with /fleet and draws the same', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [s({ id: 'a', status: 'idle', lifecycle: undefined, archivedAt: null, archivedBytes: null })] }));
+    navigate('/fleet');
+    render(<App />);
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
+    expect(screen.getByText('Select a session')).toBeInTheDocument();
+    const column = document.querySelector('.shell-nav')!.textContent;
+    expect(column).toContain('1 session');
+    cleanup();
+    const before = history.length;
+    navigate('/');
+    render(<App />);
+    await waitFor(() => expect(location.pathname).toBe('/fleet'));
+    expect(history.length).toBe(before + 1);
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
+    expect(screen.getByText('Select a session')).toBeInTheDocument();
+    expect(document.querySelector('.shell-nav')!.textContent).toBe(column);
   });
 });
 
@@ -369,7 +396,7 @@ describe('App mounts the fleet sheets (D-5468)', () => {
     act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'a', project: 'alpha', workspace: 'quiet-mesa',
       // A change just now keeps its project open (D-6088 rolls up a quiet one).
       statusUpdatedAt: Date.now() })] }));
-    navigate('/');
+    navigate('/fleet');
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'New session' }));
     expect(screen.getByRole('dialog', { name: /start a session/i })).toBeInTheDocument();
@@ -387,7 +414,9 @@ describe('ROUTES and the ladder, both ways', () => {
   // matches must render the fleet's placeholder. So a row dropped while the
   // ladder kept its own test, or a ladder rung the table never named, reds.
   const PROBES = [
-    '/', `/s/${encodeURIComponent('demo-quiet-basin')}`, '/archive', '/accounts', '/mail', '/runs', '/settings',
+    // The home, the Fleet's own path and the Overlord's place (Overlord W1 home): `/` decides the home, and without
+    // `overlord-v1` `/overlord` replaces to the Fleet; both draw their own route, never the placeholder.
+    '/', '/fleet', '/fleet/', '/overlord', '/fleetx', `/s/${encodeURIComponent('demo-quiet-basin')}`, '/archive', '/accounts', '/mail', '/runs', '/settings',
     '/digest', '/docs', '/docs/notes/a.md', '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x',
     // Waiting on you (desktop-polish PL5a): the list, an item, and near misses that name no route.
     '/waiting', '/waiting/7', '/waiting/x', '/waiting/7/y', '/waitingx',
@@ -411,7 +440,7 @@ describe('ROUTES and the ladder, both ways', () => {
   // The probes the table must place outside itself, named here rather than read back from `matchRoute`, so a row that starts
   // taking one (the programme row without its `accepts`, M12) is red here too, not only in its own case (review 1437 A3).
   const OUTSIDE = new Set([
-    '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x', '/waiting/x', '/waiting/7/y', '/waitingx',
+    '/fleetx', '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x', '/waiting/x', '/waiting/7/y', '/waitingx',
     '/programmes', '/programmes/a/b', '/programmesx', '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz', '/settings/a/b',
     '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
     '/programmes/prog-a/epics', '/programmes/a.b/epics/e-1', '/programmes/prog-a/epics/%zz', '/projects/project-a', '/projects/a/b/upkeep',
@@ -426,6 +455,10 @@ describe('ROUTES and the ladder, both ways', () => {
       const at = matchRoute(p);
       if (at === null || at.route.id === 'fleet') {
         expect(placeholder(), `${p} is the fleet`).not.toBeNull();
+        expect(document.querySelector('.app-shell'), p).toHaveAttribute('data-view', 'fleet');
+      } else if (at.route.id === 'home') {
+        // The home decides where it lands (Overlord W1 home, plan question 1): the pane says so, and a phone shows the Fleet.
+        expect(placeholder(), `${p} is the home, not the placeholder`).toBeNull();
         expect(document.querySelector('.app-shell'), p).toHaveAttribute('data-view', 'fleet');
       } else {
         expect(placeholder(), `${p} renders its own screen (${at.route.id})`).toBeNull();

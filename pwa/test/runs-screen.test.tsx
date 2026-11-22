@@ -1488,7 +1488,7 @@ describe('childReclaimRefreshDue — a vanish, never a poll (wave 5)', () => {
 // — the board's own three doors, and two rows nothing rendered —
 describe('the board’s doors', () => {
   it('Back goes to the fleet', () => {
-    // `navigate('/')` — the only way off this screen on a phone, and it had
+    // `navigate(FLEET_PATH)` — the only way off this screen on a phone, and it had
     // no case at all (an uncovered function).
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
@@ -1499,7 +1499,7 @@ describe('the board’s doors', () => {
     navigate('/runs');
     expect(location.pathname).toBe('/runs');
     fireEvent.click(screen.getByRole('button', { name: 'Back to fleet' }));
-    expect(location.pathname, 'Back navigated nowhere').toBe('/');
+    expect(location.pathname, 'Back navigated nowhere').toBe('/fleet');
   });
 
   it('the start sheet closes without starting anything', async () => {
