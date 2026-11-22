@@ -7,6 +7,7 @@ export declare const BLOCKED_CAUSES: readonly [
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
   'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
+  'pin-missing', 'effort-dropped', 'effort-fallback',
 ];
 export type BlockedCause = (typeof BLOCKED_CAUSES)[number];
 export declare const REASON_MAX: 200;
@@ -25,12 +26,42 @@ export declare function parseModelId(id: string): ParsedModelId | null;
 export declare function familyOf(id: string | null): string | null;
 export declare function compareVersions(a: readonly number[], b: readonly number[]): -1 | 0 | 1;
 export declare function eligibleIds(registry: Registry, catalogue: Catalogue | null): string[];
+/** Programme wave 3 (D-8838): the shortest run of continuous fresh sightings of a missing pin before `retired`. */
+export declare const RETIRE_GRACE_MS: 21600000;
+/** The longest gap between two sightings that still continues a run (D-8838). */
+export declare const RETIRE_GAP_MS: 5400000;
+/** A class's run of sightings of its missing pin (`markMissing`); `seen` is absent on a record of the first shape. */
+export interface MissingMark { model: string; since: string; seen?: string }
+/** A fresh catalogue's observation time in the advance file's time form, or null. */
+export declare function observedAt(catalogue: Catalogue | null | undefined): string | null;
 export declare function chooseCandidate(
-  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; family: string | null },
+  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; family: string | null;
+    missing?: MissingMark | unknown; nowMs?: number },
 ): Choice;
+export interface PinMissing { model: string; since: string | null; until: string | null; older: string }
+export declare function pinMissing(
+  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; missing?: MissingMark | unknown; nowMs: number },
+): PinMissing | null;
+export interface Candidate extends Choice { effortTo: string | null; canaryEffort: string | null }
+export declare function candidateFor(
+  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; family: string | null;
+    missing?: MissingMark | unknown; nowMs?: number },
+): Candidate;
+export declare function markMissing(
+  adv: Advance, registry: Registry, catalogue: Catalogue | null, nowMs: number,
+): { advance: Advance; changed: boolean };
+/** One class's stored effort level replaced by its fallback because its model no longer offers it (D-8842). */
+export interface EffortFallback { class: ModelClass; model: string; from: string; to: string }
+export declare function effortFallbacks(
+  json: unknown, catalogue: Catalogue | null,
+): { registry: Registry; fallbacks: EffortFallback[] } | null;
 export declare function resolveEffort(
   a: { stored: string | undefined; oldEfforts: readonly string[] | null; newEfforts: readonly string[] },
 ): string | undefined;
+/** A class's effort level set in (or, for null, removed from) a registry copy, edited in place and returned. */
+export declare function withEffort<R extends Registry>(next: R, cls: ModelClass, level: string | null): R;
+/** A history reason as `parseAdvance` accepts it: printable ASCII, at most `REASON_MAX` characters. */
+export declare const historyReason: (text: unknown) => string;
 export declare function canaryEffort(efforts: readonly string[]): string | null;
 
 // ── the advance file (§2.1, D13, D21) ──
@@ -79,6 +110,10 @@ export interface ClassAdvance {
   history: HistoryEntry[];
   /** When an Anthropic lane's hold on the class was last released (Task A2.3); no history entry is made for it. */
   releasedAt?: string;
+  /** Programme wave 3: the run of sightings of a missing pin (`markMissing`). */
+  missing?: MissingMark;
+  /** Programme wave 3: the effort fallback the refresh last wrote on this class (`recordEffortFallbacks`). */
+  effortFallback?: { at: string; model: string; from: string; to: string };
   [key: string]: unknown;
 }
 /** An automatic advance's intent (W2's `advance-commit`): it carries no `how`. */
@@ -124,6 +159,25 @@ export declare function recordFailure(
 ): { advance: Advance; isNew: boolean };
 export declare function reconcilePending(adv: Advance, registry: Registry): { advance: Advance; recovered: boolean };
 export declare function heldBackOf(c: ClassAdvance, candidate: string | null): HistoryEntry | null;
+export declare function recordEffortFallbacks(adv: Advance, fallbacks: readonly EffortFallback[], at: string): Advance;
+export declare function effortFallbackOf(
+  c: ClassAdvance | null, registry: Registry, cls: ModelClass, catalogue: Catalogue | null,
+): { at: string; model: string; from: string; to: string } | null;
+export declare function clearEffortFallback(adv: Advance, cls: ModelClass): { advance: Advance; changed: boolean };
+/** One class's wave 3 rows for `advance-health`'s blocked list (D-8838, D-8842). */
+export declare function classWaits(
+  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; c: ClassAdvance | null; nowMs: number },
+): { cause: 'pin-missing' | 'effort-fallback'; detail: string }[];
+/** `advance-health`'s detail for a registry still refused for a dropped level. */
+export declare const effortDroppedDetail: (f: EffortFallback, onDisk?: boolean) => string;
+/** Why the automatic advance does not act on a lane with a class registry, or null when it does (D-5198; moved here from
+ *  deploy/models-op.mjs, D-8866). */
+export declare function advanceIneligible(account: { exec?: unknown }, registry: { probe: string }):
+  'lane-not-codex-kind' | 'probe-not-codex' | null;
+export declare function refreshRecord(
+  adv: Advance,
+  a: { registry: Registry; catalogue: Catalogue | null; fallbacks: readonly EffortFallback[]; nowMs: number },
+): { advance: Advance; changed: boolean };
 export declare function lastMoveOf(c: ClassAdvance): HistoryEntry | null;
 
 // ── the move that lowered a lane's window (D-8384, D-8564) ──

@@ -220,7 +220,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory test-slice testbox   # one line, as `flock timeout`: _check_test-slice follows _check_scopes, _check_testbox follows it (D-7413)
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs history model-advance-held-back model-held-behind model-sessions-behind model-advance-blocked secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   # fourteen entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), update-sweep and delegation-hooks before it, each pinned, and the three backups checks before delegation-hooks, pinned; the four model-advance checks (D-8689) follow history, and their functions are at the very END of this file; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups checks (A11b) after them
+  models codex docs history model-advance-held-back model-held-behind model-sessions-behind model-advance-blocked model-release-lookup secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   # fifteen entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), update-sweep and delegation-hooks before it, each pinned, and the three backups checks before delegation-hooks, pinned; the four model-advance checks (D-8689) follow history, then model-release-lookup (model classes wave 3; no name that starts codex), and their functions are at the very END of this file; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups checks (A11b) after them
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -12525,6 +12525,15 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
         part="alias cache — the next session Claude Code starts on this lane refreshes it" ;;
       aliases-file-unreadable|aliases-file-invalid)
         part="aliases file — the refresh will not write over it: read it, then move it aside, and the next hourly refresh starts it again" ;;
+      # Programme wave 3 (D-8838, D-8842): a class waiting out the retired grace on a missing pin; a registry still
+      # refused for an effort level its model dropped, whose verbs refuse until the refresh writes the fallback (so
+      # no verb is offered that refuses on the same registry); and a class running at the fallback the refresh wrote.
+      pin-missing)
+        part="missing pin — the class moves to the older model named once every hourly sighting has missed its pin for six hours, and a sighting that lists it again ends the wait; to keep the class where it is, hold it from the lane's Models sheet (or 'ccrc models $id hold <class>'); after a move, Revert on the sheet (or 'ccrc models $id revert <class>') works only once the previous model is listed again, and without a hold the next hourly advance moves back to it by itself" ;;
+      effort-dropped)
+        part="effort level — the lane's registry names a level its model no longer offers, so its verbs refuse it; wait for the next hourly refresh, or run 'ccrc models refresh $id' now, which writes the fallback named" ;;
+      effort-fallback)
+        part="effort fallback — the class runs at the level named, one its model offers; to choose another, 'ccrc models $id set-effort <class> <level>' ('ccrc models $id show' lists them); setting any level, the one it runs at included, ends this, and so does the model offering the old level again" ;;
       lock-unwritable)
         part="lock — at the path the finding names: remove a symlink, a FIFO, or whatever stands where the lock file or its directory belongs; make a lock file this account cannot write writable, or remove it; give a lock directory another account owns back to this account; a lock directory this account owns is made 0700 by the next writer ('chmod 700' clears this now)" ;;
       *)
@@ -12658,4 +12667,40 @@ _check_model-advance-blocked() {
   esac
   _dr_ma_report model-advance-blocked "$rows" _dr_ma_blocked_fix \
     "$DR_MA_LANES lane(s) with a model registry or an aliases file: nothing blocks an advance" "$ma_note"
+}
+
+# ── model-release-lookup (programme model-class-advance wave 3, release-lookup-warn) ──
+# Named so that no line it prints starts `WARN codex` (the Codex bridge's own readings count those lines) or `FAIL`.
+# The probe records `version` and `readAt` (last good read), `triedAt` (last try), `failingSince` (first failure
+# since the last good read), and `lastError` (last failure's reason). The auth library owns the record's path and
+# read (D-8781); this check only measures the returned record. On failure the probe has the last good release or
+# its floor: WARN, never FAIL. WARN if a try is recent and the last good read is over a day old, or it has never
+# read a release and has failed for over a day. Measure each age from its own stamp using jq's clock; a stale
+# try is PASS (not in use). Missing dependencies or an unmeasurable record are SKIP, not evidence of lane absence.
+_RL_PY='
+import importlib.util, json, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = lib
+spec.loader.exec_module(lib)
+print(json.dumps(lib.read_client_release(), allow_nan=False))'
+_check_model-release-lookup() {
+  local lib="$HOME/.local/bin/ccgpt-auth.py" record v
+  command -v jq >/dev/null 2>&1 || { _dr_skip model-release-lookup "jq is not on PATH, so the Codex release lookup's record could not be read — the 'jq' check above owns that"; return 3; }
+  command -v python3 >/dev/null 2>&1 || { _dr_skip model-release-lookup "python3 is unavailable; the release lookup record could not be measured"; return 3; }
+  [ -f "$lib" ] || { _dr_skip model-release-lookup "the installed auth library is unavailable; the release lookup record could not be measured"; return 3; }
+  if ! record="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" python3 -I -c "$_RL_PY" "$lib" </dev/null 2>/dev/null 3>&-)" \
+    || ! v="$(jq -rs 'def t(k): .[k] | if type == "number" then . else null end; def h(s): "\(((now - s) / 3600) | floor) h";
+      (if length == 1 then .[0] else null end) |
+      if type != "object" or t("triedAt") == null then "skip"
+      elif now - t("triedAt") >= 86400 then "pass\u001fthe last lookup was \(h(t("triedAt"))) ago, so it is not being tried"
+      elif t("readAt") != null and now - t("readAt") > 86400 then "warn\u001fthe last good read of the Codex release lookup (\(.version // "none")) was \(h(t("readAt"))) ago\(if t("failingSince") == null then "" else ", and it has failed for \(h(t("failingSince")))" end); its last try, \(h(t("triedAt"))) ago, failed (\((.lastError // "no reason recorded") | tostring | .[0:200]))"
+      elif t("readAt") == null and t("failingSince") != null and now - t("failingSince") > 86400 then "warn\u001fthe Codex release lookup has never read a release, and has failed for \(h(t("failingSince"))) (\((.lastError // "no reason recorded") | tostring | .[0:200]))"
+      else "pass\u001fthe Codex release lookup read \(.version // "nothing yet") \(if t("readAt") == null then "" else "\(h(t("readAt"))) ago" end)" end' <<< "$record" 2>/dev/null)"; then v=; fi
+  case "$v" in
+    "warn"$'\x1f'*) _dr_warn model-release-lookup "${v#*$'\x1f'}" "each Codex lane's catalogue is asked as the last good release, or the built-in floor, until a read succeeds; check that this box reaches https://registry.npmjs.org (the reason above is the last try's); the probe tries again at the next hourly refresh" ;;
+    "pass"$'\x1f'*) _dr_pass model-release-lookup "${v#*$'\x1f'}" ;;
+    *) _dr_skip model-release-lookup "the Codex release lookup record is unavailable or could not be measured"; return 3 ;;
+  esac
 }

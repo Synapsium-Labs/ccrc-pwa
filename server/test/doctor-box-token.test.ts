@@ -1404,15 +1404,34 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
   });
 });
 
-describe('doctor box-token: every python this check runs is isolated (security)', () => {
-  it('each `python3 … -c` in the box-token block is `python3 -I -c`, and there are at least two', () => {
+function boxTokenBlock(src: string): string {
+  const start = /^# ── box-token: the box token[^\n]*\n/m.exec(src);
+  expect(start, 'the box-token start marker is missing').not.toBeNull();
+  const rest = src.slice(start!.index + start![0].length);
+  // Do not silently widen to a later section if the adjacent marker disappears.
+  const end = /^# ── [^\n]+/m.exec(rest);
+  expect(end?.[0] ?? '', 'the box-token end marker must be the adjacent docs-sw section').toMatch(/^# ── docs-sw:/);
+  const block = rest.slice(0, end!.index);
+  expect(/^[^#\n]*\bpython3[ \t]+-[^\n]*"\$_BT_PY_/m.test(block), 'the box-token section has no box-token Python call').toBe(true);
+  return block;
+}
+
+describe('doctor Python isolation', () => {
+  it('each `python3 … -c` in the box-token block is `python3 -I -c`, with exactly two calls', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');
-    const block = src.slice(src.indexOf('# ── box-token: the box token'));
+    const block = boxTokenBlock(src);
     expect(block.length).toBeGreaterThan(1000);
     const code = block.split('\n').filter((l) => !/^\s*#/.test(l));
     const calls = code.filter((l) => /python3\s+-/.test(l));
     expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(code.join('\n').match(/\bpython3[ \t]+-/g)?.length, 'box-token Python call inventory').toBe(2);
     for (const l of calls) expect(l, 'python3 without -I').toMatch(/python3 -I -c "\$_BT_PY_/);
+  });
+
+  it('the release lookup invokes its reader with `python3 -I -c`', () => {
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    const check = /^_check_model-release-lookup\(\) \{\n([\s\S]*?)^}/m.exec(src)?.[1] ?? '';
+    expect(check, 'release lookup must call isolated Python').toMatch(/^[^#\n]*\bpython3 -I -c "\$_RL_PY"/m);
   });
 });
 
@@ -1455,11 +1474,6 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
   // Review 362 F4 (bar class 10; the plan's Global Constraint): the python in this check spells the generation id's shape
   // three times and the sync-proof tuple by hand. L0 owns the shape (`GENERATION_ID_HEX`) and the two `proof-*` words
   // (`TOKEN_SYNC_OP_ERRORS`); `proved` is the verb's own success word (`R_PROOF=proved`), pinned from the verb's text.
-  const checkBlock = (src: string): string => {
-    const at = src.indexOf('# ── box-token: the box token');
-    expect(at, 'the box-token block marker moved: re-point the pin').toBeGreaterThanOrEqual(0);
-    return src.slice(at);
-  };
   /** Every QUANTIFIED bracket class (one followed by `{n}` or `{n,m}`; a class with no such quantifier is not seen, and
    *  neither is a hex shape spelled some other way, such as a `\x` escape or a literal alternation) whose admitted set is
    *  hex digits (and `-`) and holds at least one hex letter, however the class spells that set:
@@ -1489,14 +1503,14 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     }
     return out;
   };
-  const genShapes = (src: string): string[] =>
-    checkBlock(src).split('\n').filter((l) => !/^\s*#/.test(l))
+  const genShapes = (block: string): string[] =>
+    block.split('\n').filter((l) => !/^\s*#/.test(l))
       .flatMap((l) => [...l.matchAll(/(?:\(\?:)?\[((?:\[:[a-z]+:\]|\\.|[^\]\\[])*)\]\)?\{\d+(?:,\d*)?\}/g)]
         .filter((m) => { const set = expandClass(m[1]!); return [...set].every((c) => HEX_SET.has(c)) && [...set].some((c) => /[a-fA-F]/.test(c)); })
         .map((m) => m[0]))
       .filter((w) => w !== '[0-9a-f]{64}');
-  const proofTuple = (src: string): unknown[] | null => {
-    const hits = [...checkBlock(src).matchAll(/\bpf in \(([^)]*)\)/g)];
+  const proofTuple = (block: string): unknown[] | null => {
+    const hits = [...block.matchAll(/\bpf in \(([^)]*)\)/g)];
     if (hits.length !== 1) return null;
     return hits[0]![1]!.split(',').map((x) => x.trim()).filter(Boolean)
       .map((x) => (x === 'None' ? null : /^"([^"]*)"$/.exec(x)?.[1] ?? `?${x}`));
@@ -1508,24 +1522,28 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
   const l0Proof = (): string[] => TOKEN_SYNC_OP_ERRORS.filter((w) => w.startsWith('proof-'));
   it('the generation id shape is spelled exactly three times in the check and each is GENERATION_ID_HEX', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');
-    expect(genShapes(src)).toEqual([GENERATION_ID_HEX, GENERATION_ID_HEX, GENERATION_ID_HEX]);
+    expect(genShapes(boxTokenBlock(src))).toEqual([GENERATION_ID_HEX, GENERATION_ID_HEX, GENERATION_ID_HEX]);
   });
   it('the sync-proof tuple is (None, the verb\'s success word, then L0\'s proof-* sync words), exactly', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');
     expect(l0Proof().length, 'L0 has no proof-* sync words: the filter is empty').toBeGreaterThan(0);
-    expect(proofTuple(src)).toEqual([null, 'proved', ...l0Proof()]);
+    expect(proofTuple(boxTokenBlock(src))).toEqual([null, 'proved', ...l0Proof()]);
     expect([...verbProofWords()].sort(), 'the verb\'s R_PROOF words').toEqual(['proved', ...l0Proof()].sort());
   });
   it('CONTROL: the scanners see a narrowed shape, a fourth spelling, a dropped word and a renamed word', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');
+    const block = boxTokenBlock(src);
+    const plant = (line: string): string => `${block}\n    ${line}\n`;
     const want = [GENERATION_ID_HEX, GENERATION_ID_HEX, GENERATION_ID_HEX];
-    expect(genShapes(src.replace('[0-9a-f]{16}', '[0-9a-f]{15}'))).not.toEqual(want);
-    expect(genShapes(src.replace(/\[0-9a-f\]\{16\}(?![\s\S]*\[0-9a-f\]\{16\})/, '[0-9a-f]{15}'))).not.toEqual(want);
-    expect(genShapes(`${src}\n    x = re.compile(r"[0-9a-f]{16}")\n`)).not.toEqual(want);
-    expect(genShapes(`${src}\n    x = re.compile(r"[a-f0-9]{16}\\Z")\n`)).not.toEqual(want);
-    expect(genShapes(`${src}\n    x = re.compile(r"[0-9a-fA-F]{16}")\n`)).not.toEqual(want);
-    expect(genShapes(`${src}\n    x = re.compile(r"[[:xdigit:]]{16}")\n`)).not.toEqual(want);
-    expect(genShapes(`${src}\n    x = re.compile(r"[0-9]{2}")\n`), 'a digit-only class is not a hex shape').toEqual(want);
+    expect(genShapes(block.replace('[0-9a-f]{16}', '[0-9a-f]{15}'))).not.toEqual(want);
+    expect(genShapes(block.replace(/\[0-9a-f\]\{16\}(?![\s\S]*\[0-9a-f\]\{16\})/, '[0-9a-f]{15}'))).not.toEqual(want);
+    const fourth = 'x = re.compile(r"[0-9a-f]{16}")';
+    expect(genShapes(plant(fourth))).not.toEqual(want);
+    expect(genShapes(boxTokenBlock(`${src}\n    ${fourth}\n`)), 'a fourth spelling outside the section').toEqual(want);
+    expect(genShapes(plant(String.raw`x = re.compile(r"[a-f0-9]{16}\Z")`))).not.toEqual(want);
+    expect(genShapes(plant('x = re.compile(r"[0-9a-fA-F]{16}")'))).not.toEqual(want);
+    expect(genShapes(plant('x = re.compile(r"[[:xdigit:]]{16}")'))).not.toEqual(want);
+    expect(genShapes(plant('x = re.compile(r"[0-9]{2}")')), 'a digit-only class is not a hex shape').toEqual(want);
     // Review 365 R3: a class is judged by the set it admits, so every spelling of hex is a hex shape. `String.raw` keeps the
     // backslash (an untagged template turns `\d` into a bare `d`, a spelling the old scanner already found). Each row
     // names a pattern its own element must match, so an element edited to lose its backslash (or any other spelling) fails
@@ -1536,15 +1554,15 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     ];
     for (const [spelled, has] of spellings) {
       expect(spelled, `the planted element ${spelled} lost the spelling it names`).toMatch(has);
-      expect.soft(genShapes(`${src}\n    x = re.compile(r"${spelled}{16}")\n`), `${spelled} is a hex shape`).not.toEqual(want);
+      expect.soft(genShapes(plant(`x = re.compile(r"${spelled}{16}")`)), `${spelled} is a hex shape`).not.toEqual(want);
     }
     // The natural bash spelling: a class body that admits `[` would swallow it and miss the shape.
-    expect.soft(genShapes(`${src}\n    [[ "$x" =~ ^[0-9a-f]{16}$ ]]\n`), 'a hex class inside a bash [[ ]] test').not.toEqual(want);
-    expect.soft(genShapes(`${src}\n    x = re.compile(r"[A-Za-z0-9._:-]{8}")\n`), 'a class wider than hex is not a hex shape').toEqual(want);
-    expect.soft(genShapes(`${src}\n    x = re.compile(r"[0-9a-g]{16}")\n`), 'a near-miss class (g is not hex) is not a hex shape').toEqual(want);
-    expect(proofTuple(src.replace(', "proof-unmeasured")', ')'))).not.toEqual([null, 'proved', ...l0Proof()]);
-    expect(proofTuple(src.replace('"proved"', '"proven"'))).not.toEqual([null, 'proved', ...l0Proof()]);
-    expect(proofTuple(src.replace('(None, ', '('))).not.toEqual([null, 'proved', ...l0Proof()]);
+    expect.soft(genShapes(plant('[[ "$x" =~ ^[0-9a-f]{16}$ ]]')), 'a hex class inside a bash [[ ]] test').not.toEqual(want);
+    expect.soft(genShapes(plant('x = re.compile(r"[A-Za-z0-9._:-]{8}")')), 'a class wider than hex is not a hex shape').toEqual(want);
+    expect.soft(genShapes(plant('x = re.compile(r"[0-9a-g]{16}")')), 'a near-miss class (g is not hex) is not a hex shape').toEqual(want);
+    expect(proofTuple(block.replace(', "proof-unmeasured")', ')'))).not.toEqual([null, 'proved', ...l0Proof()]);
+    expect(proofTuple(block.replace('"proved"', '"proven"'))).not.toEqual([null, 'proved', ...l0Proof()]);
+    expect(proofTuple(block.replace('(None, ', '('))).not.toEqual([null, 'proved', ...l0Proof()]);
   });
   it('the server trace names are the server writer\'s (tokenPaths, SET_ASIDE_MARK, and boot\'s own set-aside list) (4554)', () => {
     const p = tokenPaths('/x/mail.token', '/h');
