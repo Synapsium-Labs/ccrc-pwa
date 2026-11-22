@@ -198,3 +198,20 @@ export function currentWitnessTuple(
   });
   return parsed.ok ? { kind: 'tuple', tuple: parsed.tuple } : { kind: 'unmeasured', why: 'tuple' };
 }
+
+// ── The witness's words ──────────────────────────────────────────────────────────────────────────────────────────────
+
+const HOST_RELATIONS: Readonly<Record<HostRelation, true>> = { 'other-host': true, 'same-host': true, unmeasured: true, console: true };
+const HELD_KINDS: Readonly<Record<WitnessHeld['kind'], true>> = { tuple: true, nothing: true, malformed: true };
+const VERDICT_KINDS: Readonly<Record<WitnessVerdict['kind'], true>> = {
+  consistent: true, stale: true, 'rolled-back': true, 'no-witness': true, unmeasured: true,
+};
+const OFF_VOLUME_WORDS: Readonly<Record<ReturnType<typeof offVolumeHeld>, true>> = { held: true, 'not-yet': true, unmeasured: true };
+
+/** Whether `w` is one of this file's own kebab words: where a witness lives, what it answered, its verdict, and whether a narrowing
+ *  is held off the volume. Derived from the tables above, so a word added to a union is admitted and a typo is not. None is a mail
+ *  rejection or a run refusal (the coordination code census admits them through here). */
+export function isWitnessKebab(w: string): boolean {
+  const own = (o: object): boolean => Object.hasOwn(o, w);
+  return own(HOST_RELATIONS) || own(HELD_KINDS) || own(VERDICT_KINDS) || own(OFF_VOLUME_WORDS);
+}

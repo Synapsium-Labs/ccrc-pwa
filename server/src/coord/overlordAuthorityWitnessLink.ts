@@ -39,3 +39,13 @@ export function witnessLinkOver(client: Pick<FleetClient, 'request' | 'state'>):
     },
   };
 }
+
+const LINK_KINDS: Readonly<Record<WitnessLinkAnswer['kind'], true>> = {
+  answered: true, 'no-op': true, 'predates-op': true, unsent: true, lost: true, malformed: true,
+};
+
+/** Whether `w` is one of this adapter's answer kinds. Derived from the table above; none is a mail rejection or a run refusal (the
+ *  coordination code census admits them through here). */
+export function isWitnessLinkKebab(w: string): boolean {
+  return Object.hasOwn(LINK_KINDS, w);
+}
