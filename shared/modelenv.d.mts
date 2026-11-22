@@ -78,6 +78,8 @@ export declare function modelEnvBlock(
   registry: Registry, catalogue: Catalogue | null, windows?: ModelWindows | null,
   opts?: { codexLane?: boolean },
 ): ModelEnv;
+/** The settings file as `mergeSettingsEnv` reads it; throws `ModelEnvInvalid` where the merge would refuse. */
+export declare function readSettingsJson(settingsPath: string): { json: Record<string, unknown>; existed: boolean };
 export declare function mergeSettingsEnv(
   settingsPath: string, block: Record<string, string>,
 ): { changed: boolean };

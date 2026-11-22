@@ -434,7 +434,7 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
     // The token and the body's shape are the door process's to get right: the Overlord never sends either.
     for (const w of ['unauthenticated', 'bad-request']) words.delete(w);
     expect([...words].sort(), 'the confirm route answers a refusal the paragraph does not name, or lost one')
-      .toEqual(['no-project', 'team-ambiguous', 'team-set', 'team-unknown', 'unavailable', 'write-failed']);
+      .toEqual(['no-project', 'not-configured', 'team-ambiguous', 'team-set', 'team-unknown', 'unavailable', 'write-failed']);
     const p = paragraph();
     for (const w of words) expect(p, `the paragraph omits \`${w}\``).toContain(`\`${w}\``);
     // And the other way (review 3253 A2): each refusal the paragraph lists, a word followed by a colon, is one the door answers.

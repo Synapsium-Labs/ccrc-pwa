@@ -724,3 +724,107 @@ describe('the advance file on an Anthropic lane (model-class Anthropic arm A2.3)
     expect(read.classes.sonnet.history[0]!['evidenceAt']).toBe(AT);
   });
 });
+
+// ── Programme wave 3: two optional per-class keys, `missing` (backward-move) and `effortFallback`
+// (effort-level-dropped). Each parses when absent (every file written before), is refused when present and malformed,
+// naming its field, and is kept by an older build as an unknown key, so the mixed-version window reads both ways.
+describe('the advance file\'s wave 3 keys: missing and effortFallback', () => {
+  const AT = '2026-11-10T22:16:58Z';
+  const MISSING = { model: 'model-6.1-gamma', since: AT, seen: '2026-11-10T23:16:55Z' };
+  const FALLBACK = { at: AT, model: 'model-6.1-gamma', from: 'max', to: 'xhigh' };
+
+  it('both parse, and survive parse, recordMove and serialize', () => {
+    const a = example();
+    a.classes.opus.missing = MISSING;
+    a.classes.sonnet.effortFallback = FALLBACK;
+    const p = parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(p.classes.opus['missing']).toEqual(MISSING);
+    expect(p.classes.sonnet['effortFallback']).toEqual(FALLBACK);
+    const moved = recordMove(p, 'opus', { at: AT, how: 'hand', from: null, to: 'model-6.1-gamma', ok: true, canary: 'not-run' });
+    expect(moved.classes.opus['missing']).toEqual(MISSING);
+    expect(moved.classes.sonnet['effortFallback']).toEqual(FALLBACK);
+  });
+
+  it('reads and preserves missing, effortFallback and releasedHold on one class', () => {
+    const a = example();
+    const releasedHold = { model: MISSING.model, at: AT };
+    a.classes.opus.missing = MISSING;
+    a.classes.opus.effortFallback = FALLBACK;
+    a.classes.opus.releasedHold = releasedHold;
+    const fields = { missing: MISSING, effortFallback: FALLBACK, releasedHold };
+    const p = parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(p.classes.opus).toMatchObject(fields);
+    expect(JSON.parse(serializeAdvance(p)).classes.opus).toMatchObject(fields);
+  });
+
+  it('refuses malformed releasedHold alongside valid missing and effortFallback', () => {
+    const a = example();
+    a.classes.opus.missing = MISSING;
+    a.classes.opus.effortFallback = FALLBACK;
+    a.classes.opus.releasedHold = { model: MISSING.model, at: 'not-a-time' };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.releasedHold',
+      message: 'classes.opus.releasedHold is not {"model": <id>, "at": <time of the form YYYY-MM-DDTHH:MM:SSZ>}.',
+    }));
+  });
+
+  it('a missing record of the first shape, with no seen, still reads (the rule restarts it, D-8838)', () => {
+    const a = example();
+    a.classes.opus.missing = { model: 'model-6.1-gamma', since: AT };
+    expect(parseAdvance(a).classes.opus['missing']).toEqual({ model: 'model-6.1-gamma', since: AT });
+  });
+
+  it.each([
+    ['a missing that is not an object', (a: any) => { a.classes.opus.missing = 'yes'; }, 'classes.opus.missing'],
+    ['a missing with no model', (a: any) => { a.classes.opus.missing = { model: null, since: AT }; }, 'classes.opus.missing'],
+    ['a missing model that is not an id', (a: any) => { a.classes.opus.missing = { model: 'not an id', since: AT }; }, 'classes.opus.missing'],
+    ['a missing since that is not a time', (a: any) => { a.classes.opus.missing = { model: 'model-6.1-gamma', since: '2026-11-10' }; }, 'classes.opus.missing'],
+    ['a missing seen that is not a time', (a: any) => { a.classes.opus.missing = { ...MISSING, seen: 1789000000 }; }, 'classes.opus.missing'],
+    ['a missing seen of null', (a: any) => { a.classes.opus.missing = { ...MISSING, seen: null }; }, 'classes.opus.missing'],
+    ['an effortFallback that is not an object', (a: any) => { a.classes.opus.effortFallback = 1; }, 'classes.opus.effortFallback'],
+    ['an effortFallback with no at', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, at: undefined }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback model that is not an id', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, model: 'x y' }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback from of null', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, from: null }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback to of null', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, to: null }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback to that is empty', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, to: '' }; }, 'classes.opus.effortFallback'],
+  ] as [string, (a: any) => void, string][])('refuses %s, naming the field', (_w, spoil, field) => {
+    const a = example();
+    spoil(a);
+    expect(() => parseAdvance(a)).toThrow(AdvanceInvalid);
+    try { parseAdvance(a); } catch (e) { expect((e as AdvanceInvalid).field).toBe(field); }
+  });
+
+  // The older build: #3107's merge commit on main (model classes wave 7), the build this wave lands on. Read out of git
+  // history into the run's own temporary directory, as the case above reads #2943's.
+  const OLDER_W7 = '6c8f52199c';
+  const olderW7 = (): string | null => {
+    const dir = mkTmp('model-advance-older-w7-');
+    fs.mkdirSync(path.join(dir, 'shared'));
+    for (const f of ['model-advance.mjs', 'models.mjs', 'base-url.mjs']) {
+      const r = spawnSync('git', ['-C', REPO, 'show', `${OLDER_W7}:shared/${f}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+      if (r.status !== 0) return null;
+      fs.writeFileSync(path.join(dir, 'shared', f), r.stdout);
+    }
+    return path.join(dir, 'shared', 'model-advance.mjs');
+  };
+
+  it('an older build reads a file carrying both keys and keeps them through its own writes', async () => {
+    const file = olderW7();
+    expect(file, `this checkout does not hold commit ${OLDER_W7}, the older build this test reads`).not.toBeNull();
+    if (file === null) return;
+    const older = await import(pathToFileURL(file).href) as {
+      parseAdvance: (j: unknown) => Advance; recordMove: (a: Advance, c: string, e: unknown) => Advance;
+    };
+    expect('markMissing' in older, 'the build under test is the older one').toBe(false);
+    const a = example();
+    a.classes.opus.missing = MISSING;
+    a.classes.sonnet.effortFallback = FALLBACK;
+    const read = older.parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(read.classes.opus['missing']).toEqual(MISSING);
+    expect(read.classes.sonnet['effortFallback']).toEqual(FALLBACK);
+    const written = older.recordMove(read, 'opus', { at: AT, how: 'hand', from: null, to: 'model-6.1-gamma', ok: true, canary: 'not-run' });
+    expect(parseAdvance(JSON.parse(serializeAdvance(written))).classes.opus['missing'], 'and this build reads it back')
+      .toEqual(MISSING);
+  });
+});

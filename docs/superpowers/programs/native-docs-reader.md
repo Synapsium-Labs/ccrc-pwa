@@ -69,6 +69,8 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
       The two races are B2's first item: deterministic waits, with no timing gate and no snapshot moved.
   - **L2 landing B2: wave 36, run 3249, ticket `lib-l2b2`, block 8881 to 8883, dispatched on B1's merge.**
     - **D-8881 is defined in X2's plan.** The `guided` layout keeps its layers in the existing per-doc `folds` field, not in a field named per layout. The bootstrap stands at 32 740 of its 32 768 bytes and is never raised, and LX6 is still to land. Each layout ignores an entry it cannot read, with a mutation row each way. X2's spec §6 State line is amended in place.
+    - **D-8881's limits are stated (review run 3292, B2 round 1).** A document with nothing folded reads as unvisited, so `guided` applies its first-visit layers. A layout's own fold write keeps only its own entries. `guided`'s layers choice lives in the existing UI preference. Making the field fully two-way would change the default layout's pinned bytes. X2's plan and spec §6 are amended in place.
+    - **D-8881's limit 2 is narrowed (review run 3336, B2 round 2).** It is the default layout's fold write that keeps only its own entries; `guided`'s write keeps the entries it does not own. X2's plan and spec §6 are amended in place.
   - **The programme's plan is declared on the server** (`plan put`, from the Work card's request of 2026-11-21).
     - Seven epics, 33 tickets and four phases:
       - the epics are the shared library (with the checkpoint "the contract release is published and signed by the operator"), X1 appearance, X2 parity, X3 drafts, X5 HTML artifacts, X6 reader mode, and close-out;
