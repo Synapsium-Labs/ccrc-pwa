@@ -43,6 +43,8 @@ import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
+import type { DesignationView } from '../../../shared/overlord-designation';
+import type { LadderWire } from '../../../shared/overlord-ladder';
 import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
@@ -139,6 +141,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
   const getJson = async <T>(path: string, opts?: ReadOpts): Promise<T> =>
     (await request(path, undefined, opts)).json() as Promise<T>;
+
+  /** `getJson`, with a 404 from the read's own path answered as `{ absent: true }`: only an older server, which has no such
+   *  read, sends one (Overlord W1 home, plan question 3). Every other failure throws exactly as `getJson` does. */
+  const getJsonOrAbsent = async <T>(path: string, opts?: ReadOpts): Promise<T | { readonly absent: true }> =>
+    getJson<T>(path, opts).catch((err: unknown) => {
+      if (err instanceof ApiError && err.status === 404) return { absent: true } as const;
+      throw err;
+    });
 
   const postInit = (body?: unknown): RequestInit =>
     body === undefined
@@ -328,6 +338,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
+    /** The Overlord's reads (Overlord W1 home, Task 2), each read only by `stores/overlord.ts`: the designation row, the ladder,
+     *  and `GET /health`'s capability words (an older server's body has no `caps`). */
+    overlordDesignation: (opts?: ReadOpts) => getJsonOrAbsent<{ readonly designation: DesignationView | null }>('/api/overlord/designation', opts),
+    overlordLadder: (opts?: ReadOpts) => getJsonOrAbsent<LadderWire>('/api/overlord/ladder', opts),
+    serverCaps: (opts?: ReadOpts) => getJson<{ readonly caps?: readonly string[] }>('/health', opts),
     rebootFleet: () => post('/api/fleet/reboot'),
 
     /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,

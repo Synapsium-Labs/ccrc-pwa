@@ -90,6 +90,30 @@ export function homePlace(caps: CapRead, d: DesignationState, rung: RungRead): H
   return HOME_TABLE[d.kind][rungClassOf(rung)];
 }
 
+/** The caps read as the home reads it: an answer (or a stale one) is its words, anything else is unmeasured. */
+export function capReadOf(read: ReadState<readonly string[]>): CapRead {
+  return read.state === 'answered' || read.state === 'stale' ? { kind: 'caps', caps: read.value } : { kind: 'unmeasured' };
+}
+
+/** The ladder read as the home reads it: the operator's rung from an answer (or a stale one), and otherwise unmeasured. An
+ *  older server with no ladder (`absent`) is unmeasured too: the rung is not known, and the place keeps the brake. */
+export function rungReadOf(read: ReadState<{ readonly operatorRung: string }>): RungRead {
+  return read.state === 'answered' || read.state === 'stale' ? { kind: 'rung', rung: read.value.operatorRung } : { kind: 'unmeasured' };
+}
+
+/** Whether the home is decided, so `/` may replace itself: no read the answer depends on is still loading. The caps decide
+ *  first; with the word, the designation; for a designated Overlord, the ladder (its `off` sends the home to the Fleet). A
+ *  failed read is decided (it answers the Fleet, or the place for an unread rung); only `loading` waits. */
+export function homeSettled(
+  caps: ReadState<readonly string[]>, designation: ReadState<DesignationView | null>, ladder: ReadState<unknown>,
+): boolean {
+  if (caps.state === 'loading') return false;
+  if (!overlordShown(capReadOf(caps))) return true;
+  if (designation.state === 'loading') return false;
+  const d = designationStateOf(designation);
+  return !((d.kind === 'bound' || d.kind === 'pending') && ladder.state === 'loading');
+}
+
 /** Whether the Overlord's door is drawn for a designation kind (spec §4: "while one is designated, and while a failed first
  *  start stands"). Read by `placesFor`, beside the word. */
 export const OVERLORD_DOOR: Readonly<Record<DesignationState['kind'], boolean>> = {
@@ -98,4 +122,13 @@ export const OVERLORD_DOOR: Readonly<Record<DesignationState['kind'], boolean>> 
   'failed-start': true,
   none: false,
   unmeasured: false,
+};
+
+/** The place's state word for a designation kind (PR A draws the place as its heading and this word; PR B the whole place). */
+export const DESIGNATION_WORDS: Readonly<Record<DesignationState['kind'], string>> = {
+  bound: 'The Overlord is running.',
+  pending: 'The Overlord is starting.',
+  'failed-start': 'The last start failed.',
+  none: 'No Overlord is designated.',
+  unmeasured: 'The designation could not be read.',
 };

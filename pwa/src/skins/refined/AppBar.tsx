@@ -1,6 +1,7 @@
 // Refined's app bar at laptop and wide (W2 Task S4b, D-5471; spec §5.3, Shell, laptop and wide rows), inside the
-// frame's `<header>`. Left to right on its line: the wordmark; the tabs, the console's desk places (`DESK_PLACES`, which has
-// no fleet place: the sessions are in the column beside every page, desktop-polish PL10, D-7952); the bell, search and Settings (pushed to
+// frame's `<header>`. Left to right on its line: the wordmark; the tabs, the console's desk places (`deskPlacesFor`, which has
+// no fleet place while D25 stands: the sessions are in the column beside every page, desktop-polish PL10, D-7952; the
+// Overlord's door first and the Fleet's second while the home is the Overlord, Overlord W1 home ruled F5); the bell, search and Settings (pushed to
 // the line's right edge); `+ New session`. Under the line the header holds the lanes row, the full accounts strip
 // (T2c, D-6329): every lane's card, one instance, since the bar mounts only at the desk.
 //
@@ -16,9 +17,10 @@ import { FaceMark } from '../../face/FaceMark';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
-import { DESK_PLACES } from '../../lib/places';
+import { deskPlacesFor } from '../../lib/places';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES } from '../../lib/routes';
+import { useDesignationState, useHome, useOverlordShown } from '../../stores/overlord';
 
 function Tab({ id, here, count, word }: { id: string; here: boolean; count: number; word: string }): ReactNode {
   const route = ROUTES.find((r) => r.id === id)!;
@@ -41,13 +43,14 @@ export function AppBar(): ReactNode {
   const { path } = useLocation();
   const here = matchRoute(path)?.route.id ?? null;
   const badges = useNavBadges();
+  const places = deskPlacesFor(useOverlordShown(), useDesignationState(), useHome());
   return (
     <>
       <div className="ref-bar">
         <Wordmark className="ref-bar-mark" />
         <FaceMark />
         <nav aria-label="Primary" className="ref-tabs">
-          {DESK_PLACES.map(({ id }) => (
+          {places.map(({ id }) => (
             <Tab key={id} id={id} here={here === id} {...placeBadge(id, badges)} />
           ))}
         </nav>
