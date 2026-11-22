@@ -1206,6 +1206,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
     /** `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one; a refusal rejects with its `ApiError`. */
     cancelSessionTimer: (id: string, timerId: number) => postJson<unknown>(`${sid(id)}/timers/${timerId}/cancel`),
+    /** `GET /api/overlord/restore` (authority journal C): the authority guard's state; `RestoreBanner`'s `readAuthority` reads it. */
+    overlordRestore: () => getJson<unknown>('/api/overlord/restore'),
+    /** `POST /api/overlord/restore/confirm`: Confirm the restore, behind the step-up; a refusal rejects with its `ApiError`. */
+    confirmRestore: () => postJson<unknown>('/api/overlord/restore/confirm'),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
