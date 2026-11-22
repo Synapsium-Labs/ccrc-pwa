@@ -561,7 +561,8 @@ number from `POST /api/ledger/deviations`.
   link opens its call there; a link the wire carries without a readable call id opens the screen, as before. The landing
   says only what the list draws (review 3217): `callTargetOf` answers open, cleared (inside the trail's own 48-hour window),
   hidden (the side rail's filter hides it), gone, or not yet heard (only on the device's saved list), and the page scrolls
-  once per address. Record: the wave 8 note.
+  once per address. A cleared call's notice never outlives its row (review 3222): Show all opens its group and the folded
+  trail keeps its row. Record: the wave 8 note.
 
 ## Global Constraints
 
