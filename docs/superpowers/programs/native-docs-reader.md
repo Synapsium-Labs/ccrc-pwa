@@ -33,9 +33,64 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan), #2806 | run 1532, dispatched 2026-11-10; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Tasks 1-9 committed (worker-reported). Task 10 was held at Step 2 from 2026-11-11 and resumed on 2026-11-14 with CI standing in for the local server suite (Decisions, 2026-11-14). The wave-done was verified at `d56b10667`. Review runs 2104, 2116 and 2122 found 3, 2 and 1 important findings, each sent back as a fix round; on 2026-11-15 the review cap was extended from 3 to 6. Review run 2132 (round 4) found no product defect, the wave was accepted at `b7b60ed93`, and #2806 **merged** 2026-11-15 (`f6bdbf153`), its merge-queue run green with `browser (pwa)`. Run 1532 closed done (Decisions, 2026-11-15) |
 | Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **X1's design merged 2026-11-19 (#3048, `8781ef20a`; run 2631, D-8759 to D-8761), accepted at the review cap; its carries were folded in by X4, the library-input text wave (run 2680, wave 27), merged 2026-11-19 (#3055, `da21717b8`), which also set X2's library share. The library programme plans its one wave from X1 §10 and X2 §6 on `main`; ccrc's wave C after the release. Implementation waits for the operator's approval (Decisions, 2026-11-19)**. Approved 2026-11-19. This programme drives the library's waves: L1, the appearance contract, runs as run 2843 in the library's repository, and the library is renamed pinax-lib before the release (Decisions, 2026-11-20). L1 landed as library PR #86 (merge commit `aacae4c56`; run 2843, D-8816 and D-8824 to D-8827), accepted at the review cap, with a release-gate measurement carried (Decisions, 2026-11-20 (evening)) |
-| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)**. Approved and confirmed 2026-11-19. X2's P1 landed in #3102 (`2d544ec50`; run 2743, D-8783 and D-8784), and X5, HTML pages as artifacts, in #3093 (`dd14bc1f2`; run 2837), each accepted at the review cap. X3's R1 is run 2949, wedged since 2026-11-20 20:10Z (Decisions, 2026-11-21 (morning)). X2's library side: the rename landed as library PR #87 (`bee0fd1ec`; run 2987), and L2's landing A is in review as library PR #88 (run 3007, D-8868). X6, reader mode, landed in #3121 (`c58f67743`; run 2847, D-8803 to D-8805 and D-8831), accepted at the review cap (Decisions, 2026-11-20 (evening)) |
+| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)**. Approved and confirmed 2026-11-19. X2's P1 landed in #3102 (`2d544ec50`; run 2743, D-8783 and D-8784), and X5, HTML pages as artifacts, in #3093 (`dd14bc1f2`; run 2837), each accepted at the review cap. X3's R1 is run 2949, wedged since 2026-11-20 20:10Z (Decisions, 2026-11-21 (morning)). X2's library side: the rename landed as library PR #87 (`bee0fd1ec`; run 2987), L2's landing A landed as library PR #88 (`1c2120d93`; run 3007, D-8868) and landing B1 as library PR #89 (`f46f49877`; run 3179), each accepted at the review cap; landing B2 is run 3249 (Decisions, 2026-11-22 (early)). X6, reader mode, landed in #3121 (`c58f67743`; run 2847, D-8803 to D-8805 and D-8831), accepted at the review cap (Decisions, 2026-11-20 (evening)) |
 
 ## Decisions & deviations
+- **2026-11-22 (early): L2's landings A and B1 landed, each accepted at the review cap. B2 is building. The programme's plan is declared (coordinator rulings).**
+  - **L2 landing A (run 3007): landed as library PR #88 (merge commit `1c2120d93`) on 2026-11-21.**
+    - Round 3 (review run 3160) was the last. It was ruled at the cap: the reviewer's exact fixes, applied verbatim and then checked mechanically, with no fourth round.
+    - The main-line run on the merge commit was green.
+    - D-8867 and D-8869 are unused.
+  - **Landing B is split in two, as ruled during wave 35.**
+    - B1 is Task 0, Task 9's layout infrastructure, `classic`, `editorial`, and B1's part of Task 14.
+    - B2 is `review`, `guided`, and B2's part of Task 14.
+  - **L2 landing B1 (run 3179, wave 35, block 8878 to 8880): landed as library PR #89 (merge commit `f46f49877`) on 2026-11-22.**
+    - **Task 0.** The build's free-globals comparison compares the names read and written, never alias spellings. Each case it must refuse keeps a red row, and one row reds when it is made alias-sensitive again. This closes landing A's first follow-up.
+    - **Two CI fixes, test-only, loosening nothing:**
+      - the WebKit cue test sampled during the layouts' 0.55 s reveal, so it now waits for the reveal to settle, and the painted cue is unchanged;
+      - B8.2's root cause was the initial-hash pin re-applying after the reset, so the test now waits for `scrollY === 0` before its checks.
+    - **Round 1 (review run 3218) found two important findings:**
+      - the Close control kept the control row under a coarse pointer. X1 §10 applies it under `(pointer: fine)` only, so both layouts now guard it, with a row each;
+      - the plan's record was owed, as Task 14 says.
+
+      Seven minors were applied, among them a corpus directory required for every shipped layout and the ratchet's hostile check extended to per-layout snapshots.
+    - **Round 2 (review run 3227):**
+      - the PR description's counts were brought to the final tip;
+      - Task 0's superseded record was corrected;
+      - three checks that could not fail were deleted. A guard that cannot fire may not stand: each deletion records "green with it removed".
+    - **The `Ledger-Edit:` trailer on two B1 commits carries a placeholder token, not an issued number.** It names no deviation. The closeout is a record, not a departure, so no number is owed, and no library check reads the token. History is not rewritten. A later `Ledger-Edit:` cites an issued "ccrc D-n" from the wave's block, or is left out. The block's numbers, 8878 to 8880, are unused.
+    - **Considered, no change:** Classic's phone chips have no coarse 44 px floor. X1 §9's tap floor is measured on the host's head and frame rows, and the default reader holds no universal floor for in-document controls. It is carried to the release-readiness wave.
+    - **Round 3 (review run 3233) was the last.** A redundant newest-entry loop was deleted, and five wording fixes were made. Each fix was applied verbatim, and the four files were checked byte for byte against the expected files, with no fourth round.
+    - **Landing.** `--merge --match-head-commit`, with the PR's title as subject and its description as the merge body, which carries one `Size-Design: x2` line. The x2 row is 4 885 103 total and 4 571 331 in the frame, and the bootstrap budget was never raised.
+    - **CI flakes at an unchanged head, each green on rerun:**
+      - RF3's timing ratio, once on Node 24;
+      - two browser races on Node 22: the editorial corpus case on WebKit caught the scroll-spy's first activation, and the rail test measured before the float settled.
+
+      The two races are B2's first item: deterministic waits, with no timing gate and no snapshot moved.
+  - **L2 landing B2: wave 36, run 3249, ticket `lib-l2b2`, block 8881 to 8883, dispatched on B1's merge.**
+  - **The programme's plan is declared on the server** (`plan put`, from the Work card's request of 2026-11-21).
+    - Seven epics, 33 tickets and four phases:
+      - the epics are the shared library (with the checkpoint "the contract release is published and signed by the operator"), X1 appearance, X2 parity, X3 drafts, X5 HTML artifacts, X6 reader mode, and close-out;
+      - the phases are designs, before the library release, on the library release, and close-out.
+    - Eleven finished tickets are backfilled from the runs that did them: the six design runs (2631, 2680, 2632, 2633, 2837, 2847), P1 (2743), L1 (2843), LR (2987), L2 A (3007) and B1 (3179).
+    - R1's ticket closes from run 2949 when that run is done.
+    - Retirement of the old server stays the operator's separate cutover, outside the plan.
+  - **Library follow-ups for the release-readiness wave:**
+    - a race the host causes still counts as a frame refusal;
+    - the corpus's print-run state;
+    - the byline's Range, Selection and observer;
+    - `changesBase` on the wire;
+    - the Safari byline cost;
+    - Classic's phone chips;
+    - RF3's timing ratio;
+    - the release-gate measurements (L1's old-cap browser mount, and WebKit by a workflow input).
+  - **Process:**
+    - a third subagent hook refusal was reported during landing A;
+    - a worker's run-bound timer was refused as too long, so the coordinator waits on CI with a bounded watcher instead;
+    - each reviewer ran tests against the worker's install, read-only and only on an equal lock hash, removed before reporting (asks 699 and 701).
+  - **The coordinator's calls (clause 21), recorded on the server:**
+    - checks that cannot fire are deleted, not repaired (calls 182 and 188).
+  - **R1 (run 2949) is still wedged,** waiting on the operator to wake its pane.
 - **2026-11-21 (morning): the library rename landed. L2's landing A is in review, with rounds 1 and 2 ruled. R1's worker is wedged.**
   - **LR, the library renamed pinax-lib (run 2987): landed as library PR #87 (merge commit `bee0fd1ec`).**
     - It took two review rounds (runs 2992 and 3001).
@@ -1287,9 +1342,9 @@ Wave L plans from X1's text on `main` after #3055, not as it was at `89a9ce02a`.
   - R1 waits for the operator's confirmation of asks 595 and 603.
   - R3 waits for the M-X3.16 device item, and names `DocsHead.tsx`, `DocsIndexView.tsx`, the control census, the tap-target floors and the residue A23 to A27.
 
-## Current next-wave briefs — R1 and L2, runs 2949 and 3007
+## Current next-wave briefs — R1 and L2 landing B2, runs 2949 and 3249
 
-R1 is wedged; L2's landing A is in review; the library rename landed (Decisions, 2026-11-21 (morning)).
+R1 is wedged; L2's landings A and B1 landed, and B2 is building (Decisions, 2026-11-22 (early)).
 
 ### R1 — run 2949
 
@@ -1358,6 +1413,90 @@ The operator approved X3's design on 2026-11-19 and confirmed asks 595 and 603: 
 - List mail before your push, and push once.
 - Then get the exact-tip required checks, the ledger guard and CodeQL green, with 0 open alerts, and send your wave-done with the fingerprint JSON and the suite and failure lines.
 - Never enqueue or arm auto-merge.
+
+### L2 landing B2 — run 3249 (the library's repository)
+
+Programme `native-docs-reader` (home project ccrc-pwa), wave 36 = L2 landing B2: the shared rendering library's `review` and `guided` layouts. It is built in the library's own repository (project `docserver`, GitHub `Synapsium-Labs/docserver`, PUBLIC; the package is `@synapsium-labs/pinax-lib`). Run 3249, ticket `lib-l2b2`. Deviation block issued: 8881, 8882 and 8883.
+
+Landing B1 merged as library PR #89 (merge commit `f46f49877`): Task 0, Task 9's layout infrastructure, `classic` and `editorial`, with B1's part of Task 14. Your base is the library's `main` at `f46f49877` or later. B2 is the second of the two landings I ruled: the `review` and `guided` layouts, and Task 14 for B2. The release and its signed tag come after the release-readiness wave, and are the operator's.
+
+**Your input:**
+- **The library's leaf plan on `main`:** `docs/superpowers/plans/2026-11-20-docserver-parity-additions.md`. Read Design §3 (the split), choices B11 and B12, Tasks 9 to 14, Results and Departures as B1 left them, and the B1/B2 split. B1's notes (`docs/superpowers/programs/docserver/parity-layouts-b1.md`), scrub audits and mutation files show the conventions.
+- **ccrc's design, read from the home repository** (homeRepoRoot `<projects-root>/ccrc-pwa`, planSha `09e66b1a8fbff59b22de2ada1e7cbefe2475d807`):
+  - X2's spec `docs/superpowers/specs/2026-11-18-native-docs-parity-design.md`, §6's layout rows and §4.2;
+  - X1's spec §10, through D-8827: the appearance contract, test 8's layout row, test 9's CSP row and test 10's cues.
+
+**Scope:**
+0. **First, in its own commit, test-only: two races B1's last CI run met at an unchanged head** (run 44983402840, attempt 1, Node 22). Both passed on every earlier run of the same code.
+   - `layout-corpus.test.ts`, `layout editorial > webkit > rail/plan-marks`: the snapshot caught the scroll-spy's first activation (`li .open`, `a .active aria-current="location"`) that the expected file lacks.
+   - `rail.test.ts`, chromium, "keeps the full-width topbar before the float and after scrolling at both desktop widths": `source.width` was 348 over, so the float had not settled.
+
+   Make each wait on a settled state, measured deterministically, as B1's cue and B8.2 fixes did. Never use a timing gate, never loosen an assertion, and move no snapshot. Apply the same wait to every layout's corpus case, the new ones included. Each fix gets a mutation row, and the record names both runs.
+1. Tasks 12 and 13 as the plan writes them (`review`, `guided`), on B1's infrastructure: `frameCsp(layout)`, `maxSrcdocChars(layout)`, the per-layout feature list, corpus directories and ratchet rows. Extend those mechanisms; do not fork them.
+2. Task 14 for B2: the size row, the README, the CHANGELOG, B2's notes, and the plan's record (Status, Results and Departures for Tasks 12 to 14, mutation files with their JSON fences, measured).
+
+**Not in scope:**
+- landing A's follow-ups (the host race, the corpus's print-run state, the byline's Range, Selection and observer, `changesBase` on the wire, the Safari byline cost);
+- Classic's phone chips without a coarse 44 px floor (carried to the release-readiness wave);
+- LX6, the release-gate measurements, and any version bump.
+
+**What B1's three review rounds settled, and B2 keeps:**
+- **Pointer rules.** X1 §10 applies the control row under `(pointer: fine)` only, and a coarse pointer keeps the 44 px floor. The guard that walks each layout's stylesheet covers both new layouts, with a row each.
+- **A guard that cannot fire may not stand.** Every new guard gets a mutation row that reds when the guard is deleted. Never write a guard that a module-load failure or another row already makes unreachable.
+- **Hashes:** after any asset change, regenerate the CHANGELOG hash bullets from the built manifest before you push.
+- **Records:** the plan's Results, the mutation fences, the notes and the PR description give the counts at the final tip. The description cites the exact-tip run.
+- **Trailers:** one final paragraph. A `Ledger-Edit:` cites an issued "ccrc D-n" from your block, or is left out; never a placeholder.
+- **Tests:** deterministic waits (a settled reveal, `scrollY === 0`), never timing gates. `enhance-plans-rf3`'s timing ratio is a known flake on Node 24; report it, never chase it.
+
+**Size: test 8 holds this design to its shares, read from the shares table at the first parent.**
+- Each new layout's assets stay within the default enhance bundle at your landing (the layout row).
+- **The bootstrap budget, 32 768 bytes, is never raised.** Map each layout's state onto the existing `DOC_FIELDS` and `pref:ui`. If anything would take the bootstrap past 32 768, or a measured row past either share, stop and send me the numbers and your options before you trim.
+- Exactly one `Size-Design: x2` line, in the PR description.
+
+**Bridge discipline, unchanged:**
+- every addition rides the existing port, host parser and `BRIDGE_LIMITS`, and the bridge stays version 1;
+- `frameCsp(layout)` emits only that layout's hashes;
+- no layout adds a channel, a window listener, parent-DOM access or a CSP source of any other kind.
+
+**The scrub.** Every operator-specific default in a reference layout is scrubbed into an off-by-default option or dropped, each recorded in that layout's scrub audit. No host, account, workspace or product name may stand in a source, asset or snapshot. Public files state process notes neutrally.
+
+**Standing rules, for you and every subagent:**
+- one test command per Bash call, no loops or chains;
+- files are written with the file tool, never prose in a heredoc;
+- a hook refusal stops the subagent, which reports the refusal's text;
+- an implementer's claim of an edit is checked against `git diff --stat` before it counts;
+- mutation counts are recounted from the JSON fences in the final commit;
+- guards on cost are structural counts, never timing gates.
+
+**Measure, don't recall.**
+- CI runs Node 22 and 24, with real Chromium and WebKit, in about 36 minutes.
+- Run affected files locally in the foreground, through `ccrc test --`, one per call, with a timeout of at least 600000 ms.
+- A timeout under the slice's memory kills, with no assertion mismatch, gets one isolated rerun; then record it as unmeasured and let CI on the exact tip arbitrate.
+- WebKit cannot run on this box. For a WebKit-only question, one push per CI cycle is accepted; list mail before each push.
+- Use your workspace's own install and the cached browsers. Make no repository copy and open no extra worktree.
+
+**Departures:** a sentence of §6 or §10 you cannot build as written is a stop-and-ask to me, quoting the sentence and your proposal. Never write a D-number in the library's repository: cite ccrc's numbers as "ccrc D-n" only.
+
+**Stop and ask:**
+- any widening of the frame's sandbox, CSP or channels beyond §6;
+- a size-share, layout-row or bootstrap breach;
+- an edit outside the library repository;
+- a refusal from any tool, hook or route: report it, then wait for my word.
+
+**Routing:**
+- Main loop Opus · high.
+- Implementer subagents Sonnet · high for `frameCsp(layout)`, the contrast gate and any guard; Sonnet · medium elsewhere.
+- One Opus · high review subagent over each task's diff before its commit, given the diff and plan inline and told not to invoke any skill.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+
+**Delivery:**
+- Claim every file before its first edit, and commit on your workspace branch only.
+- One PR to `Synapsium-Labs/docserver` `main`, with the trailers in one final paragraph.
+- List mail before your push.
+- Get the exact-tip test (22) and test (24) green, then send the wave-done with the fingerprint JSON and the suite and failure lines.
+- Never merge, enqueue or arm auto-merge.
+
+## Earlier briefs — L2 landings A and B1, runs 3007 and 3179 (landed as library PRs #88 and #89)
 
 ### L2 — run 3007 (the library's repository)
 
@@ -1434,6 +1573,81 @@ Not in scope:
 - One PR to `Synapsium-Labs/docserver` `main`, or the first of the planned two, with the trailers in one final paragraph.
 - List mail before your push, and push once.
 - Get the exact-tip test (22) and test (24) green, then send wave-done with the fingerprint JSON and the suite and failure lines.
+- Never merge, enqueue or arm auto-merge.
+
+### L2 landing B1 — run 3179 (the library's repository)
+
+Programme `native-docs-reader` (home project ccrc-pwa), wave 35 = L2 landing B: the shared rendering library's four layouts. It is built in the library's own repository (project `docserver`, GitHub `Synapsium-Labs/docserver`, PUBLIC; the package is `@synapsium-labs/pinax-lib`). Run 3179. Deviation block issued: 8878, 8879 and 8880.
+
+Landing A merged as library PR #88 (merge commit `1c2120d93`). Your base is the library's `main` at `1c2120d93` or later. Landing B starts from A's landing, so each layout is measured against the default bundle at that commit. The release and its signed tag come after this wave, and are the operator's.
+
+**Your input:**
+- **The library's leaf plan on `main`:** `docs/superpowers/plans/2026-11-20-docserver-parity-additions.md`. Read Design §3 (the split), choices B11 and B12, Tasks 9 to 14, Results' "Landing B's bootstrap estimate", and its process notes. Landing A's mutation files and notes show the conventions.
+- **ccrc's design, read from the home repository** (homeRepoRoot `<projects-root>/ccrc-pwa`, planSha `09e66b1a8fbff59b22de2ada1e7cbefe2475d807`):
+  - X2's spec `docs/superpowers/specs/2026-11-18-native-docs-parity-design.md`: §6's layout rows (`frameCsp(layout)`, per-layout conformance, contrast and srcdoc caps) and §4.2;
+  - X1's spec §10, through D-8827: the appearance contract every layout keeps, test 8's layout row and test 9's CSP row.
+
+**Scope:**
+1. **Task 0, first, in its own commit:** the build's free-globals comparison becomes insensitive to which minified name an alias gets. It must compare the set of free globals and pinned names, never alias spellings. Landing A's Tasks 3 and 6 both hit that tie. This is a change to the build's safety tooling, so:
+   - each case it must still refuse (a new free global, a missing pinned name) keeps a red mutation row;
+   - one row reds when the comparison is made alias-sensitive again.
+2. **Tasks 9 to 14 as the plan writes them:** layout infrastructure, then `classic`, `editorial`, `review` and `guided`, then landing B's size row, README, CHANGELOG and notes.
+
+**Not in scope:**
+- landing A's other follow-ups (the host race, the corpus's print-run state, the byline's Range, Selection and observer, `changesBase` on the wire, and the Safari byline cost): a later library wave;
+- LX6, reader mode's library part;
+- the release-gate measurements;
+- any version bump.
+
+**One landing, or a split you propose.** The plan offers four landings. After Task 9, if one PR would be too large to review, mail me a split into at most two landings, for example Tasks 0 and 9 with two layouts, then two layouts with Task 14. Each landing carries exactly one `Size-Design: x2` line. I rule.
+
+**Size: test 8 holds this design to its shares, read from the shares table at the first parent.**
+- Every new layout's assets stay within the default enhance bundle at your landing (the layout row).
+- **The bootstrap has 28 bytes left (32 740 of 32 768), and its budget is never raised.** Map each layout's state onto the existing `DOC_FIELDS` and `pref:ui` wherever you can. If a new doc field, or anything else, would take the bootstrap past 32 768, stop and send me the numbers and your options before you trim anything. Landing A's host-side moves, (b'), are the pattern.
+- If a measured row would exceed either share, stop and send me the numbers.
+
+**Bridge discipline, unchanged from landing A:**
+- every addition rides the existing port, host parser and `BRIDGE_LIMITS`, and the bridge stays version 1;
+- `frameCsp(layout)` emits only that layout's hashes;
+- no layout adds a channel, a window listener, parent-DOM access or a CSP source of any other kind.
+
+**The scrub.** Every operator-specific default in a reference layout is scrubbed into an off-by-default option or dropped, each recorded in that layout's scrub audit. No host, account, workspace or product name may stand in a source, asset or snapshot.
+
+**Standing rules from landing A, for you and every subagent:**
+- one test command per Bash call, no loops or chains;
+- files are written with the file tool, never prose in a heredoc;
+- a hook refusal stops the subagent, which reports the refusal's text;
+- an implementer's claim of an edit is checked against `git diff --stat` before it counts;
+- each commit's trailers sit in one final paragraph, and a moved-trailer only names a case that moved;
+- mutation counts are recounted from the JSON fences in each round's final commit;
+- guards on cost are structural counts, never timing gates.
+
+**Measure, don't recall.**
+- The library's CI runs Node 22 and 24, with real Chromium and WebKit, in about 36 minutes.
+- Run affected files locally in the foreground, through `ccrc test --`, one per call, with a timeout of at least 600000 ms.
+- A timeout under the test slice's memory kills, with no assertion mismatch, gets one isolated rerun; if it still times out, record it as unmeasured and let CI on the exact tip arbitrate.
+- WebKit cannot run on this box. For a WebKit-only question, one push per CI cycle is accepted; list mail before each push.
+- Use your workspace's own install and the cached browsers. Make no repository copy and open no extra worktree.
+
+**Departures:** a sentence of §6 or §10 you cannot build as written is a stop-and-ask to me, quoting the sentence and your proposal. Never write a D-number in the library's repository: cite ccrc's numbers as "ccrc D-n" only.
+
+**Stop and ask:**
+- any widening of the frame's sandbox, CSP or channels beyond §6;
+- a size-share, layout-row or bootstrap breach;
+- an edit outside the library repository;
+- a refusal from any tool, hook or route: report it, then wait for my word.
+
+**Routing:**
+- Main loop Opus · high.
+- Implementer subagents Sonnet · high for Task 0, Task 9, `frameCsp(layout)` and the contrast gate; Sonnet · medium elsewhere.
+- One Opus · high review subagent over each task's diff before its commit, given the diff and plan inline and told not to invoke any skill.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+
+**Delivery:**
+- Claim every file before its first edit, and commit on your workspace branch only.
+- One PR to `Synapsium-Labs/docserver` `main` (or the first of the ruled two), with the trailers in one final paragraph.
+- List mail before your push.
+- Get the exact-tip test (22) and test (24) green, then send the wave-done with the fingerprint JSON and the suite and failure lines.
 - Never merge, enqueue or arm auto-merge.
 
 ## Earlier brief — LR, run 2987 (landed as library PR #87)
