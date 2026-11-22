@@ -98,8 +98,8 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
     if (!c.ok) return refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' });
     const g = await deps.gate(req, reply, 'inbox', { sessionId: c.id, uuid: c.uuid, uuidField: 'byUuid' });
     if (g.kind === 'refused') return reply;
-    // `others: 'refuse'` on the row: the gate never serves this door in the hook's group.
-    if (g.kind !== 'pass') return refuseRoute(reply, 'not-the-overlord', { detail: 'the gate did not pass the call' });
+    // `others: 'refuse'` on the row: the gate never serves this door in the hook's group (answered as the linking confirm answers it).
+    if (g.kind !== 'pass') return refuseRoute(reply, 'unavailable', { detail: 'the gate did not pass the call' });
     return deps.readRunner(req, reply, {
       door: 'inbox', pass: g, row: overlordRow('inbox'),
       compose: (): ReadComposed => {
@@ -134,7 +134,7 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
     if (!c.ok) return refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' });
     const g = await deps.gate(req, reply, 'messages', { sessionId: c.id, uuid: c.uuid, uuidField: 'byUuid' });
     if (g.kind === 'refused') return reply;
-    if (g.kind !== 'pass') return refuseRoute(reply, 'not-the-overlord', { detail: 'the gate did not pass the call' });
+    if (g.kind !== 'pass') return refuseRoute(reply, 'unavailable', { detail: 'the gate did not pass the call' });
     const id = parseMessageId((req.params as { id?: unknown }).id);
     if (!id.ok) return refuseRoute(reply, 'bad-request', { detail: id.detail });
     const scope = `id:${id.id}`;
@@ -168,7 +168,7 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
     if (!c.ok) return refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' });
     const g = await deps.gate(req, reply, 'acknowledge', { sessionId: c.id, uuid: c.uuid, uuidField: 'byUuid' });
     if (g.kind === 'refused') return reply;
-    if (g.kind !== 'pass') return refuseRoute(reply, 'not-the-overlord', { detail: 'the gate did not pass the call' });
+    if (g.kind !== 'pass') return refuseRoute(reply, 'unavailable', { detail: 'the gate did not pass the call' });
     const id = parseMessageId((req.params as { id?: unknown }).id);
     if (!id.ok) return refuseRoute(reply, 'bad-request', { detail: id.detail });
     const store = deps.inboxStore;
