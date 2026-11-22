@@ -4,8 +4,10 @@
 // HOMEs and stub ops: the local arm's case spawns a bash stub under a fixture home, never a real `ccrc`, and never
 // anything under the real home.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { localIO, localIOFor, type FleetIO } from '../src/io.js';
@@ -15,7 +17,7 @@ import { readReadyOps } from '../src/remote/client.js';
 import { readLaneModels } from '../src/laneModels.js';
 import { MODELS_OP, type ModelsAsked } from '../../shared/agent-protocol.js';
 import { MAX_CAP_WORDS } from '../../shared/api.js';
-import { lastMoveOf, parseAdvance } from '../../shared/model-advance.mjs';
+import { lastMoveOf, parseAdvance, seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
 import {
   CLASSES, MODELS_DIR_NAME, catalogueFileName, laneClassModels, parseCatalogue, parseRegistry, registryFileName,
   type LaneModelsAnswer, type ModelClass,
@@ -502,5 +504,207 @@ describe('GET /api/models/:lane through the op', () => {
     expect(Object.keys(body).sort()).toEqual(['lane', 'models', 'ok']);
     expect(body.models.kind).toBe('read');
     expect(body.models.kind === 'read' && body.models.advance?.state).toBe('ok');
+  });
+});
+
+// ── Model-class Anthropic arm A4, Task A4.1: an Anthropic lane's class models on the read ───────────────────────────
+// The REAL op prints `show` for a fixture HOME (a roster row with `telemetry: 'anthropic'`, its aliases file and, for a hold,
+// its advance file) and `readLaneModels` reads that stdout, so `describe`'s `labels` and `readShowAnswer` are measured
+// together, the way the console reads them. Ids are invented, so no fixture goes stale at a release.
+describe('an Anthropic lane through the real show (model-class Anthropic arm A4.1)', () => {
+  const OP = fileURLToPath(new URL('../../deploy/models-op.mjs', import.meta.url));
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const S1 = 'claude-sonnet-9-1';
+  const ROSTER = {
+    version: 1,
+    accounts: [
+      { id: 'lane-up', label: 'lane-up', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
+      { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude-lane-a', exec: { kind: 'generated' }, homeAble: true, telemetry: 'anthropic' },
+    ],
+  };
+  const catRow = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id, label: `Name ${id}`, efforts: ['low', 'high'], defaultEffort: 'high', minVersion: null, ...over,
+  });
+  const aliasClass = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: null, source: null, evidenceAt: null, idSince: null, cacheTarget: null, seenId: null, seenAt: null,
+    unobserved: true, unlaunchable: null, row: null, rowFrom: null, heldRow: null, orphaned: null, ...over,
+  });
+  /** A launchable, observed class on `id`, its row from the lane's own cache. */
+  const kept = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => aliasClass({
+    id, source: 'cache', evidenceAt: AT, idSince: AT, cacheTarget: id, unobserved: false, row: catRow(id), rowFrom: 'own', ...over,
+  });
+  const aliasesJson = (classes: Partial<Record<ModelClass, Record<string, unknown>>>): unknown => ({
+    v: 1, at: AT, cache: { format: 'current', fetchedAt: AT }, stale: false,
+    classes: Object.fromEntries(CLASSES.map((c) => [c, classes[c] ?? aliasClass()])),
+  });
+
+  /** A fixture HOME with the roster and, when given, the lane's aliases file and the holds of its advance file. */
+  function plant(aliases: unknown, holds: Partial<Record<ModelClass, string>> = {}) {
+    const base = testDeps(mkTmp('ccrc-lanemodels-anth-'));
+    const home = base.cfg.home;
+    const dir = path.join(home, '.ccrc', MODELS_DIR_NAME);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'accounts.json'), JSON.stringify(ROSTER));
+    if (aliases !== undefined) writeFileSync(path.join(dir, 'lane-a.aliases.json'), typeof aliases === 'string' ? aliases : JSON.stringify(aliases));
+    if (Object.keys(holds).length > 0) {
+      const adv = seedAnthropicAdvance();
+      for (const [c, model] of Object.entries(holds)) adv.classes[c as ModelClass].hold = { at: AT, by: 'hand', model };
+      writeFileSync(path.join(dir, 'lane-a.advance.json'), serializeAdvance(adv));
+    }
+    return { base, home, dir };
+  }
+  const showOf = (home: string): { code: number; stdout: string } => {
+    const r = spawnSync(process.execPath, [OP, 'show', '--file', path.join(home, '.ccrc', 'accounts.json'), '--id', 'lane-a'],
+      { env: { PATH: process.env['PATH'] ?? '', HOME: home }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout };
+  };
+  /** The lane read the way the console reads it: the real op's stdout through `readLaneModels`. */
+  async function readLane(p: ReturnType<typeof plant>) {
+    const s = showOf(p.home);
+    const io: FleetIO = { ...p.base.io, models: async () => exited(s.stdout, s.code) };
+    return { got: await readLaneModels(io, p.base.cfg.ccrcDir, 'lane-a'), shown: JSON.parse(s.stdout) as Record<string, unknown> };
+  }
+  const readOf = async (p: ReturnType<typeof plant>) => {
+    const { got } = await readLane(p);
+    if (got.kind !== 'read') throw new Error(`read ${got.kind}`);
+    return got;
+  };
+
+  it('an Anthropic lane reads its aliases', async () => {
+    const p = plant(aliasesJson({
+      [C0]: kept(X1, { seenId: X1, orphaned: { id: 'claude-opus-9-0', level: 'high' } }),
+      [C1]: kept(S1, { source: 'use', row: catRow(S1, { label: null, efforts: null }), cacheTarget: null }),
+      [C2]: kept(X2, { row: catRow(X2, { efforts: [] }) }),
+    }));
+    const got = await readOf(p);
+    expect(got.classes[C0]).toEqual({
+      model: X1, label: `Name ${X1}`, efforts: ['low', 'high'], source: 'cache', cacheTarget: X1, seenId: X1,
+      orphanedEffort: { id: 'claude-opus-9-0', level: 'high' },
+    });
+    // a row with no label reads as the id, and one with no effort field as null (not "takes none")
+    expect(got.classes[C1]).toEqual({
+      model: S1, label: S1, efforts: null, source: 'use', cacheTarget: null, seenId: null, orphanedEffort: null,
+    });
+    // a row that says the model takes no level
+    expect(got.classes[C2]).toMatchObject({ model: X2, efforts: [], takesNoEffort: true });
+    expect(got.classes[C0]).not.toHaveProperty('takesNoEffort');
+    expect(got.advance?.state).toBe('absent');
+  });
+
+  it('a class with no id reads as a row of nulls, the lane read', async () => {
+    const got = await readOf(plant(aliasesJson({ [C0]: kept(X1) })));
+    expect(got.classes[C3]).toEqual({
+      model: null, label: null, efforts: null, source: null, cacheTarget: null, seenId: null, unobserved: true,
+      orphanedEffort: null,
+    });
+    expect(got.classes[C0].model).toBe(X1);
+  });
+
+  it('an unlaunchable id reads as a row of nulls and names the builds', async () => {
+    const got = await readOf(plant(aliasesJson({
+      [C0]: kept(X2, { unobserved: true, unlaunchable: { needs: '9.9.9', laneVersion: '2.0.0' }, row: catRow(X2, { minVersion: '9.9.9' }) }),
+      [C1]: kept(S1, { unobserved: true, unlaunchable: { needs: '9.9.9', laneVersion: null }, row: catRow(S1, { minVersion: '9.9.9' }) }),
+    })));
+    expect(got.classes[C0]).toEqual({
+      model: null, label: null, efforts: null, source: 'cache', cacheTarget: X2, seenId: null, unobserved: true,
+      unlaunchable: { needs: '9.9.9', laneVersion: '2.0.0' }, orphanedEffort: null,
+    });
+    expect(got.classes[C1].unlaunchable).toEqual({ needs: '9.9.9', laneVersion: null });
+    expect(got.classes[C1].model).toBeNull();
+  });
+
+  it("a held class's label and efforts are the held id's", async () => {
+    // held on X1, and the alias has since moved to X2
+    const p = plant(aliasesJson({
+      [C0]: kept(X2, { row: catRow(X2, { label: 'Moved', efforts: ['low', 'medium', 'high'] }), heldRow: catRow(X1, { label: 'Held', efforts: ['low'] }) }),
+      // held on the id the alias still names: no second id to show
+      [C1]: kept(S1, { heldRow: catRow(S1, { label: 'Same' }) }),
+      // held on an id with no row in the cache: the id is its own label, and no levels are known
+      [C2]: kept(X2, { heldRow: null }),
+    }), { [C0]: X1, [C1]: S1, [C2]: 'claude-opus-9-0' });
+    const got = await readOf(p);
+    expect(got.classes[C0]).toMatchObject({ model: X1, label: 'Held', efforts: ['low'], aliasId: X2 });
+    expect(got.classes[C1]).toMatchObject({ model: S1, label: 'Same', efforts: ['low', 'high'] });
+    expect(got.classes[C1]).not.toHaveProperty('aliasId');
+    expect(got.classes[C2]).toMatchObject({ model: 'claude-opus-9-0', label: 'claude-opus-9-0', efforts: null, aliasId: X2 });
+    // a class with no hold reads as the alias does
+    expect(got.classes[C3]).toMatchObject({ model: null });
+  });
+
+  it('an unobserved class carries unobserved', async () => {
+    const got = await readOf(plant(aliasesJson({ [C0]: kept(X1, { unobserved: true }), [C1]: kept(S1) })));
+    expect(got.classes[C0].unobserved).toBe(true);
+    expect(got.classes[C1]).not.toHaveProperty('unobserved');
+  });
+
+  it('the held id rides advance.hold.model', async () => {
+    const got = await readOf(plant(aliasesJson({ [C0]: kept(X2, { heldRow: catRow(X1) }) }), { [C0]: X1 }));
+    expect(got.advance?.state).toBe('ok');
+    expect(got.advance?.classes?.[C0].hold).toEqual({ at: AT, by: 'hand', model: X1 });
+    expect(got.advance?.classes?.[C1].hold).toBeNull();
+  });
+
+  it('an unreadable or invalid aliases file reads the lane unreadable', async () => {
+    const aliasesState = (shown: Record<string, unknown>) => (shown.aliases as { state?: string }).state;
+    // not JSON, and JSON that is not an aliases file: invalid
+    for (const text of ['{not json', JSON.stringify({ v: 2 })]) {
+      const { got, shown } = await readLane(plant(text));
+      expect(aliasesState(shown), text).toBe('invalid');
+      expect(got, text).toEqual({ kind: 'unreadable' });
+    }
+    // a directory where the file belongs cannot be read as a file: unreadable
+    const p = plant(undefined);
+    mkdirSync(path.join(p.dir, 'lane-a.aliases.json'));
+    const { got, shown } = await readLane(p);
+    expect(aliasesState(shown)).toBe('unreadable');
+    expect(got).toEqual({ kind: 'unreadable' });
+    // no file at all stays absent, with the lane kind
+    expect((await readLane(plant(undefined))).got).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+  });
+});
+
+// A stub `show` for an Anthropic lane: the reader's own grammar, apart from the op that prints it.
+describe('readLaneModels over an Anthropic lane\'s show body (model-class Anthropic arm A4.1)', () => {
+  const ROWS = Object.fromEntries(CLASSES.map((c) => [c, { model: `claude-x-9-${c.length}`, label: 'L', efforts: ['low'] }]));
+  const anth = (over: Record<string, unknown>) => showJson('lane-a', { anthropic: true, registry: null, aliases: { v: 1 }, labels: ROWS, ...over });
+  const read = (over: Record<string, unknown>) => rig(exited(anth(over))).read();
+
+  it('the aliases state words keep three answers: absent, absent for an older op, and unreadable twice', async () => {
+    expect(await read({ aliases: { state: 'absent' }, labels: null })).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+    expect(await read({ aliases: undefined, labels: null })).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+    expect(await read({ aliases: { state: 'unreadable', detail: 'd' }, labels: null })).toEqual({ kind: 'unreadable' });
+    expect(await read({ aliases: { state: 'invalid', detail: 'd' }, labels: null })).toEqual({ kind: 'unreadable' });
+    expect((await read({})).kind).toBe('read');
+  });
+
+  it('a parsed aliases file with no labels, a bad class row or an unreadable advance reads unreadable', async () => {
+    expect(await read({ labels: null })).toEqual({ kind: 'unreadable' });
+    expect(await read({ labels: { ...ROWS, [C3]: { model: 7 } } })).toEqual({ kind: 'unreadable' });
+    expect(await read({ labels: { ...ROWS, [C3]: undefined } })).toEqual({ kind: 'unreadable' });
+    expect(await read({ aliases: 'x' })).toEqual({ kind: 'unreadable' });
+    expect(await read({ advance: 'ok' })).toEqual({ kind: 'unreadable' });
+  });
+
+  it('a malformed optional field is dropped to absent and the row is kept', async () => {
+    const bad = {
+      model: 'claude-x-9-1', label: 'L', efforts: ['low'], takesNoEffort: false, source: 'guess', cacheTarget: 5, seenId: {},
+      unobserved: false, unlaunchable: { needs: 5 }, aliasId: 7, orphanedEffort: { id: 'x' },
+    };
+    const good = {
+      model: 'claude-x-9-2', label: 'L', efforts: [], takesNoEffort: true, source: 'use', cacheTarget: 'claude-x-9-3',
+      seenId: null, unobserved: true, unlaunchable: { needs: '1.2', laneVersion: null }, aliasId: 'claude-x-9-4',
+      orphanedEffort: { id: 'claude-x-9-5', level: 'high' },
+    };
+    const got = await read({ labels: { ...ROWS, [C0]: bad, [C1]: good } });
+    if (got.kind !== 'read') throw new Error(got.kind);
+    expect(got.classes[C0]).toEqual({ model: 'claude-x-9-1', label: 'L', efforts: ['low'] });
+    expect(got.classes[C1]).toEqual(good);
+  });
+
+  it("a Codex lane's classes carry none of the new keys", async () => {
+    const got = await rig(exited(showJson('lane-a'))).read();
+    if (got.kind !== 'read') throw new Error(got.kind);
+    for (const c of CLASSES) expect(Object.keys(got.classes[c]).sort(), c).toEqual(['efforts', 'label', 'model']);
   });
 });
