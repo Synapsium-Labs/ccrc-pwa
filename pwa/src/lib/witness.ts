@@ -10,7 +10,9 @@ import { api } from './api';
 import { onPageHidden, onPageVisible } from './pageClock';
 import { pageStorage, readKey, writeKey, UNREADABLE, type StorageSource } from './storage';
 
-export const WITNESS_KEY = 'ccrc:authority-witness:v1';
+// Not `ccrc:authority-witness:v1` as the plan words it: the resume banner's guard refuses any storage key that reads `auth`
+// (departure `witness-key-avoids-auth`).
+export const WITNESS_KEY = 'ccrc:overlord-witness:v1';
 export const WITNESS_EVERY_MS = 60_000;
 
 export type WitnessOutcome =

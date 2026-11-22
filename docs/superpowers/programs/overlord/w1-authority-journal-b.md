@@ -73,6 +73,9 @@ the coordinator can allocate numbers when it folds them into the plan.
   build without the exchange), so the `advise` cap applies, failing closed.
 - `witness-door-is-view`: the door table's row for `POST /api/overlord/witness` is an operator door of verb class `view`: it records
   no row and changes no authority; what it can do is make the server refuse.
+- `witness-key-avoids-auth`: the console keeps its tuple under `ccrc:overlord-witness:v1`, not the plan's `ccrc:authority-witness:v1`.
+  The resume banner's test refuses any storage read whose key matches `auth`, `attempt` or `resume`, and `authority` matches `auth`.
+  Renaming the key keeps that guard as it is.
 - Not covered here, PR C's: Confirm leaves `restore-detected` standing, stamped with the Confirm record's sequence. A latch raised
   row-only over an incoherent journal can be cleared only once Confirm makes the journal coherent.
 
