@@ -4,17 +4,21 @@
 // here, and no sentence claims a running session picks a re-pinned model up by itself (it may keep the model it has until
 // it is relaunched, spec §2.4).
 //
+// AN ANTHROPIC LANE (wave 9, Task A4.3; D-8744, D-8746, D-8820): its classes are the client's aliases, so each card also says
+// where its id came from, the held id beside the alias's own, and the lines that explain a class with no id; `anthropicFacts`
+// decides every one of them, and the sheet draws what it returns. The sheet offers no class actions on that lane.
+//
 // THE TWO READERS. `asLaneModelsActAnswer` reads `POST /api/models/:lane`'s 200, its `models` through `asLaneModelsRead`
 // (the ONE reader of that wire, `lib/models.ts`); `modelsActFailure` reads a refused POST into a typed failure, whose
 // `outcome` is the one fact the sheet words by: `none` (the verb NEVER RAN, so nothing was changed, and only then is that said),
 // `refused` (the verb or a word of a later build refused: it may have written before it did, so nothing is claimed either way)
 // or `unknown` (it MAY have run: never success and never failure). The sheet reads the lane again after EVERY act, whatever
 // the outcome, and the row shows that read, never a guess (F1).
-import type { LaneAdvanceRead, LaneClassAdvance, LaneModelsRead, ModelClass } from '../../../shared/models';
+import type { LaneAdvanceRead, LaneClassAdvance, LaneClassModel, LaneModelsRead, ModelClass } from '../../../shared/models';
 import { CLASSES } from '../../../shared/models';
 import type { HistoryEntry, Hold, Pending, Previous } from '../../../shared/model-advance.mjs';
 import { ApiError, writeOutcomeUnknown } from '../lib/apiError';
-import { asLaneModelsRead, classWord, laneReadWords, type LaneReadFailure } from '../lib/models';
+import { asLaneModelsRead, classWord, laneReadWords, type LaneKindFacts, type LaneReadFailure } from '../lib/models';
 
 export type ModelsAction = 'hold' | 'release' | 'revert';
 const ACTIONS: readonly ModelsAction[] = ['hold', 'release', 'revert'];
@@ -78,10 +82,10 @@ export const VERB_CODE_WORDS: Readonly<Record<string, string>> = {
   'unroutable-lane': 'The lane\'s files cannot be rendered for routing, so the model was not moved. A hold may already be in place: the row shows what the lane holds now.',
   'no-such-account': 'The fleet box has no account by this name.',
   'anthropic-lane': 'This is an Anthropic lane: its classes are the client\'s own and carry no registry, so there is nothing to hold or revert.',
-  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias yet, or only one this lane\'s Claude Code cannot launch, so there is no model to hold. Start one session on this lane, then try again.',
-  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so the class\'s current model is unknown and was not held. Move that file aside on the fleet box.',
-  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so the class\'s current model is unknown and was not held. Move that file aside on the fleet box.',
-  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over a hold, so the hold could not reach a launch. Remove that setting on the fleet box, then hold again.',
+  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias yet, or only one this lane\'s Claude Code cannot launch, so there is no model to hold. The next session started on this lane, or the next hourly refresh, records one.',
+  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so the class\'s current model is unknown and was not held. Doctor names the file.',
+  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so the class\'s current model is unknown and was not held. Doctor names the file.',
+  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over a hold, so the hold could not reach a launch and was not made.',
   'registry-unwritable': 'The lane\'s class registry could not be written on the fleet box. A revert\'s hold may already be in place: the row shows what the lane holds now.',
   'advance-unwritable': 'The lane\'s advance file could not be written on the fleet box. The row shows what the lane holds now.',
   'settings-unwritable': 'The lane\'s settings could not be rendered or written on the fleet box. A revert\'s hold, and its move of the model, may already be in place: the row shows what the lane holds now.',
@@ -172,6 +176,13 @@ export function modelsActFailure(err: unknown, lane: string, cls: string): Model
 
 /** The fold's act that opens the sheet. */
 export const MODELS_ACT = 'Models';
+/** Whether a lane's card offers the Models act, decided from the roster's lane kind: a Codex-kind lane (R4, D-8752), or an
+ *  Anthropic one (`telemetry: 'anthropic'`, wave 9 Task A4.3, the one test `modelListProvider` asks). `undefined` is a
+ *  lane the roster has no row for. */
+export const modelsActOffered = (entry: Pick<LaneKindFacts, 'kind' | 'telemetry'> | undefined): boolean =>
+  entry?.kind === 'codex' || entry?.telemetry === 'anthropic';
+/** The sheet's lane-kind prop: an Anthropic lane draws its cards with the Anthropic lines and no Hold or Release. */
+export const modelsSheetAnthropic = (entry: Pick<LaneKindFacts, 'telemetry'> | undefined): boolean => entry?.telemetry === 'anthropic';
 export const MODELS_SHEET_TITLE = 'Model classes';
 export const MODELS_EMPTY_CLASS = 'No model: this class is empty on this lane.';
 export const MODELS_NOT_HELD = 'Not held: an automatic advance may move it.';
@@ -227,6 +238,59 @@ export function lastMoveWords(m: HistoryEntry | null): string {
 export const previousWords = (p: Previous | null): string | null =>
   p === null ? null : `A revert would put back ${p.model ?? 'an empty class'}.`;
 
+/** An Anthropic class card's model line: the label and id when the class has one, else the class word (an alias names no
+ *  id until one is on record, so the class word is the one name it has). */
+export const anthropicModelLine = (cls: ModelClass, model: string | null, label: string | null): string =>
+  model === null ? classWord(cls) : modelLine(model, label);
+
+/** D-8820's residual, said once on a held Anthropic class: a supervisor kept on the previous ccd body is the one place a
+ *  hold does not reach a launch. A fact, not an instruction. */
+export const SUPERVISOR_RESIDUAL_WORDS =
+  'If a session supervisor on the fleet box still runs the previous ccd build, it launches this class\'s sessions without the held model until it restarts; the update\'s degraded sweep line names such a supervisor.';
+
+export type AnthropicFactKind =
+  | 'source' | 'disagree' | 'held' | 'alias' | 'orphaned' | 'no-id' | 'unlaunchable' | 'unobserved' | 'supervisor';
+export interface AnthropicFact { readonly kind: AnthropicFactKind; readonly text: string }
+
+const SOURCE_WORDS: Readonly<Record<'cache' | 'use', string>> = {
+  cache: 'Id from Claude Code\'s catalogue.',
+  use: 'Id seen at a launch.',
+};
+
+/** The lines an Anthropic class's card carries, in the order they are read. `c` is the class's read (`model` is the held id
+ *  while a hold stands), `adv` its advance entry, which owns the held id (`hold.model`): the card's own `model` is never read
+ *  as the held one. A class with no id and an unlaunchable one are two lines apart, never one. `unobserved` is said only
+ *  for a class that is held (it exempts nothing else), so another class's card never carries it. */
+export function anthropicFacts(cls: ModelClass, c: LaneClassModel, adv: LaneClassAdvance | null): readonly AnthropicFact[] {
+  const out: AnthropicFact[] = [];
+  const add = (kind: AnthropicFactKind, text: string): void => { out.push({ kind, text }); };
+  if (c.source === 'cache' || c.source === 'use') add('source', SOURCE_WORDS[c.source]);
+  if (c.cacheTarget != null && c.seenId != null && c.cacheTarget !== c.seenId) {
+    add('disagree', `Claude Code\'s catalogue names ${c.cacheTarget}, and the newest launch seen ran ${c.seenId}.`);
+  }
+  const heldId = adv?.hold?.model;
+  if (heldId !== undefined) {
+    add('held', `Held at ${heldId}.`);
+    if (c.aliasId !== undefined && c.aliasId !== heldId) add('alias', `The ${classWord(cls)} alias now resolves to ${c.aliasId}.`);
+  }
+  if (c.orphanedEffort != null) {
+    add('orphaned', `Saved effort ${c.orphanedEffort.level} is keyed to an older model; ccd carries it at launch under Auto.`);
+  }
+  if (c.unlaunchable !== undefined) {
+    const { needs, laneVersion } = c.unlaunchable;
+    add('unlaunchable', laneVersion === null
+      ? `This lane\'s Claude Code build could not be read, and this class\'s model needs build ${needs}.`
+      : `This lane\'s Claude Code build ${laneVersion} is older than build ${needs}, which this class\'s model needs.`);
+  } else if (c.model === null) {
+    add('no-id', 'No model id is on record for this class yet.');
+  }
+  if (adv?.hold != null) {
+    if (c.unobserved === true) add('unobserved', 'The alias\'s resolution is not observed while the hold stands.');
+    add('supervisor', SUPERVISOR_RESIDUAL_WORDS);
+  }
+  return out;
+}
+
 export const familyWords = (family: string | null): string => (family === null ? 'No family recorded.' : `Family ${family}.`);
 
 /** A verb's reason, as `: <reason>` for a sentence that ends in our own period: one trailing period of the reason's is dropped
@@ -238,7 +302,7 @@ const reasonOf = (detail: string | null): string => {
 
 /** Each way the advance file can read, and the one where the answer carried no advance key at all (an agent without the
  *  op: the advance file was not read, which is not "unreported"). */
-export function advanceStateWords(a: LaneAdvanceRead | undefined): { readonly state: LaneAdvanceRead['state'] | 'not-read'; readonly text: string } {
+export function advanceStateWords(a: LaneAdvanceRead | undefined, anthropic = false): { readonly state: LaneAdvanceRead['state'] | 'not-read'; readonly text: string } {
   if (a === undefined) {
     return { state: 'not-read', text: 'The advance record was not read: holds and the last move are not known, so none is offered.' };
   }
@@ -247,7 +311,9 @@ export function advanceStateWords(a: LaneAdvanceRead | undefined): { readonly st
     case 'absent': return { state: 'absent', text: 'No automatic advance is on record for this lane yet.' };
     case 'unreadable': return { state: 'unreadable', text: `The advance record cannot be read${reasonOf(a.detail)}.` };
     case 'invalid': return { state: 'invalid', text: `The advance record is not one this build reads${reasonOf(a.detail)}.` };
-    case 'unreported': return { state: 'unreported', text: 'The fleet box\'s ccrc predates the advance record, so holds are not known. Update it to hold or revert from here.' };
+    case 'unreported': return { state: 'unreported', text: anthropic
+      ? 'The fleet box\'s ccrc predates the advance record, so holds are not known.'
+      : 'The fleet box\'s ccrc predates the advance record, so holds are not known. Update it to hold or revert from here.' };
   }
 }
 
@@ -268,16 +334,16 @@ export interface ClassActs {
   readonly hold: 'hold' | 'release' | null;
   readonly revert: boolean;
 }
-export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass): ClassActs {
+export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass, anthropic = false): ClassActs {
   const adv: LaneClassAdvance | null = advance?.state === 'ok' ? advance.classes?.[cls] ?? null : null;
   const held = adv?.hold != null;
-  const holdKnown = adv !== null || advance?.state === 'absent';
-  return { adv, held, hold: !holdKnown ? null : held ? 'release' : 'hold', revert: adv?.revertable === true && adv.previous !== null };
+  const holdKnown = !anthropic && (adv !== null || advance?.state === 'absent');
+  return { adv, held, hold: !holdKnown ? null : held ? 'release' : 'hold', revert: !anthropic && adv?.revertable === true && adv.previous !== null };
 }
 /** Whether a Revert of `cls` is still on offer on the CURRENT read: the confirm asks it when it opens, while it stands and
  *  again when it is confirmed, and sends nothing when it is no longer so. */
-export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass): boolean =>
-  read?.kind === 'read' && classActs(read.advance, cls).revert;
+export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass, anthropic = false): boolean =>
+  read?.kind === 'read' && classActs(read.advance, cls, anthropic).revert;
 /** Said when a Revert that was asked about is withdrawn because the lane's current read no longer offers it: the class
  *  has no earlier model on record now, or the read no longer shows the advance record at all (it is unreadable, invalid,
  *  unreported, absent or was not read, or the lane itself could not be read). */
@@ -289,7 +355,9 @@ export const holdAriaLabel = (action: 'hold' | 'release', cls: ModelClass): stri
 export const revertAriaLabel = (cls: ModelClass): string => `Revert the ${cls} class`;
 export const revertTitle = (cls: ModelClass): string => `Revert the ${cls} class?`;
 /** `previous` is the one on record: a revert whose class has none is not offered, so there is no sentence for it (F13). */
-export function revertConsequence(lane: string, cls: ModelClass, current: string | null, previous: Previous): string[] {
+export function revertConsequence(
+  lane: string, cls: ModelClass, current: string | null, previous: Previous,
+): string[] {
   return [
     `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}, so no automatic advance moves it until you release it.`,
     `As last read, that replaces ${current ?? 'an empty class'}.`,

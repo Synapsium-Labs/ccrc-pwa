@@ -2464,7 +2464,86 @@ describe.skipIf(!HAS_FLOCK)('the hourly refresh and the push carry Anthropic lan
     expect(notifyCalls()).toEqual([`--push\t${line}`]);
     const roster = new Map((ANTH_ROSTER.accounts as { id: string; exec: { kind: string }; telemetry: string }[]).map((a) => [a.id, a]));
     expect(modelsPushDecision(line, roster)).toEqual({
-      verdict: 'pushable', lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' });
+      verdict: 'pushable', lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' });
+  });
+
+  // F15: one alias change is ONE phone push naming every lane it moved. Both lanes share an alias here (each holds its own
+  // cache, the same ids), so a per-lane push would send two.
+  it('two lanes on one alias move send one push', () => {
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1, X2]));
+    plantCache('.claude-lane-b', cacheJson(C1, { opus: X1 }, [X1, X2]));
+    expect(run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 }).code).toBe(0);
+    expect(notifyCalls()).toEqual([]);
+    plantCache('.claude-lane-a', cacheJson(C2, { opus: X2 }, [X1, X2]));
+    plantCache('.claude-lane-b', cacheJson(C2, { opus: X2 }, [X1, X2]));
+    const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T1 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const moved = { class: 'opus', from: X1, to: X2 };
+    expect(rows(r)).toEqual([OK('lane-up'),
+      { id: 'lane-a', ok: true, aliases: { ok: true, moved: [moved] } },
+      { id: 'lane-b', ok: true, aliases: { ok: true, moved: [moved] } }]);
+    const line = 'lane-a, lane-b: opus claude-opus-9-1 → claude-opus-9-2';
+    expect(notifyCalls()).toEqual([`--push\t${line}`]);
+    const roster = new Map((ANTH_ROSTER.accounts as { id: string; exec: { kind: string }; telemetry: string }[]).map((a) => [a.id, a]));
+    expect(modelsPushDecision(line, roster)).toMatchObject({
+      verdict: 'pushable', lanes: ['lane-a', 'lane-b'], tag: 'models-advance:lane-a,lane-b:opus' });
+  });
+
+  it('logs each grouped push when the budget is already spent, with no notification', () => {
+    setupAnth();
+    const row = JSON.stringify({ id: 'lane-a', ok: true, aliases: { ok: true, moved: [
+      { class: 'opus', from: X1, to: X2 }, { class: 'sonnet', from: S1, to: S2 },
+    ] } });
+    const r = run(`_models_aliases_push 0 '${row}'`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr.trim().split('\n')).toEqual([
+      `ccrc: models push skipped (deadline): lane-a: opus ${X1} → ${X2}`,
+      `ccrc: models push skipped (deadline): lane-a: sonnet ${S1} → ${S2}`,
+    ]);
+    expect(notifyCalls()).toEqual([]);
+  });
+
+  it('logs only the current and later groups when the budget expires after one send', () => {
+    setupAnth();
+    const row = JSON.stringify({ id: 'lane-a', ok: true, aliases: { ok: true, moved: [
+      { class: 'opus', from: X1, to: X2 }, { class: 'sonnet', from: S1, to: S2 },
+      { class: 'haiku', from: 'claude-haiku-9-1', to: 'claude-haiku-9-2' },
+    ] } });
+    const pre = `eval "$(declare -f _models_advance_admit | sed '1s/_models_advance_admit/__real_models_advance_admit/')"
+      admissions=0
+      _models_advance_admit() { admissions=$((admissions + 1)); [ "$admissions" -ne 3 ] || SECONDS=1000; __real_models_advance_admit "$@"; }`;
+    const r = sourced(`_models_aliases_push 100 '${row}'`, {}, pre);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(notifyCalls()).toEqual([`--push\tlane-a: opus ${X1} → ${X2}`]);
+    expect(r.stderr.trim().split('\n')).toEqual([
+      `ccrc: models push skipped (deadline): lane-a: sonnet ${S1} → ${S2}`,
+      'ccrc: models push skipped (deadline): lane-a: haiku claude-haiku-9-1 → claude-haiku-9-2',
+    ]);
+  });
+
+  it('lanes that move differently send one push each', () => {
+    // Same class: lane-up and lane-a start on one id and end on two (they differ by `to`); lane-a and lane-b end on one id
+    // from two (they differ by `from`). So a key that left either out would fold two of the three into one line.
+    const X0 = 'claude-opus-9-0';
+    const X3 = 'claude-opus-9-3';
+    const all = [X0, X1, X2, X3];
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, all));
+    plantCache('.claude-lane-b', cacheJson(C1, { opus: X0 }, all));
+    plantCache('.claude', cacheJson(C1, { opus: X1 }, all));
+    expect(run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 }).code).toBe(0);
+    plantCache('.claude-lane-a', cacheJson(C2, { opus: X2 }, all));
+    plantCache('.claude-lane-b', cacheJson(C2, { opus: X2 }, all));
+    plantCache('.claude', cacheJson(C2, { opus: X3 }, all));
+    const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T1 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(notifyCalls()).toEqual([
+      `--push\tlane-up: opus ${X1} → ${X3}`,
+      `--push\tlane-a: opus ${X1} → ${X2}`,
+      `--push\tlane-b: opus ${X0} → ${X2}`]);
   });
 
   it('a move of two classes is two pushes, one per class, in class order', () => {

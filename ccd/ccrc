@@ -12744,7 +12744,10 @@ _models_push() {   # <message> -> rc 0
   local hook="$_SVC_REG/notify.sh"
   [ -x "$hook" ] || return 0
   if [ -n "${MODELS_AUTO_DEADLINE:-}" ]; then
-    _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )) || return 0
+    if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )); then
+      [ "${2:-}" != grouped ] || printf 'ccrc: models push skipped (deadline): %s\n' "$1" >&2
+      return 0
+    fi
     _plat_timeout_strict "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
   else
     _plat_timeout "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
@@ -13200,10 +13203,10 @@ _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `e
 #                                                                       Codex step skips silently too; the next hour retries
 #   {id, ok: false, reason, aliases: {ok: false, error: <word>, moved: []}}   the op or the lock refused (`lock-busy`, the
 #                                                                       op's own cause word, `no-answer`): a failed row
-# Each class that moved is pushed through `_models_push`, one line each, built by `moveline` in the Codex step's own
-# shape after `tok` and `word` have checked the tokens, as `recovered` does; a refresh with no move pushes nothing.
+# It pushes nothing: the row carries what moved, and the refresh sends ONE push per (class, from, to) over every lane
+# (`_models_aliases_push`), so one alias change is one notification however many lanes it moved (F15).
 _models_aliases_lane() {   # <id> <roster file> <deadline-secs> -> prints ONE row; rc 0 unless the row failed
-  local id="$1" file="$2" body='{"ok":false,"error":"budget-deferred"}' rc=0 pre=1 line row MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
+  local id="$1" file="$2" body='{"ok":false,"error":"budget-deferred"}' rc=0 pre=1 row MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
   if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then :
   elif ! _models_advance_capable "$id"; then body='{"ok":false,"error":"not-capable"}'
   else pre=0
@@ -13223,13 +13226,41 @@ _models_aliases_lane() {   # <id> <roster file> <deadline-secs> -> prints ONE ro
                          elif ($b.detail | type) == "string" then $b.detail else "aliases-refresh refused with \($w)" end)}
           end end')" || return 1
   printf '%s\n' "$row"
-  case "$row" in *'"ok":false,"aliases"'*) return 1 ;; *'"aliases":{"ok":true'*) ;; *) return 0 ;; esac
+  case "$row" in *'"ok":false,"aliases"'*) return 1 ;; esac
+  return 0
+}
+
+# The ONE push of the Anthropic arm (D-8751, F15): the moves of every refreshed row, grouped by (class, from, to) in the order
+# each group first appears, one line per group naming its lanes in the rows' order (the roster's),
+# `<lane>, <lane>: <class> <from|none> → <to>`, which `modelsPushOf` reads. `tok` and `word` check the tokens, as `recovered`
+# does. A row that failed or was deferred holds no move and so names no lane. Each line goes through `_models_push` in the
+# automatic context at the run's advance deadline, so a spent budget skips the push rather than running it late.
+_models_aliases_push() {   # <deadline-secs> <row>... -> rc 0
+  local MODELS_AUTO_DEADLINE="$1" line lines
+  shift
+  lines="$(printf '%s\n' "$@" | jq -rs "$MODELS_JQ_DEFS"'
+    reduce (.[] | select(type == "object" and .ok == true and .aliases.ok == true) | .id as $id
+            | (.aliases.moved // []) | if type == "array" then .[] else empty end
+            | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
+            | {k: [.class, .from, .to], id: $id, m: .}) as $e
+      ([]; (map(.k) | index([$e.k])) as $i
+        | if $i == null then . + [{k: $e.k, m: $e.m, ids: [$e.id]}]
+          else .[$i].ids += [$e.id] end)
+    | .[] | (.ids | join(", ")) as $lanes | .m | moveline($lanes)' 2>/dev/null)" || return 0
+  [ -n "$lines" ] || return 0
+  # The strict hook call needs the capability THIS shell proved: the lanes' own runs proved it in their subshells, so it is
+  # proved here, admitted first, and a box without it sends nothing, as a lane without it ran nothing.
+  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then
+    while IFS= read -r line; do
+      [ -z "$line" ] || printf 'ccrc: models push skipped (deadline): %s\n' "$line" >&2
+    done <<<"$lines"
+    return 0
+  fi
+  _plat_timeout_capability >/dev/null
+  [ "$CCD_TIMEOUT_CAPABILITY" = strong ] || return 0
   while IFS= read -r line; do
-    [ -n "$line" ] && _models_push "$line"
-  done < <(printf '%s' "$body" | jq -r --arg id "$id" "$MODELS_JQ_DEFS"'
-    (.moved // []) | if type == "array" then .[] else empty end
-    | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
-    | moveline($id)' 2>/dev/null)
+    [ -n "$line" ] && _models_push "$line" grouped
+  done <<<"$lines"
   return 0
 }
 
@@ -13483,13 +13514,15 @@ _models_box_sub() {   # <subcommand> [args…]
       # row, each in the automatic context, its row appended to `rows` so that BOTH output paths below carry it (the
       # advance overlays are keyed by the indexes the registry rows took above, which an append never moves). A budget that
       # is spent defers a lane, never fails it.
-      local anth_n anth_i anth_id anth_row
+      local anth_n anth_i anth_id anth_row anth_rows=()
       anth_n="$(printf '%s' "$anth" | jq 'length')"
       for (( anth_i = 0; anth_i < anth_n; anth_i++ )); do
         anth_id="$(printf '%s' "$anth" | jq -r ".[$anth_i].id")"
         anth_row="$(_models_aliases_lane "$anth_id" "$file" "$adv_deadline")" || failed=1
-        rows+=("$anth_row")
+        rows+=("$anth_row"); anth_rows+=("$anth_row")
       done
+      # ONE push per (class, from, to) over every lane, after the loop has run them all (F15).
+      [ "${#anth_rows[@]}" -eq 0 ] || _models_aliases_push "$adv_deadline" "${anth_rows[@]}"
       if [ "$adv_entered" -eq 1 ]; then
         # The final output, bounded: ONE strict jq assembles the rows and the advance overlays and writes the result
         # straight to stdout (no capture, no outer printf, no per-lane merge elsewhere). Its allowance is the 18 s

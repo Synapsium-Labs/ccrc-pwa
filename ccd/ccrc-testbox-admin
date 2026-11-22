@@ -35,6 +35,15 @@
 # ~/.ccrc/testbox-admin.lock for its whole life. The PARENT never holds the lock, so the unit inherits no descriptor
 # that could pin it (the `_upd_detach` rule); the parent only probes it, and answers `busy` when it is held.
 #
+# THE DEADLINES (D-8899; spec docs/superpowers/specs/2026-11-22-test-box-managed-node-design.md §2.9). No act
+# holds the lock without a ceiling. TBA_DEADLINE_S is the one table: a long sub's row is its unit's RuntimeMaxSec, enforced by
+# the system manager and not by the act's own care, and the state records the latest time the act can end (`act_deadline`). So
+# `busy` names the holder (its sub, its start, its latest end) and the status's running act carries the same `deadlineAt`; an
+# act stopped at its ceiling reads `interrupted` at the next status read or the next act (`_tba_reap`); a parity act gives its
+# tool a time to end by and a bound for each step, so a slow run ends with a record before the ceiling; and `cancel` ends a
+# parity act as it ends an Apply when idle. `deadlineAt` is the status's one new field: a server older than this verb refuses
+# a status that carries it, so the server takes this build first (`ccrc rollout --server-first`).
+#
 # THE ONE WAY TO THE BOX is `_tba_ssh`. Every ssh this file runs carries the five options of the plan's Global
 # constraints (pinned known-hosts file, strict host checking, batch mode, identities only, a connect deadline), and
 # ssh's own stderr goes to a temp file that never leaves the fleet host: the caller gets a closed code.
@@ -72,6 +81,15 @@ TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refuse
 # The long subs whose parent asks them for a precheck before it detaches (`settings-box` only with --when-idle).
 TBA_PRECHECK_SUBS=(connect settings-box repair apply-release parity)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
+# THE ONE DEADLINE TABLE, in seconds (D-8899; shared/testbox-admin.ts#TESTBOX_ADMIN_DEADLINE_S is its twin, and
+# says why each row is what it is). A row named for a sub is that sub's ceiling: `_tba_detach` hands it to the system manager as the
+# unit's RuntimeMaxSec, so an act that outlives it is stopped there and its lock is freed. A SUB IS LONG BECAUSE IT HAS A ROW
+# (`_tba_is_long`), so no sub can detach without a ceiling. A row that holds a `/` is a part, never a sub: `settings-box/idle` is the
+# ceiling of an Apply when idle (the six-hour wait, then the act), `parity/leg` bounds one step of the parity tool (an install, or
+# one leg), `parity/kill` is the time between a stopped step's TERM and its KILL (the shim's range is 2 to 8), `parity/tail` is the end of a parity act kept
+# back from its legs (half for the tool to stop and clean up, half for the record), and `unit/stop` is the time between the
+# unit's TERM at its ceiling and its KILL.
+declare -gA TBA_DEADLINE_S=([connect]=3480 [repair]=1800 [apply-release]=1800 [settings-box]=1800 [settings-box/idle]=23520 [parity]=3600 [parity/leg]=900 [parity/kill]=8 [parity/tail]=300 [unit/stop]=90)
 # The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the thirty-one box keys (D-8290
 # adds the three live probe keys).
 TBA_FLEET_KEYS=(CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE
@@ -288,7 +306,18 @@ _tba_refuse() {   # <closed code> [space-separated setting names the refusal nam
   local k named=""
   _tba_code_ok "${1-}" || { echo "$PROG: internal error: ${1-} is not a closed code" >&2; exit 70; }
   for k in ${2-}; do [[ "$k" =~ ^CCRC_[A-Z0-9_]+$ ]] && named="${named:+$named,}\"$k\""; done
-  if [ -n "$named" ]; then printf '{"ok":false,"code":"%s","keys":[%s]}\n' "$1" "$named"; else printf '{"ok":false,"code":"%s"}\n' "$1"; fi
+  # The setting names when the refusal names any, and the holder when the refusal is `busy`.
+  printf '{"ok":false,"code":"%s"%s%s}\n' "$1" "${named:+,\"keys\":[$named]}" "$([ "$1" != busy ] || _tba_holder)"
+}
+# `busy` names who holds the lock: `,"holder":{sub, startedAt, deadlineAt}` for the long act the state says is running (its sub,
+# its start and the latest time it can end, in epoch milliseconds, each of at most 15 digits;
+# shared/testbox-admin.ts#readTestboxBusyHolder reads it). Nothing for a short act, which holds the lock for under a minute and
+# is not recorded. Never an address, a path or a secret.
+_tba_holder() {
+  local sub; sub="$(_tba_state_get act_sub 2>/dev/null)"
+  [ "$(_tba_state_get act_outcome 2>/dev/null)" = running ] && _tba_is_long "$sub" || return 0
+  [[ "$(_tba_state_get act_started 2>/dev/null) $(_tba_state_get act_deadline 2>/dev/null)" =~ ^([0-9]{1,15})\ ([0-9]{1,15})$ ]] || return 0
+  printf ',"holder":{"sub":"%s","startedAt":%s,"deadlineAt":%s}' "$sub" "${BASH_REMATCH[@]:1}"
 }
 _tba_usage_die() { echo "$PROG: $*" >&2; echo "usage: $PROG <sub> [--name=value]... [--from agent|pwa|cli]; subs: ${TBA_SUBS[*]}" >&2; exit 2; }
 
@@ -377,11 +406,13 @@ _tba_ended_push() {   # -> the state's `acts_prev` with the act the state holds 
   [ "$n" -le "$TBA_ENDED_KEEP" ] || keep=("${keep[@]: $(( n - TBA_ENDED_KEEP ))}")
   printf '%s' "${keep[*]}"
 }
-_tba_act_begin() {   # <id> <sub> -> the state says this act is running
-  local prev
-  prev="$(_tba_ended_push)"
+# `act_deadline` is the latest time the act can hold the lock: its start, its unit's ceiling, and the `unit/stop` the system
+# manager gives a unit between its TERM at the ceiling and its KILL.
+_tba_act_begin() {   # <id> <sub> [ceiling in seconds] -> the state says this act is running, and until when at the latest
+  local prev now
+  prev="$(_tba_ended_push)"; now="$(_tba_now_ms)"
   _tba_state_write "act_id=$1" "act_sub=$2" "act_phase=" "act_phases=" "act_t0=" "act_outcome=running" "act_code=" \
-    "act_started=$(_tba_now_ms)" "act_ended=" "acts_prev=$prev"
+    "act_started=$now" "act_deadline=${3:+$(( now + ($3 + ${TBA_DEADLINE_S[unit/stop]}) * 1000 ))}" "act_ended=" "acts_prev=$prev"
 }
 _tba_act_mine() { [ -n "${TBA_ACT_ID:-}" ] && [ "$(_tba_state_get act_id 2>/dev/null)" = "$TBA_ACT_ID" ]; }
 # `_tba_phase <name>` — enter a phase; the phase before it is closed with its milliseconds. A no-op outside an act.
@@ -411,12 +442,14 @@ _tba_lock_probe() {
   [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") 2>/dev/null || return 2
   ( exec 9>>"$TBA_LOCK" || exit 2; flock -n 9 || exit 1 ) 2>/dev/null
 }
-# `_tba_lock` — take the lock for the rest of THIS shell's life: 0 held, 1 busy, 2 cannot be taken.
+# `_tba_lock` — take the lock for the rest of THIS shell's life: 0 held, 1 busy, 2 cannot be taken. It is held on descriptor 9,
+# a fixed number, so a command that must not carry the lock (a parity leg, whose processes run in a scope outside the unit and
+# could outlive it) is started with `9>&-`.
 _tba_lock() {
   command -v flock >/dev/null 2>&1 || return 2
   [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") 2>/dev/null || return 2
-  { exec {TBA_LOCK_FD}>>"$TBA_LOCK"; } 2>/dev/null || return 2
-  flock -n "$TBA_LOCK_FD" || { exec {TBA_LOCK_FD}>&-; return 1; }
+  { exec 9>>"$TBA_LOCK"; } 2>/dev/null || return 2
+  flock -n 9 || { exec 9>&-; return 1; }
   TBA_LOCK_HELD=1
 }
 
@@ -425,21 +458,23 @@ _tba_lock() {
 # short bound can hold (the agent kills a short sub at 60 s and would leave the box file written and the installer cut between
 # its phases). `--when-idle` only decides whether the unit waits for no run in progress or the parent refuses `runs-in-progress`
 # at once (the parent's precheck, which answers before it detaches).
-_tba_is_long() {
-  case "${1-}" in
-    connect|parity|repair|apply-release|settings-box) return 0 ;;
-    *) return 1 ;;
-  esac
-}
+_tba_is_long() { [[ "${1-}" != */* ]] && [ -n "${TBA_DEADLINE_S[${1:-_}]:-}" ]; }
 
 # `_tba_detach <sub> [word]...` — hand the act to a transient unit and answer its id. The parent writes `running` first
 # and answers only when the state file says so, so the card never learns an id the state does not hold.
 _tba_detach() {
-  local sub="$1" prc=0 id rc=0 args slice=""
+  local sub="$1" prc=0 id rc=0 args slice="" row="$1" dl
   shift
   # A parity run is a test run: it goes in the tests slice, never the verb's own (spec §2.8).
   [ "$sub" != parity ] || slice="$TBA_PARITY_SLICE"
-  _tba_lock_probe || prc=$?
+  # The ceiling: the sub's row, or its `/idle` row for an Apply when idle. No row, no unit: a unit with no ceiling is the act
+  # that once held the lock for 23 hours.
+  [ "${TBA_WHENIDLE:-0}" != 1 ] || row="$sub/idle"
+  dl="${TBA_DEADLINE_S[$row]:-}"
+  [[ "$dl" =~ ^[1-9][0-9]*$ ]] || { echo "$PROG: $row has no deadline row, so no unit is started" >&2; return 1; }
+  # An act whose unit is gone is ended first, so it is never written over as if it had not run (`_tba_ended_push` keeps ended
+  # acts only).
+  _tba_reap; _tba_lock_probe || prc=$?
   case "$prc" in
     0) ;;
     1) _tba_refuse busy; return 0 ;;
@@ -448,7 +483,7 @@ _tba_detach() {
   id="$(_tba_new_id)"
   [[ "$id" =~ ^[0-9a-f]{32}$ ]] || { echo "$PROG: could not make an act id" >&2; return 1; }
   TBA_ACT_ID="$id"
-  _tba_act_begin "$id" "$sub" || { echo "$PROG: could not write the state file" >&2; return 1; }
+  _tba_act_begin "$id" "$sub" "$dl" || { echo "$PROG: could not write the state file" >&2; return 1; }
   # The checked words reach the unit in a 0600 file, never in the unit's argv: systemd expands `$` and `%` in a unit's
   # argv, and a setting value (a glob list) may hold either. The unit reads the file, deletes it and checks every word
   # again.
@@ -460,7 +495,8 @@ _tba_detach() {
   # The unit's PATH is the user manager's, which lacks ~/.local/bin and any environment.d entry the agent's has: the shell here puts
   # ~/.local/bin first, as `_upd_detach` does (D-3282), so the unit's `node` and `gh` resolve as the parent's precheck's did. The
   # string below carries no `$$` and no `${...}` (systemd-run expands those itself; see `_upd_detach`'s warning).
-  _svc_run_detached --unit="ccrc-testbox-admin-$sub-$id" ${slice:+--slice="$slice"} /usr/bin/env "CCRC_TBA_ACT=$id" \
+  _svc_run_detached --unit="ccrc-testbox-admin-$sub-$id" ${slice:+--slice="$slice"} --property=RuntimeMaxSec="$dl" \
+    --property=TimeoutStopSec="${TBA_DEADLINE_S[unit/stop]}" /usr/bin/env "CCRC_TBA_ACT=$id" \
     /bin/sh -c 'PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@"' ccrc-detach testbox-admin "$sub" || rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f -- "$args"
@@ -559,10 +595,14 @@ _tba_ssh() {
 # dies before it takes the lock leaves it so for ever, and the card has no control left. So the status first looks: an act
 # `running` for longer than TBA_REAP_AFTER (a unit takes the lock within seconds of its start) whose lock is free has no unit,
 # and it is ended as `failed` with the code `interrupted`, under the lock itself, so a unit that starts at that instant finds it
-# taken and ends `busy`. A host with no flock cannot tell, and leaves the state as it is.
+# taken and ends `busy`. A host with no flock cannot tell by the lock, and a lock still held by a process the unit left behind
+# says nothing either: there the act's own ceiling decides (D-8899). The system manager stops the unit at
+# its ceiling and kills it one `unit/stop` later, which is `act_deadline`; one more `unit/stop` after that no unit of this act is
+# alive, and the act is ended `interrupted` without the lock. Nothing can begin an act meanwhile: `_tba_detach` refuses while
+# the lock is held or cannot be measured.
 TBA_REAP_AFTER_DEFAULT=45
 _tba_reap() {
-  local started now after="${TBA_REAP_AFTER:-$TBA_REAP_AFTER_DEFAULT}" lrc=0
+  local started now after="${TBA_REAP_AFTER:-$TBA_REAP_AFTER_DEFAULT}" lrc=0 dl
   [ "$(_tba_state_get act_outcome 2>/dev/null)" = running ] || return 0
   started="$(_tba_state_get act_started 2>/dev/null)"
   [[ "$started" =~ ^[0-9]+$ ]] || return 0
@@ -570,18 +610,21 @@ _tba_reap() {
   now="$(_tba_now_ms)"
   [ $(( now - started )) -ge $(( after * 1000 )) ] || return 0
   _tba_lock || lrc=$?
-  [ "$lrc" = 0 ] || return 0
+  dl="$(_tba_state_get act_deadline 2>/dev/null)"
+  [ "$lrc" = 0 ] || { [[ "$dl" =~ ^[0-9]{1,15}$ ]] && [ "$now" -ge $(( dl + 1000 * ${TBA_DEADLINE_S[unit/stop]} )) ]; } || return 0
   if [ "$(_tba_state_get act_outcome 2>/dev/null)" = running ] && [ "$(_tba_state_get act_started 2>/dev/null)" = "$started" ]; then
     _tba_state_write "act_outcome=failed" "act_code=interrupted" "act_t0=" "act_ended=$now" || :
     _tba_log "act: interrupted (its unit is gone)"
   fi
-  exec {TBA_LOCK_FD}>&-
+  [ "$lrc" != 0 ] || { exec 9>&-; TBA_LOCK_HELD=0; }
 }
 
 # ── status ────────────────────────────────────────────────────────────────────────────────────────────────────
-# `_tba_act_json <id> <sub> <phase> <phases> <outcome> <code> <started> <ended>` -> the act object, or null when a field is off.
+# `_tba_act_json <id> <sub> <phase> <phases> <outcome> <code> <started> <ended> [deadline]` -> the act object, or null when a
+# field is off. A RUNNING act with a recorded deadline also says `deadlineAt`, the latest time it can end: what `busy` names as
+# its holder's (D-8899). An ended act never carries it.
 _tba_act_json() {
-  local id="$1" sub="$2" phase="$3" phases="$4" outcome="$5" code="$6" started="$7" ended="$8" list="" pair n ms first=1 ph cj ej
+  local id="$1" sub="$2" phase="$3" phases="$4" outcome="$5" code="$6" started="$7" ended="$8" list="" pair n ms first=1 ph cj ej dj=""
   [[ "$id" =~ ^[0-9a-f]{32}$ ]] || { printf null; return; }
   _tba_in "$sub" "${TBA_SUBS[@]}" || { printf null; return; }
   case "$outcome" in running|ok|failed) ;; *) printf null; return ;; esac
@@ -589,6 +632,7 @@ _tba_act_json() {
   [[ "$ended" =~ ^[0-9]+$ ]] && ej="$ended" || ej=null
   _tba_phase_ok "$phase" && ph="\"$phase\"" || ph=null
   _tba_code_ok "$code" && cj="\"$code\"" || cj=null
+  if [ "$outcome" = running ] && [[ "${9-}" =~ ^[0-9]{1,15}$ ]]; then dj=",\"deadlineAt\":$9"; fi
   local IFS=,
   for pair in $phases; do
     n="${pair%%:*}"; ms="${pair#*:}"
@@ -596,13 +640,13 @@ _tba_act_json() {
     [ "$first" = 1 ] || list="$list,"
     list="$list{\"name\":\"$n\",\"ms\":$ms}"; first=0
   done
-  printf '{"id":"%s","sub":"%s","phase":%s,"phases":[%s],"outcome":"%s","code":%s,"startedAt":%s,"endedAt":%s}' \
-    "$id" "$sub" "$ph" "$list" "$outcome" "$cj" "$started" "$ej"
+  printf '{"id":"%s","sub":"%s","phase":%s,"phases":[%s],"outcome":"%s","code":%s,"startedAt":%s,"endedAt":%s%s}' \
+    "$id" "$sub" "$ph" "$list" "$outcome" "$cj" "$started" "$ej" "$dj"
 }
 _tba_status_act() {   # -> the act object, or null
   _tba_act_json "$(_tba_state_get act_id 2>/dev/null)" "$(_tba_state_get act_sub 2>/dev/null)" "$(_tba_state_get act_phase 2>/dev/null)" \
     "$(_tba_state_get act_phases 2>/dev/null)" "$(_tba_state_get act_outcome 2>/dev/null)" "$(_tba_state_get act_code 2>/dev/null)" \
-    "$(_tba_state_get act_started 2>/dev/null)" "$(_tba_state_get act_ended 2>/dev/null)"
+    "$(_tba_state_get act_started 2>/dev/null)" "$(_tba_state_get act_ended 2>/dev/null)" "$(_tba_state_get act_deadline 2>/dev/null)"
 }
 # The acts that ended before the current one: a JSON array of act objects, oldest first (an entry off its shape is left out).
 _tba_status_ended() {
@@ -1840,15 +1884,19 @@ _tba_parity_rebind() {   # <old sha256> <new sha256>
   ( umask 077; printf '%s\n' "$rec" >"$tmp" ) 2>/dev/null && mv -f -- "$tmp" "$TBA_PARITY" 2>/dev/null || rm -f -- "$tmp"
   return 0
 }
+# The unit's look at the cancel mark: rc 0 iff it names this act. The mark is taken either way: one act runs at a time, so a mark
+# left for another act is not this one's, and is nobody's any more.
+_tba_cancel_asked() {
+  local m; m="$(head -c 64 "$TBA_CANCEL" 2>/dev/null)"; [ -z "$m" ] || rm -f -- "$TBA_CANCEL"
+  [ -n "${TBA_ACT_ID:-}" ] && [ "$m" = "$TBA_ACT_ID" ]
+}
 # Apply when idle: wait for no run in progress, up to the deadline; `cancel` ends it. TBA_CODE on rc 1.
 _tba_sb_wait() {
-  local dl="${TBA_IDLE_DEADLINE:-$TBA_IDLE_DEADLINE_DEFAULT}" poll="${TBA_IDLE_POLL:-$TBA_IDLE_POLL_DEFAULT}" t0 now id="${TBA_ACT_ID:-}"
+  local dl="${TBA_IDLE_DEADLINE:-$TBA_IDLE_DEADLINE_DEFAULT}" poll="${TBA_IDLE_POLL:-$TBA_IDLE_POLL_DEFAULT}" t0 now
   [[ "$dl" =~ ^[0-9]{1,6}$ ]] && [[ "$poll" =~ ^[0-9]{1,3}$ ]] || { dl="$TBA_IDLE_DEADLINE_DEFAULT"; poll="$TBA_IDLE_POLL_DEFAULT"; }
-  # A cancel left for another act is not this one's.
-  if [ -f "$TBA_CANCEL" ] && [ "$(head -c 64 "$TBA_CANCEL" 2>/dev/null)" != "$id" ]; then rm -f -- "$TBA_CANCEL"; fi
   t0="$(date +%s)"
   while _tba_runs_busy; do
-    if [ -n "$id" ] && [ "$(head -c 64 "$TBA_CANCEL" 2>/dev/null)" = "$id" ]; then rm -f -- "$TBA_CANCEL"; TBA_CODE=cancelled; return 1; fi
+    if _tba_cancel_asked; then TBA_CODE=cancelled; return 1; fi
     now="$(date +%s)"
     if [ $(( now - t0 )) -ge "$dl" ]; then TBA_CODE=idle-deadline; return 1; fi
     sleep "$poll"
@@ -1911,13 +1959,15 @@ _tba_run_settings-box() {
   return "$rc"
 }
 
-# cancel — ends an Apply when idle that is still waiting. The unit reads the mark at its next look.
+# cancel — ends an Apply when idle that is still waiting, or a parity act that is still running its legs. The unit reads the mark at
+# its next look (`_tba_cancel_asked`). It answered `cancelled:false` for every parity act until D-8899: the mark was
+# written only for a waiting settings-box, and the parity unit never looked for one. An act past the point it can stop cleanly
+# (a box file being written, an installer running, a record being written) is not cancelled; its ceiling ends it if it hangs.
 _tba_run_cancel() {
   local id tmp
   id="$(_tba_state_get act_id 2>/dev/null)"
-  if [[ "$id" =~ ^[0-9a-f]{32}$ ]] && [ "$(_tba_state_get act_sub 2>/dev/null)" = settings-box ] \
-     && [ "$(_tba_state_get act_outcome 2>/dev/null)" = running ] && [ "$(_tba_state_get act_phase 2>/dev/null)" != settings ] \
-     && [ "$(_tba_state_get act_phase 2>/dev/null)" != install ]; then
+  if [[ "$id" =~ ^[0-9a-f]{32}$ ]] && [ "$(_tba_state_get act_outcome 2>/dev/null)" = running ] \
+     && [[ "$(_tba_state_get act_sub 2>/dev/null)/$(_tba_state_get act_phase 2>/dev/null)" =~ ^(settings-box/(wait)?|parity/(legs)?)$ ]]; then
     tmp="$TBA_CANCEL.tmp.$$"
     _tmp_guard "$tmp"
     ( umask 077; printf '%s' "$id" >"$tmp" ) 2>/dev/null && mv -f -- "$tmp" "$TBA_CANCEL" 2>/dev/null || { rm -f -- "$tmp"; echo "$PROG: cannot write the cancel mark" >&2; return 1; }
@@ -2032,10 +2082,16 @@ _tba_run_tools-home() {
 # repository). The three fixtures run once, in the first row that has a checkout. The record is the rows' results merged with
 # the box's release, its tools key, the pin's fingerprint and the box file's sha256; a pass clears the stale mark.
 # `gh` signed out is answered by the parent, before the unit, and writes no record.
+# The tool is ccd/testbox-parity, or the stand-in a test names (TBA_PARITY_TOOL); the merge of the rows' records is the tool's own
+# `--merge` (argv: the result floor, 1 when a row could not run, the meta, then the record files), never the stand-in's.
+#
+# THE ACT'S TIME (D-8899). The legs must end by the act's recorded start plus its ceiling less `parity/tail`: the
+# tool is told that time (`--until`) and starts nothing after it, so a run that is only slow ends `parity-differs` with a record
+# and the log's reason, and the unit's ceiling is left for a real hang. the platform timeout shim on the tool is the backstop for a tool
+# that does not end by itself: half the tail after that time. The other half is the record's.
 TBA_PARITY_RECENT=5
 TBA_PARITY_SLICE=ccrctests.slice
 _tba_gh() { if [ -n "${TBA_GH:-}" ]; then "$TBA_GH" "$@"; else gh "$@"; fi; }
-_tba_pr_tool() { if [ -n "${TBA_PARITY_TOOL:-}" ]; then "$TBA_PARITY_TOOL" "$@"; else bash "$TBA_HERE/testbox-parity" "$@"; fi; }
 # `<url>` as `host/path`: no scheme, no user, no `.git`, no trailing slash, so an https and an ssh spelling of one repository agree.
 _tba_norm_url() { local u="${1%.git}"; u="${u%/}"; u="${u#*://}"; u="${u#*@}"; printf '%s' "${u/://}"; }
 # `_tba_pr_checkout <fetch url>` -> the path of the fleet's clone of it, rc 1 when there is none.
@@ -2067,27 +2123,17 @@ _tba_pr_rows() {
   done <"$TBA_ROWS"
   [ "${#PR_ROWS[@]}" -gt 0 ] || { TBA_CODE=status-not-ok; return 1; }
 }
-# The merge of the rows' records: argv is the result floor (1 when a row could not run), the meta, then the record files.
-_tba_pr_merge() {   # <fail 0|1> <release> <tools key> <fingerprint> <sha256> <record file>... -> the final record on stdout
-  node -e '
-const fs = require("fs");
-const [fail, release, toolsKey, fingerprint, boxFileSha256, ...files] = process.argv.slice(1);
-let result = fail === "1" ? "fail" : "pass";
-const prs = [];
-let fixtures = [];
-for (const f of files) {
-  let r;
-  try { r = JSON.parse(fs.readFileSync(f, "utf8")); } catch { result = "fail"; continue; }
-  if (r.result !== "pass") result = "fail";
-  prs.push(...r.prs);
-  if (r.fixtures.length > 0) fixtures = r.fixtures;
-}
-if (fixtures.length !== 3 || fixtures.some((x) => x.result !== "pass") || prs.length === 0) result = "fail";
-process.stdout.write(JSON.stringify({ v: 1, result, prs, fixtures, release, toolsKey, fingerprint, boxFileSha256, at: Date.now() }) + "\n");
-' "$@"
+# The lines the parity tool has written since the last look, into the log. The tool writes to a FILE, read here through an open
+# descriptor, never to a pipe: there is no reader process to wait for or to lose lines when the unit ends, and a process a leg
+# left behind that keeps the file open keeps nothing. A line not yet ended waits in TBA_PR_PART for its end.
+_tba_pr_say() {   # <descriptor> <repository name>
+  local w
+  while IFS= read -r -u "$1" w; do _tba_log "parity: $2: $TBA_PR_PART$w"; TBA_PR_PART=""; done
+  TBA_PR_PART="$TBA_PR_PART$w"
 }
 _tba_run_parity() {
   local pre=0 w i=0 name url pkg head co fail=0 fxpending=1 rel="" v="" tk="" fp sha tmp rec final named=() args=() cmd=() recs=() row pass
+  local pid fd end left stop=0 tool=(bash "$TBA_HERE/testbox-parity") TBA_PR_PART=""
   if [ "${1-}" = --precheck ]; then pre=1; shift; fi
   TBA_CODE=""; TBA_CODE_KEYS=""
   _tba_ra_precheck || return 1
@@ -2096,6 +2142,9 @@ _tba_run_parity() {
   for w in "$@"; do case "$w" in --pr=*) named+=("${w#--pr=}") ;; esac; done
   fp="$(_tba_state_get fingerprint 2>/dev/null)"; sha="$(_tba_state_get box_sha256 2>/dev/null)"
   { _tba_is_fingerprint "$fp" && [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; } || { TBA_CODE=not-connected; return 1; }
+  [[ "$(_tba_state_get act_started 2>/dev/null)" =~ ^[0-9]{1,15}$ ]] || { TBA_CODE=status-not-ok; return 1; }
+  end=$(( BASH_REMATCH[0] / 1000 + ${TBA_DEADLINE_S[parity]} - ${TBA_DEADLINE_S[parity/tail]} ))
+  [ -z "${TBA_PARITY_TOOL:-}" ] || tool=("$TBA_PARITY_TOOL")
   _tba_log "parity: begins"
   _tba_phase legs
   _tba_cx_out cat -- "$(_tba_box_tools)/release/installed/build.json"
@@ -2111,6 +2160,7 @@ _tba_run_parity() {
     if ! co="$(_tba_pr_checkout "$url")"; then _tba_log "parity: $name: the fleet host has no clone of its fetch URL"; fail=1; i=$(( i + 1 )); continue; fi
     rec="$tmp/rec.$i"; i=$(( i + 1 ))
     args=(--repo "$co" --package "$pkg" --record "$rec" --repo-name "$name" --release "$rel" --tools-key "$tk" --fingerprint "$fp" --box-sha256 "$sha")
+    args+=(--leg-deadline "${TBA_DEADLINE_S[parity/leg]}" --leg-kill "${TBA_DEADLINE_S[parity/kill]}" --until "$end")
     if [ "$fxpending" = 1 ] && [ "${#named[@]}" -gt 0 ]; then
       for w in "${named[@]}"; do args+=(--pr "$w"); done
     else
@@ -2119,12 +2169,26 @@ _tba_run_parity() {
     [ "$fxpending" = 0 ] || args+=(--fixtures)
     fxpending=0
     read -r -a cmd <<<"$head"
-    _tba_pr_tool "${args[@]}" -- "${cmd[@]}" run 2>&1 | while IFS= read -r w; do _tba_log "parity: $name: $w"; done
+    # The tool runs beside the unit's shell, which looks for a cancel while it waits (`cancel` could never end a parity act before
+    # this: nothing looked). `$pid` is the shell the platform shim runs in, so a cancel signals that shell's children: the shim's
+    # `timeout` passes a TERM on to the tool, and the tool stops its running step. The tool bounds each step itself and ends by
+    # `--until`, so a leg that hangs fails there and the act goes on. `9>&-`, so no leg carries the act's lock.
+    left=$(( end - $(date +%s) ))
+    : >"$rec.out"; exec {fd}<"$rec.out"; TBA_PR_PART=""
+    CCD_TIMEOUT_KILL_AFTER="${TBA_DEADLINE_S[parity/kill]}" _plat_timeout \
+      "$(( (left > 0 ? left : 0) + ${TBA_DEADLINE_S[parity/tail]} / 2 ))" "${tool[@]}" "${args[@]}" -- "${cmd[@]}" run >>"$rec.out" 2>&1 9>&- & pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+      _tba_pr_say "$fd" "$name"
+      if [ "$stop" = 1 ] || _tba_cancel_asked; then pkill -P "$pid" 2>/dev/null; stop=1; fi; sleep "${TBA_CANCEL_POLL:-1}"
+    done
+    wait "$pid" 2>/dev/null || [ $? != 124 ] || _tba_log "parity: $name: the tool did not end by the act's time and was stopped"
+    _tba_pr_say "$fd" "$name"; exec {fd}<&-
+    [ "$stop" = 0 ] || { TBA_CODE=cancelled; _tba_log "parity: cancelled"; return 1; }
     [ -f "$rec" ] && recs+=("$rec") || fail=1
   done
   _tba_phase record
   final="$tmp/final.json"
-  _tba_pr_merge "$fail" "$rel" "$tk" "$fp" "$sha" ${recs[@]+"${recs[@]}"} >"$final" 2>/dev/null || { TBA_CODE=status-not-ok; return 1; }
+  bash "$TBA_HERE/testbox-parity" --merge "$fail" "$rel" "$tk" "$fp" "$sha" ${recs[@]+"${recs[@]}"} >"$final" 2>/dev/null || { TBA_CODE=status-not-ok; return 1; }
   [ -d "$TBA_DIR" ] || (umask 077 && mkdir -p "$TBA_DIR") || { TBA_CODE=status-not-ok; return 1; }
   ( umask 077; cp -- "$final" "$TBA_PARITY.tmp.$$" ) 2>/dev/null && _tmp_guard "$TBA_PARITY.tmp.$$" \
     && mv -f -- "$TBA_PARITY.tmp.$$" "$TBA_PARITY" 2>/dev/null || { rm -f -- "${TBA_PARITY:?}.tmp.$$"; TBA_CODE=status-not-ok; return 1; }

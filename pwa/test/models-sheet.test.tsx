@@ -5,11 +5,11 @@
 // only: this repository is public.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { LaneAdvanceRead, LaneClassAdvance, LaneModelsRead, ModelClass } from '../../shared/models';
+import type { LaneAdvanceRead, LaneClassAdvance, LaneClassModel, LaneModelsRead, ModelClass } from '../../shared/models';
 import { ModelsSheet } from '../src/accounts/ModelsSheet';
 import { PickSheet } from '../src/session/PickSheet';
 import { laneReadWords } from '../src/lib/models';
-import { VERB_CODE_WORDS } from '../src/accounts/modelsSheetWords';
+import { SUPERVISOR_RESIDUAL_WORDS, VERB_CODE_WORDS } from '../src/accounts/modelsSheetWords';
 import { ApiError } from '../src/lib/apiError';
 import { clearScreenCache, laneModelsKey, peek, put } from '../src/lib/screenCache';
 
@@ -37,11 +37,11 @@ const wire = (models: LaneModelsRead): unknown => ({ ok: true, lane: 'lane-a', m
 const actAnswer = (action: string, cls: ModelClass, models: LaneModelsRead, over: Record<string, unknown> = {}): unknown =>
   ({ ok: true, lane: 'lane-a', action, class: cls, changed: action === 'revert' ? null : true, partial: false, models, ...over });
 
-function mount(models: LaneModelsRead | 'pending', over: { act?: (lane: string, body: { action: string; class: string }) => Promise<unknown>; offline?: string | null; load?: ReturnType<typeof vi.fn> } = {}) {
+function mount(models: LaneModelsRead | 'pending', over: { act?: (lane: string, body: { action: string; class: string }) => Promise<unknown>; offline?: string | null; load?: ReturnType<typeof vi.fn>; anthropic?: boolean } = {}) {
   const load = over.load ?? vi.fn(async () => (models === 'pending' ? new Promise<unknown>(() => {}) : wire(models)));
   const doAct = vi.fn(over.act ?? (async () => { throw new Error('no act expected'); }));
   const onClose = vi.fn();
-  render(<ModelsSheet lane="lane-a" open onClose={onClose} offline={over.offline ?? null} act={doAct as never} load={load as never} />);
+  render(<ModelsSheet lane="lane-a" open onClose={onClose} offline={over.offline ?? null} anthropic={over.anthropic ?? false} act={doAct as never} load={load as never} />);
   return { load, act: doAct, onClose };
 }
 const rowOf = (cls: ModelClass): HTMLElement => screen.getByTestId(`models-class-${cls}`);
@@ -646,5 +646,162 @@ describe('ModelsSheet: a Revert confirm is re-checked against the CURRENT read (
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /revert the opus class\?/i })).toBeNull());
     expect(alertText()).toMatch(/revert of the opus class was cancelled/i);
     expect(alertText()).toMatch(/advance record could not be read/i);
+  });
+});
+
+// ── an Anthropic lane (wave 9, Task A4.3; D-8744, D-8746, D-8820; the coordinator's ruling no-hold-release-controls) ──
+// Invented ids and builds only. The sheet is told the lane is Anthropic by the screen (the roster's telemetry), never by
+// guessing from a read.
+describe('ModelsSheet: an Anthropic lane', () => {
+  type Over = Partial<Record<ModelClass, Partial<LaneClassModel>>>;
+  const ANTH: Record<ModelClass, LaneClassModel> = {
+    haiku: { model: 'claude-haiku-9-1', label: 'Haiku 9.1', efforts: null },
+    sonnet: { model: 'claude-sonnet-9-1', label: 'Sonnet 9.1', efforts: null },
+    opus: { model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: null },
+    fable: { model: 'claude-fable-9-1', label: 'Fable 9.1', efforts: null },
+  };
+  const aclass = (family: string, over: Partial<LaneClassAdvance> = {}): LaneClassAdvance => classAdv({ family, ...over });
+  const HELD = { at: '2026-11-18T08:00:00Z', by: 'hand', model: 'claude-opus-9-1' } as const;
+  const aadvance = (classes: Partial<Record<ModelClass, LaneClassAdvance>> = {}): LaneAdvanceRead => ({
+    state: 'ok', detail: null, pending: null,
+    classes: { haiku: aclass('haiku'), sonnet: aclass('sonnet'), opus: aclass('opus'), fable: aclass('fable'), ...classes },
+  });
+  const aread = (over: Over = {}, advance: LaneAdvanceRead = aadvance()): LaneModelsRead => ({
+    kind: 'read',
+    classes: Object.fromEntries((Object.keys(ANTH) as ModelClass[]).map((c) => [c, { ...ANTH[c], ...over[c] }])) as never,
+    advance,
+  });
+  const facts = (cls: ModelClass): string[] =>
+    [...rowOf(cls).querySelectorAll('[data-fact]')].map((e) => e.getAttribute('data-fact') as string);
+  const fact = (cls: ModelClass, kind: string): string | null => rowOf(cls).querySelector(`[data-fact="${kind}"]`)?.textContent ?? null;
+
+  it('an Anthropic class shows where its id came from', async () => {
+    mount(aread({ opus: { source: 'cache' }, sonnet: { source: 'use' } }), { anthropic: true });
+    await ready();
+    expect(rowOf('opus').textContent).toContain('Opus 9.1 (claude-opus-9-1)');
+    expect(fact('opus', 'source')).toMatch(/from Claude Code's catalogue/);
+    expect(fact('sonnet', 'source')).toMatch(/seen at a launch/);
+    expect(facts('haiku')).toEqual([]);
+  });
+
+  it('both ids show when the catalogue and a launch disagree', async () => {
+    mount(aread({ opus: { source: 'use', cacheTarget: 'claude-opus-9-1', seenId: 'claude-opus-9-2' }, sonnet: { cacheTarget: 'claude-sonnet-9-1', seenId: 'claude-sonnet-9-1' } }), { anthropic: true });
+    await ready();
+    expect(fact('opus', 'disagree')).toContain('claude-opus-9-1');
+    expect(fact('opus', 'disagree')).toContain('claude-opus-9-2');
+    expect(fact('sonnet', 'disagree')).toBeNull();
+  });
+
+  it('a held Anthropic class shows the held id and the alias\'s id', async () => {
+    // held on 9-1 while the alias moved to 9-2; the card's own model is the held id, as the wire sends it
+    mount(aread({ opus: { aliasId: 'claude-opus-9-2' } }, aadvance({ opus: aclass('opus', { hold: HELD }) })), { anthropic: true });
+    await ready();
+    expect(fact('opus', 'held')).toBe('Held at claude-opus-9-1.');
+    expect(fact('opus', 'alias')).toContain('claude-opus-9-2');
+    expect(fact('haiku', 'held')).toBeNull();
+  });
+
+  it('the held id is the advance file\'s, not the card\'s model', async () => {
+    mount(aread({ opus: { model: 'claude-opus-9-3', aliasId: 'claude-opus-9-2' } }, aadvance({ opus: aclass('opus', { hold: HELD }) })), { anthropic: true });
+    await ready();
+    expect(fact('opus', 'held')).toBe('Held at claude-opus-9-1.');
+  });
+
+  it('a hold on the alias\'s own id shows no second id', async () => {
+    mount(aread({ opus: { aliasId: 'claude-opus-9-1' } }, aadvance({ opus: aclass('opus', { hold: HELD }) })), { anthropic: true });
+    await ready();
+    expect(fact('opus', 'alias')).toBeNull();
+  });
+
+  it('a revertable held Anthropic class has no controls but retains its hold facts', async () => {
+    mount(aread({}, aadvance({ opus: aclass('opus', { hold: HELD, revertable: true, previous: { model: 'claude-opus-9-0', effort: null } }) })), { anthropic: true });
+    await ready();
+    expect(screen.queryAllByRole('button', { name: /^(Hold|Release|Revert) the/ })).toHaveLength(0);
+    expect(fact('opus', 'held')).toBe('Held at claude-opus-9-1.');
+    expect(fact('opus', 'supervisor')).toBe(SUPERVISOR_RESIDUAL_WORDS);
+    expect(rowOf('opus').textContent).not.toMatch(/a revert would put back/i);
+  });
+
+  it('an unreported advance record does not direct an Anthropic lane to unavailable controls', async () => {
+    mount(aread({}, { state: 'unreported', detail: null, pending: null, classes: null }), { anthropic: true });
+    await ready();
+    expect(screen.getByTestId('models-advance').textContent).toMatch(/holds are not known/i);
+    expect(screen.getByTestId('models-advance').textContent).not.toMatch(/hold or revert from here/i);
+  });
+
+  it('the orphaned saved level is one line', async () => {
+    mount(aread({ opus: { orphanedEffort: { id: 'claude-opus-9-0', level: 'high' } } }), { anthropic: true });
+    await ready();
+    expect(fact('opus', 'orphaned')).toBe('Saved effort high is keyed to an older model; ccd carries it at launch under Auto.');
+    expect(facts('sonnet')).toEqual([]);
+  });
+
+  it('a class with no id shows its class word', async () => {
+    mount(aread({ fable: { model: null, label: null, efforts: null, unobserved: true } }), { anthropic: true });
+    await ready();
+    expect(within(rowOf('fable')).getByText('Fable class', { selector: '.acct-models-model' })).toBeTruthy();
+    expect(rowOf('fable').textContent).not.toMatch(/no model: this class is empty/i);
+    expect(facts('fable')).toEqual(['no-id']);
+  });
+
+  it('an unlaunchable class names both builds', async () => {
+    mount(aread({
+      opus: { model: null, label: null, efforts: null, unobserved: true, unlaunchable: { needs: '9.1.0', laneVersion: '9.0.1' } },
+      sonnet: { model: null, label: null, efforts: null, unlaunchable: { needs: '9.1.0', laneVersion: null } },
+    }), { anthropic: true });
+    await ready();
+    expect(within(rowOf('opus')).getByText('Opus class', { selector: '.acct-models-model' })).toBeTruthy();
+    expect(facts('opus')).toEqual(['unlaunchable']);
+    expect(fact('opus', 'unlaunchable')).toMatch(/older than/);
+    expect(fact('opus', 'unlaunchable')).toContain('9.0.1');
+    expect(fact('opus', 'unlaunchable')).toContain('9.1.0');
+    expect(fact('sonnet', 'unlaunchable')).toMatch(/could not be read/);
+    expect(fact('sonnet', 'unlaunchable')).toContain('9.1.0');
+  });
+
+  it('a held Anthropic class carries the supervisor sentence', async () => {
+    mount(aread({}, aadvance({ opus: aclass('opus', { hold: HELD }) })), { anthropic: true });
+    await ready();
+    expect(fact('opus', 'supervisor')).toBe(SUPERVISOR_RESIDUAL_WORDS);
+    for (const c of ['haiku', 'sonnet', 'fable'] as const) expect(rowOf(c).textContent).not.toContain(SUPERVISOR_RESIDUAL_WORDS);
+  });
+
+  it('unobserved shows only on its own class', async () => {
+    // opus is held and unobserved; fable has no id and is unobserved too (the wire's own shape), but is not held
+    mount(aread({
+      opus: { unobserved: true },
+      fable: { model: null, label: null, efforts: null, unobserved: true },
+    }, aadvance({ opus: aclass('opus', { hold: HELD }) })), { anthropic: true });
+    await ready();
+    expect(fact('opus', 'unobserved')).toMatch(/not observed while the hold stands/);
+    for (const c of ['haiku', 'sonnet', 'fable'] as const) {
+      expect(rowOf(c).textContent, c).not.toMatch(/not observed/i);
+      expect(fact(c, 'unobserved'), c).toBeNull();
+    }
+  });
+
+  it('an Anthropic lane offers no Hold or Release', async () => {
+    // Every class: unheld, held, with no id, and unlaunchable.
+    mount(aread({
+      sonnet: { model: null, label: null, efforts: null, unobserved: true },
+      fable: { model: null, label: null, efforts: null, unobserved: true, unlaunchable: { needs: '9.1.0', laneVersion: '9.0.1' } },
+    }, aadvance({ opus: aclass('opus', { hold: HELD }) })), { anthropic: true });
+    await ready();
+    expect(screen.queryAllByRole('button', { name: /^(Hold|Release) the/ })).toHaveLength(0);
+    cleanup(); clearScreenCache();
+    // and an absent record, where a Codex lane offers a Hold on every class
+    mount(aread({}, { state: 'absent', detail: null, pending: null, classes: null }), { anthropic: true });
+    await ready();
+    expect(screen.queryAllByRole('button', { name: /^(Hold|Release) the/ })).toHaveLength(0);
+  });
+
+  it('a Codex lane\'s sheet is unchanged: Hold and Release are offered and no Anthropic line appears', async () => {
+    mount(read(okAdvance({ opus: { ...OPUS_ADV, hold: { at: '2026-11-18T08:00:00Z', by: 'hand' } } })));
+    await ready();
+    expect(screen.getAllByRole('button', { name: /^Hold the/ })).toHaveLength(3);
+    expect(screen.getAllByRole('button', { name: /^Release the/ })).toHaveLength(1);
+    expect(document.querySelectorAll('[data-fact]')).toHaveLength(0);
+    expect(document.body.textContent).not.toContain(SUPERVISOR_RESIDUAL_WORDS);
+    expect(rowOf('fable').textContent).toMatch(/no model: this class is empty/i);
   });
 });
