@@ -512,7 +512,17 @@ export function resolveMapProposal(p: MapProposal, eligible: readonly IssueSnaps
     seen.add(row.linearId);
     entries.push({ issue: row.linearId, identifier: row.identifier, class: e.class, ...(e.target === undefined ? {} : { target: e.target }) });
   }
-  return { ok: true, map: { team: p.team, entries, ...(p.backlog === undefined ? {} : { backlog: p.backlog }), ...(p.epics === undefined ? {} : { epics: p.epics }) } };
+  // D-8186, review 3350 F2: a superseded entry's successor that names an entry of this map by identifier in another ASCII case takes
+  // that entry's canonical identifier (the apply sends it to Linear). An exact id of an entry, or anything naming nothing on the map,
+  // is left as sent, so `checkMap`'s successor checks are the ones they were.
+  const ids = new Set(entries.map((e) => e.issue));
+  const canonical = new Map(entries.map((e) => [asciiUpper(e.identifier), e.identifier] as const));
+  const settled = entries.map((e) => {
+    const successor = e.class === 'superseded' ? e.target?.successor : undefined;
+    const named = successor === undefined || ids.has(successor) ? undefined : canonical.get(asciiUpper(successor));
+    return named === undefined ? e : { ...e, target: { ...e.target, successor: named } };
+  });
+  return { ok: true, map: { team: p.team, entries: settled, ...(p.backlog === undefined ? {} : { backlog: p.backlog }), ...(p.epics === undefined ? {} : { epics: p.epics }) } };
 }
 
 // ── Items and mails (§11.3; every one raised under `linear-sync`, acted on in the console only) ──

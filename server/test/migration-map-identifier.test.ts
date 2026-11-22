@@ -10,7 +10,8 @@ import { NO_SESSION } from '../src/auth/gate.js';
 import type { MapEntry } from '../../shared/plan.js';
 import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 import { cleanMigRigs, migRig, ok, OWNER, SLUG, U, type MigRig } from './migrationRig.js';
-import { WS } from './linearProxyRig.js';
+import { seedSlot, WS } from './linearProxyRig.js';
+import { parseMapProposal, resolveMapProposal } from '../src/linear/migrationPolicy.js';
 
 const TOKEN = 'k'.repeat(64);
 const apps: FastifyInstance[] = [];
@@ -21,9 +22,9 @@ const byIdentifier = (identifier: string, tgt: MapEntry['target'] = target) => (
 const legacy = (n: number, tgt: MapEntry['target'] = target) => ({ issue: U(100 + n), identifier: `AAA-${n}`, class: 'leaf', target: tgt });
 
 /** A rig with the migration started and the real route over it. */
-async function routed(setup: (r: MigRig) => void = (r) => { r.addIssue(1); r.addIssue(2); }) {
+async function routed(setup: (r: MigRig) => void | Promise<void> = (r) => { r.addIssue(1); r.addIssue(2); }) {
   const r = await migRig();
-  setup(r);
+  await setup(r);
   const started = r.mig.start('project-a', await r.mig.workspaceOfProject('project-a'));
   if (!started.ok) throw new Error(`start refused: ${started.word}`);
   const app = Fastify();
@@ -79,7 +80,7 @@ describe('plan map-propose by visible identifier (D-8186)', () => {
   });
 
   describe('refused at the route: no item, the migration still proposing with no map, and no write', () => {
-    const refused = async (setup: ((r: MigRig) => void) | undefined, body: unknown, want: { status: number; error: string; detail: string }) => {
+    const refused = async (setup: ((r: MigRig) => void | Promise<void>) | undefined, body: unknown, want: { status: number; error: string; detail: string }) => {
       const { r, post } = await routed(setup);
       const res = await post(body);
       expect(res.status).toBe(want.status);
@@ -145,23 +146,99 @@ describe('plan map-propose by visible identifier (D-8186)', () => {
       expect(stored(r)).toEqual({ state: 'proposing', entries: null, snapshot: null });
       expect(writes(r)).toEqual([]);
     });
-    it('an identifier only another workspace\'s team has: the read is the migration\'s workspace alone', async () => {
-      const { r, post } = await routed((x) => { x.addIssue(1); x.addIssue(2); });
-      // Another workspace holds team AAA too: there AAA-9 is open, and AAA-1 is a different issue.
-      const elsewhere = [{ ...r.issues.get(U(101))!, id: U(191) }, { ...r.issues.get(U(101))!, id: U(199), identifier: 'AAA-9' }];
-      r.override.current = (ask) => ask.op === 'teamOpenIssues' && ask.workspaceId !== WS.a.id ? ok({ nodes: elsewhere, next: null }) : undefined;
-      const res = await post({ entries: [...covering, byIdentifier('AAA-9', { ...target, ticketKey: 'k9' })] });
-      expect([res.status, res.json.error, res.json.detail]).toEqual([409, 'map-incomplete', 'not-open:AAA-9']);
-      expect(r.asks.map((a) => a.workspaceId)).toEqual([WS.a.id]);
-      expect(itemsOf(r)).toEqual([]);
-      expect(stored(r)).toEqual({ state: 'proposing', entries: null, snapshot: null });
-      // control: the same map without AAA-9 is stored with this workspace's AAA-1, never the other's
-      expect((await post({ entries: covering })).status).toBe(200);
-      expect(stored(r).entries!.map((e) => e.issue)).toEqual([U(101), U(102)]);
-    });
     it('a non-string issue', async () => {
       await refused(undefined, { entries: [{ issue: 101, identifier: 'AAA-1', class: 'leaf', target }] },
         { status: 400, error: 'plan-bad-body', detail: "an entry's issue is not a string" });
     });
+  });
+});
+
+describe('a second reachable workspace serving team AAA (D-8186, review 3350 F1)', () => {
+  /** Workspace b serves team AAA too: its open read answers a colliding AAA-1 (another id) and an AAA-9 of its own. */
+  const twoWorkspaces = async (r: MigRig): Promise<void> => {
+    r.addIssue(1); r.addIssue(2);
+    await seedSlot(r.ccrcDir, 'b', { teams: [{ id: WS.b.teams[0].id, key: 'AAA', name: 'Team A in B' }] });
+    r.db.prepare('INSERT INTO project_linking (project, teamKey, override, teamWorkspace) VALUES (?, ?, ?, ?)').run('project-b', 'AAA', 'private', WS.b.id);
+    r.db.prepare('UPDATE project_linking SET teamWorkspace = ? WHERE project = ?').run(WS.a.id, 'project-a');
+    r.db.prepare("UPDATE project_linking SET linearOwner = 'coord-a' WHERE project = 'project-a'").run();
+    r.db.prepare("UPDATE project_linking SET linearOwner = 'coord-b' WHERE project = 'project-b'").run();
+    const base = r.issues.get(U(101))!;
+    const elsewhere = [{ ...base, id: U(191) }, { ...base, id: U(199), identifier: 'AAA-9', title: 'Only in b' }];
+    r.override.current = (ask) => ask.op === 'teamOpenIssues' && ask.slot.id === WS.b.id ? ok({ nodes: elsewhere, next: null }) : undefined;
+  };
+  const covering = [byIdentifier('AAA-1'), byIdentifier('AAA-2', { ...target, ticketKey: 'k2' })];
+
+  it('the control reads the b rows, and they would resolve differently, so a wrong route or a cross-workspace lookup cannot pass', async () => {
+    const { r } = await routed(twoWorkspaces);
+    r.asks.length = 0;
+    const openB = await r.mig.readOpen('AAA', WS.b.id);
+    if (!openB.ok) throw new Error(openB.detail);
+    expect(openB.rows.map((x) => [x.linearId, x.identifier])).toEqual([[U(191), 'AAA-1'], [U(199), 'AAA-9']]);
+    expect(r.asks.map((a) => [a.op, a.slot.id])).toEqual([['teamOpenIssues', WS.b.id]]);
+    const openA = await r.mig.readOpen('AAA', WS.a.id);
+    if (!openA.ok) throw new Error(openA.detail);
+    expect(openA.rows.map((x) => x.identifier)).toEqual(['AAA-1', 'AAA-2']);
+    const proposal = (entries: unknown[]) => { const p = parseMapProposal({ entries }, 'AAA'); if (!p.ok) throw new Error(p.detail); return p.proposal; };
+    const asB = resolveMapProposal(proposal(covering), openB.rows);
+    expect(asB).toMatchObject({ ok: false, detail: 'not-open:AAA-2' });
+    expect(resolveMapProposal(proposal([byIdentifier('AAA-1')]), openB.rows)).toMatchObject({ ok: true, map: { entries: [{ issue: U(191) }] } });
+    expect(resolveMapProposal(proposal([byIdentifier('AAA-1')]), [...openA.rows, ...openB.rows])).toMatchObject({ ok: false, detail: 'ambiguous:AAA-1' });
+  });
+
+  it('the ws-a migration refuses an identifier only ws-b has, reading ws-a alone, then stores its own canonical rows', async () => {
+    const { r, post } = await routed(twoWorkspaces);
+    r.asks.length = 0;
+    const res = await post({ entries: [...covering, byIdentifier('AAA-9', { ...target, ticketKey: 'k9' })] });
+    expect([res.status, res.json.error, res.json.detail]).toEqual([409, 'map-incomplete', 'not-open:AAA-9']);
+    expect(r.asks.filter((a) => a.op === 'teamOpenIssues').map((a) => [a.workspaceId, a.slot.id])).toEqual([[WS.a.id, WS.a.id]]);
+    expect(itemsOf(r)).toEqual([]);
+    expect(stored(r)).toEqual({ state: 'proposing', entries: null, snapshot: null });
+    expect(writes(r)).toEqual([]);
+    // control: the map of this workspace's own issues is accepted and stores its rows, never ws-b's AAA-1
+    const ok200 = await post({ entries: covering });
+    expect(ok200.status).toBe(200);
+    expect(stored(r).entries!.map((e) => [e.issue, e.identifier])).toEqual([[U(101), 'AAA-1'], [U(102), 'AAA-2']]);
+    expect(Object.keys(stored(r).snapshot!)).toEqual([U(101), U(102)]);
+    expect(itemsOf(r)).toHaveLength(1);
+  });
+});
+
+describe('a superseded entry\'s successor in any case (D-8186, review 3350 F2)', () => {
+  const sup = (id: string, successor: string, issue?: string) => ({ ...(issue === undefined ? {} : { issue }), identifier: id, class: 'superseded', target: { successor } });
+  const leaf2 = (id: string, issue?: string) => ({ ...(issue === undefined ? {} : { issue }), identifier: id, class: 'leaf', target: { ...target, ticketKey: 'k2' } });
+
+  it('the former valid lowercase legacy pair form is accepted and stores canonical values, with the successor in Linear\'s spelling', async () => {
+    const { r, post } = await routed();
+    const res = await post({ entries: [sup('aaa-1', 'aaa-2', U(101)), leaf2('aaa-2', U(102))] });
+    expect(res.status).toBe(200);
+    expect(stored(r).entries).toEqual([
+      { issue: U(101), identifier: 'AAA-1', class: 'superseded', target: { successor: 'AAA-2' } },
+      { issue: U(102), identifier: 'AAA-2', class: 'leaf', target: { ...target, ticketKey: 'k2' } },
+    ]);
+  });
+  it('the identifier-only lowercase and mixed-case forms likewise', async () => {
+    for (const [a, b] of [['aaa-1', 'aaa-2'], ['Aaa-1', 'aAa-2']] as const) {
+      const { r, post } = await routed();
+      expect((await post({ entries: [sup(a, b), leaf2(b)] })).status).toBe(200);
+      expect(stored(r).entries!.map((e) => [e.issue, e.identifier, e.target?.successor])).toEqual([[U(101), 'AAA-1', 'AAA-2'], [U(102), 'AAA-2', undefined]]);
+    }
+  });
+  it('a successor outside the map is still an unknown successor, with no item and no write', async () => {
+    const { r, post } = await routed();
+    const res = await post({ entries: [sup('aaa-1', 'AAA-404'), leaf2('aaa-2')] });
+    expect([res.status, res.json.error, res.json.detail]).toEqual([400, 'plan-bad-body', 'unknown-successor:AAA-1']);
+    expect(itemsOf(r)).toEqual([]);
+    expect(stored(r)).toEqual({ state: 'proposing', entries: null, snapshot: null });
+    expect(writes(r)).toEqual([]);
+  });
+  it('the apply relates the superseded issue to the canonical successor and closes it', async () => {
+    const { r, post } = await routed();
+    expect((await post({ entries: [sup('aaa-1', 'aaa-2', U(101)), leaf2('aaa-2', U(102))] })).status).toBe(200);
+    const m = r.plan.migrationsOf()[0]!;
+    expect(r.mig.act(m.itemId!, m.id, 'approve', null)).toEqual({ ok: true });
+    await r.until(() => r.stateOf(m.id) === 'applied');
+    expect(r.stateOf(m.id)).toBe('applied');
+    expect(r.opsOf('issueRelationCreate').map((a) => a.input)).toEqual([{ issueId: U(101), relatedIssueId: 'AAA-2', type: 'related' }]);
+    expect(r.opsOf('issueUpdate').some((a) => a.input['id'] === U(101) && 'stateId' in a.input)).toBe(true);
   });
 });

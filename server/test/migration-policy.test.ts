@@ -413,3 +413,33 @@ describe('parseMapProposal and resolveMapProposal (D-8186: the visible identifie
     expect(resolveMapProposal(proposal([{ identifier: 'AAA-1', class: 'stale' }]), eligible)).toMatchObject({ ok: true });
   });
 });
+
+describe('resolveMapProposal: a superseded entry\'s on-map successor takes Linear\'s spelling (D-8186, review 3350 F2)', () => {
+  const eligible = [row(1), row(2), row(3)];
+  const resolve = (entries: unknown[]) => {
+    const p = parseMapProposal({ entries }, 'AAA');
+    if (!p.ok) throw new Error(p.detail);
+    const before = JSON.stringify(p.proposal);
+    const r = resolveMapProposal(p.proposal, eligible);
+    expect(JSON.stringify(p.proposal), 'the input proposal is not mutated').toBe(before);
+    if (!r.ok) throw new Error(r.detail);
+    return r.map.entries;
+  };
+  const sup = (id: string, successor: string) => ({ identifier: id, class: 'superseded', target: { successor } });
+  const leafE = (id: string) => ({ identifier: id, class: 'leaf', target: { programme: 'prog-a', epic: 'e-1' } });
+
+  it('a lowercase or mixed-case successor naming an on-map entry becomes its canonical identifier', () => {
+    expect(resolve([sup('aaa-1', 'aaa-2'), leafE('aaa-2')])[0]).toMatchObject({ identifier: 'AAA-1', target: { successor: 'AAA-2' } });
+    expect(resolve([sup('aaa-1', 'Aaa-2'), leafE('AAA-2')])[0]).toMatchObject({ target: { successor: 'AAA-2' } });
+  });
+  it('a successor that is exactly an on-map entry\'s UUID stays that UUID', () => {
+    expect(resolve([sup('AAA-1', U(2)), leafE('AAA-2')])[0]).toMatchObject({ target: { successor: U(2) } });
+  });
+  it('a successor naming nothing on the map stays exactly as sent', () => {
+    expect(resolve([sup('AAA-1', 'aaa-77'), leafE('AAA-2')])[0]).toMatchObject({ target: { successor: 'aaa-77' } });
+    expect(resolve([sup('AAA-1', 'aaa-3'), leafE('AAA-2')])[0]).toMatchObject({ target: { successor: 'aaa-3' } });
+  });
+  it('another entry\'s target is left alone', () => {
+    expect(resolve([sup('AAA-1', 'AAA-2'), leafE('aaa-2')])[1]).toEqual({ issue: U(2), identifier: 'AAA-2', class: 'leaf', target: { programme: 'prog-a', epic: 'e-1' } });
+  });
+});
