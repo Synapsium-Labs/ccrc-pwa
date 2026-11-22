@@ -322,14 +322,25 @@ Each row below was disputed by a challenger or needs a named condition. The rule
 | Workers cap | Derive only, or keep the dial | Kept with a derived default | It is the one bound on concurrent spend, and the capacity change alters what it counts. |
 | Private registry, private mirror, extra egress hosts on the test box | Keep for teams that need them | Removed | The code cannot serve those cases today: no registry sign-in, and the egress list refuses any other host. |
 
-## Decisions for you
+## Decisions, ruled
 
-1. **Unattended deletion without a per-box soak.** Expiry, the collector and the temp sweep would delete on every box once the publisher has read the shadow record. Recommendation: yes, one release after the lossless lanes, with Pause cleanup as the stop.
-2. **No Off for automatic updates.** Recommendation: yes. Stable moves only when you promote, and Roll back holds a fleet.
-3. **The dev channel.** Recommendation: drop the radio and fix users at stable. A fleet that follows dev says so once at install. Your own fleet needs this to soak shadow lanes.
-4. **Approvals on a single box.** Recommendation: ask once at install, default yes, and state plainly that one box gives weaker separation than two.
-5. **Admin merge.** Recommendation: drop the box-wide off line. GitHub admin rights are the control.
-6. **A full history store.** Recommendation: ask with one tap. Do not prune the only copy unasked.
+The operator ruled on all six on 2026-11-22. Where a ruling differs from a table above, the ruling stands.
+
+| # | Decision | Ruling |
+|---|---|---|
+| 1 | Unattended deletion without a per-box soak | Agreed: live one release after the lossless lanes, with Pause cleanup as the stop. |
+| 2 | Automatic updates with no Off | Not now. Updates is the one area that needs no immediate change: Auto-install, the Install and Update buttons, Ack and the per-node controls stay as they are. |
+| 3 | The dev channel | Kept as it is: the channel choice stays in Settings. |
+| 4 | Approvals on a single box | Agreed: asked once at install, default yes. |
+| 5 | Admin merge | Agreed: the box-wide off line goes. GitHub admin rights are the control. |
+| 6 | A full history store | A one-tap prompt at the cap. Never pruned unasked. |
+
+*Table. The six rulings. Rulings 2 and 3 keep the Updates rows of "Derived automatically", "Kept with a default" and
+"Risky removals" as they are today, and take step 6 out of the delivery below.*
+
+One more ruling the same day changes a row of "Kept with a default": **the workers cap on Runs is derived** from the
+fleet host's memory and cores. It shows as "Automatic", with an override for an incident. Its change is a pull
+request of its own.
 
 ## How to ship it
 
@@ -340,7 +351,7 @@ Each pull request is safe alone and removes a visible chunk. Cheapest and most v
 3. **Fix the Automation cards that change nothing risky.** Dispatch abandon on, roll every idle session, renewals at a break, plain auto memory off, browser tools off, quiet time 2 hours, roster card live, finished worktrees kept. Drop the new-session routing row, the class chooser and the effort menu. About 20 items.
 4. **Stall watch at Alert.** Delete the ladder, the three arming files and the two busy-gate files. Keep the one off file.
 5. **Lossless lanes live.** Hibernation, stale archive, clean orphan trees, deps shed, carry dedupe, nested rescue, stop leftovers, idle leftover sweep, landing checks, drift push, child reclaim, mail hold. Delete their arming files and the per-lane off files. Needs step 2. About 25 items.
-6. **Updates run themselves.** Auto-install where the gate exists, channel out of Settings, no release announcements, self-clearing halt for health failures, one Roll back, no per-node intent, a daily backup timer.
+6. **Updates: deferred by ruling 2.** Nothing changes here for now. The daily backup timer is the one part that may ship alone.
 7. **Env-file purge.** Delete the tuning numbers, paths and call bounds, and the read-only Box settings panel. Derive the machine sizes. The largest single cut, about 130 lines of configuration.
 8. **Test box.** Delete the Settings panel and its keys. Derive sizes and pairing values. Run parity, tool sync, release apply, repair and key rotation automatically. About 60 items.
 9. **Set-up in one pass.** A pairing step for two boxes, generated push keys, the sign-in gate derived from exposure, the role recorded, the single-box approvals question.
