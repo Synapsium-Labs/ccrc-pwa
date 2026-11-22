@@ -12,7 +12,7 @@ replayed it, and the evidence is not in the tree (§3).
   to LF; at its edges the composer's documented trim removed whitespace.
 - **No defect was reproduced, so no code changed.**
 - **Unmeasured:** the prompt body and count the server receives, the pane, Claude Code's input box and the
-  transcript; also touch input, other browser engines and an operating-system clipboard (§5).
+  transcript (§5); also touch input, other browser engines and an operating-system clipboard (§2).
 
 ## 2. Environment and boundaries
 
@@ -117,9 +117,11 @@ From the code and `docs/superpowers/plans/2026-10-15-paste-chip-send.md`, macOS 
   chips than long lines typed (pinned in `server/test/send-paste-chip.test.ts`). On a later line the plan reports in
   prose, with no recorded pane, that the first line's needle still matched and `sendPrompt` answered `ok` with about
   1 KB missing, because the chip guards run only when nothing echoed. Linux and the fleet's path are unmeasured.
-- **A long first line, then `M-Enter`.** The plan saw `M-Enter` submit the long line alone in some no-pause tries,
-  and `sendPrompt` sends it with no deliberate pause. Such a split refuses `verify-failed` with line one already sent,
-  and both conflict-sheet choices resend the whole message, so line one at least arrives twice.
+- **A long first line, then `M-Enter`.** In the plan, `M-Enter` straight after the long line submitted it alone in 3
+  of 16 python-driven tries with no pause, 0 of 14 with a 30 or 100 ms pause and 0 of 6 through the real
+  `sendPrompt`. `sendPrompt` sends `M-Enter` with no deliberate pause, so its exposure is inferred from that missing
+  pause, not observed. Such a split refuses `verify-failed` with line one already sent, and both conflict-sheet
+  choices resend the whole message, so line one at least arrives twice.
 - **Other shapes:** a tab inside a short typed line may read as the Tab key (c3), and a multibyte character may
   straddle a read boundary (c4b).
 
