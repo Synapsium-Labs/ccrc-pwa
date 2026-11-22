@@ -9,6 +9,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
+import { RUNG_CELLS } from '../../shared/overlord-ladder.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/overlord-skill');
@@ -290,6 +292,11 @@ function steps(text: string): Array<{ n: number; text: string }> {
   return out;
 }
 
+// Doors another programme's plan added to the Overlord's table that the spec's Table 11.1e does not name, each keyed by its
+// door name in starting.md to its row in server/src/coord/overlordDoors.ts, whose word it must carry (D-8809: the Linear
+// hierarchy's team confirm).
+const OUTSIDE_SPEC: Readonly<Record<string, string>> = { 'link team': 'link-team' };
+
 describe('the Overlord skill: its references', () => {
   it('carries exactly the four references', () => {
     expect(readdirSync(path.join(skillDir, 'references')).sort()).toEqual([...REFERENCES]);
@@ -307,6 +314,12 @@ describe('the Overlord skill: its references', () => {
     expect(rows.length, 'the references name no doors').toBeGreaterThan(20);
     const wrong: string[] = [];
     for (const { file, door, words } of rows) {
+      if (door in OUTSIDE_SPEC) {
+        const row = OVERLORD_DOORS[OUTSIDE_SPEC[door]!];
+        if (!row || row.group !== 'overlord') { wrong.push(`${file}: ${door} has no Overlord row in overlordDoors.ts`); continue; }
+        if (words.length !== 1 || words[0] !== row.word) wrong.push(`${file}: ${door} carries ${words.join(', ') || 'nothing'}; its row in overlordDoors.ts has the word ${row.word}`);
+        continue;
+      }
       const wave = waveOf(door);
       const accepted = acceptedWords(wave, byWave);
       if (words.length === 0 || words.some((w) => !accepted.includes(w))) {
@@ -314,6 +327,13 @@ describe('the Overlord skill: its references', () => {
       }
     }
     expect(wrong).toEqual([]);
+  });
+
+  it('names outside the spec only doors the spec lacks, each in the door table', () => {
+    for (const door of Object.keys(OUTSIDE_SPEC)) {
+      expect(() => waveOf(door), `Table 11.1e now names ${door}; drop it from OUTSIDE_SPEC`).toThrow();
+      expect(doorRows().some((r) => r.file === 'starting.md' && r.door === door), `${door} is not in starting.md's door table`).toBe(true);
+    }
   });
 
   const table116 = new Set(specTable('| Word | Door or lane |', '*Table 11.6.').map((r) => firstWord(cells(r)[0]!)));
@@ -353,5 +373,49 @@ describe('the Overlord skill: its references', () => {
     const row = refusals().find((r) => firstWord(r[0]!) === 'renewing');
     expect(row, 'the refusal table has no renewing row').toBeTruthy();
     expect(row!.join(' | ')).toContain('step 3');
+  });
+});
+
+describe('the Overlord skill: the team candidate (D-8809)', () => {
+  const paragraph = (): string => {
+    const text = readRef('starting.md');
+    const at = text.indexOf('**A team candidate.**');
+    if (at === -1) return '';
+    const end = text.indexOf('\n\n', at);
+    return text.slice(at, end === -1 ? undefined : end).replace(/\s*\n\s*/g, ' ');
+  };
+  const cellsOf = RUNG_CELLS['link-team'] as Readonly<Record<string, string>>;
+
+  it('exists and names link team', () => {
+    expect(paragraph()).toContain('`link team`');
+  });
+
+  it("follows the gate's rung cells", () => {
+    const p = paragraph();
+    const first = p.slice(0, p.indexOf('. ') + 1);
+    for (const [rung, cell] of Object.entries(cellsOf)) {
+      if (cell === 'allow') expect(first, `the first sentence omits \`${rung}\``).toContain(`\`${rung}\``);
+      if (cell === 'refuse') expect(p, `the paragraph omits \`${rung}\``).toContain(`\`${rung}\``);
+    }
+    for (const w of ['`rung-below`', 'Project linking card', 'decision brief', 'never by another route']) expect(p).toContain(w);
+  });
+
+  it("gives the confirm route's refusals", () => {
+    const route = readFileSync(path.join(root, 'server/src/linking/routes.ts'), 'utf8');
+    const from = route.indexOf("app.post('/api/linking/confirm'");
+    expect(from).toBeGreaterThan(-1);
+    const to = route.indexOf('app.post(', from + 1);
+    const body = route.slice(from, to === -1 ? undefined : to);
+    const policy = readFileSync(path.join(root, 'server/src/linking/policy.ts'), 'utf8');
+    const pf = policy.indexOf('export function teamPairVerdict');
+    expect(pf, 'policy.ts lost teamPairVerdict').toBeGreaterThan(-1);
+    const pe = policy.indexOf('\nexport ', pf + 1);
+    const policyFn = policy.slice(pf, pe === -1 ? undefined : pe);
+    const p = paragraph();
+    for (const w of ['team-set', 'team-unknown', 'team-ambiguous', 'no-project', 'unavailable', 'write-failed']) {
+      expect(p, `the paragraph omits \`${w}\``).toContain(`\`${w}\``);
+      const viaPair = policyFn.includes(`'${w}'`) && body.includes('refuseRoute(reply, pair.error');
+      expect(body.includes(`'${w}'`) || viaPair, `the confirm route has no '${w}', directly or through teamPairVerdict`).toBe(true);
+    }
   });
 });
