@@ -6,9 +6,10 @@
 // A submission is answered with `capture.state` frames: `refused` with its typed reason and sentence (nothing queued), or
 // `queued` with its position, then `running`, then `ended` with the runner's verdict, or with none and why when the
 // runner could not judge (it answered no verdict, or threw). Every answer echoes the submission's build. The standing
-// refusals are judged again when a waiting capture starts (a symlink may have moved while it waited).
+// refusals are judged again when a waiting capture starts (a symlink may have moved while it waited), and a capture that
+// waited too long to answer before the fleet agent stops waiting is ended with no verdict and a word, never run (F8).
 import { CAPTURE_REFUSAL_SENTENCE, type CaptureAnswer, type CaptureRefusal, type CaptureStateWord, type CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
-import { captureWrites, capturePaths } from './capture.js';
+import { CAPTURE_LATE_DETAIL, captureStartsLate, captureWrites, capturePaths } from './capture.js';
 import type { CaptureRun } from './captureRunner.js';
 import { writeRefusal, type ProbeRole } from './probes.js';
 import { admit, EMPTY_QUEUE, enqueue, finish, positions, type QueueState } from './queue.js';
@@ -31,6 +32,8 @@ export interface CaptureDeskDeps {
   readonly realPath: (p: string) => string;
   /** Whether the build's file is placed (a regular file). */
   readonly buildPresent: (file: string) => boolean;
+  /** The clock a capture's wait in the queue is measured on (default `Date.now`). */
+  readonly now?: () => number;
 }
 
 /** The capture's own queue holds one at a time, the probe rule's. */
@@ -38,7 +41,8 @@ const CAPTURE_SLOTS = 1;
 const SESSION = 'capture';
 const RUNNER_FAILED = 'the capture runner failed';
 
-interface Held { readonly f: CaptureSubmit; readonly sink: CaptureSink }
+/** A capture the desk holds, and when it was submitted (its wait in the queue is measured from then). */
+interface Held { readonly f: CaptureSubmit; readonly sink: CaptureSink; readonly at: number }
 
 export class CaptureDesk {
   private queue: QueueState = EMPTY_QUEUE;
@@ -47,6 +51,8 @@ export class CaptureDesk {
   private readonly driving = new Set<Promise<void>>();
 
   constructor(private readonly d: CaptureDeskDeps) {}
+
+  private now(): number { return (this.d.now ?? Date.now)(); }
 
   /** Why the desk takes no capture of `f` now, in order: the role, the runner, the build's bytes, the write guard. */
   private standing(f: CaptureSubmit): CaptureRefusal | null {
@@ -75,7 +81,7 @@ export class CaptureDesk {
     if (q === null) { this.refuse(f, sink, 'capture-id-used'); return; }
     this.queue = q;
     this.used.add(f.captureId);
-    this.held.set(f.captureId, { f, sink });
+    this.held.set(f.captureId, { f, sink, at: this.now() });
     this.answer(f, sink, 'queued', { position: positions(this.queue).get(f.captureId) ?? null });
     this.pump();
   }
@@ -94,7 +100,11 @@ export class CaptureDesk {
     const h = this.held.get(captureId)!;
     const standing = this.standing(h.f);
     const runner = this.d.runner;
-    if (standing === null && runner !== null) {
+    if (standing === null && runner !== null && captureStartsLate(this.now() - h.at)) {
+      // Its verdict would come after the fleet agent stopped waiting: ended with no verdict and the word, never run
+      // (review 3226 F8). The decision is `capture.ts#captureStartsLate`'s.
+      this.answer(h.f, h.sink, 'ended', { detail: CAPTURE_LATE_DETAIL });
+    } else if (standing === null && runner !== null) {
       this.answer(h.f, h.sink, 'running');
       let run: CaptureRun;
       try { run = await runner.run(captureId, h.f.build); } catch { run = { result: null, detail: RUNNER_FAILED }; }

@@ -12,6 +12,7 @@
 // - THE DRIVE: the keys typed at each step and the events that must be recorded before the next.
 // - THE STAND-IN'S REPLIES: one rule per request, keyed on what the request carries, never on a model.
 import path from 'node:path';
+import { TESTBOX_CAPTURE_DEADLINE_MS } from '../../../shared/agent-protocol.js';
 import { CAPTURE_EVENTS, CAPTURE_WRITE_COMMAND } from '../../../shared/claudeBuildCapture.js';
 import type { HookEvent } from '../../../shared/hook-events.js';
 import { SYSTEM_PATH } from './spec.js';
@@ -193,4 +194,54 @@ export function standInReply(body: unknown): StandInReply {
     return { kind: 'error', status: 400, message: 'ccrc capture stand-in: this request is refused on purpose' };
   }
   return { kind: 'text', text: text.includes(CAPTURE_MARK.subagent) ? 'ok' : 'ccrc capture summary' };
+}
+
+// ── the timings (review 3226 F8) ─────────────────────────────────────────────────────────────────────────────────
+
+/** How long each part of one capture may take. The fleet agent waits `TESTBOX_CAPTURE_DEADLINE_MS` for the verdict and then
+ *  closes its connection, so a verdict sent after that is lost; these values are chosen so a capture fits that deadline
+ *  with one capture ahead of it in the queue ({@link captureWorstCaseMs}, pinned by `testbox-capture-deadline.test.ts`). */
+export interface CaptureTimings {
+  /** One step's events (the runner's `stepTimeoutMs`). */
+  readonly stepMs: number;
+  /** The build's exit after the last step (the runner's `exitTimeoutMs`). */
+  readonly exitMs: number;
+  /** The recording's poll (the runner's `pollMs`). */
+  readonly pollMs: number;
+  /** One tmux call's bound (`captureRunner.ts#tmuxLauncher`'s `boundMs`). */
+  readonly tmuxCallMs: number;
+  /** After `stop`, the wait for the build to be gone (the runner's `stopWaitMs`). */
+  readonly stopWaitMs: number;
+  /** An allowance for the scratch directory, the seeded config and the stand-in's start, which no call bounds. */
+  readonly setupMs: number;
+}
+
+/** The production timings. A step of the drive against the stand-in takes seconds; 40 s each leaves room on a slow box. */
+export const CAPTURE_TIMINGS: CaptureTimings = Object.freeze({
+  stepMs: 40_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, stopWaitMs: 5_000, setupMs: 10_000,
+});
+
+/** The slack kept beside the worst case: the frames' travel and the clocks of two processes. */
+export const CAPTURE_DEADLINE_MARGIN_MS = 30_000;
+
+/** The longest one capture can take under `t`: the setup and the start (one tmux call); each step's typing (the text and
+ *  Enter, two calls, and one liveness call when typing fails) and its wait, which can overrun by one poll; one liveness
+ *  call when the drive stops unfinished; the exit wait (each pass a call, overrunning by a call and a poll); and the
+ *  cleanup (the kill, then the bounded wait for the build to be gone). */
+export function captureWorstCaseMs(t: CaptureTimings, steps: readonly CaptureStep[] = CAPTURE_STEPS): number {
+  const call = t.tmuxCallMs;
+  const start = t.setupMs + call;
+  const drive = steps.reduce((ms, s) => ms + (s.type === null ? 0 : 3 * call) + t.stepMs + t.pollMs, 0) + call;
+  const exit = t.exitMs + call + t.pollMs;
+  const stop = call + t.stopWaitMs + call + t.pollMs;
+  return start + drive + exit + stop;
+}
+
+/** What a capture that started too late to answer in time is told: no verdict, and why. */
+export const CAPTURE_LATE_DETAIL = 'the capture waited in the queue too long to finish before the fleet agent stops waiting: not run, no verdict';
+
+/** Whether a capture that has waited `waitedMs` since its submission must not start: its worst case and the margin would
+ *  end past the fleet agent's deadline, so its verdict would be lost. The desk ends it with {@link CAPTURE_LATE_DETAIL}. */
+export function captureStartsLate(waitedMs: number, t: CaptureTimings = CAPTURE_TIMINGS, deadlineMs: number = TESTBOX_CAPTURE_DEADLINE_MS): boolean {
+  return waitedMs + captureWorstCaseMs(t) + CAPTURE_DEADLINE_MARGIN_MS > deadlineMs;
 }
