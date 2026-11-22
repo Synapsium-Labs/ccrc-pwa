@@ -26,6 +26,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
+import { raiseRestoreDetectedOn } from './coord/overlordRestoreLatch.js';
 import { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
 import { witnessLinkOver } from './coord/overlordAuthorityWitnessLink.js';
 import type { PrivacyJournalHead } from './coord/privacyJournalHead.js';
@@ -175,6 +176,9 @@ const overlordAuthorityPort: AuthorityBootPort = {
 const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuard(overlordAuthorityPort);
 const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
   overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
+// The ladder's `restore-detected` latch is raised on the guard's report, registered BEFORE the boot step so a non-coherent boot
+// verdict raises too (ruling F4; `coord/overlordRestoreLatch.ts`).
+raiseRestoreDetectedOn(overlordAuthorityGuard, { coord, journal: overlordAuthority, clock: time.clock, entropy: time.entropy, inTransaction: () => coordDb.isTransaction, warn: (line) => console.warn(line) });
 runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as

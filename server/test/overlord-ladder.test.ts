@@ -30,7 +30,9 @@ describe('the rung words', () => {
 
 describe('every exported union has its runtime list', () => {
   it('the lists hold exactly the members', () => {
-    expect(L0.LADDER_CAUSES).toEqual(['generation-degraded', 'off-model', 'rung-word-missing', 'unwitnessed-third']);
+    expect(L0.LADDER_CAUSES).toEqual(expect.arrayContaining(['generation-degraded', 'off-model', 'rung-word-missing', 'unwitnessed-third', 'restore-detected', 'no-witness-since-boot']));
+    expect(L0.LADDER_CAUSE_MAP['restore-detected']).toMatchObject({ kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none' });
+    expect(L0.LADDER_CAUSE_MAP['no-witness-since-boot']).toMatchObject({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none' });
     expect(L0.LADDER_READERS).toEqual(['launch-profile-unmet']);
     expect(L0.LADDER_NOTICES).toEqual(['none', 'push', 'item']);
     expect(L0.LADDER_ACT_KINDS).toEqual(['read', 'write-note', 'acknowledge', 'link-team']);

@@ -46,7 +46,7 @@ export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
 export type SidecarOf = (sessionId: string) => Pick<SessionUsage, 'class' | 'stale'> | null | undefined;
 const sidecarClassOf = (u: ReturnType<SidecarOf>): SidecarClass => (u === null || u === undefined ? { kind: 'absent' } : u.stale ? { kind: 'stale' } : { kind: 'fresh', class: u.class });
 
-export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf }): LadderConditionInputs {
+export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf; noWitnessSinceBoot?: () => ConditionReading }): LadderConditionInputs {
   return {
     'generation-degraded': () => {
       try {
@@ -78,6 +78,10 @@ export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<C
         const read = deps.coord.ladderRungRead();
         return read.kind === 'current' ? rungWordReading(read.current, deps.serverCaps) : 'unmeasured';
       } catch { return 'unmeasured'; }
+    },
+    // No witness off the volume has answered since this boot (the authority exchange's read); absent dep: its effect applies.
+    'no-witness-since-boot': () => {
+      try { return deps.noWitnessSinceBoot === undefined ? 'unmeasured' : deps.noWitnessSinceBoot(); } catch { return 'unmeasured'; }
     },
   };
 }
