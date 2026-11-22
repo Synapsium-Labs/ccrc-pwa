@@ -478,11 +478,8 @@ describe('the client stays closed', () => {
     expect(code.match(/if \[\[ "\$key" == 'note\.add' \|\| "\$key" == 'note\.close' \|\| "\$key" == 'note\.handover' \]\]; then/g) ?? []).toHaveLength(1);
     pairLast(blockOf("if [[ \"$key\" == 'note.add' || \"$key\" == 'note.close' || \"$key\" == 'note.handover' ]]; then"));
     // The probe answer's fill is the note door's rule on one row: refuse a body naming either key, then append the pane's pair.
-    const probeFill = code.slice(code.indexOf("if [[ \"$key\" == 'probe.answer' ]]; then\n    [[ -n"));
     expect(code.match(/if \[\[ "\$key" == 'probe\.answer' \]\]; then\n    \[\[ -n/g) ?? []).toHaveLength(1);
-    expect(probeFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
-    expect(probeFill).toMatch(/append_body_field 'byId' "\$DERIVED_ID"/);
-    expect(probeFill).toMatch(/append_body_field 'byUuid' "\$DERIVED_UUID"/);
+    pairLast(blockOf("if [[ \"$key\" == 'probe.answer' ]]; then\n    [[ -n"));
     // THE APPEND-LAST FILLS, derived from the client's own blocks: every `if [[ "$key" == …` block that fills the pane's pair
     // with `append_body_field` (the pair LAST, so a parser keeping the later of two keys keeps the pane's, review 2039 F7), and
     // no such block that splices it. The goals writes (review 2240 F1) and the remaining-work door (Overlord W2, review 2265 F9)

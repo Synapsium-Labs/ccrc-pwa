@@ -1264,8 +1264,10 @@ main() {
   # THE FOURTH BODY THIS CLIENT FILLS, and the first it never lets the caller speak for (D-8126): a call's attribution pair is the
   # PANE's, through `derive_identity`, as `runs.open` derives its uuid, but here the opposite of the `byId` fill's rule: a body that
   # names `byId` or `byUuid` is REFUSED, unsent, because the call record is the coordinator's account of its own decision and
-  # the route stores `madeBy` from this pair. The textual test is the `byId` fill's, over a whitespace-stripped copy, with the
-  # same stated limits: a nested or `\u`-escaped key passes it, and is outranked by the appended pair at the server's parse.
+  # the route stores `madeBy` from this pair. The textual test is the `byId` fill's substring match, over a whitespace-stripped
+  # copy, but a match here REFUSES where the `byId` fill's suppresses its fill: a nested or a whitespace-padded `byId` or
+  # `byUuid` key matches and is refused, and only a `\u`-escaped spelling passes, which the appended pair outranks at the
+  # server's parse.
   # A bodyless call is refused (`no-body`), a body that is not a JSON object is refused, and a pane with no identity is refused;
   # nothing is sent in any of the three. The pair is appended LAST, byId then byUuid, as the note doors' is (review 2039 F7,
   # review 3245 A2): the server's JSON parse keeps the later of two duplicate keys, so a spelling of `byId` the textual test

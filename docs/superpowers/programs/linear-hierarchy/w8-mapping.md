@@ -339,10 +339,19 @@ Fix round 1 (review 3266, as the coordinator ruled):
   matching the `runs.review-rounds` block later in the file. Each slice now ends at its own block's closing `fi` and asserts
   the refusal, no splice, and `append_body_field` for `byId` before `byUuid`. Measured: each door reverted to
   `splice_body_field` turns its assertion red; restored, it passes.
-- F2: the call record's comment says what is true: a nested or `\u`-escaped key passes the text test and is outranked by
-  the appended pair at the server's parse (it said the server refused it, `bad-field`).
+- F2: the call record's comment no longer says the server refuses an escaped key (`bad-field`): a `\u`-escaped spelling
+  passes the text test and is outranked by the appended pair at the server's parse.
 - F3: the `runs review-rounds` sentence above says why its splice-first order is safe.
 - F4: the `w8-confirm-unmeasured` entry is exact about the operator's write, which answers `team-unknown` only when it names
   a workspace. A store with no slot measures `not-configured`, which today's verdict folds into `team-unknown`, so the
   measured resolver alone would not tell the operator that no workspace is connected.
 
+Fix round 2 (review 3271, as the coordinator ruled):
+
+- F1: fix round 1's comment and note sentence said a nested key passes the text test too. It does not: the test is a
+  substring match over the whitespace-stripped body, so a nested or a whitespace-padded `byId` or `byUuid` key matches and
+  is refused (`bad-body`); only a `\u`-escaped spelling passes. The comment says so, and says how this door differs from the
+  `byId` fill, where the same match suppresses the fill instead of refusing.
+- F2: the probe answer's slice ends at its own block's closing `fi` too, through the same helper, so the `programme.remaining`
+  block can no longer satisfy it. Measured: the probe door reverted to `splice_body_field` turns its assertion red; restored,
+  it passes.
