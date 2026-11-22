@@ -7,6 +7,7 @@ import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import { raiseLatch, ladderRead } from '../src/coord/overlordLadderRead.js';
 import { effectiveRung } from '../src/coord/overlordLadder.js';
+import { LADDER_CAUSE_MAP } from '../../shared/overlord-ladder.js';
 import { applyRestoreInTx } from '../src/coord/overlordLadderStore.js';
 import { tx } from '../src/coord/db.js';
 import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
@@ -62,6 +63,12 @@ describe('ladder latch seam', () => {
     expect(effectiveRung(facts)).toMatchObject({ rung: 'off', binding: [{ cause: 'condition-a', known: true }] });
     expect(effectiveRung({ ...facts, conditions: [{ cause: 'condition-a', reading: 'lifted' }] })).toMatchObject({ rung: 'chat', binding: [{ cause: 'restore-detected', known: true }] });
   });
+  it("the isolation word's row is a condition capping advise with notice none, through the shipped table", () => {
+    const facts = { operatorRung: { kind: 'set', rung: 'full' }, latches: [], conditions: [{ cause: 'shared-user', reading: 'standing' }],
+      causeTable: LADDER_CAUSE_MAP, serverCaps: ['overlord-route-v1', 'overlord-answer-v1'] } as const;
+    expect(LADDER_CAUSE_MAP['shared-user']).toMatchObject({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none' });
+    expect(effectiveRung(facts)).toMatchObject({ rung: 'advise', binding: [{ cause: 'shared-user', kind: 'condition', cap: 'advise', known: true }] });
+  });
   it('Confirm stamps pending rows, preserves earlier records and adds the stricter side', () => {
     const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'advise', 'actor', 1, NULL, 'full', 1)");
@@ -79,7 +86,7 @@ describe('ladder latch seam', () => {
       { cause: 'latch-a', cap: 'chat', raiseSequence: 9 }, { cause: 'latch-b', cap: 'advise', raiseSequence: 3 }, { cause: 'latch-c', cap: 'chat', raiseSequence: 9 },
     ]);
     const coord = new CoordStore(db);
-    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted' }, { heldFor: () => 'held' }, []);
+    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted' }, { heldFor: () => 'held' }, []);
     expect(read).toMatchObject({ kind: 'measured', lastChange: { narrowing: { state: 'done' } } });
     db.close();
   });
