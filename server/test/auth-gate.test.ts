@@ -1660,6 +1660,9 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     'POST /api/overlord/account-set', 'POST /api/overlord/model',
     // Clearing a latch always asks the account gate, unlike lowering or Pause.
     'POST /api/overlord/latches/:cause/clear',
+    // Confirm the restore (authority journal C): the read and the door each ask the account gate with `cap: null` (the door with a
+    // step-up), so dark each answers `auth-off` (501): BY DESIGN.
+    'GET /api/overlord/restore', 'POST /api/overlord/restore/confirm',
     // The decision-model doors' five writes (Overlord W2, decision model B): each takes the account gate with `cap: null`, so dark
     // each answers `auth-off` (501); armed with a session the arm, key PUT, and a widening off or ceiling ask the step-up first, and
     // the rest reach their handler, which with no coordination store answers `not-configured`: BY DESIGN. The read is not here.
@@ -1673,7 +1676,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     'POST /api/continuity/quiz-runs/:id/withdraw',
   ]);
 
-  it('FLAG_AWARE is exactly those thirty-three — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those thirty-five — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1696,6 +1699,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'DELETE /api/programmes/:slug/secrets/:slot',
       'GET /api/auth/passkeys',
       'GET /api/overlord/designation',
+      'GET /api/overlord/restore',
       'POST /api/accounts/revoke-ack',
       'POST /api/auth/login',
       'POST /api/auth/logout',
@@ -1717,6 +1721,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/overlord/designate',
       'POST /api/overlord/latches/:cause/clear',
       'POST /api/overlord/model',
+      'POST /api/overlord/restore/confirm',
       'PUT /api/decision-model/key',
       'PUT /api/items/:id/secret',
       'PUT /api/linear/connection',
