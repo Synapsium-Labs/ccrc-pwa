@@ -649,6 +649,10 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     f(a);
     fs.writeFileSync(aliasesPath(h), `${JSON.stringify(a, null, 2)}\n`);
   };
+  /** The full alias-source-absent WARN on lane-c, as a measured list holding alias-launch-v1 prints it. */
+  const SOURCE_ABSENT_WARN = 'WARN model-advance-blocked: lane-c: alias-source-absent (no class has a model id: the lane\'s home has no '
+    + 'catalogue cache, and no alias launch has reported one)\n'
+    + '  remedy: per cause: alias source — start one session on this lane through ccd, or sign it in so Claude Code writes a catalogue\n';
   /** A stub ccd whose `caps` lists these words, one per line. */
   const stubCcd = (h: string, words: string[]): void => {
     fs.mkdirSync(join(h, '.local', 'bin'), { recursive: true });
@@ -804,6 +808,20 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     const warn = check(h, 'model-advance-blocked');
     expect(warn.out).toContain('WARN model-advance-blocked: lane-c: alias-source-absent (');
     expect(warn.code).toBe(2);
+  });
+
+  it('a measured caps list: with alias-launch-v1 the source row WARNs in full, without it the row is the note (doctor-caps-one-reader)', () => {
+    const h = box();
+    aop(h, T0, 'aliases-refresh');
+    capable(h);
+    const warn = check(h, 'model-advance-blocked');
+    expect(warn.out).toBe(SOURCE_ABSENT_WARN);
+    expect(warn.code).toBe(2);
+    stubCcd(h, ['caps', 'ws-add']);
+    const note = check(h, 'model-advance-blocked');
+    expect(note.out).toBe('PASS model-advance-blocked: 1 lane(s) with a model registry or an aliases file: nothing blocks an advance; '
+      + 'no source until ccd marks alias launches (lane-c)\n');
+    expect(note.code).toBe(0);
   });
 
   it('the note names only the source cause: a stale cache or a file cause still WARNs before alias-launch-v1', () => {
