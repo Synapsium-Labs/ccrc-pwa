@@ -5,6 +5,9 @@
 # it starts, the release a tool-sync takeover replaced is removed (tools-sync --takeover-ended, D-7426). The firewall
 # lets it out only to its own rows of spec §2.0's table, matched through the cgroup set NFTSet= adds it to (D-7568); the
 # firewall's load is nftables.service's, so the service does not start when that load fails.
+# RuntimeDirectory= is the service's own directory, /run/ccrc-testbox, made for its user at each start and removed at
+# each stop: the service writes its ready file and its drain answer there (D-8907, agent/src/testbox/boxFiles.ts), and
+# root reads them as data, so neither outlives the process that wrote it.
 [Unit]
 Description=ccrc test box: the test service
 Wants=network-online.target
@@ -18,6 +21,7 @@ ExecStartPre=+@@TREE@@/deploy/testbox/bin/tools-sync --takeover-ended
 ExecStart=@@TOOLS@@/current/node @@TREE@@/agent/dist/agent/src/testbox/main.js
 Restart=always
 RestartSec=5s
+RuntimeDirectory=ccrc-testbox
 NFTSet=cgroup:inet:ccrc_testbox:service_cg
 NoNewPrivileges=yes
 PrivateTmp=yes
