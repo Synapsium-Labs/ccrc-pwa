@@ -11,8 +11,9 @@ import {
   type RestoreGeneration, type SequenceKind, type SequencePageWire, type SequenceWireLine,
 } from '../../../shared/overlord-sequence.js';
 
-/** Why a line may not be written. */
-export type LineRefusal = 'unknown-kind' | 'unknown-state' | 'bad-id' | 'bad-actor' | 'bad-actor-kind' | 'bad-at';
+/** Why a line may not be written, enumerated once; the type derives from it. */
+export const LINE_REFUSALS = ['unknown-kind', 'unknown-state', 'bad-id', 'bad-actor', 'bad-actor-kind', 'bad-at'] as const;
+export type LineRefusal = (typeof LINE_REFUSALS)[number];
 
 const textWithin = (v: string, max: number): boolean => v.length > 0 && v.length <= max;
 

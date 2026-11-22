@@ -15,13 +15,22 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { ACTOR_KIND_MAP, type ActorKind } from '../../../shared/overlord-identity.js';
 import type { SequenceKind, SequenceWireLine } from '../../../shared/overlord-sequence.js';
-import { SEQUENCE_KEPT_KIND, sequenceLineKnown, sequenceLineVerdict, type LineRefusal, type SequenceFacts } from './overlordSequence.js';
+import { LINE_REFUSALS, SEQUENCE_KEPT_KIND, sequenceLineKnown, sequenceLineVerdict, type LineRefusal, type SequenceFacts } from './overlordSequence.js';
 
 /** The stamp's answer. It never throws: every caller checks it and writes no row on a refusal (by throwing inside its own
  *  transaction, so the row rolls back with the line). */
 export type StampAnswer =
   | { readonly ok: true; readonly seq: number }
-  | { readonly ok: false; readonly error: 'not-in-transaction' | LineRefusal | 'write-failed'; readonly detail: string };
+  | { readonly ok: false; readonly error: StampFailure | LineRefusal; readonly detail: string };
+
+/** The writer's own two failures, beside the verdict's refusals: outside a transaction, and an insert that failed. */
+export const STAMP_FAILURES = ['not-in-transaction', 'write-failed'] as const;
+export type StampFailure = (typeof STAMP_FAILURES)[number];
+
+/** Whether `tok` is one of the stamp's answer words. Each is a stamped writer's internal answer, logged or thrown, never a mail
+ *  or run refusal; `mail-routes.test.ts`'s kebab scan admits them through this guard. */
+export const isSequenceStampKebab = (tok: string): boolean =>
+  (STAMP_FAILURES as readonly string[]).includes(tok) || (LINE_REFUSALS as readonly string[]).includes(tok);
 
 /** One line to stamp. `at` is the time the stamped writer already takes, so a line never reads a clock of its own. */
 export interface SequenceLineInput {
