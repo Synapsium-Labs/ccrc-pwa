@@ -112,7 +112,7 @@ import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
 import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
 import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
-import { overlordGateRun } from './coord/overlordGateRun.js';
+import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
 import { readTurnMarkMeasured } from './turnmark.js';
@@ -2236,7 +2236,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
   const continuityLive = () => deps.coord !== undefined && laneArmRowViewOf(CONTINUITY_LANE, deps.coord.laneArmSetting(CONTINUITY_LANE)).live;
-  const gate = overlordGateRun({
+  const gateDeps: OverlordGateDeps = {
     identity, serverWords: () => SERVER_CAPS, now: () => deps.time.clock.wall(),
     designation: () => deps.coord?.designationRead() ?? { kind: 'unmeasured', why: noCoord },
     authority: () => deps.overlordAuthorityGuard?.state() ?? { kind: 'unmeasured', why: 'journal' },
@@ -2248,7 +2248,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
-  });
+  };
+  const gate = overlordGateRun(gateDeps);
+  // The inbox wake asks the same readers as a read (no fence, no witness, nothing recorded), through its own handle.
+  watcher?.useInboxReadGate?.(overlordReadGate(gateDeps));
   // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project, and (D-8809)
   // the Overlord's confirm of a team candidate behind the gate above.
   registerLinkingRoutes(app, {

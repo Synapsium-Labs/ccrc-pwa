@@ -1,6 +1,6 @@
 // The Overlord inbox's deciders (Overlord W1, inbox piece, Task 1; plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-inbox.md`;
 // spec §6.8, §3.8 and §11.2). Ring L1, context C5: pure decisions over facts the runner, the handlers and the wake lane
-// (L4) read. Runtime imports: L0 only (`shared/overlordInbox.ts`, `shared/operatorMessages.ts`), and gates B's
+// (L4) read. Runtime imports: L0 (`shared/overlordInbox.ts`, `shared/operatorMessages.ts`) and the fixed-line table of `envelope.ts` (L1, for the kebab census alone), and gates B's
 // `GateWord` and `GateVerdict` by type. No `fs`, no Fastify, no clock: time arrives as an argument, and every source
 // arrives with its unmeasured arm, so a source that could not be read never reads as an empty one (the plan's question 14).
 //
@@ -23,6 +23,7 @@ import type {
 import type { MessageState, ReadDoor } from '../../../shared/operatorMessages.js';
 import type { GenerationState, ProbeRoundKind } from '../../../shared/continuity.js';
 import type { GateVerdict, GateWord } from './overlordGate.js';
+import { FIXED_LINE_MAIL } from './envelope.js';
 
 export type Source<T> = { readonly kind: 'measured'; readonly value: T } | { readonly kind: 'unmeasured'; readonly why: string };
 export interface OpenRound { readonly roundId: string; readonly kind: ProbeRoundKind; readonly questions: number; readonly askedAt: number }
@@ -111,6 +112,14 @@ export function inboxProbeSource(gen: GenerationFact, rows: ProbeRowsFact | 'not
   return { kind: 'measured', value: { roundId: first.roundId, kind: first.kind, questions: rows.rows.length, askedAt: first.askedAt } };
 }
 
+/** The inbox's probe source for one caller, through the two steps `inboxProbeSource` asks: the generation first, then the open
+ *  round's rows only when the decider asks for them. `readRows` is the reader the caller binds (the inbox door and the wake read
+ *  the round through the same one, `overlordInboxWake.ts#openRoundFact`). */
+export function inboxProbeSourceOf(gen: GenerationFact, readRows: () => ProbeRowsFact): Source<OpenRound | 'none'> {
+  const asked = inboxProbeSource(gen, 'not-read');
+  return asked.kind === 'read-rows' ? inboxProbeSource(gen, readRows()) : asked;
+}
+
 /** The nudge a row has besides the wake. A row of a kind this build does not know declares none: the wake covers it. */
 export function rowNudgeOf(r: InboxRow): RowNudge {
   if (r.kind === 'operator-message') return MESSAGE_NUDGE;
@@ -195,7 +204,7 @@ export function inboxWakeVerdict(i: WakeInput): WakeVerdict {
 }
 
 /** The words this file and the inbox's other coordination files spell as kebab literals that no other union admits: the
- *  wake's own holds, the row kinds, the nudges, the behind kinds and the wake's subject. The coordination kebab census
+ *  wake's own holds, the row kinds, the nudges, the behind kinds, the wake's subject and the fixed-line table's row names and first-delivery words. The coordination kebab census
  *  (`mail-routes.test.ts`) takes them through this guard, never an allowlist pin. */
 export const isOverlordInboxKebab = (word: string): boolean =>
   Object.prototype.hasOwnProperty.call(WAKE_OWN_HOLD_MAP, word)
@@ -203,4 +212,5 @@ export const isOverlordInboxKebab = (word: string): boolean =>
   || (ROW_NUDGES as readonly string[]).includes(word)
   || (INBOX_BEHIND_KINDS as readonly string[]).includes(word)
   || word === INBOX_WAKE_SUBJECT
+  || FIXED_LINE_MAIL.some((r) => r.name === word || r.firstDelivery === word)
   || word === 'read-rows';

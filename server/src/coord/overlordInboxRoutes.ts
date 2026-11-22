@@ -19,13 +19,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { refuseRoute } from '../refuse.js';
 import { INBOX_SERVED_BANDS, parseMessageId, type InboxAnswer } from '../../../shared/overlordInbox.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
-import { effectiveGeneration, type GenerationsRead } from '../continuity/continuityStore.js';
-import { designationFactFrom, identityOf } from '../roleOf.js';
 import type { OperatorModelStore } from '../operatorModel/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import { doorRow, type OverlordDoorRow } from './overlordDoors.js';
-import type { overlordGateRun } from './overlordGateRun.js';
-import { acknowledgeVerdict, composeInbox, inboxProbeSource, type GenerationFact, type ProbeRowsFact } from './overlordInbox.js';
+import { callerGenerationOf, type overlordGateRun } from './overlordGateRun.js';
+import { acknowledgeVerdict, composeInbox, inboxProbeSourceOf, type GenerationFact } from './overlordInbox.js';
+import { openRoundFact } from './overlordInboxWake.js';
 import type { ReadComposed, runOverlordRead } from './overlordRead.js';
 import type { CoordStore } from './store.js';
 
@@ -71,34 +70,14 @@ const NO_STORE = 'the private store is not open';
 const NO_COORD = 'no coordination store';
 
 export function registerOverlordInboxRoutes(app: FastifyInstance, deps: OverlordInboxRoutesDeps): void {
-  /** The caller's live generation's effective state, read as the gate runner reads it (its identity row, then
-   *  `effectiveGeneration`): a state, no live generation, or the reason it could not be read. */
+  /** The caller's live generation's effective state, through the one reading the gate runner and the wake lane use
+   *  (`overlordGateRun.ts#callerGenerationOf`): a state, no live generation, or the reason it could not be read. */
   function generationOf(sessionId: string): GenerationFact {
     if (deps.reads === undefined) return { kind: 'unmeasured', why: NO_COORD };
-    let fact: ReturnType<typeof designationFactFrom>;
-    let gens: GenerationsRead;
-    try {
-      const designation: DesignationRead = deps.reads.designationRead();
-      fact = designationFactFrom(designation);
-      gens = deps.reads.liveGenerations();
-    } catch (err) { return { kind: 'unmeasured', why: err instanceof Error ? err.message : String(err) }; }
-    if (fact === 'unmeasured') return { kind: 'unmeasured', why: 'the designation could not be read' };
-    if (!gens.ok) return { kind: 'unmeasured', why: gens.detail };
-    const identity = identityOf(sessionId, fact);
-    const live = gens.rows.find((g) => g.identity === identity);
-    if (live === undefined) return { kind: 'none' };
-    try { return { kind: 'state', state: effectiveGeneration(live, deps.continuityLive()).state }; } catch (err) {
-      return { kind: 'unmeasured', why: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  /** The open round's rows cut to the fields the inbox may carry: ids, kind and time, never a question or what it expects. */
-  function openRoundOf(sessionId: string): ProbeRowsFact {
-    if (deps.reads === undefined) return { ok: false, detail: NO_COORD };
-    try {
-      const r = deps.reads.openProbeRound(sessionId);
-      return r.ok ? { ok: true, rows: r.rows.map((x) => ({ roundId: x.roundId, kind: x.kind, askedAt: x.askedAt })) } : { ok: false, detail: r.detail };
-    } catch (err) { return { ok: false, detail: err instanceof Error ? err.message : String(err) }; }
+    const reads = deps.reads;
+    let designation: DesignationRead;
+    try { designation = reads.designationRead(); } catch (err) { return { kind: 'unmeasured', why: err instanceof Error ? err.message : String(err) }; }
+    return callerGenerationOf({ generations: () => reads.liveGenerations(), continuityLive: deps.continuityLive }, sessionId, designation).generation;
   }
 
   /**
@@ -125,8 +104,7 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
       door: 'inbox', pass: g, row: overlordRow('inbox'),
       compose: (): ReadComposed => {
         const gen = generationOf(c.id);
-        const asked = inboxProbeSource(gen, 'not-read');
-        const probe = asked.kind === 'read-rows' ? inboxProbeSource(gen, openRoundOf(c.id)) : asked;
+        const probe = inboxProbeSourceOf(gen, () => (deps.reads === undefined ? { ok: false, detail: NO_COORD } : openRoundFact(deps.reads, c.id)));
         const messages = deps.inboxStore === undefined ? { kind: 'unmeasured' as const, why: NO_STORE } : deps.inboxStore.unsettledFacts();
         const composed = composeInbox({ probe, messages });
         if (composed.kind === 'unmeasured') {
