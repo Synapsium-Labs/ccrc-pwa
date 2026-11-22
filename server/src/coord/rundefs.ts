@@ -315,10 +315,26 @@ const APPROVAL_NUDGE_SUBJECT_PREFIX = 'approval:';
 
 export const approvalNudgeSubject = (approvalId: number): string => `${APPROVAL_NUDGE_SUBJECT_PREFIX}${approvalId}`;
 
+/** The park's ruling mail to the CHILD (approvals plan 2026-11-18, §3.3.2): its parked call was ruled, and its retry of the
+ *  same command meets the ruling. Not an approval nudge (`isApprovalNudgeMail` reads the prefix above only). */
+export const approvalParkRuledSubject = (approvalId: number): string => `approval ${approvalId} ruled`;
+
 /** Is this mail row an approval nudge? Recorded and never pushed, for the ask nudge's reason (`isAskNudgeMail`): it
  *  exists to keep the prompt off the operator's phone during the window, so its own delivery must not buzz it. */
 export function isApprovalNudgeMail(m: { fromId: string; runId: number | null; subject: string }): boolean {
   return m.fromId === 'operator' && m.runId === null &&
     m.subject.startsWith(APPROVAL_NUDGE_SUBJECT_PREFIX) &&
     /^\d+$/.test(m.subject.slice(APPROVAL_NUDGE_SUBJECT_PREFIX.length));
+}
+
+/** D-6096: the session a close, an abandon or the stall watch would treat as this run's WORKER is the run's own CLAIMANT,
+ *  whose workspace is the coordinator's. True for an in-place run, and for any run bound to its own claimant with
+ *  `inPlace` unset: after a coord.db rebuild (`inPlace` is not recoverable, the reconstruction drill's UNRECOVERABLE list)
+ *  an in-place run reads as such a run, and a plain dispatch can no longer make one (`self-dispatch`). ONE predicate for
+ *  both readers (review 2993 F8), and the wider form is the safe direction for each: `closeDecide` composes no `ws-*` verb
+ *  and no child gate on the claimant, and the stall watch takes the run as no worker subject. */
+export function actsOnClaimant(
+  run: { readonly inPlace?: boolean; readonly sessionId: string | null; readonly claimedBy: string | null },
+): boolean {
+  return run.inPlace === true || (run.sessionId !== null && run.sessionId === run.claimedBy);
 }

@@ -218,6 +218,23 @@ describe('modelsPushDecision, the policy of push:true (plan W2 Task 12)', () => 
     expect(modelsPushDecision(MOVED, new Map())).toEqual({ verdict: 'refused', reason: 'unknown-lane', lane: 'lane-a' });
   });
 
+  it('an Anthropic row is pushable, as a codex-kind one is; any other row keeps not-a-codex-lane (D-8751)', () => {
+    const row = (kind: string, telemetry?: string) => ({ exec: { kind }, ...(telemetry === undefined ? {} : { telemetry }) });
+    const roster: ModelsPushRoster = new Map([
+      ['lane-a', row('generated', 'anthropic')], ['lane-up', row('upstream', 'anthropic')],
+      ['lane-d', row('generated', 'none')], ['lane-e', row('generated', 'openrouter')], ['lane-f', row('generated')],
+      ['lane-g', row('codex', 'codex')],
+    ]);
+    const moved = (lane: string): string => `${lane}: opus claude-opus-9-1 → claude-opus-9-2`;
+    expect(modelsPushDecision(moved('lane-a'), roster)).toEqual({
+      verdict: 'pushable', lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' });
+    expect(modelsPushDecision(moved('lane-up'), roster).verdict).toBe('pushable');
+    expect(modelsPushDecision(moved('lane-g'), roster).verdict).toBe('pushable');
+    for (const lane of ['lane-d', 'lane-e', 'lane-f']) {
+      expect(modelsPushDecision(moved(lane), roster)).toEqual({ verdict: 'refused', reason: 'not-a-codex-lane', lane });
+    }
+  });
+
   describe('the cap: it stays at 300, and what it refuses is stated', () => {
     const longest = Math.max(...CLASSES.map((c) => c.length));
     const widest = CLASSES.find((c) => c.length === longest)!;
@@ -253,11 +270,18 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
   const LANE_A = { proxyPort: 45020, litellmPort: 45021, authDir: codexAuthDir('lane-a') };
   const LANE_B = { proxyPort: 45030, litellmPort: 45031, authDir: codexAuthDir('lane-b') };
   /** A server whose roster has lane-a and (unless `laneBCodex` is false) lane-b codex-kind, lane-c an Anthropic lane,
-   *  and no lane-z. Its ports are pure-parse: nothing here connects to them. */
+   *  lane-d a generated lane that is neither (no telemetry), and no lane-z. Its ports are pure-parse: nothing here
+   *  connects to them. */
+  const withLaneD = (roster: ReturnType<typeof stepRoster>): unknown => ({
+    ...roster,
+    accounts: [...roster.accounts,
+      { id: 'lane-d', label: 'lane-d', configDirSuffix: '.claude-lane-d', exec: { kind: 'generated' }, homeAble: true,
+        telemetry: 'none' }],
+  });
   const lanesDeps = (laneBCodex = true): Deps => {
     const h = mkTmp('ccrc-');
     const d = testDeps(h);
-    seedRoster(h, laneBCodex ? stepRoster(LANE_A, LANE_B) : stepRoster(LANE_A));
+    seedRoster(h, withLaneD(laneBCodex ? stepRoster(LANE_A, LANE_B) : stepRoster(LANE_A)));
     return { ...d, cfg: loadConfig({ CCRC_HOME: h }) };
   };
   const fakePush = (impl: (p: PushPayload) => Promise<void> = async () => {}) => {
@@ -308,7 +332,7 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
   const REFUSALS: [string, string, string, string | undefined][] = [
     ['a cc swap: notice', 'cc swap: s1 moved lane-a -> lane-b', 'not-a-model-line', undefined],
     ['a lane the roster does not have', 'lane-z: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane', 'lane-z'],
-    ['a lane that is not codex-kind', 'lane-c: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane', 'lane-c'],
+    ['a lane that is not codex-kind', 'lane-d: opus model-5.6-gamma → model-6.1-gamma', 'not-a-codex-lane', 'lane-d'],
     ['a lane named like an inherited object key', 'constructor: opus model-5.6-gamma → model-6.1-gamma', 'unknown-lane', 'constructor'],
     ['a word that is not a class', 'lane-a: subagent model-5.6-gamma → model-6.1-gamma', 'not-a-model-line', undefined],
     ['free text', 'lane-a: re-authenticate at http://example.invalid now', 'not-a-model-line', undefined],
@@ -340,7 +364,7 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     // the message names none of them, in either mode. The over-cap arm alone explains itself: the line is a good one,
     // only too long for the push.
     if (lane !== undefined) {
-      expect(said[0]).toContain(`lane ${lane} must exist and carry exec.kind "codex"`);
+      expect(said[0]).toContain(`lane ${lane} must exist and carry exec.kind "codex" or telemetry "anthropic"`);
       expect(said[0]).toContain("the server box's roster row");
       expect(said[0]).toContain('(the server decides from the roster it holds)');
       // Its own mode's clause, and not the other's.
@@ -393,15 +417,15 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     const p = fakePush();
     app = await buildServer({ ...lanesDeps(), mailToken: TOKEN, push: p.push });
     const secret = 'Re-authenticate at https://example.invalid/login';
-    for (const lane of ['lane-z', 'lane-c']) {
+    for (const lane of ['lane-z', 'lane-d']) {
       const message = `${lane}: opus stays on none: model-6-alpha failed its canary (${secret})`;
       expect((await post(app, { message, push: true })).statusCode).toBe(200);
     }
     const said = warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes(REFUSED));
     expect(said).toHaveLength(2);
-    expect(said[0]).toContain('lane lane-z must exist and carry exec.kind "codex"');
+    expect(said[0]).toContain('lane lane-z must exist and carry exec.kind "codex" or telemetry "anthropic"');
     expect(said[0]).toContain('(unknown-lane)');
-    expect(said[1]).toContain('lane lane-c must exist and carry exec.kind "codex"');
+    expect(said[1]).toContain('lane lane-d must exist and carry exec.kind "codex" or telemetry "anthropic"');
     expect(said[1]).toContain('(not-a-codex-lane)');
     // What to fix and how the server picks it up, in this server's (local) mode.
     for (const l of said) expect(l).toContain(LOCAL_FIX);
@@ -421,7 +445,7 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     const d = lanesDeps();
     app = await buildServer({ ...d, cfg: { ...d.cfg, fleetMode: mode as 'local' | 'remote' }, mailToken: TOKEN, push: p.push });
     const secret = 'Re-authenticate at https://example.invalid/login';
-    for (const lane of ['lane-z', 'lane-c']) {
+    for (const lane of ['lane-z', 'lane-d']) {
       const message = `${lane}: opus stays on none: model-6-alpha failed its canary (${secret})`;
       expect((await post(app, { message, push: true })).statusCode).toBe(200);
     }
@@ -436,7 +460,7 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
       expect(l, 'the remedy names no restart').toContain(', and restart the server');
       expect(l, 'the remedy promises an account verb').not.toContain('account verb');
       expect(l.replace(REPLACES_COPY, ''), 'the remedy promises an answer').not.toMatch(/\banswer/);
-      expect(l).toContain('must exist and carry exec.kind "codex" (the server decides from the roster it holds)');
+      expect(l).toContain('must exist and carry exec.kind "codex" or telemetry "anthropic" (the server decides from the roster it holds)');
       expect(l, 'the old, false phrase').not.toContain('alone does not make it pushable');
       for (const leaked of [secret, 'Re-authenticate', 'example.invalid', 'model-6-alpha', 'canary']) {
         expect(l, `the warning echoes "${leaked}"`).not.toContain(leaked);
@@ -461,16 +485,25 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
     expect(refusals()).toHaveLength(1);
     expect(refusals()[0]).toContain('(not-a-codex-lane)');
 
-    reload(stepRoster(LANE_A, LANE_B));   // lane-b becomes codex-kind
+    reload(withLaneD(stepRoster(LANE_A, LANE_B)));   // lane-b becomes codex-kind
     expect((await post(app, { message: MOVED_B, push: true })).statusCode).toBe(200);
     expect(p.notify).toHaveBeenCalledTimes(1);
     expect(p.notify.mock.calls[0]![0].tag).toBe('models-advance:lane-b:opus');
     expect(refusals()).toHaveLength(1);
 
-    reload(stepRoster(LANE_A));           // and stops being
+    reload(withLaneD(stepRoster(LANE_A)));         // and stops being
     expect((await post(app, { message: MOVED_B, push: true })).statusCode).toBe(200);
     expect(p.notify).toHaveBeenCalledTimes(1);
     expect(refusals()).toHaveLength(2);
+  });
+
+  it('push:true on a move line of an Anthropic lane sends one phone push, tagged by lane and class (D-8751)', async () => {
+    const p = fakePush();
+    app = await buildServer({ ...lanesDeps(), mailToken: TOKEN, push: p.push });
+    const message = 'lane-c: opus claude-opus-9-1 → claude-opus-9-2';
+    expect((await post(app, { message, push: true })).statusCode).toBe(200);
+    expect(p.notify).toHaveBeenCalledTimes(1);
+    expect(p.notify.mock.calls[0]![0].tag).toBe('models-advance:lane-c:opus');
   });
 
   it('the response never waits for the push: a push service whose notify never resolves still answers 200 within 3 seconds', async () => {
@@ -499,7 +532,7 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
   it('with no push service the eligibility is still decided: push:true on a line of a lane that is not codex-kind still warns', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     app = await buildServer({ ...lanesDeps(), mailToken: TOKEN });
-    expect((await post(app, { message: 'lane-c: opus model-5.6-gamma → model-6.1-gamma', push: true })).statusCode).toBe(200);
+    expect((await post(app, { message: 'lane-d: opus model-5.6-gamma → model-6.1-gamma', push: true })).statusCode).toBe(200);
     expect(warn.mock.calls.flat().join(' ')).toContain(REFUSED);
   });
 

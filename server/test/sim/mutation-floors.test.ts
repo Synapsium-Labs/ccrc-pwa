@@ -11,6 +11,7 @@ import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
 import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
+import { MAIL_HOLD_POLICY_MUTANT_SETS } from './mailHoldPolicySets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
@@ -39,6 +40,8 @@ import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
 import { ACT_KEY_MUTANT_SETS } from './actKeySets.js';
+import { HOOK_REPORT_MUTANT_SETS } from './hookReportSets.js';
+import { HOOK_READING_MUTANT_SETS } from './hookReadingSets.js';
 import { FIRST_PROMPT_MUTANT_SETS } from './firstPromptSets.js';
 import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
@@ -51,12 +54,16 @@ import { GATE_MUTANT_SETS } from './gateSets.js';
 import { OTHER_LANES_MUTANT_SETS } from './otherLanesSets.js';
 import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
 import { PLAN_TICKET_DONE_MUTANT_SETS } from './planTicketDoneSets.js';
+import { PLAN_EPIC_WAVES_MUTANT_SETS } from './planEpicWavesSets.js';
+import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
 import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
+import { APPROVAL_PARK_MUTANT_SETS } from './approvalParkSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
+import { WITNESS_MUTANT_SETS } from './witnessSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -188,6 +195,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...MAIL_PACE_MUTANT_SETS,
   ...MAIL_KEY_MUTANT_SETS,
   ...URGENT_MAIL_MUTANT_SETS,
+  ...MAIL_HOLD_POLICY_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,
@@ -215,6 +223,8 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
   ...HANDOFF_MUTANT_SETS,
   ...ACT_KEY_MUTANT_SETS,
+  ...HOOK_REPORT_MUTANT_SETS,
+  ...HOOK_READING_MUTANT_SETS,
   ...FIRST_PROMPT_MUTANT_SETS,
   ...DESIGNATION_MUTANT_SETS,
   ...BINOMIAL_BOUND_MUTANT_SETS,
@@ -227,12 +237,16 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...OTHER_LANES_MUTANT_SETS,
   ...PLAN_PHASES_MUTANT_SETS,
   ...PLAN_TICKET_DONE_MUTANT_SETS,
+  ...PLAN_EPIC_WAVES_MUTANT_SETS,
+  ...WORK_MAP_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
   ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
   ...APPROVAL_ENVELOPE_MUTANT_SETS,
+  ...APPROVAL_PARK_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
+  ...WITNESS_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

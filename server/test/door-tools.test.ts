@@ -4,11 +4,13 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  DOOR_TOOLS, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS,
+  DOOR_TOOLS, DOOR_TOOL_PREFIX as PROGRAM_PREFIX, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS, TEAM_KEY_SHAPE,
 } from '../../ccd/door-process.mjs';
 import * as shared from '../../shared/continuity-door.js';
+import { DOOR_TOOL_PREFIX, DOOR_TOOL_NAME_RE } from '../../shared/continuity-reports.js';
+import { LINEAR_TEAM_KEY_SHAPE } from '../../shared/linear.js';
 
-type Row = { name: string; verb: string; class: 'view' | 'operate'; fenced: boolean; reader: boolean; input: unknown };
+type Row = { name: string; verb: string | null; class: 'view' | 'operate'; fenced: boolean; reader: boolean; input: unknown };
 const ROWS = DOOR_TOOLS as unknown as Row[];
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -42,14 +44,23 @@ const keysOf = (v: unknown): string[] => {
 };
 
 describe('DOOR_TOOLS', () => {
-  it('has ten uniquely named rows', () => {
-    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel']);
+  it('has twelve uniquely named rows, the readers\' `read` last', () => {
+    // D-8809: `link_team`, the Overlord's confirm of a team candidate.
+    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team', 'read']);
+  });
+
+  it('every name is a legal tool name after the hook\'s prefix, and the prefix is the L0 constant', () => {
+    expect(DOOR_TOOL_PREFIX).toBe('mcp__door__');
+    expect(PROGRAM_PREFIX, 'the door process\'s copy').toBe(DOOR_TOOL_PREFIX);
+    for (const r of ROWS) expect(DOOR_TOOL_NAME_RE.test(r.name), r.name).toBe(true);
   });
 
   it('every row\'s verb is a key of ccrc-api\'s ROUTES', () => {
     const routes = routeKeys();
     expect(routes.length).toBeGreaterThan(50);
-    for (const r of ROWS) expect(routes, `${r.name} -> ${r.verb}`).toContain(r.verb);
+    // `read` has no verb of its own: it runs the argv builder of the row it names (a row marked `reader`), and none is marked yet.
+    for (const r of ROWS.filter((x) => x.name !== 'read')) expect(routes, `${r.name} -> ${r.verb}`).toContain(r.verb);
+    expect(ROWS.find((r) => r.name === 'read')!.verb).toBeNull();
   });
 
   it('every name is a door of the ccrc-overlord skill (spaces as _), or is in DOOR_ONLY_TOOLS with a reason', () => {
@@ -68,14 +79,23 @@ describe('DOOR_TOOLS', () => {
     }
   });
 
-  it('reader is true on no row', () => {
+  it('the link_team row\'s team grammar is shared/linear.ts\'s LINEAR_TEAM_KEY_SHAPE (D-8809)', () => {
+    expect(TEAM_KEY_SHAPE.source).toBe(LINEAR_TEAM_KEY_SHAPE.source);
+    expect(TEAM_KEY_SHAPE.flags).toBe(LINEAR_TEAM_KEY_SHAPE.flags);
+  });
+
+  it('reader is true on no row in B1, so the read tool\'s enum is empty', () => {
     expect(ROWS.filter((r) => r.reader)).toEqual([]);
+    const read = ROWS.find((r) => r.name === 'read')!;
+    expect(read.class).toBe('view');
+    expect(read.fenced).toBe(false);
+    expect(JSON.stringify(read.input)).not.toContain('"enum"');
   });
 
   it('card is the one view row that is fenced, and every operate row is fenced', () => {
     expect(ROWS.filter((r) => r.class === 'view' && r.fenced).map((r) => r.name)).toEqual(['card']);
     expect(ROWS.filter((r) => r.class === 'operate' && !r.fenced).map((r) => r.name)).toEqual([]);
-    expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['note_list', 'probe', 'timer_list']);
+    expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['note_list', 'probe', 'read', 'timer_list']);
   });
 
   it('no input schema names an attribution field, at any depth', () => {

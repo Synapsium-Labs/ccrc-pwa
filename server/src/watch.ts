@@ -49,7 +49,7 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_SETTLE_TICKS } from './askwindow.js';
+import { APPROVAL_RULED_GRACE_MS, ASK_SETTLE_TICKS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -72,6 +72,10 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, isApprovalNudgeMail, isAskNudgeMail,
   survivorOf,
 } from './coord/rundefs.js';
+import { stallCoordBallMailStep } from './coord/coordBall.js';
+import { ballOnlySubjects, coordBallInputOf, idleNudgeOpenRunOf, r7BreachNotice, type StallCoordinatorSubject } from './coord/coordBallLane.js';
+import { blockWakesPass } from './coord/blockWakeLane.js';
+import { admissionWakePass, type AdmissionWakeMemory } from './coord/admissionWakeLane.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
@@ -155,7 +159,7 @@ import {
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallTimerFiredSince, stallTimersOf, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
-  type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
+  type StallCoordBlockedInput, type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
 import {
@@ -185,6 +189,7 @@ import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { MAIL_HOLD_LANE_ROW, mailHoldPass, type MailHoldLaneMemory } from './coord/mailHoldLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { compactionsPaths, readCompactionsMeasured } from './continuity/compactions.js';
@@ -195,6 +200,8 @@ import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import { skillInstallPass } from './coord/skillInstallLane.js';
+import { rolloutListingOf, skillRolloutPass } from './coord/skillRolloutLane.js';
+import { isSkillRolloutMail } from './coord/skillRollout.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -297,7 +304,7 @@ import {
   WAKE_GATE_DEFAULT, WAKE_GATE_LINE_MS, wakeAdmit, wakeMemoryGate, wakeRefund, wakeRefusalWord, type WakeAdmission, type WakeKind, type WakeMemoryRefusal, type WakeRefused,
 } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
-import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor, workerFactsFor } from './turnverdict.js';
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
 import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
@@ -612,10 +619,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
  *  resume. */
 // `ASKS_DISABLED_MARKER` is imported from its `shared/switches.ts` row as well (D-5855).
 
-/** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
- *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
- *  a sweep's slack. */
-const APPROVAL_RULED_GRACE_MS = 10_000;
+// `APPROVAL_RULED_GRACE_MS` (D-5298) lives in `askwindow.ts` since approvals PR 3: the ruling read uses it too.
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
@@ -1117,6 +1121,8 @@ export class FleetWatcher {
   /** D-8126 (A7-5, review 2807 F6): the accounts whose `skill-ensure` call is still running, kept across the self-install
    *  lane's passes so an overdue call still holds its home (`SkillInstallLaneDeps.inFlight`). */
   private readonly skillInstallInFlight = new Set<string>();
+  /** D-8126 (A9-3): the coordinator-skill revisions whose rollout mail this process has settled (`SkillRolloutDeps.settled`). */
+  private readonly skillRolloutSettled = new Set<string>();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -1287,6 +1293,10 @@ export class FleetWatcher {
    *  automatic wakes and the routes' asked ones (`admitWake`) share it. In memory by design — a restart empties it,
    *  which can let one extra burst through and no more. */
   private wakeRecent: number[] = [];
+  /** D-8792 (D-6094's pacing): the freed-slot admit's window (`admitFreedSlot`), a list of its own. */
+  private freedSlotRecent: number[] = [];
+  /** D-6095: the `admissionWake` lane's own window and round-robin (`AdmissionWakeMemory`), in memory by design. */
+  private readonly admissionWakeMemory: AdmissionWakeMemory = { recent: [], served: new Map() };
   /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
    *  as it is read. */
   private readonly lastWakeAt = new Map<string, number>();
@@ -2043,6 +2053,7 @@ export class FleetWatcher {
   private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map(); private readonly renewalMemo = new Set<string>();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
+  private readonly mailHoldMemory: MailHoldLaneMemory = { failing: new Set(), lastLine: null, storeUnread: false, generation: 0 };
   private delegationLane(): DelegationLane {
     this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;
@@ -2332,6 +2343,18 @@ export class FleetWatcher {
     return this.wakeVerdictAt(kind, id, Date.now()).admit;
   }
 
+  /**
+   * D-8792 (D-6094's pacing): admit one dispatch-cap slot the worker readings freed (a run whose worker is waiting or gone,
+   * counted out only while the `cap-counts-working` row is armed). `WAKE_BURST` per `WAKE_WINDOW_MS` through the pure
+   * `wakeAdmit`, in a list of its OWN: it never records into `wakeRecent`, so a real process wake is charged once and a
+   * mail wake is never pushed back by it (D-8793: the cap governs starts, not wakes).
+   */
+  admitFreedSlot(): boolean {
+    const r = wakeAdmit(this.freedSlotRecent, Date.now(), 'auto');
+    this.freedSlotRecent = r.recent;
+    return r.admit;
+  }
+
   /** `admitWake` with the reason a refusal had (D-8122): `wake-budget` for the window, the memory gate's word for the
    *  gate. The mail lane reads it to name the gate on the delivery. */
   wakeVerdict(kind: WakeKind, id: string): { admit: boolean; refused: WakeMemoryRefusal | 'wake-budget' | null } {
@@ -2417,6 +2440,8 @@ export class FleetWatcher {
         listing: async () => {
           try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
         },
+        // D-8791: the waiting case's one mail to the run's coordinator.
+        stallNotice: (run, n) => queueStallNotice(coord, run, n),
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2543,6 +2568,17 @@ export class FleetWatcher {
    *  SHADOW until `$REG/stale-archive-live`. */
   async sweepStaleArchive(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     await this.runLane('staleArchive', () => this.staleArchive.pass(records, names));
+  }
+
+  /** The `admissionWake` lane (D-6095; `coord/admissionWakeLane.ts`): a coordinator the concurrency cap refused is mailed
+   *  when the cap has room. Gated on `primed`; the pass holds itself on the two switches and the serialiser. */
+  async sweepAdmissionWake(names: readonly string[] | null): Promise<void> {
+    const coord = this.deps.coord;
+    if (!this.primed || !coord) return;
+    const turnReads = turnReadDeps(this.deps, this);
+    await this.runLane('admissionWake', () => admissionWakePass({ coord, names, serial: this.stopDoneSerial,
+      workerFacts: (sid) => workerFactsFor(turnReads, sid), freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
+      push: (n) => this.pushOne(n, this.activeProjects), warn: (line) => console.warn(line) }));
   }
 
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
@@ -2873,9 +2909,17 @@ export class FleetWatcher {
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
       void this.runLane('linearDrift', () => this.deps.driftPass?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
+      // NEVER awaited, the same reasons: the LINEAR MIGRATION (D-8186): a team's map mails, its apply and its put back.
+      void this.runLane('linearMigration', () => this.deps.linearMigration?.tick())?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
       const skillCoord = this.deps.coord;
       if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
+      // D-8126 (A9-3): the coordinator skill's rollout mail, on this tick's listing. Its own `coord` feed row is record-only, and
+      // the mail it queues is record-only in `pushNewMail` (`isSkillRolloutMail`) and never asks a wake. Only where
+      // `index.ts` set the revision (`deps.skillRolloutRevision`): a test's or a script's watcher never mails its claimants.
+      const rolloutRevision = this.deps.skillRolloutRevision;
+      if (skillCoord !== undefined && rolloutRevision !== undefined) void this.runLane('skillRollout', () => skillRolloutPass({ coord: skillCoord, revision: rolloutRevision, settled: this.skillRolloutSettled, log: (line) => console.warn(line),
+        record: (e, dedupeKey) => this.pushOne({ kind: 'coord', sessionId: e.sessionId, project: '', title: e.title, body: e.body, runId: null, recordAlways: true, recordOnly: true, dedupeKey }, this.activeProjects) }, rolloutListingOf(registryRead)))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -2884,6 +2928,8 @@ export class FleetWatcher {
       // (`inject/send.ts:30-40,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the MAILHOLD projection (mid-turn mail §3.4), run under `mail-disabled` too, where it only clears.
+      void this.sweepMailHold(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // The question sweep (W3 Q3c, D-7027): its two halves, each NEVER awaited, same reasoning as `sweepMail`
       // immediately above — the release CAS and its own registry listing must not sit in front of the dialog detector.
       this.sweepQuestions(registryRead);
@@ -3077,6 +3123,10 @@ export class FleetWatcher {
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
+      void this.sweepBlockWakes(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-6095: the admission wake, its own lane, never awaited; it reads the tick's listing for the two switches.
+      void this.sweepAdmissionWake(registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.
@@ -3379,7 +3429,7 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -6271,6 +6321,17 @@ export class FleetWatcher {
     });
   }
 
+  /** The mailhold projection (mid-turn mail §3.4, `coord/mailHoldLane.ts`) on this tick's listing: it runs whether or not
+   *  `mail-disabled` stands (read off the same listing), and then only clears. PUBLIC so a test can await it. */
+  async sweepMailHold(read: FleetReadModel): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || !read.listed) return;
+    await this.runLane(MAIL_HOLD_LANE_ROW, () => mailHoldPass({
+      coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, wallMs: () => this.deps.time.clock.wall(),
+      log: (line) => console.warn(line), memory: this.mailHoldMemory,
+    }, read.records.map((r) => ({ id: r.id, route: r.route })), read.switches[MAIL_DISABLED_MARKER] === 'set'));
+  }
+
   /** The timers lane (Overlord §3.3.12, W1a; `continuity/timerLane.ts`), on this tick's own listing, passed rather than read
    *  from `this.listedIds` mid-pass. `mail-disabled` holds its firing only; its cleanup and purge run. */
   async sweepTimers(records: readonly SessionRecord[], listedIds: ReadonlySet<string> | null, listedAt: number,
@@ -6963,8 +7024,12 @@ export class FleetWatcher {
       judging = true;
       const workers = stallSubjects(candidates.runs);
       const workerIds = new Set(workers.map((x) => x.primary.sessionId));
-      const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
+      const coordinators: StallCoordinatorSubject[] = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
       const judged = new Set([...workerIds, ...coordinators.map((c) => c.sessionId)]);
+      // The coord-ball mail rung's coordinators: claimants of open runs none of which is active (an `awaiting-review`
+      // run is no candidate), so `stallCandidates` names none of them. They get that rung alone (`ballOnly`) and stay
+      // out of `judged`, so orphan D still reaches them through the registry-row loop below.
+      const ballOnly = ballOnlySubjects(store, judged, (line) => console.warn(line));
       this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
       const seen = new Map<number, WorkerSeen>();
       for (const subject of workers) {
@@ -6975,7 +7040,7 @@ export class FleetWatcher {
         }
       }
       this.workerSeen.replace(seen);
-      for (const c of coordinators) {
+      for (const c of [...coordinators, ...ballOnly]) {
         try {
           await this.judgeStallCoordinator(store, c, sessions, tick, arming, paused, now);
         } catch (err) {
@@ -7159,7 +7224,7 @@ export class FleetWatcher {
    *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
    *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
   private async judgeStallCoordinator(
-    store: WatcherCoordPort, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
+    store: WatcherCoordPort, c: StallCoordinatorSubject,
     sessions: readonly FleetSession[], tick: StallTick, arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const id = c.sessionId;
@@ -7176,7 +7241,9 @@ export class FleetWatcher {
       const ident = this.stallUuid(tick, id);
       lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
       mark = await this.stallMarkRead(id, ident, lr);
-      this.stallMarkClock(id, ident, mark, now);
+      // A `ballOnly` coordinator keeps no marker clock: the clock belongs to the arms it does not run. Its marker is still
+      // read, so the rung takes the session holds every arm takes (review 2817 R5).
+      if (c.ballOnly !== true) this.stallMarkClock(id, ident, mark, now);
     }
     const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, refused);
     const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
@@ -7198,6 +7265,10 @@ export class FleetWatcher {
       longLived: role !== null && longLivedOf(role, false) === true,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
+    if (c.ballOnly === true) {
+      this.judgeCoordBall(store, si, project, now);
+      return;
+    }
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
@@ -7209,6 +7280,43 @@ export class FleetWatcher {
     const step = stallCoordBlockedStep(blocked, now);
     if (step.episode === null) this.stallCoordEpisodes.delete(id); else this.stallCoordEpisodes.set(id, step.episode);
     this.applyStallSession(store, si, project, step.verdict, now, (n) => stallCoordBlockedPushText(blocked, n, now));
+    this.countR7Breach(store, blocked, step.episode, project, now);
+  }
+
+  /** The `blockWakes` lane (design 2026-11-09 §8.2, P7; `coord/blockWakeLane.ts`): every coordinator with an unwoken block,
+   *  whether or not it claims an open run and whatever the stall watch's arming is. PUBLIC for `stall-sweep.test.ts`. */
+  async sweepBlockWakes(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
+    const coord = this.deps.coord;
+    if (!this.primed || !coord) return;
+    // The turn marker is read only for an `account-room` block; a refused id reads as unread.
+    const readMark = async (id: string): Promise<TurnMarkRead> => {
+      const s = sessions.find((x) => x.id === id);
+      if (tick.refused.has(id) || s === undefined) return STALL_MARK_UNREAD;
+      return this.stallMarkRead(id, this.stallUuid(tick, id), await this.stallLiveRead(id, s.wrapper, tick));
+    };
+    await this.runLane('blockWakes', () => blockWakesPass({
+      coord, now: Date.now(), diskLevel: () => this.diskAlarm.block()?.level ?? 'unmeasured',
+      memoryLevel: () => this.pressureLane.memoryReading().level, build: this.deps.build?.version ?? null,
+      readMark, notOkSeen: this.blockNotOkSeen, names, warn: (line) => console.warn(line),
+    }));
+  }
+
+  /** The block-wake lane's memory of a condition seen not cleared (`BlockWakeDeps.notOkSeen`). */
+  private readonly blockNotOkSeen = new Set<string>();
+
+  /** R7's count (design 2026-11-09 §10, M2): an open coord-blocked episode held by a pending dialog on a pinned programme
+   *  writes ONE `r7-breach` feed row, keyed on the episode's start through `hasNotice`'s once-only key. Record-only, never a
+   *  push: the coord-blocked push is unchanged and keeps reporting. */
+  private countR7Breach(store: WatcherCoordPort, blocked: StallCoordBlockedInput, episode: StallCoordEpisode | null, project: string, now: number): void {
+    const n = r7BreachNotice(store, blocked, episode, now);
+    if (n !== null) this.pushOne({ ...n, project, recordAlways: true, recordOnly: true }, this.activeProjects);
+  }
+
+  /** The coord-ball mail rung for one coordinator (design 2026-11-09 §8.3 item 1): `coordBallInputOf` measures,
+   *  `stallCoordBallMailStep` decides, `applyStallSession` applies. A read that fails holds the rung this sweep. */
+  private judgeCoordBall(store: WatcherCoordPort, si: StallSessionInput, project: string, now: number): void {
+    const input = coordBallInputOf(store, si, now, (line) => console.warn(line));
+    if (input !== null) this.applyStallSession(store, si, project, stallCoordBallMailStep(input, now), now);
   }
 
   /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
@@ -7405,7 +7513,7 @@ export class FleetWatcher {
   private applyStall(store: WatcherCoordPort, input: StallInput, n: StallNotify, now: number): void {
     const primary = input.subject.primary;
     const worker = primary.sessionId;
-    if (stallNotifyDelivery(n.arm, n.to, input.arming) === 'shadow') {
+    if (stallNotifyDelivery(n.arm, n.to, input.arming, n.rung) === 'shadow') {
       const obs = store.recordStallObservation(primary.id, stallDetail('shadow', n.arm, n.rung, n.key), now);
       if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${n.arm} r${n.rung} run ${primary.id} ${worker}`);
       return;
@@ -7476,7 +7584,7 @@ export class FleetWatcher {
     }
     if (v.act !== 'notify') return;
     const run = si.run;
-    if (stallNotifyDelivery(v.arm, v.to, si.arming) === 'shadow') {
+    if (stallNotifyDelivery(v.arm, v.to, si.arming, v.rung) === 'shadow') {
       if (run === null) {
         this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less) key ${v.key}`);
         return;
@@ -7559,7 +7667,8 @@ export class FleetWatcher {
     const live = liveRead.ok
       ? { ok: true as const, word: liveRead.state.status, since: liveRead.state.statusUpdatedAt }
       : { ok: false as const };
-    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const },
+    const openRun = idleNudgeOpenRunOf(coord, s.id);
+    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const }, openRun,
       compaction: { kind: 'none' as const }, alreadyNudged: () => false };
     // Stage 1: everything but the marker, the tasks and the tail. A hold here costs no further read.
     let v = decideIdleCompactNudge(base);
@@ -7568,9 +7677,10 @@ export class FleetWatcher {
       liveRead.ok ? { startedAt: liveRead.state.startedAt } : null);
     const mark = markRead.ok ? { ok: true as const, state: markRead.state, bg: markRead.bg } : { ok: false as const };
     v = decideIdleCompactNudge({ ...base, mark });
-    if (v.act === 'hold' && v.reason !== 'tasks-unread') return;
-    const taskRead = await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
-    const tasks = taskRead.listed
+    // A session with an open run is decided on the run, not the task list: the list is not read for it.
+    if (v.act === 'hold' && v.reason !== 'tasks-unread' && !(openRun !== null && v.reason === 'no-compaction')) return;
+    const taskRead = openRun !== null ? null : await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
+    const tasks = taskRead !== null && taskRead.listed
       ? { ok: true as const, open: taskRead.tasks.filter((t) => t.status === 'in_progress' || t.status === 'pending').length,
         touchedAt: taskRead.touchedAt ?? null }
       : { ok: false as const };

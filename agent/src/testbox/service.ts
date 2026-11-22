@@ -21,11 +21,13 @@
 // carries the desk's block when the box names a probe config directory. A service without a desk refuses the frame.
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { CaptureAnswer, CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
 import type {
   ProbeAnswer, ProbeSubmit, RunCancel, RunLog, RunSubmit, RunSummary, StatusAnswer, TestboxFrame, TestboxFrameType, TestboxRepoRow,
   TestboxSync, TestboxToolVersions,
 } from '../../../shared/testbox.js';
 import type { MirrorOps } from './mirror.js';
+import type { CaptureDesk } from './captureDesk.js';
 import type { ProbeDesk } from './probeDesk.js';
 import { admit, cancel as queueCancel, enqueue, EMPTY_QUEUE, finish, positions, queueCounts, type QueueState } from './queue.js';
 import { lastLine, logTail, OUTPUT_DRAIN_MS, OutputTail, PREPARE_STDERR, readReport, RUN_LOG, SLOT_OUTPUT_FILES } from './results.js';
@@ -74,6 +76,8 @@ export interface ServiceDeps {
   readonly specBuilt?: (spec: RunSpec) => void;
   /** The live probe desk (D-8290); absent, a `probe.submit` is refused and the status answer has no probe block. */
   readonly probes?: ProbeDesk;
+  /** The build capture desk (spec 2026-11-22); absent, a `capture.submit` is refused. */
+  readonly captures?: CaptureDesk;
 }
 
 /** What the pristine store needs from outside (D-7543). */
@@ -96,7 +100,7 @@ export interface RunSink {
 
 /** A connection, as the dispatch table sees it: a run's frames, or a probe's (D-8290). */
 export interface Conn {
-  send(frame: RunLog | RunSummary | ProbeAnswer): void;
+  send(frame: RunLog | RunSummary | ProbeAnswer | CaptureAnswer): void;
   /** Close the connection: the box will not take what it sent. */
   refuse(reason: string): void;
 }
@@ -181,6 +185,12 @@ export class TestboxService {
       ...this.pristineFacts(), heldRunUsers: heldUsers(this.pool, this.s.runUserPrefix),
       probes: this.d.probes?.configured() === true ? this.d.probes.view() : null,
     });
+  }
+
+  /** A capture submission: the desk's, or refused when this service has none. */
+  capture(f: CaptureSubmit, conn: Conn): void {
+    if (this.d.captures === undefined) { conn.refuse('capture.submit is not a frame this service takes'); return; }
+    this.d.captures.submit(f, conn);
   }
 
   /** A probe submission (D-8290): the desk's, or refused when this service has none. */
@@ -496,4 +506,5 @@ export const FRAME_HANDLERS: Readonly<Partial<Record<TestboxFrameType, FrameHand
   'run.cancel': (svc, f) => svc.cancel((f as RunCancel).runId),
   'tools.sync': async (svc, f, conn) => (await import('./toolsync.js')).onToolsSync(svc, f, conn),
   'probe.submit': (svc, f, conn) => svc.probe(f as ProbeSubmit, conn),
+  'capture.submit': (svc, f, conn) => svc.capture(f as CaptureSubmit, conn),
 };

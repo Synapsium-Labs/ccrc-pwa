@@ -16,7 +16,8 @@
 //     `coordinator`, first on the context line, because every session the operator creates is one from its first
 //     turn and the operator should see which rows are. The branch beside it shortens to what is left of the budget.
 //   • The HEADER is the full set — a SUPERSET of the card: every card fact under
-//     the same key, with its full text, plus everything the card leaves out. There is ONE allowance (D-8771): the
+//     the same key, with its full text, plus everything the card leaves out but a session's helpers, which its
+//     Helpers section lists and counts once (session helpers H3, D-8875). There is ONE allowance (D-8771): the
 //     status word's background count, which the header keeps and the card drops (`HEADER_COUNT_ALLOWANCES`).
 //     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `card-header-facts.test.tsx`.
 //
@@ -29,7 +30,7 @@
 import {
   ASK_OPERATOR_PRINCIPAL, backgroundWork, backgroundWords, ctxPressure, graphGateCount, graphReadCount,
   sessionAsk, sessionWithCoordinator, substrateFault, turnStall, unmeasuredFields, withCoordinatorWords,
-  type DelegationActivityWire, type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
+  type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountLabel, accountPool } from '../lib/accounts';
 import { elapsedShort, elapsedWords, statusLabel } from '@ccrc/ui';
@@ -47,7 +48,7 @@ import { substrateFaultText } from './substrateWords';
 import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './unmeasuredWords';
-import { delegatedChip, type DelegatedSummary } from './delegationWords';
+import type { SessionWorktree } from './sessionWorktrees';
 import { claudeBuildOf, type ClaudeBuildFact } from '../../../shared/claudeVersion';
 import { behindFact, buildText } from './buildWords';
 
@@ -97,8 +98,8 @@ export function shortenByToken(text: string, max: number): string {
 export type FactKey =
   | 'name' | 'status' | 'role' | 'working-on'
   | 'programme' | 'coordinator' | 'run' | 'child-marker' | 'hold'
-  | 'pr' | 'branch' | 'tasks' | 'subagents' | 'graph' | 'cleanup' | 'lane'
-  | 'ask-state' | 'delegated' | 'build' | MarkerKey;
+  | 'pr' | 'branch' | 'tasks' | 'graph' | 'cleanup' | 'lane'
+  | 'ask-state' | 'build' | MarkerKey;
 
 /** The attention markers, in their FIXED priority: the card shows the first one present. `behind` (D-8276: an older
  *  Claude Code build than the fleet's newest) is the quietest, last: a tracking fact, which a roll fixes only where the
@@ -132,8 +133,8 @@ export interface FactInput {
   readonly coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
   readonly coordinatorTitle?: string | null;
-  /** The delegation entries this session started: every one (`activitiesStartedBy`), for the header. The card takes none (D-8771). Absent or `null` = none known. */
-  readonly delegated?: readonly DelegationActivityWire[] | null;
+  /** The session's worktrees, for the header's details (`worktreesOf`, D-8782: the fleet list draws none). Absent or `null` = none known. */
+  readonly worktrees?: readonly SessionWorktree[] | null;
   /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest` over the fleet store's
    *  rows). Absent or `null` = unknown, and nothing is said to be behind. */
   readonly claudeLatest?: string | null;
@@ -177,7 +178,6 @@ export interface SessionFactSet {
   readonly cleanup: readonly string[];
   readonly tasks: { readonly done: number; readonly total: number } | null;
   readonly graph: { readonly reads: number; readonly gated: number | null } | null;
-  readonly subagents: FleetSession['subagents'] | null;
   readonly background: { readonly text: string; readonly title: string } | null;
   readonly ctx: { readonly pct: number; readonly wedged: boolean; readonly text: string; readonly title: string } | null;
   readonly limit: { readonly text: string } | null;
@@ -185,9 +185,8 @@ export interface SessionFactSet {
   readonly offPool: string | null;
   readonly orphan: 'gone' | 'hibernated' | null;
   readonly orphanTitle: string | null;
-  /** The session's recorded delegation entries as the header's disclosure and list (`delegatedChip`): every entry it is
-   *  handed, of every liveness, on a live row and a dead one alike (D-7781); `null` when handed none. */
-  readonly delegated: DelegatedSummary | null;
+  /** The session's worktrees (D-8782): drawn in the header's details with their controls, never on the card. Empty when none. */
+  readonly worktrees: readonly SessionWorktree[];
   /** D-8276: the session's Claude Code build against the fleet's newest (`claudeBuildOf`). */
   readonly build: ClaudeBuildFact;
 }
@@ -237,17 +236,26 @@ export function coordinatorRole(session: FleetSession): boolean {
   return role === 'coordinator';
 }
 
-/** The word the header and the session details say for a coordinator, and the palette's session entries too. */
+/** The word a coordinator is called: the badge's accessible name (D-8817), and the palette's session entries' text, which
+ *  the operator types to search. No row or header draws it as visible text any more. */
 export const COORDINATOR_WORD = 'coordinator';
 
-/** THE role fact: the card's (D-8142) and the header's one object, so the word and its title have one home. */
-/** The role's hover title, written once: the card's role cell and the header's role detail both read it. */
+/** The role's hover title, written once: the card's role badge and the header's read it. */
 export const COORDINATOR_ROLE_TITLE = 'this session is its project\'s coordinator';
+
+/** THE coordinator badge (the operator's note of 2026-11-19, D-8817), spelt once: the icon, the accessible name and the
+ *  hover title `RoleBadge` (`@ccrc/ui`) draws, which the card's role cell and the header's role detail both spread. */
+export const COORDINATOR_BADGE = { icon: 'network', label: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE } as const;
+
+/** The role fact: the card's (D-8142) and the header's one object. It is the name and title the badge carries (the same two
+ *  constants as `COORDINATOR_BADGE`), as a `Fact`, for the one place that asks whether a card has a role cell. */
 const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE };
 
-/** The width the card's role cell takes on the context line: the word and its middot separator (D-8142). A branch
- *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
-export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
+/** The width the card's role cell takes on the context line, in characters of the meta line's mono face (D-8142, D-8817):
+ *  the badge's 16px icon, 2.2 characters at the meta line's `--fs-xs` (12px), rounded up to 3, and its middot separator. A
+ *  branch beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. The cell was 11 characters and
+ *  the separator (14) when it drew the word. */
+export const ROLE_CELL_CHARS = 3 + ' · '.length;
 
 /** D-8771: the words `backgroundWords` puts after its count (`in background`), TAKEN FROM ITS OWN OUTPUT, so the words are
  *  spelt once, in `shared/api.ts`: a reword there reaches the card's uncounted form and the allowance below together. */
@@ -263,7 +271,7 @@ function cardBackgroundWords(b: { count: number; kinds: string[] }): { text: str
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
-    coordinatorTitle = null, delegated = null, claudeLatest = null, claudeLaneLatest = null,
+    coordinatorTitle = null, worktrees = null, claudeLatest = null, claudeLaneLatest = null,
   } = input;
   const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
@@ -350,7 +358,6 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     cleanup: session.bucket === 'cleanup' && session.archivedBytes !== null ? [humanBytes(session.archivedBytes)] : [],
     tasks: !dead && session.tasks !== null ? { done: session.tasks.done, total: session.tasks.total } : null,
     graph: reads === null ? null : { reads, gated: gateDenials !== null && gateDenials > 0 ? gateDenials : null },
-    subagents: dead ? null : session.subagents,
     background: bgWords,
     ctx: !ctxHigh || ctxPct === null ? null : {
       pct: ctxPct, wedged,
@@ -370,8 +377,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     offPool,
     orphan: coordinator === 'dead' ? 'gone' : coordinator === 'hibernated' ? 'hibernated' : null,
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
-    // D-7781: no dead shortcut. A dead worker's entries stay in its header's disclosure (the fleet list's row has none, D-8771).
-    delegated: delegatedChip(delegated ?? []),
+    worktrees: worktrees ?? [],
     build: claudeBuildOf(session, claudeLatest, claudeLaneLatest),
   };
 }
@@ -460,6 +466,41 @@ export function cardFacts(f: SessionFactSet): CardFacts {
   };
 }
 
+/** One cell of the header's meta row (`SessionMeta`, header mode): which fact it draws, and for a marker or a cleanup fact,
+ *  which one. */
+export type HeaderMetaCell =
+  | { readonly key: 'hold' | 'child' | 'spawn' | 'ask-state' | 'tasks' | 'graph' | 'build' }
+  | { readonly key: 'cleanup'; readonly text: string; readonly at: number }
+  | { readonly key: 'marker'; readonly fact: Fact };
+
+/** The header's meta row, cell by cell, in `SessionMeta`'s order: the ONE reading of which cells it draws (desktop polish HF2,
+ *  D-8877; review 2995 F3). `SessionMeta` draws exactly these, and `headerMetaHasCells` asks whether there is one, so the
+ *  details row is decided from the facts (`detailsHaveFacts`, desktop polish C51 review 2963 F3 to F6) and never from a
+ *  second reading of the row's conditions. The cells: the hold (unless the context is the programme, which the coordination
+ *  row names), the child marker (its hedge, when no held run names it), the last spawn, the ask-state chip, the cleanup
+ *  facts, the task tally, the graph counter, the current build, and every marker but the spawn and the restart (the header
+ *  draws those as chips of its own). No subagent and no delegated cell (session helpers H3, D-8875). */
+export function headerMetaCells(f: SessionFactSet): readonly HeaderMetaCell[] {
+  const ctx = contextFact(f);
+  const out: HeaderMetaCell[] = [];
+  if (f.session.held !== null && ctx?.key !== 'programme') out.push({ key: 'hold' });
+  // A child-marker context is only ever a child with no held run (`contextFact` names a held or active run `programme`).
+  if (ctx?.key === 'child-marker') out.push({ key: 'child' });
+  if (f.spawn !== null) out.push({ key: 'spawn' });
+  if (f.askState !== null) out.push({ key: 'ask-state' });
+  f.cleanup.forEach((text, at) => { out.push({ key: 'cleanup', text, at }); });
+  if (f.tasks !== null) out.push({ key: 'tasks' });
+  if (f.graph !== null) out.push({ key: 'graph' });
+  if (f.build.kind === 'current') out.push({ key: 'build' });
+  for (const m of markers(f)) if (m.key !== 'spawn' && m.key !== 'restarted') out.push({ key: 'marker', fact: m });
+  return out;
+}
+
+/** Whether the header's meta row draws ANY cell for these facts (`headerMetaCells`, its one reading). */
+export function headerMetaHasCells(f: SessionFactSet): boolean {
+  return headerMetaCells(f).length > 0;
+}
+
 /** What the HEADER shows: every fact, in reading order. A superset of `cardFacts`. */
 export function headerFacts(f: SessionFactSet): Fact[] {
   const s = f.session;
@@ -482,10 +523,6 @@ export function headerFacts(f: SessionFactSet): Fact[] {
   if (ctx?.key !== 'pr' && s.pr?.number != null) out.push({ key: 'pr', text: `PR #${s.pr.number}` });
   if (ctx?.key !== 'branch' && s.branch !== null && s.branch !== f.name) out.push({ key: 'branch', text: s.branch });
   if (f.tasks !== null) out.push({ key: 'tasks', text: `${f.tasks.done}/${f.tasks.total} tasks` });
-  if (f.subagents !== null && f.subagents.length > 0) {
-    out.push({ key: 'subagents', text: `${f.subagents.length} subagent${f.subagents.length === 1 ? '' : 's'}` });
-  }
-  if (f.delegated !== null) out.push({ key: 'delegated', text: f.delegated.text, title: f.delegated.title });
   if (f.askState !== null) out.push({ key: 'ask-state', text: f.askState.label, title: f.askState.title });
   if (f.graph !== null) {
     out.push({ key: 'graph', text: `graph ${f.graph.reads}${f.graph.gated === null ? '' : ` · gated ${f.graph.gated}`}` });

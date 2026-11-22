@@ -1166,6 +1166,9 @@ export const UNIT_FILES: Array<[string, string]> = [
   // The read-only conflict radar (landing order wave 3b): ROLE-GATED `!= server` - a server box checks out no project to measure.
   ['ccd-land-probe.service', 'deploy/systemd/ccd-land-probe.service'],
   ['ccd-land-probe.timer', 'deploy/systemd/ccd-land-probe.timer'],
+  // Overlord W1a: the weekly replay quiz's pair, ROLE-GATED `!= server` - a server box keeps no history store and runs no sessions.
+  ['ccd-quiz-weekly.service', 'deploy/systemd/ccd-quiz-weekly.service'],
+  ['ccd-quiz-weekly.timer', 'deploy/systemd/ccd-quiz-weekly.timer'],
   // Test box TB11 (D-7413): the durations timer's pair, ROLE-GATED `!= server` - only a box that runs `ccrc test` estimates.
   ['ccd-testbox-times.service', 'deploy/systemd/ccd-testbox-times.service'],
   ['ccd-testbox-times.timer', 'deploy/systemd/ccd-testbox-times.timer'],
@@ -1843,7 +1846,10 @@ export const PROVISIONED_BOX_TOKEN =
  *  (no landing conf is opted in on a fresh box), re-measured from both box-token cases' own failing diff. D-8047 added
  *  `playwright`: SKIP at every stage (a fresh box caches no browser build), re-measured the same way. Launch profiles PR B (Overlord W1a) added `auto-memory`: PASS at every stage (a fresh box's
  *  rostered config dirs hold no memory directory), re-measured from both box-token cases' own failing diff. The Overlord
- *  W1 pool set B1 added `cap-floor`: PASS at every stage (no fact stands on a fresh box), re-measured the same way. */
+ *  W1 pool set B1 added `cap-floor`: PASS at every stage (no fact stands on a fresh box), re-measured the same way.
+ *  Model-class auto-advance W3 (D-8689) added `model-advance-held-back`, `model-held-behind`, `model-sessions-behind`
+ *  and `model-advance-blocked`: SKIP at every stage (no lane on a fresh fleet box has a model registry), re-measured
+ *  the same way; at the flip they move with `models` (the flip case names them). */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1891,7 +1897,16 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "land-probe": "SKIP",
   "linger": "PASS",
   "memory": "PASS",
+  // Model-class auto-advance W3 (D-8689): SKIP at every stage, re-measured from both box-token cases' own failing diff: a
+  // fresh fleet box has no model registry.
+  "model-advance-blocked": "SKIP",
+  "model-advance-held-back": "SKIP",
   "model-default": "PASS",
+  "model-held-behind": "SKIP",
+  // Model classes wave 3 (release-lookup-warn): SKIP at every stage: no Codex lane has been probed on a fresh box, so
+  // there is no release lookup record.
+  "model-release-lookup": "SKIP",
+  "model-sessions-behind": "SKIP",
   "models": "SKIP",
   "name": "SKIP",
   "node": "PASS",
@@ -1906,6 +1921,8 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "pools": "PASS",
   "provenance": "PASS",
   "python3": "PASS",
+  // Overlord W1a: PASS at every stage: a fresh fleet box has run no unattended quiz, which the check reads as no run yet.
+  "quiz-weekly": "PASS",
   "rc": "PASS",
   "routing": "PASS",
   "scope-sweep": "SKIP",

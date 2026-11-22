@@ -24,15 +24,18 @@
 import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
 import type { SessionRecord } from '../registry.js';
 import { childBirthOf } from './childSpent.js';
-import { bindingOf, boundRunsOf, hasOwnerlessUndecidedOpen, incarnationOf, type Incarnation } from './runBinding.js';
+import { bindingOf, boundRunsOf, hasOwnerlessUndecidedOpen, incarnationOf, parentRunOf, type Incarnation } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
 import type { SessionBindings } from './bindingReads.js';
 import type { WatcherCoordPort } from './ports.js';
 
+/** `runId` is the run the child's mark names (the row's run, D-5362: a resumed child's mark still names wave 1);
+ *  `bindingRunId` is the run the parent was read from (`parentRunOf`, the child's live binding run), or null when the
+ *  series could not be represented. The approvals park keys and closes on `bindingRunId` (review 2889 F2). */
 export type HeldFor =
   | { readonly kind: 'not-a-child' }
-  | { readonly kind: 'held'; readonly parent: string; readonly runId: number }
-  | { readonly kind: 'released'; readonly parent: string; readonly runId: number; readonly reason: AskMintReleaseReason };
+  | { readonly kind: 'held'; readonly parent: string; readonly runId: number; readonly bindingRunId: number | null }
+  | { readonly kind: 'released'; readonly parent: string; readonly runId: number; readonly bindingRunId: number | null; readonly reason: AskMintReleaseReason };
 
 /** How many open runs bind the child's incarnation: over `series` (the read `bindingsOf(id).parent` decided the parent from)
  *  when it is readable, else the store's proven reader. The store's reader runs either way and a failed read throws, as
@@ -68,7 +71,9 @@ export async function heldFor(
   if (!minting.ok) throw new Error(`heldFor: ${minting.detail}`);
   if (minting.run === null) return notAChild;
   const runId = mark.runId;
-  const nobody = (reason: AskMintReleaseReason): HeldFor => ({ kind: 'released', parent: ASK_OPERATOR_PRINCIPAL, runId, reason });
+  // The run that parent was read from, over the same series and the same rule (`parentRunOf`).
+  const bindingRunId = series.ok ? parentRunOf(bindingOf(series.runs, incarnation), minting.run.claimedBy)?.id ?? null : null;
+  const nobody = (reason: AskMintReleaseReason): HeldFor => ({ kind: 'released', parent: ASK_OPERATOR_PRINCIPAL, runId, bindingRunId, reason });
   if (parent === null) {
     // No claimant on the newest open run naming the child — or no open run at all, which is not a child (spec §4).
     // The siblings come from the SAME series the parent was read from, so the two answers cannot disagree about which
@@ -86,10 +91,10 @@ export async function heldFor(
   if (minting.run.unattributed || minting.run.coordProject === null) return nobody('run-unattributed');
   const row = recs.find((x) => x.id === parent) ?? null;
   if (row === null || row.archivedAt !== null || row.stopped !== null) {
-    return { kind: 'released', parent, runId, reason: 'parent-not-live' };
+    return { kind: 'released', parent, runId, bindingRunId, reason: 'parent-not-live' };
   }
   const verdict = await measureClaimant(deps, parent, nowMs);
-  if (claimantMeasuredDead(verdict)) return { kind: 'released', parent, runId, reason: 'parent-not-live' };
-  if (verdict.state === 'unmeasurable') return { kind: 'released', parent, runId, reason: 'parent-unmeasured' };
-  return { kind: 'held', parent, runId };
+  if (claimantMeasuredDead(verdict)) return { kind: 'released', parent, runId, bindingRunId, reason: 'parent-not-live' };
+  if (verdict.state === 'unmeasurable') return { kind: 'released', parent, runId, bindingRunId, reason: 'parent-unmeasured' };
+  return { kind: 'held', parent, runId, bindingRunId };
 }

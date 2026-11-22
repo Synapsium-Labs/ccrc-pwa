@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, EXPIRE_CAP, KEEP_AWAKE_CAP, LAUNCH_SURFACE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SET_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP, DOCS_SECTIONS_CAP, EXPIRE_CAP, KEEP_AWAKE_CAP, LAUNCH_SURFACE_CAP, MAILHOLD_ROUTE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SET_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -212,6 +212,9 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_DEFAULT_CAP);
     // D-8121: the browser route field's token, held equal to ccd's own `echo browser-route-v1`.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(BROWSER_ROUTE_CAP);
+    // Mid-turn mail PR 4: the mailhold field's token, held equal to the constant the projection gates on and to ccd's own
+    // `echo route-mailhold-v1` (PR 3).
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(MAILHOLD_ROUTE_CAP);
     // The native Docs reader's token (docs W2): the third spelling of `docs-v1`, held equal to the constant the docs
     // adapter's gate reads (`capSupported`) and to ccd's own `echo docs-v1` (W1).
     expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_CAP);
@@ -220,6 +223,8 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_SECTIONS_CAP);
     // The history token (docs W5b-1): held equal to the constant the docs-log row reads and to ccd's own `echo docs-log-v1`.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_LOG_CAP);
+    // The range token (X2 P1.2): held equal to the constant the docsShowRange row reads and to ccd's own `echo docs-range-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_RANGE_CAP);
     // The delegation broker's wave-3 token: the spool grammar plus ccd making each session's spool directory. The server-side constant
     // that gates ingestion arrives with the ingestion task; until then this list and ccd's own `echo delegation-events-v1` are the two
     // spellings, and `delegation-spool.test.ts` pins that the token is advertised exactly once.

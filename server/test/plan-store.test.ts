@@ -23,7 +23,7 @@ import {
 import {
   ADOPTED_FINGERPRINT, adoptIssueBindingInTx, bindingsOf, ensureUpkeepEpicInTx, inboundByIdentifier, inboundTicketInTx, moveTicketToProgrammeInTx,
   placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, upkeepEpicOf, upkeepPlanOf, upkeepTicketByIdentifier,
-  boundLinearIdsOf, upkeepProjectsOf,
+  boundLinearIdsOf, upkeepProjectsOf, ticketOfRun, dropPutBack, retireBindingInTx, MIGRATION_PLAN_BY,
 } from '../src/coord/planStore.js';
 import { LINEAR_SYNC_PROGRAMME, PLAN_BOUNDS, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE } from '../../shared/plan.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -468,6 +468,16 @@ describe('drift marks and events', () => {
     expect(graceBindingsOf(db, 'ws-b')).toEqual([]);
     expect(planStorePort(db).graceBindingsOf('ws-a').map((x) => x.id)).toEqual([b.id]);
   });
+  it('graceBindingsOf leaves out a retired binding whose grace still stands (review 2918 A2; review 2955 F4)', () => {
+    declare('prog-a');
+    const tk = (db.prepare("SELECT id FROM plan_tickets WHERE program = 'prog-a'").get() as { id: number }).id;
+    const b = ensurePending(db, 'ticket', tk, 'ws-a', 'AAA');
+    markBound(db, b.id, 'lin-7', 'AAA-7', 'fp', 5);
+    setDriftSince(db, b.id, 99);
+    expect(graceBindingsOf(db, 'ws-a').map((x) => x.id)).toEqual([b.id]);
+    tx(db, () => retireBindingInTx(db, b.id));             // set aside: it holds its issue for no reader
+    expect(graceBindingsOf(db, 'ws-a')).toEqual([]);
+  });
   it('recordDrift and driftRestoresOf', () => {
     const a = recordDrift(db, { bindingId: 1, at: 100, field: 'projectId', value: 'x', actor: 'not read', restored: true });
     const b = recordDrift(db, { bindingId: 1, at: 50, field: 'title', value: 'y', actor: 'not read', restored: true });
@@ -505,6 +515,13 @@ describe('inbound', () => {
     expect(inboundOf(db, 'nope')).toBeNull();
     setInboundState(db, 'L1', { state: 'closed', reason: 'duplicate', actedAt: 8 });
     expect(inboundOf(db, 'L1')).toMatchObject({ state: 'closed', reason: 'duplicate', actedAt: 8, mailedTo: 'coord-a' });
+  });
+  it('setInboundState called outside a transaction is one transaction of its own: a failing note delete leaves the state unchanged (review 2834 A3)', () => {
+    upsertInbound(db, inboundIn('L1'));
+    db.exec('DROP TABLE linear_inbound_notes');       // the second statement (the note's delete) now throws
+    expect(db.isTransaction).toBe(false);
+    expect(() => setInboundState(db, 'L1', { state: 'handed', handedTo: 'coord-a' })).toThrow();
+    expect(inboundOf(db, 'L1')).toMatchObject({ state: 'waiting', handedTo: null });
   });
   it('upsertInbound truncates a long title and body visibly, on a code point (D-8705)', () => {
     const title = '😀'.repeat(300);
@@ -811,5 +828,73 @@ describe('the one retire of an inbound row (review 2457 F4, A6; D-8735)', () => 
     const port = planStorePort(db);
     expect(typeof port.retireInbound).toBe('function');
     expect(typeof port.retireInboundInTx).toBe('function');
+  });
+});
+
+describe('a row\'s note lives only while its row is waiting (round 4 F2)', () => {
+  const note = { kind: 'returned', program: 'prog-a', note: 'not mine', at: 9 } as const;
+  const fresh = (id: string) => { upsertInbound(db, inboundIn(id)); setInboundNote(db, id, note); };
+
+  it('setInboundState to any state but waiting deletes the note', () => {
+    for (const state of ['mailed', 'handed', 'closed', 'raised', 'placed', 'taken', 'retired'] as const) {
+      fresh(`L-${state}`);
+      setInboundState(db, `L-${state}`, { state });
+      expect(inboundNoteOf(db, `L-${state}`), state).toBeNull();
+    }
+  });
+
+  it('a patch with no state, or with state waiting, keeps the note', () => {
+    fresh('L1');
+    setInboundState(db, 'L1', { actedAt: 5 });
+    setInboundState(db, 'L1', { state: 'waiting', mailedTo: null });
+    expect(inboundNoteOf(db, 'L1')).toEqual(note);
+  });
+
+  it('inside the caller\'s transaction the delete is the same transaction: a rollback keeps the note and the state', () => {
+    fresh('L1');
+    expect(() => tx(db, () => { setInboundState(db, 'L1', { state: 'placed' }); throw new Error('stop'); })).toThrow('stop');
+    expect(inboundOf(db, 'L1')!.state).toBe('waiting');
+    expect(inboundNoteOf(db, 'L1')).toEqual(note);
+  });
+});
+
+describe('review 2892 fix round 1 (D-8186)', () => {
+  it('F9: ticketOfRun, the one reader of a run\'s ticket, leaves out a ticket put back', () => {
+    declare();
+    const runId = openWork().id;
+    const e = planOf(db, 'prog-a').epics[0]!;
+    const t = e.tickets[0]!;
+    tx(db, () => attachTicketInTx(db, runId, { kind: 'existing', id: t.id, epicId: e.id, reproject: null }, 20));
+    expect(ticketOfRun(db, runId)).toEqual({ ticketId: t.id, key: 't1' });
+    dropPutBack(db, { epics: [], checkpoints: [], tickets: [t.id] }, 30);
+    expect(ticketById(db, t.id)!.putBackAt).not.toBeNull();
+    expect(ticketOfRun(db, runId)).toEqual({ ticketId: null, key: null });
+  });
+
+  it('F1: a coordinator\'s first plan write takes over a plan the migration declared; nothing else rewrites planBy', () => {
+    applyPlanChanges(db, 'prog-m', changes({ epics: { insert: [epicIn('em', [])], update: [], drop: [] } }), MIGRATION_PLAN_BY, 10, { home: 'project-a', title: 'M' });
+    expect(planOf(db, 'prog-m').planBy).toBe(MIGRATION_PLAN_BY);
+    applyPlanChanges(db, 'prog-m', changes({ epics: { insert: [epicIn('em2', [], 1)], update: [], drop: [] } }), MIGRATION_PLAN_BY, 11, null);
+    expect(planOf(db, 'prog-m').planBy).toBe(MIGRATION_PLAN_BY);          // a follow-up map's own write keeps it the map's
+    applyPlanChanges(db, 'prog-m', changes({ epics: { insert: [epicIn('ec', [2], 2)], update: [], drop: [] } }), 'coord-m', 12, null);
+    expect(planOf(db, 'prog-m').planBy).toBe('coord-m');
+    applyPlanChanges(db, 'prog-m', changes({ epics: { insert: [epicIn('em3', [], 3)], update: [], drop: [] } }), MIGRATION_PLAN_BY, 13, null);
+    applyPlanChanges(db, 'prog-m', changes({ epics: { insert: [epicIn('ec2', [3], 4)], update: [], drop: [] } }), 'coord-x', 14, null);
+    expect(planOf(db, 'prog-m').planBy).toBe('coord-m');                   // a coordinator's plan stays theirs
+  });
+
+  it('F5: a retired binding keeps its row and holds its issue for no reader: plan-owned, inbound, the drift pass, the map', () => {
+    declare();
+    const t = planOf(db, 'prog-a').epics[0]!.tickets[0]!;
+    const port = planStorePort(db);
+    const b = port.ensurePending('ticket', t.id, 'ws-a', 'AAA');
+    port.markBound(b.id, 'lin-9', 'AAA-9', 'fp', 10);
+    expect(issueBound(db, 'ws-a', { id: 'lin-9', identifier: null })).toBe(true);
+    tx(db, () => retireBindingInTx(db, b.id));
+    expect(db.prepare('SELECT state, linearId, identifier FROM linear_bindings WHERE id = ?').get(b.id)).toEqual({ state: 'retired', linearId: 'lin-9', identifier: 'AAA-9' });
+    expect(issueBound(db, 'ws-a', { id: 'lin-9', identifier: 'AAA-9' })).toBe(false);
+    expect(bindingByLinearId(db, 'ws-a', 'lin-9')).toBeNull();
+    expect(boundLinearIdsOf(db, 'ws-a')).not.toContain('lin-9');
+    expect(port.bindingsInWorkspace('ws-a').map((x) => x.id)).not.toContain(b.id);
   });
 });

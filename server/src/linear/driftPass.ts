@@ -44,13 +44,14 @@ import type { LinearRateService } from './rate.js';
 import type { FleetSession } from '../../../shared/api.js';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, syncWroteSince, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
-  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, type NameFacts,
+  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, driftEventText, type NameFacts,
   shouldRaiseDriftItem, type DriftKind, type DriftRaiseWhy, type OwnedFields,
   DRIFT_KEEP_NOTE, bindingByLinearIdOf, closedByKeep, driftCursorAfterFailure, handRoute, restoreFallbackCommentOf, sweepStep,
 } from './driftPolicy.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type RestoreOutcome, type RestoreTarget, type SlotInfo } from './planSync.js';
 import { requestIdOf, type PlannedOwned } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
+import type { TeamRoutes } from './route.js';
 import type { LinearDirectoryRead } from './directory.js';
 import { InboundLane } from './inboundLane.js';
 import type { InboundRecheck } from './inboundPolicy.js';
@@ -446,12 +447,13 @@ export class DriftPass {
     plan.setDriftItem(fresh.id, coord.raiseItem(input, now, 'ccrc'));
   }
 
-  /** The record of what changed, as an operator or a coordinator reads it: Linear's values, fenced as untrusted text. */
+  /** The record of what changed, as an operator or a coordinator reads it: Linear's values, fenced as untrusted text; a one-way set's
+   *  line names the planned members Linear lacks (`driftEventText`). */
   private recordBlock(bindingId: number, now: number): string {
     const lines = this.deps.plan.driftEventsOf(bindingId, now - DRIFT_PERSIST.windowMs).map((e) => {
       const day = new Date(e.at).toISOString().slice(0, 10);
       const value = e.value.replace(/\s+/gu, ' ');
-      return `${day} ${e.field} = ${value === '' ? '(empty)' : value} (${e.restored ? 'put back' : 'not put back'}; who: not read by ccrc)`;
+      return `${day} ${driftEventText(e.field, value)} (${e.restored ? 'put back' : 'not put back'}; who: not read by ccrc)`;
     });
     return untrustedBlock(lines.join('\n'), UNTRUSTED_CAP_BYTES, 'on the drift record', LINEAR_TEXT_PREFACE);
   }
@@ -474,7 +476,7 @@ export class DriftPass {
    *  programme with no coordinator, the home project's Linear owner (A-7, D-8736; `handRoute` decides), settles the item and ends the
    *  binding's hold on it, in one transaction; with no usable owner it is refused `no-linear-owner` and the item stays open. `keep`
    *  settles it and the binding keeps it (D-8720's quiet reads it, `closedByKeep`), and ccrc goes on restoring. */
-  act(itemId: number, act: 'hand' | 'keep', bindingId: number): { ok: true } | { ok: false; word: 'not-found' | 'not-open' | HierarchyItemRefusal } {
+  act(itemId: number, act: 'hand' | 'keep', bindingId: number, routes: TeamRoutes | null = null): { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unreachable' | HierarchyItemRefusal } {
     const { coord, plan } = this.deps;
     const item = coord.itemById(itemId);
     if (item === null || item.action?.verb !== 'linear-drift' || item.action.bindingId !== bindingId) return { ok: false, word: 'not-found' };
@@ -489,7 +491,10 @@ export class DriftPass {
     const binding = key === null ? undefined : plan.bindingsOf(key).find((b) => b.id === bindingId);
     if (key === null || binding === undefined) return { ok: false, word: 'not-found' };
     const upkeep = key.startsWith(UPKEEP_DUE_PREFIX);
-    const route = handRoute({ upkeep, coordinator: upkeep ? null : plan.planOwnerOf(key), owner: this.linearOwnerOf(upkeep ? key.slice(UPKEEP_DUE_PREFIX.length) : coord.programHome(key)) });
+    const coordinator = upkeep ? null : plan.planOwnerOf(key);
+    const owner = coordinator === null ? this.linearOwnerOf(upkeep ? key.slice(UPKEEP_DUE_PREFIX.length) : coord.programHome(key), routes) : null;
+    if (owner?.kind === 'unmeasured') return { ok: false, word: 'unreachable' };
+    const route = handRoute({ upkeep, coordinator, owner });
     if (route.to === 'none') return { ok: false, word: HIERARCHY_ITEM_REFUSALS.noLinearOwner };
     const kind = KIND_OF[binding.localKind];
     const subject = `Linear sync: drift on ${WORD[kind]} ${this.planKeyOf(key, binding)} handed (${key})`;
@@ -505,10 +510,10 @@ export class DriftPass {
 
   /** A project's Linear owner as `planPolicy.ts#linearOwnerOfProject` decides it (the facts the inbound lane reads too: the rows, the
    *  latest programme's coordinator and a session's standing), or null for a project nobody names. */
-  private linearOwnerOf(project: string | null): { id: string | null; gone: boolean } | null {
+  private linearOwnerOf(project: string | null, routes: TeamRoutes | null) {
     if (project === null) return null;
     const { plan, presenceOf } = this.deps;
-    return linearOwnerOfProject(project, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf });
+    return linearOwnerOfProject(project, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf }, routes);
   }
 
   /** A stored inbound row's issue, re-read by id (review 2457 F4, D-8733), for `plan take` and `plan triage`: the inbound lane's own read. */

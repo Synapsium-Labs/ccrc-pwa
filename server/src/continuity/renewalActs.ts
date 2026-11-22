@@ -29,7 +29,7 @@ import { genExpectOf, genViewOf, type GenRow } from './continuityStore.js';
 import { generationStep } from './generationMachine.js';
 import type { ActTarget, PlannedAct } from './generationsLane.js';
 import {
-  FIRST_PROMPT_OF_ROLE, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT, actsOfStep, answerActs, handoverInRenewal,
+  FIRST_PROMPT_OF_ROLE, RENEWAL_HANDOVER_SUBJECT, RENEWAL_MAIL_OF_ROLE, SPOT_PROBE_SUBJECT, actsOfStep, answerActs, handoverInRenewal,
   itemAboutOf, itemStandsWords, renewAnswerEvent, renewalItemPrefix, type ItemAbout, type RenewalAct,
 } from './renewalFeed.js';
 import type { SessionHost } from './sessionHost.js';
@@ -98,8 +98,8 @@ async function act(deps: RenewalActsDeps, t: ActTarget, a: RenewalAct, r: Counts
       else { r.failed += 1; say(`the ${a.kind} was not delivered (${d.kind === 'refused' ? d.reason : d.detail})`); }
       return;
     }
-    case 'ask-handover': return mailOnce(deps, t, RENEWAL_HANDOVER_SUBJECT, RENEWAL_HANDOVER_BODY, r, say);
-    case 'spot-probe': return mailOnce(deps, t, SPOT_PROBE_SUBJECT, SPOT_PROBE_BODY, r, say);
+    case 'ask-handover': return mailOnce(deps, t, RENEWAL_HANDOVER_SUBJECT, RENEWAL_MAIL_OF_ROLE[t.role].handover, r, say);
+    case 'spot-probe': return mailOnce(deps, t, SPOT_PROBE_SUBJECT, RENEWAL_MAIL_OF_ROLE[t.role].spotProbe, r, say);
     case 'assemble-checkpoint': { if (!seal(deps, t)) { r.failed += 1; say('the checkpoint could not be stored'); } return; }
     case 'raise-item': return raiseDegraded(deps, t, a, r, say);
     case 'set-hold-off': {

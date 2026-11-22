@@ -64,7 +64,10 @@
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
 // every import below is a `.mjs`.
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
+import {
+  accessSync, constants as fsConstants, lstatSync, readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync,
+  statSync, unlinkSync,
+} from 'node:fs';
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
@@ -74,13 +77,16 @@ import {
 } from '../shared/models.mjs';
 import {
   CLIENT_DEFAULT_CONTEXT_TOKENS, LANE_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
-  effortFile, mergeSettingsEnv, modelEnvBlock, readRegular, windowCeiling,
+  effortFile, mergeSettingsEnv, modelEnvBlock, readRegular, readSettingsJson, windowCeiling,
 } from '../shared/modelenv.mjs';
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
-  AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance,
-  reconcilePending, recordFailure, recordMove, resolveEffort, unmeasuredMoveNotice, unmeasuredMoves,
+  AdvanceInvalid, advanceIneligible, backfillAdvance, candidateFor, chooseCandidate, classWaits, clearEffortFallback,
+  clientWindowNotice, effortDroppedDetail, effortFallbacks, familyOf, heldBackOf, historyReason, parseAdvance,
+  reconcilePending, recordFailure, refreshRecord, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice,
+  unmeasuredMoves, withEffort,
 } from '../shared/model-advance.mjs';
+import { ANTHROPIC_OPS, anthropicArm } from './models-anthropic.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
@@ -321,10 +327,16 @@ function readRegistry(id, catalogue) {
   try {
     return { registry: parseRegistry(json, catalogue) };
   } catch (e) {
-    if (e instanceof RegistryInvalid) return { invalid: e };
+    // `dropped` (D-8842): the registry with its fallback levels (`effortFallbacks`), when a dropped level is all that is
+    // wrong with it, and the registry as stored (`stored`, what a failed materialise writes back); else absent.
+    if (e instanceof RegistryInvalid) return { invalid: e, ...fallbackOf(effortFallbacks(json, catalogue), json) };
     throw e;
   }
 }
+const fallbackOf = (fixed, stored) => (fixed === null ? {} : { dropped: { ...fixed, stored } });
+/** The registry as stored, in the parsed shape: the fallback's with each fallen class back at its stored level (D-8865). */
+const storedOf = (l) => ({ ...l.registry,
+  effort: { ...l.registry.effort, ...Object.fromEntries(l.fallbacks.map((f) => [f.class, f.from])) } });
 
 /** The lane's measured windows, as EXACTLY ONE of three states — never an
  *  overloaded null:
@@ -637,19 +649,51 @@ function settleHandMove(id, after) {
     + "change's intent, which the lane's next locked writer records.";
 }
 
-/** Why the automatic advance does not act on a lane that has a class registry, or null when it does (auto-advance
- *  spec §2.2; D-5198). The first that applies:
- *    - `lane-not-codex-kind`: only an `exec.kind: "codex"` row advances; an external row's tier, port and key are
- *      not ccrc's to know;
- *    - `probe-not-codex`: the family rule is the Codex lanes', so a registry whose probe is not `codex` never
- *      advances.
- *  A fact about the lane, never a refusal: each op of the advance step reports it as its `why`. ONE answer for all
- *  of them, so they can never disagree about which lanes advance: `advance-backfill` and `advance-plan` call it, and
- *  W2 Task 9's `advance-commit` calls it too. */
-function advanceIneligible(account, registry) {
-  if (!(isObj(account.exec) && account.exec.kind === 'codex')) return 'lane-not-codex-kind';
-  if (registry.probe !== 'codex') return 'probe-not-codex';
-  return null;
+/** How old a catalogue staging file must be before the hourly writer may reap it (ruling 11, 2026-11-16). The
+ *  probe that writes one is bounded far below this, so a file this old is no probe's in flight. */
+const STALE_TMP_MS = 3_600_000;
+/** The largest pid a staging file's suffix may name; a larger number is not one of ours, and is left alone. */
+const TMP_PID_MAX = 2_147_483_647;
+
+/** `(id) => string[]`: unlink each `<id>.json.tmp.<pid>` the catalogue probe (`ccd/ccrc-models-probe`, its
+ *  `$OUT.tmp.$$`) left in the models directory when it was killed before its EXIT trap ran, and answer the names it
+ *  removed. The probe runs OUTSIDE the lane-files lock, so a file is reaped only when it is PROVED stale: a regular
+ *  file (lstat: never a symlink, a directory or a FIFO), named exactly `catalogueFileName(id)` + `.tmp.` + a pid,
+ *  whose pid no longer runs (`process.kill(pid, 0)` answers ESRCH; EPERM is a live process of another account), and
+ *  whose mtime is at least `STALE_TMP_MS` before `now()`. Another lane's file, the catalogue itself and every other
+ *  name are never touched. Best effort: a listing or an unlink that fails reaps nothing and fails nothing, and the
+ *  next hour tries again. Reached only through `advance-backfill`, a write op, so only under the lane-files lock. */
+function reapStaleCatalogueTmp(id) {
+  const nowMs = Date.parse(now());
+  const prefix = `${catalogueFileName(id)}.tmp.`;
+  let names;
+  try {
+    names = readdirSync(modelsDir());
+  } catch {
+    return [];
+  }
+  const reaped = [];
+  for (const n of [...names].sort()) {
+    if (!n.startsWith(prefix)) continue;
+    const suffix = n.slice(prefix.length);
+    if (!/^[1-9][0-9]{0,9}$/.test(suffix) || Number(suffix) > TMP_PID_MAX) continue;
+    const p = path.join(modelsDir(), n);
+    try {
+      const st = lstatSync(p);
+      if (!st.isFile() || !(st.mtimeMs <= nowMs - STALE_TMP_MS)) continue;
+      try {
+        process.kill(Number(suffix), 0);
+        continue;
+      } catch (e) {
+        if (e.code !== 'ESRCH') continue;
+      }
+      unlinkSync(p);
+      reaped.push(n);
+    } catch {
+      // best effort: the next hour tries again
+    }
+  }
+  return reaped;
 }
 
 /** `advance-backfill` (auto-advance spec §2.1): give a codex-kind lane whose registry probe is `codex` its advance
@@ -663,8 +707,11 @@ function advanceIneligible(account, registry) {
  *  word), never a refusal (D-5198); so does a file it cannot read, with the read's word. An Anthropic lane and a
  *  lane with no class registry never reach here: `main`'s gates refuse them first (`anthropic-lane`,
  *  `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex` and whose probe,
- *  materialise and LiteLLM render all succeeded. */
+ *  materialise and LiteLLM render all succeeded. Before any of that it reaps the lane's stale catalogue staging
+ *  files (`reapStaleCatalogueTmp`, ruling 11) and names them as `reapedTmp`, present only when it removed one.
+ *  It never writes a class's `missing`: the refresh's `materialise` does (`recordRefresh`, D-8838). */
 function backfillOp(a, account, registry) {
+  const reaped = reapStaleCatalogueTmp(a.id);
   const why = advanceIneligible(account, registry);
   const b = why === null ? backfillOnce(a.id, registry) : { created: false, why };
   if (b.err !== undefined) return refuse(1, b.err[0], b.err[1]);
@@ -678,9 +725,23 @@ function backfillOp(a, account, registry) {
     }
     recoveredMove = s.recoveredMove;
   }
-  out({ ok: true, op: 'advance-backfill', id: a.id, created: b.created, ...(b.created ? {} : { why: b.why }),
-    ...recoveredField(recoveredMove) });
+  out({ ok: true, op: 'advance-backfill', id: a.id, ...(reaped.length > 0 ? { reapedTmp: reaped } : {}),
+    created: b.created, ...(b.created ? {} : { why: b.why }), ...recoveredField(recoveredMove) });
   return 0;
+}
+
+/** Programme wave 3 (D-8838, D-8842): `edit` (`refreshRecord`, `clearEffortFallback`) applied to the lane's advance
+ *  file under the caller's lane lock, and written when it changed it; only in a file that exists and reads (never
+ *  created or overwritten here). Its word, which the refresh's `materialise` answers as `effortFallbackRecord`:
+ *  `recorded`, `no-advance-file`, the read's own word, or `unwritten` (the write failed, named on stderr). A sighting
+ *  whose record was not written proposes no `retired` move (`retireDue`). */
+function editAdvance(id, edit) {
+  const rd = readAdvance(id);
+  if (rd.err !== undefined || rd.advance === null) return rd.err?.[0] ?? 'no-advance-file';
+  const r = edit(rd.advance);
+  const w = r.changed ? writeAdvance(id, r.advance) : null;
+  if (w !== null) process.stderr.write(`${SELF}: the advance file was not updated: ${w[0]}: ${w[1]}\n`);
+  return w === null ? 'recorded' : 'unwritten';
 }
 
 /** A writer's refusal of an advance file it cannot read: the verb rewrites that file and will not overwrite one it
@@ -724,20 +785,6 @@ function sayWhatChanged(detail, rest) {
   return `${detail.endsWith(NOTHING_CHANGED) ? detail.slice(0, -NOTHING_CHANGED.length) : `${detail} `}${rest}`;
 }
 
-/** A class's effort level in a registry copy the caller is building (`next`, edited in place and returned): set to
- *  `level`, or removed for null, the `effort` map dropped once that was its last entry. ONE rule for every op that
- *  moves a level: `revert`, `advance-commit` and `set-effort`. */
-function withEffort(next, cls, level) {
-  if (level === null) {
-    if (isObj(next.effort)) {
-      delete next.effort[cls];
-      if (Object.keys(next.effort).length === 0) delete next.effort;
-    }
-  } else {
-    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [cls]: level };
-  }
-  return next;
-}
 
 /**
  * `revert <class>` (auto-advance spec §2.7): put back the model the class had before its last automatic advance
@@ -747,7 +794,9 @@ function withEffort(next, cls, level) {
  *    still lists it, never only against the current model's row, which may not list it either.
  *  - REFUSED, writing nothing: no advance on record (`no-previous`); a previous model the catalogue no longer lists
  *    (`previous-not-in-catalogue`); one another class pins now (`previous-taken`: a revert never empties another
- *    class); a registry the validator or the renderer refuses (`registry-invalid`, `unroutable-lane`).
+ *    class); a registry the validator or the renderer refuses (`registry-invalid`, `unroutable-lane`); a lane
+ *    settings file the materialise would refuse to merge into (`settings-unwritable`). Every one is decided before
+ *    the first write (programme wave 3), so only a write or a materialise that FAILS can follow the hold.
  *  - THE BRAKE FIRST (D-5206): the hold reaches the advance file before the registry moves, so a revert stopped
  *    anywhere leaves the class held, never free to be advanced again. It is `{at: now(), by: 'revert'}` whatever
  *    hold stood before, a hand one included: a hold records the act that set it last (D-5190), and the panel and
@@ -825,6 +874,14 @@ function revertOp(a, account, registry, catalogue, win) {
     modelEnvBlock(validated, catalogue, windowsOf(win));
   } catch (e) {
     if (e instanceof ModelEnvInvalid) return refuse(1, 'unroutable-lane', `${e.message} Nothing was written.`);
+    throw e;
+  }
+  // Programme wave 3 (revert-writes-before-refusing): the settings file `materialise` merges into, read as it reads it,
+  // so a file it would refuse is refused here, before the hold is written, and a refused revert writes nothing.
+  try {
+    readSettingsJson(path.join(HOME, account.configDirSuffix, 'settings.json'));
+  } catch (e) {
+    if (e instanceof ModelEnvInvalid) return refuse(1, 'settings-unwritable', e.message);
     throw e;
   }
   // THE BRAKE FIRST (D-5206), over any hold already standing: the act that set it last.
@@ -1174,6 +1231,7 @@ function describe(account, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
     advance: advanceReport(account.id),
+    ...(anthropic ? { aliases: aliasesReport(account.id) } : {}),
     labels: registry === null ? null : laneClassModels(registry, catalogue),
     windowNotices: windowNotices(account.id, registry, catalogue, windows),
   };
@@ -1182,15 +1240,24 @@ function describe(account, registry, catalogue, reading) {
 /** `show`'s and `lanes`' `windowNotices` (D-8384, public issue #2607): one sentence per class whose last move
  *  lowered the lane's context window below the old model's measured one (`unmeasuredMoves`; D-8564: a move to a
  *  model whose provider promise is at least that lowered nothing and is quiet), each in `unmeasuredMoveNotice`'s one
- *  spelling, which `ccrc doctor`'s `models` row prints as a WARN (it asks `lanes`). Empty with no registry, and
- *  with an advance file that is absent or cannot be read: `advance` already names that one. */
+ *  spelling, which `ccrc doctor`'s `models` row prints as a WARN (it asks `lanes`). Empty with no registry; with an
+ *  advance file that is absent or cannot be read there is no move to name (`advance` already names that file).
+ *  D-8685 adds the one notice that needs no move: a STALE catalogue under a class model with no measured window,
+ *  whose lane falls to the client's own default (`clientWindowNotice`), named once and never beside a move notice
+ *  for the same model. */
 function windowNotices(id, registry, catalogue, windows) {
   if (registry === null) return [];
-  const rd = readAdvance(id);
-  if (rd.err !== undefined || rd.advance === null) return [];
   const room = contextWindowFor(registry, catalogue, windows);
-  return unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule, tokens: room.tokens })
-    .map((m) => unmeasuredMoveNotice(id, m, room.tokens));
+  const rd = readAdvance(id);
+  const moves = rd.err !== undefined || rd.advance === null ? []
+    : unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule, tokens: room.tokens });
+  const notes = moves.map((m) => unmeasuredMoveNotice(id, m, room.tokens));
+  // D-8685: the stale-catalogue fall, named once, and never beside a move notice that already names its model.
+  if (!moves.some((m) => m.to === room.model)) {
+    const n = clientWindowNotice(id, registry, catalogue !== null && catalogue.stale === true, room);
+    if (n !== null) notes.push(n);
+  }
+  return notes;
 }
 
 /** §11's ORPHAN: a registry file whose id is in no roster row — typically
@@ -1283,8 +1350,9 @@ const OPS = {
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'], writes: true },
   // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
   // form, which writes nothing and answers `changed`; omitted, the op writes,
-  // as every caller before it expects. Any other value is refused.
-  materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'], writes: true },
+  // as every caller before it expects. Any other value is refused. `--refresh true` (D-8838, D-8842) is the hourly
+  // refresh's call after a probe: it falls back a dropped effort level and records the sightings (`editAdvance`).
+  materialise: { keys: ['file', 'id', 'check', 'refresh'], required: ['file', 'id'], writes: true },
   rm: { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
   // auto-advance spec §2.1: create the lane's advance file when it has none (`backfillOp`), and settle a pending
   // intent in one that exists (plan W2 Task 9, D-5215); it rewrites nothing else.
@@ -1295,6 +1363,13 @@ const OPS = {
   // Auto-advance plan W2 Task 9: one class's move, or one failed canary's
   // record. It writes, and ONLY under the lane-files lock its bash caller holds.
   'advance-commit': { keys: ['file', 'id', 'class', 'from', 'to', 'canary', 'reason'], required: ['file', 'id', 'class', 'from', 'to', 'canary'], writes: true },
+  // Model-class Anthropic arm, Task A2.3: an Anthropic lane's aliases file (the id each class's alias resolves to, from
+  // the lane's cache and its marked launches), and the moves it finds, recorded in the advance file. It writes, and ONLY
+  // under the lane-files lock its bash caller holds. `--reg` is the session registry (the launch markers).
+  'aliases-refresh': { keys: ['file', 'id', 'reg'], required: ['file', 'id', 'reg'], writes: true },
+  // Auto-advance plan W3 Task 14: doctor's one read of every lane's advance state. Box-wide and READ-ONLY; its two
+  // paths come from ccd/ccrc ($_SVC_REG and `_models_lock_path '{id}'`) so neither is spelled twice.
+  'advance-health': { keys: ['file', 'reg', 'lock-template'], required: ['file', 'reg', 'lock-template'], writes: false },
   // auto-advance spec §2.7 (D12): the hold the automatic advance honours, and the one-act revert.
   hold: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
   release: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
@@ -1670,34 +1745,6 @@ function lowerWindowsOp(a, account, registry, catalogue, reading) {
   return 0;
 }
 
-/** One class's candidate this hour and the two effort levels that go with it (auto-advance spec §2.2 to §2.3):
- *  `chooseCandidate`'s `{candidate, reason, blocked}`, plus
- *    `effortTo`      the level the class would carry on the candidate (`resolveEffort`, ranked by its pin's own row,
- *                    D-5200; null: none);
- *    `canaryEffort`  the lowest level the candidate lists (null: it lists none).
- *  Both null with no candidate. ONE computation for `advance-plan`, which reports it before the canary, and
- *  `advance-commit`, which re-checks it under the lock after the canary and writes its `effortTo`, so the level a
- *  plan names and the level a commit writes cannot differ. `family` is the class's stored family, which
- *  `chooseCandidate` reads for an EMPTY class only (D-5992). */
-function candidateFor(registry, catalogue, cls, family) {
-  const choice = chooseCandidate({ registry, catalogue, cls, family });
-  if (choice.candidate === null) return { ...choice, effortTo: null, canaryEffort: null };
-  const rowOf = (id) => catalogue.models.find((m) => m.id === id);
-  const pin = registry.classes[cls];
-  const next = rowOf(choice.candidate);
-  const prev = pin === null ? undefined : rowOf(pin);
-  const newEfforts = next === undefined ? [] : next.efforts;
-  return {
-    ...choice,
-    effortTo: resolveEffort({
-      stored: isObj(registry.effort) ? registry.effort[cls] : undefined,
-      oldEfforts: prev === undefined ? null : prev.efforts,
-      newEfforts,
-    }) ?? null,
-    canaryEffort: canaryEffort(newEfforts),
-  };
-}
-
 /** `advance-plan` (auto-advance spec §2.2 to §2.3; plan W2 Task 8): READ-ONLY.
  *  Which classes of this lane the hourly refresh may advance, and to what — the
  *  question the refresh asks before it asks anything of the lane itself.
@@ -1751,7 +1798,8 @@ function advancePlanOp(a, account, registry, catalogue, win) {
       candidate: null, reason: null, blocked: null, effortTo: null, canaryEffort: null,
     };
     if (why !== null) return row;
-    Object.assign(row, candidateFor(registry, catalogue, cls, stored));
+    Object.assign(row, candidateFor({ registry, catalogue, cls, family: stored,
+      missing: adv === null ? undefined : adv.classes[cls].missing, nowMs: Date.parse(now()) }));
     if (row.candidate !== null && row.blocked === null && win.state === 'unreadable') {
       row.blocked = 'windows-unreadable';
     }
@@ -1762,15 +1810,6 @@ function advancePlanOp(a, account, registry, catalogue, win) {
   return 0;
 }
 
-/** A history `reason` as the advance file's reader accepts it (plan §3.1):
- *  printable ASCII, at most `REASON_MAX` characters, the one number
- *  `shared/model-advance.mjs` defines and its `parseAdvance` holds every
- *  reason to. Every reason this file records passes through it, the canary's
- *  (`--reason`) and its own, because one the reader refused would make the
- *  whole advance file unreadable, and every later advance on the lane blocked
- *  behind it. */
-const historyReason = (text) =>
-  String(text).replace(/[^\x20-\x7e]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, REASON_MAX);
 
 /** `advance-commit` (auto-advance spec §2.1 D21 and §2.3 steps 4 to 6; plan W2
  *  Task 9): one class's move, or one failed canary's record, under the
@@ -1894,7 +1933,8 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     return answer('failed', { reason, push: f.isNew, ...extra });
   };
   if (a.canary === 'failed') return fail(historyReason(a.reason ?? '') || 'the canary failed', 'failed');
-  const choice = candidateFor(registry, catalogue, cls, adv.classes[cls].family);
+  const choice = candidateFor({ registry, catalogue, cls, family: adv.classes[cls].family,
+    missing: adv.classes[cls].missing, nowMs: Date.parse(now()) });
   if (choice.blocked !== null || choice.candidate !== a.to) return abandon('candidate-changed');
 
   // 4. The moved registry, its effort resolved against the old pin's row
@@ -1962,6 +2002,292 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     ...(w === null ? {} : { reason: historyReason(`moved, but its history could not be written (${w[0]})`) }) });
 }
 
+// ── `advance-health` (auto-advance spec §2.8; plan W3 Task 14) ───────────────────────────────────────────────────
+// The one read behind `ccrc doctor`'s four model-advance checks. BOX-WIDE and READ-ONLY: it reads every lane's
+// model files, the session registry and each lane's lock path, and it writes nothing, takes no lock and never opens
+// a lock path. Its answer's shape is the plan's §3.9, plus `canary` on each held-back class, `reason` on each
+// held-behind class, the session registry's own word, and the sessions it could not measure, at the top level (a
+// `.wrapper` it cannot read) and on each lane (D-5220).
+
+/** The largest `<sid>.wrapper` read (a lane id, at most 32 characters, and no newline). */
+const WRAPPER_FILE_MAX_BYTES = 256;
+/** The largest turn marker or usage sidecar read: the marker's own writer-side cap (`server/src/turnmark.ts`), and
+ *  far above a sidecar's one line. */
+const SESSION_FILE_MAX_BYTES = 4096;
+/** A ccd session id as a file name: the status line's own charset (`ccd/statusline-command.sh`), led by a letter or
+ *  digit so no dotted temporary file is ever read as a session. */
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** A session registry file, type-tested and SIZE-tested before it is read (`readRegular` reads a file whole): a FIFO
+ *  or a directory throws `ENOTREG`, an oversized file `ETOOBIG`, so no session file can block or flood this op. */
+function readSessionFile(p, maxBytes) {
+  const st = statSync(p);
+  if (!st.isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+  if (st.size > maxBytes) throw Object.assign(new Error(`over ${maxBytes} bytes`), { code: 'ETOOBIG' });
+  return readRegular(p);
+}
+
+/** Whether a writer could take the lane-files lock at `p`, measured READ-ONLY with `lstat` and `access(W_OK)` only:
+ *  never an open (a FIFO would block it), never a create, never the lock itself (D-5193). The
+ *  answer is the sentence `model-advance-blocked` prints, or null when nothing stands in the way. It names every
+ *  case `_models_lock` (W1, `ccd/ccrc`) refuses `lock-unwritable`, and, by ruling RC7's letter ("whose lock
+ *  directory it cannot write"), one case that writer repairs instead of refusing:
+ *   - the directory: absent is not a finding (the first lock makes it); a symlink is, anything but a directory is,
+ *     one another account owns is (lstat's `uid`: its `chmod 700` would fail, even where `access` says writable;
+ *     root can chmod any), and so is one this account cannot write. That last one, on a directory this account
+ *     owns, is the RC7 case: the next writer's `chmod 700` makes it writable, and the remedy says so;
+ *   - the file: absent is not a finding; a symlink (live or dangling) is, anything but a regular file (a FIFO, a
+ *     directory, a socket) is, and so is one this account cannot write (its `>>` open would fail). */
+function lockUnwritable(p) {
+  const d = path.dirname(p);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  let ds;
+  try {
+    ds = lstatSync(d);
+  } catch (e) {
+    return e.code === 'ENOENT' ? null : `${d} could not be examined (${e.code ?? e.message})`;
+  }
+  if (ds.isSymbolicLink()) return `${d} is a symlink, which the lane-files lock never follows`;
+  if (!ds.isDirectory()) return `${d} is not a directory`;
+  if (uid !== null && uid !== 0 && ds.uid !== uid) {
+    return `${d} belongs to another account (uid ${ds.uid}), so the lane-files lock cannot make it 0700`;
+  }
+  try {
+    accessSync(d, fsConstants.W_OK);
+  } catch (e) {
+    return `${d} is not writable by this account (${e.code ?? e.message})`;
+  }
+  let fst;
+  try {
+    fst = lstatSync(p);
+  } catch (e) {
+    return e.code === 'ENOENT' ? null : `${p} could not be examined (${e.code ?? e.message})`;
+  }
+  if (fst.isSymbolicLink()) return `${p} is a symlink, which the lane-files lock never opens`;
+  if (!fst.isFile()) {
+    return `${p} is not a regular file (a FIFO, a directory or a socket), which the lane-files lock never opens`;
+  }
+  try {
+    accessSync(p, fsConstants.W_OK);
+  } catch (e) {
+    return `${p} is not writable by this account (${e.code ?? e.message})`;
+  }
+  return null;
+}
+
+/** The session registry, listed ONCE per op: each session's lane, read from its `<sid>.wrapper` (ccd's field, a
+ *  lane id with no newline). `state` keeps three answers apart: `read`, `absent` (no directory: no session to
+ *  measure) and `unreadable` (it cannot be listed: no session was measured, which doctor must never read as none).
+ *  A `.wrapper` that cannot be read is a session of NO KNOWN LANE, which may be on any lane: it is never skipped, and
+ *  goes in `unlaned` as `wrapper-unreadable` (D-4052's rule for the `codex` check, ccrc-doctor-checks'
+ *  `_dr_cx_sessions`). A name that is not a session id (a dotted temporary file, say) is no session at all. */
+function sessionIndex(reg) {
+  let names;
+  try {
+    names = readdirSync(reg);
+  } catch (e) {
+    return { state: e.code === 'ENOENT' ? 'absent' : 'unreadable', byLane: new Map(), unlaned: [] };
+  }
+  const byLane = new Map();
+  const unlaned = [];
+  for (const n of [...names].sort()) {
+    if (!n.endsWith('.wrapper')) continue;
+    const sid = n.slice(0, -'.wrapper'.length);
+    if (!SESSION_ID_RE.test(sid)) continue;
+    let lane;
+    try {
+      lane = readSessionFile(path.join(reg, n), WRAPPER_FILE_MAX_BYTES).split('\n')[0];
+    } catch {
+      unlaned.push({ session: sid, why: 'wrapper-unreadable' });
+      continue;
+    }
+    if (!byLane.has(lane)) byLane.set(lane, []);
+    byLane.get(lane).push(sid);
+  }
+  return { state: 'read', byLane, unlaned };
+}
+
+/** One session file as one JSON object, or the word for why not: `absent` (ENOENT, the file or its directory) or
+ *  `unreadable` (every other read failure: not a regular file, over its cap, a permission; or text that is not one
+ *  JSON object). Two words, never folded: a session with no sidecar is a home whose status line writes none, a
+ *  broken sidecar is a fault. */
+function readSessionJson(p) {
+  let raw;
+  try {
+    raw = readSessionFile(p, SESSION_FILE_MAX_BYTES);
+  } catch (e) {
+    return { why: e.code === 'ENOENT' ? 'absent' : 'unreadable' };
+  }
+  try {
+    const v = JSON.parse(raw);
+    return isObj(v) ? { value: v } : { why: 'unreadable' };
+  } catch {
+    return { why: 'unreadable' };
+  }
+}
+
+/** The lane's sessions behind a move (`sessionBehind`, the pure rule), from each session's turn marker
+ *  (`<sid>.turn.json`) and its main-loop usage sidecar (`usage/<sid>.json`, never a subagent's `usage/<sid>.agents/`),
+ *  and the sessions it could not judge. A session whose marker or sidecar is absent, or cannot be read as one JSON
+ *  object, is never listed as behind and never silently passed: it goes in `unmeasured` with the first file that
+ *  failed and why (D-5220). A session the rule reads and finds not behind is measured. */
+function sessionsBehindOf(id, ctx, advance, registry) {
+  const behind = [];
+  const unmeasured = [];
+  for (const session of ctx.sessions.byLane.get(id) ?? []) {
+    const turn = readSessionJson(path.join(ctx.reg, `${session}.turn.json`));
+    if (turn.why !== undefined) {
+      unmeasured.push({ session, why: turn.why === 'absent' ? 'marker-absent' : 'marker-unreadable' });
+      continue;
+    }
+    const usage = readSessionJson(path.join(ctx.reg, 'usage', `${session}.json`));
+    if (usage.why !== undefined) {
+      unmeasured.push({ session, why: usage.why === 'absent' ? 'sidecar-absent' : 'sidecar-unreadable' });
+      continue;
+    }
+    const b = sessionBehind({ advance, registry, nowMs: ctx.nowMs, turn: turn.value, usage: usage.value });
+    if (b !== null) behind.push({ session, ...b });
+  }
+  return { behind, unmeasured };
+}
+
+/** One lane's findings, or null for a lane with no registry FILE (not in the population). The order of `blocked`
+ *  is fixed: the lock, the advance file, then the registry, the lane's kind or the catalogue, then each class in
+ *  `CLASSES` order, then the windows file.
+ *   - Every lane in the population: its lock path, and its advance file when that is present and unreadable.
+ *   - A registry that cannot be read or parsed is reported whatever the lane's probe, and ends the lane; each of the
+ *     lane's sessions is then named in `sessionsUnmeasured` with the registry's word, unless no advance file stands
+ *     (nothing has moved), so no session sits in neither list (D-5220).
+ *   - Everything else is for probe `codex` alone. `sessionsBehind` is judged against the advance file as the next
+ *     locked writer will settle it (`reconcilePending`, in memory: a move a crash cut short counts as the move it
+ *     was, D-5188, and nothing is written); `sessionsUnmeasured` names each session it could
+ *     not judge: every one of the lane's, by the advance file's own word (`advance-file-unreadable` or
+ *     `advance-file-invalid`), when that file cannot be read (its moves are unknown), else those `sessionsBehindOf` could not read. With no advance file nothing has moved, so
+ *     no session is read. A row that is not `exec.kind: "codex"` is `lane-not-codex-kind` and nothing more
+ *     (D-5198): it never advances.
+ *   - Per class: `chooseCandidate`'s `pin-grammar` and `shared-family`; a HELD class with a candidate is
+ *     `heldBehind`, with `reason`, one of `CANDIDATE_REASONS` (the words a successful advance records as its
+ *     `cause`, D-8384; `retired` names a fallback that may be older than the pin),
+ *     never `heldBack`, because the hold stopped its retries (D-5221); an unheld class whose
+ *     newest entry `heldBackOf` names is `heldBack`, with the step that failed; and the windows file blocks the lane
+ *     once when some unheld class has a candidate and that file cannot be read. */
+function laneHealth(acc, ctx) {
+  const id = acc.id;
+  const cat = readCatalogue(id);
+  const reg = readRegistry(id, cat.err !== undefined ? null : cat.catalogue);
+  if (reg.err === undefined && reg.invalid === undefined && reg.registry === null) return null;
+  const lane = { id, anthropic: false, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
+  const block = (cls, cause, detail) => { lane.blocked.push({ class: cls, cause, detail }); };
+  const lockWhy = lockUnwritable(ctx.lockTemplate.replace('{id}', id));
+  if (lockWhy !== null) block(null, 'lock-unwritable', lockWhy);
+  const rd = readAdvance(id);
+  if (rd.err !== undefined) block(null, rd.err[0], rd.err[1]);
+  if (reg.err !== undefined || reg.invalid !== undefined) {
+    const word = reg.err !== undefined ? reg.err[0] : reg.dropped !== undefined ? 'effort-dropped' : 'registry-invalid';
+    // D-8865, review 3015 F1: the effort file holds the fallback's rendering and NOT the stored one; two classes on one
+    // model can render both alike, and then the file says nothing about which was written.
+    const onDisk = reg.dropped !== undefined && materialiseCheck(acc, reg.dropped.registry, cat.catalogue).changed?.effort === false
+      && materialiseCheck(acc, storedOf(reg.dropped), cat.catalogue).changed?.effort === true;
+    if (reg.dropped !== undefined) for (const f of reg.dropped.fallbacks) block(f.class, word, effortDroppedDetail(f, onDisk));
+    else block(null, word, reg.err !== undefined ? reg.err[1] : reg.invalid.message);
+    // No session is judged here, so each is named unmeasured, by the registry's word (D-5220; review of R2).
+    if (rd.err !== undefined || rd.advance !== null) {
+      lane.sessionsUnmeasured = (ctx.sessions.byLane.get(id) ?? []).map((session) => ({ session, why: word }));
+    }
+    return lane;
+  }
+  const registry = reg.registry;
+  if (registry.probe !== 'codex') return lane;
+  const adv = rd.err !== undefined || rd.advance === null ? null : reconcilePending(rd.advance, registry).advance;
+  if (rd.err !== undefined) {
+    lane.sessionsUnmeasured = (ctx.sessions.byLane.get(id) ?? []).map((session) => ({ session, why: rd.err[0] }));
+  } else if (adv !== null) {
+    const s = sessionsBehindOf(id, ctx, adv, registry);
+    lane.sessionsBehind = s.behind;
+    lane.sessionsUnmeasured = s.unmeasured;
+  }
+  if (!(isObj(acc.exec) && acc.exec.kind === 'codex')) {
+    const kind = isObj(acc.exec) && typeof acc.exec.kind === 'string' ? acc.exec.kind : 'none';
+    block(null, 'lane-not-codex-kind', `its roster row is exec.kind "${kind}", and only an exec.kind "codex" lane advances`);
+    return lane;
+  }
+  if (cat.err !== undefined) {
+    block(null, cat.err[0], cat.err[1]);
+    return lane;
+  }
+  const win = readWindowsFile(id);
+  let waiting = false;
+  for (const cls of CLASSES) {
+    const c = adv === null ? null : adv.classes[cls];
+    const pin = registry.classes[cls] ?? null;
+    const choice = chooseCandidate({ registry, catalogue: cat.catalogue, cls, family: c === null ? null : c.family,
+      missing: c?.missing, nowMs: ctx.nowMs });
+    for (const w of classWaits({ registry, catalogue: cat.catalogue, cls, c, nowMs: ctx.nowMs })) block(cls, w.cause, w.detail);
+    if (choice.blocked === 'pin-grammar') block(cls, 'pin-grammar', `${pin} is not <vendor>-<version>-<family>`);
+    if (choice.blocked === 'shared-family') {
+      const fam = (c === null ? null : c.family) ?? familyOf(pin);
+      const others = CLASSES.filter((o) => o !== cls && familyOf(registry.classes[o] ?? null) === fam);
+      block(cls, 'shared-family',
+        `family ${fam} is followed by ${[cls, ...others].join(' and ')}, and its newest model is already another class's pin`);
+    }
+    if (c !== null && c.hold !== null) {
+      if (choice.candidate !== null) {
+        lane.heldBehind.push({ class: cls, pin, newer: choice.candidate, reason: choice.reason, hold: c.hold });
+      }
+      continue;
+    }
+    if (choice.candidate !== null && choice.blocked === null) waiting = true;
+    if (c === null) continue;
+    const back = heldBackOf(c, choice.candidate);
+    if (back !== null) {
+      lane.heldBack.push({ class: cls, from: back.from, to: back.to, reason: back.reason ?? null,
+        tries: back.tries ?? 1, since: back.at, canary: back.canary });
+    }
+  }
+  if (waiting && win.state === 'unreadable') block(null, 'windows-unreadable', win.reason);
+  return lane;
+}
+
+/** `advance-health` (auto-advance spec §2.8; plan W3 Task 14): box-wide and READ-ONLY. Every roster row a registry
+ *  can sit on (`canCarryRegistry`) whose registry FILE exists, readable or not, and every Anthropic row
+ *  (`isAnthropicLane`) with an aliases file or an advance file, in roster order; a row with none is not in the
+ *  population. Every lane row carries `anthropic`, the one fact of the lane's kind. `--reg` is the session registry and `--lock-template` the lane-files lock path with `{id}`
+ *  in place of the lane, both from `ccd/ccrc` (`$_SVC_REG`, `_models_lock_path '{id}'`), so this file spells neither
+ *  (D-5219). Each is checked after the roster read (`main` reads the roster before it
+ *  dispatches any op, so with no roster the answer is the roster's own word) and before any lane file or session
+ *  file is read: an absolute `--reg`, and an absolute template holding `{id}` exactly once. */
+function advanceHealthOp(a, json) {
+  if (!path.isAbsolute(a.reg)) {
+    return refuse(2, 'bad-argv', `--reg must be the session registry's absolute path (got ${JSON.stringify(a.reg)}).`);
+  }
+  const tpl = a['lock-template'];
+  if (!path.isAbsolute(tpl) || tpl.split('{id}').length !== 2) {
+    return refuse(2, 'bad-argv',
+      `--lock-template must be an absolute path holding {id} exactly once (got ${JSON.stringify(tpl)}).`);
+  }
+  const at = now();
+  const nowMs = Date.parse(at);
+  if (!Number.isFinite(nowMs)) return refuse(2, 'bad-argv', `the clock answered ${JSON.stringify(at)}, which is not a time.`);
+  const sessions = sessionIndex(a.reg);
+  const ctx = { nowMs, reg: a.reg, sessions, lockTemplate: tpl };
+  const lanes = [];
+  for (const acc of (json.accounts ?? [])) {
+    if (!isObj(acc) || typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id)) continue;
+    const lane = isAnthropicLane(acc) ? anthropicLaneHealth(acc, ctx) : canCarryRegistry(acc) ? laneHealth(acc, ctx) : null;
+    if (lane !== null) lanes.push(lane);
+  }
+  out({ ok: true, op: 'advance-health', now: at, sessions: sessions.state, sessionsUnmeasured: sessions.unlaned, lanes });
+  return 0;
+}
+
+// The Anthropic arm (`deploy/models-anthropic.mjs`, model-class Anthropic arm A2), bound once to the helpers it shares with
+// this file. It never imports this file, so each helper reaches it here and nowhere else.
+const { anthropicOp, anthropicLaneHealth, aliasIdsOf, aliasesReport, aliasesPath } = anthropicArm({
+  HOME, now, out, refuse, isObj, isAnthropicLane, modelsDir, readAdvance, writeAdvance, refuseAdvance, writeJsonFile,
+  sayWhatChanged, readSessionFile, readSessionJson, SESSION_FILE_MAX_BYTES, SESSION_ID_RE, lockUnwritable, describe,
+  readWindowsFile,
+});
+
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
  *  walk: a value that itself starts with `--` is refused, because accepting it
  *  would consume the NEXT token as a key and shift every following pair by one
@@ -1996,6 +2322,8 @@ function main(argv) {
   const pairs = readPairs(argv, spec);
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
+  // Review 2999 A-2: `materialise --refresh`'s value is argv, refused before any file is read, a refused registry's too.
+  if (a.refresh !== undefined && a.refresh !== 'true') return refuse(2, 'bad-argv', `--refresh takes only "true" (got ${a.refresh}).`);
 
   // C6: at op entry, before any of the seven per-account paths are built and
   // before the roster is even read — `rm`'s own unlink loop runs before the
@@ -2023,7 +2351,21 @@ function main(argv) {
   if (opName === 'lanes') {
     const lanes = [];
     for (const acc of (json.accounts ?? [])) {
-      if (!isObj(acc) || !canCarryRegistry(acc)) continue;
+      if (!isObj(acc)) continue;
+      // D-8751: an Anthropic lane is listed too, so the hourly refresh reaches it through this one op. `anthropic` is
+      // the one fact of the lane's kind (`isAnthropicLane`, from the roster): no second kind field. Such a row has no
+      // registry and no catalogue by design, so nothing of either is read; `ids` is its aliases file's two readings
+      // of each class, `null` when that file is absent, unreadable or invalid (`show`'s `aliases` names which).
+      if (isAnthropicLane(acc)) {
+        if (typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id) || typeof acc.configDirSuffix !== 'string') continue;
+        lanes.push({
+          id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: isAnthropicLane(acc),
+          hasRegistry: false, registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null,
+          windowNotices: [], ids: aliasIdsOf(acc.id),
+        });
+        continue;
+      }
+      if (!canCarryRegistry(acc)) continue;
       // `readRegistry` runs REGARDLESS of whether the catalogue read
       // succeeded (round-2 ruling on Task 9's Fix round 1, Finding 2): the
       // old code's `cat.err !== undefined ? { registry: null } : …` treated
@@ -2045,13 +2387,17 @@ function main(argv) {
       // registry doesn't parse still SHOWS UP for a caller to name — and
       // `probe` stays null on that row, because there is no VALID probe kind
       // to report.
-      const registry = reg.registry ?? null;
-      const registryInvalid = reg.err !== undefined ? reg.err[1] : (reg.invalid !== undefined ? reg.invalid.message : null);
+      // Programme wave 3 (effort-level-dropped): a registry refused only for a dropped effort level is still probed,
+      // so the hourly refresh keeps replacing the catalogue, and its `materialise` lowers the level (`effortDropped`).
+      const registry = reg.registry ?? reg.dropped?.registry ?? null;
+      const registryInvalid = reg.err !== undefined ? reg.err[1]
+        : (reg.invalid !== undefined && reg.dropped === undefined ? reg.invalid.message : null);
       lanes.push({
-        id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: false,
+        id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: isAnthropicLane(acc),
         hasRegistry: registry !== null || registryInvalid !== null,
         registryInvalid,
         catalogueInvalid: cat.err !== undefined ? cat.err[1] : null,
+        ...(reg.dropped === undefined ? {} : { effortDropped: reg.dropped.fallbacks }),
         probe: registry === null ? null : registry.probe,
         baseUrl: registry === null || registry.baseUrl === undefined ? null : registry.baseUrl,
         // D-8384: `show`'s `windowNotices`, for every lane in ONE call, which is how `ccrc doctor`'s `models`
@@ -2064,11 +2410,14 @@ function main(argv) {
     return 0;
   }
 
+  // Auto-advance plan W3 Task 14: doctor's one read of every lane's advance state. Box-wide like `lanes` above: it
+  // takes no --id, so it is answered before any one account is looked up.
+  if (opName === 'advance-health') return advanceHealthOp(a, json);
   const account = findAccount(json, a.id);
 
   if (opName === 'rm') {
-    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the six
-    // model-registry files this design owns and clears exactly `LANE_ENV_KEYS`
+    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the seven
+    // model-registry files this design owns (the seventh is an Anthropic lane's aliases file, Task A2.3) and clears exactly `LANE_ENV_KEYS`
     // from the lane's settings: every key a lane block can carry (the eight model
     // keys and, on a Codex lane, `ENABLE_CODE_SECURITY_REVIEW`) — nothing else in
     // that file. Because it runs before the anthropic-lane gate, this is the one
@@ -2085,7 +2434,7 @@ function main(argv) {
     // error: there is no configDirSuffix to find a settings.json through, so
     // the settings step is skipped, and the answer says so.
     const removed = [];
-    for (const p of [registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id),
+    for (const p of [aliasesPath(a.id), registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id),
       windowsPath(a.id), advancePath(a.id)]) {
       try {
         unlinkSync(p);
@@ -2131,15 +2480,21 @@ function main(argv) {
       + `${(json.accounts ?? []).map((x) => x.id).join(', ')}.`);
   }
   if (isAnthropicLane(account)) {
-    // Every op but `show` is refused on such a lane. `show` answers, because
-    // "this lane has all four classes and they are the client's own" is a
-    // useful answer and the one every surface renders (§4.1, decision 4).
+    // Every op but `show` is refused on such a lane, bar the four its OWN PATH admits (model-class Anthropic arm, Task
+    // A2.3, D-8747): `hold`, `release`, `revert` and `aliases-refresh`, which need no registry and run before the
+    // `no-registry` gate below. `show` answers, because "this lane has all four classes and they are the client's own"
+    // is a useful answer and the one every surface renders (§4.1, decision 4).
+    if (ANTHROPIC_OPS.includes(opName)) return anthropicOp(opName, a, account, json);
     if (opName !== 'show') {
       return refuse(1, 'anthropic-lane',
         `account "${a.id}" is an Anthropic lane (telemetry: anthropic): its four classes are Claude `
         + 'Code\'s own defaults, shown read-only, and it carries no class registry. Nothing was '
         + 'written.');
     }
+  } else if (opName === 'aliases-refresh') {
+    return refuse(1, 'not-an-anthropic-lane',
+      `account "${a.id}" is not an Anthropic lane (telemetry: anthropic), and an aliases file is an Anthropic lane's `
+      + 'own. Nothing was written.');
   }
 
   const cat = readCatalogue(a.id);
@@ -2148,8 +2503,13 @@ function main(argv) {
 
   const reg = readRegistry(a.id, catalogue);
   if (reg.err !== undefined) return refuse(1, reg.err[0], reg.err[1]);
-  if (reg.invalid !== undefined) return refuseRegistry(reg.invalid, a.id);
-  let registry = reg.registry;
+  // Programme wave 3 (D-8842): only the hourly refresh's locked `materialise --refresh true` writes the fallback.
+  const refresh = opName === 'materialise' && a.check === undefined && a.refresh === 'true';
+  const lowered = refresh ? reg.dropped : undefined;
+  if (reg.invalid !== undefined && lowered === undefined) return refuseRegistry(reg.invalid, a.id);
+  let registry = reg.invalid === undefined ? reg.registry : lowered.registry;
+  const fell = lowered === undefined ? null : writeRegistry(a.id, lowered.registry);
+  if (fell !== null) return refuse(1, fell[0], fell[1]);
   // Codex-bridge spec §2.7: the lane's measured windows, read ONCE per op, so
   // the answer, the materialise and the drift check agree about them. An
   // unreadable file is a READING here, never a refusal: only the two window
@@ -2246,8 +2606,26 @@ function main(argv) {
       return 0;
     }
     const mat = materialise(account, registry, catalogue, windowsOf(win));
-    if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
-    out({ ok: true, op: 'materialise', id: a.id, wrote: mat.wrote });
+    // D-8842, D-8865: a fallback whose files could not all be written is undone: the stored registry goes back
+    // (`writeRegistry`), then this same path renders the lane's files from it. A failed write-back leaves the registry
+    // at the fallback, which is then applied and recorded like any other.
+    const back = mat.err === undefined || lowered === undefined ? null : writeRegistry(a.id, lowered.stored);
+    const redo = mat.err === undefined || lowered === undefined || back !== null ? {}
+      : materialise(account, storedOf(lowered), catalogue, windowsOf(win));
+    const kept = lowered !== undefined && (mat.err === undefined || back !== null);
+    const rec = refresh && registry !== null ? editAdvance(a.id, (adv) => refreshRecord(adv,
+      { registry, catalogue, fallbacks: kept ? lowered.fallbacks : [], nowMs: Date.parse(now()) })) : null;
+    const fb = kept ? { effortFallback: lowered.fallbacks, effortFallbackRecord: rec } : {};
+    if (mat.err !== undefined) {
+      const [word, undo] = lowered === undefined ? [mat.err[0], ''] : back !== null ? [mat.err[0], ` Writing the stored `
+        + `registry back failed too (${back[0]}), so the registry keeps the effort fallback, applied.`]
+        : redo.err !== undefined ? ['effort-fallback-unrestored', ` The stored registry was written back, but rendering `
+        + `the lane's files from it failed too (${redo.err[0]}: ${redo.err[1]}), so they may carry the effort fallback.`]
+        : [mat.err[0], ' The effort fallback was not applied: the stored registry was written back, and the lane\'s '
+        + 'files rendered from it.'];
+      return refuse(1, word, `${mat.err[1]}${undo}`, undefined, fb);
+    }
+    out({ ok: true, op: 'materialise', id: a.id, wrote: mat.wrote, ...fb });
     return 0;
   }
 
@@ -2598,6 +2976,8 @@ function main(argv) {
   const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1], undefined, recoveredByHand);
   const advanceNote = hand === null ? null : (hand.note ?? settleHandMove(a.id, validated));
+  // D-8842: a hand level that was set, the one the class runs at included, ends the class's recorded fallback.
+  if (opName === 'set-effort') editAdvance(a.id, (adv) => clearEffortFallback(adv, a.class));
   const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue, win),
     ...recoveredByHand };
   if (advanceNote !== null) {

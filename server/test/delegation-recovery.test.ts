@@ -3591,7 +3591,8 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
     }
     const own = new Set(programMembers(CHECKPOINT_SOURCE).map((f) => `./${path.basename(f, '.ts')}.js`));
     const imports = [...new Set(texts.flatMap((t) => importsOf(strip(t.text))).filter((s) => !own.has(s)))];
-    expect(imports.sort()).toEqual(['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
+    // D-8830: plus the end-basis rules, a new L1 module the builder calls (session helpers S1), not a move out of the checkpoint.
+    expect(imports.sort()).toEqual(['../../../shared/api.js', './delegation-compaction.js', './delegation-end-basis.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
   });
   for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {

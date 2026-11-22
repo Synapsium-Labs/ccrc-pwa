@@ -765,9 +765,22 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[106] (linear_drift_cursors, linear_inbound_notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
     // follow-ups, D-8734, D-8735),
     // and MIGRATIONS[107] (mail.urgentAs and mail_urgent, urgent mail, mid-turn mail PR 2),
-    // and MIGRATIONS[108] (overlord_fence_refusals, the gate's fence refusals, Overlord W1 gates B).
-    expect(COORD_SCHEMA_VERSION).toBe(109);
-    expect(MIGRATIONS.length).toBe(109);
+    // and MIGRATIONS[108] (overlord_fence_refusals, the gate's fence refusals, Overlord W1 gates B),
+    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, the hook's reports, Overlord W1 door process B1),
+    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, waiting workers sleep, D-8790),
+    // and MIGRATIONS[111] (the cap-counts-working lane-arm row, the dispatch cap counts only working workers, D-8792),
+    // and MIGRATIONS[112] (runs.admissionWaitSince, lastRefusedAt and admissionWokenAt, the admission wait, D-6095),
+    // and MIGRATIONS[113] (linear_migrations.project, report, putBackAskedAt and reportDoneAt, the per-team migration, Linear
+    // hierarchy wave 7, D-8186),
+    // and MIGRATIONS[114] (approval_parks, four approvals columns and the approval-park lane row, approvals PR 3),
+    // and MIGRATIONS[115] (project_linking.teamWorkspace, teamSuggestions and teamCallId, the project row's Linear workspace,
+    // Linear hierarchy wave 8),
+    // and MIGRATIONS[116] (runs.inPlace, the in-place bind, D-6096),
+    // and MIGRATIONS[117] (delegation_activities.endBasis, what a broker activity's end rests on, session helpers S1, D-8830),
+    // and MIGRATIONS[118] (claude_builds.fails, a build's failed captures, so ccrc retries up to a ceiling),
+    // and MIGRATIONS[119] (continuity_quiz_status, the weekly unattended replay quiz's last word, run 3212).
+    expect(COORD_SCHEMA_VERSION).toBe(120);
+    expect(MIGRATIONS.length).toBe(120);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -902,8 +915,19 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[106] (the drift cursors, the inbound notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
     // follow-ups),
     // and MIGRATIONS[107] (mail.urgentAs, mid-turn mail PR 2),
-    // and MIGRATIONS[108] (overlord_fence_refusals, Overlord W1 gates B); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(109);
+    // and MIGRATIONS[108] (overlord_fence_refusals, Overlord W1 gates B),
+    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, Overlord W1 door process B1),
+    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, D-8790),
+    // and MIGRATIONS[111] (the cap-counts-working lane-arm row, D-8792),
+    // and MIGRATIONS[112] (the admission wait columns, D-6095),
+    // and MIGRATIONS[113] (the per-team migration's columns, Linear hierarchy wave 7),
+    // and MIGRATIONS[114] (approval_parks, approvals PR 3),
+    // and MIGRATIONS[115] (project_linking's three linking columns, Linear hierarchy wave 8),
+    // and MIGRATIONS[116] (runs.inPlace, D-6096),
+    // and MIGRATIONS[117] (delegation_activities.endBasis, D-8830),
+    // and MIGRATIONS[118] (claude_builds.fails),
+    // and MIGRATIONS[119] (continuity_quiz_status, run 3212); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(120);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1170,7 +1194,7 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     expect(PREDECESSOR, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
     expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     expect(SLOT).toBeLessThanOrEqual(MIGRATIONS.length);
-    expect(MIGRATIONS.filter((m) => m.includes('delegation_')), 'one migration, not several').toHaveLength(1);
+    expect(MIGRATIONS.filter((m) => m.includes('CREATE TABLE delegation_')), 'one migration, not several').toHaveLength(1);
     const ddl = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
     const statements = ddl.split(';').map((s) => s.trim()).filter((s) => s !== '');
     expect(statements.every((s) => /^CREATE (UNIQUE )?(TABLE|INDEX) /.test(s)),
@@ -1223,6 +1247,7 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
       ['activityId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['sourceKind', 'TEXT', 1, 0],
       ['upstreamId', 'TEXT', 1, 0], ['identityJournalId', 'TEXT', 1, 0], ['displayName', 'TEXT', 0, 0],
       ['executionState', 'TEXT', 1, 0], ['openedAt', 'INTEGER', 1, 0], ['endedAt', 'INTEGER', 0, 0], ['lastEventAt', 'INTEGER', 1, 0],
+      ['endBasis', 'TEXT', 0, 0],
     ]);
     expect(cols(db, 'delegation_leases')).toEqual([
       ['leaseId', 'TEXT', 1, 1], ['generation', 'INTEGER', 1, 0], ['creatingJournalSequence', 'INTEGER', 1, 0],
@@ -2439,7 +2464,8 @@ describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-fi
     const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
     expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
       'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
-      'answeredBy', 'toolUseId', 'corrected', 'denyCurrent', 'commandWords', 'literalInRoot']);
+      'answeredBy', 'toolUseId', 'corrected', 'denyCurrent', 'commandWords', 'literalInRoot', 'parkWord', 'parkKey', 'fetchedAt',
+      'wouldPark']);
     db.close();
   });
 });
@@ -2684,8 +2710,10 @@ describe('coord.db: continuity_generations and continuity_cursor, the generation
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
-      .toEqual([{ lane: 'anchor-slot', choice: 'shadow', updatedAt: 0 }, { lane: 'continuity', choice: 'shadow', updatedAt: 0 },
-        { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 }, { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
+      .toEqual([{ lane: 'anchor-slot', choice: 'shadow', updatedAt: 0 }, { lane: 'approval-park', choice: 'shadow', updatedAt: 0 },
+        { lane: 'cap-counts-working', choice: 'shadow', updatedAt: 0 },
+        { lane: 'continuity', choice: 'shadow', updatedAt: 0 }, { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 },
+        { lane: 'roster-card', choice: 'live', updatedAt: 7 }, { lane: 'working-idle-sleep', choice: 'shadow', updatedAt: 0 }]);
     db.close();
   });
 });
@@ -2870,6 +2898,92 @@ describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
     expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: the working-idle-sleep lane-arm row (waiting workers sleep, D-8790)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes("VALUES ('working-idle-sleep', 'shadow', 0)")) + 1;
+  const ENTRY = /^INSERT OR IGNORE INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('working-idle-sleep', 'shadow', 0\);$/;
+  it('ONE SEED ROW, shadow, nothing else, the entry after the hook\'s reports (Overlord W1 door process B1)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_hook_reports')) + 2);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the row lands shadow, and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'anchor-slot'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'working-idle-sleep'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+
+  it('a database one version back that already carries the row keeps its stored choice and boots (OR IGNORE)', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 9 WHERE lane = 'working-idle-sleep'");
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'working-idle-sleep'").get()).toEqual({ choice: 'live', updatedAt: 9 });
+    db.close();
+  });
+});
+
+describe('coord.db: the cap-counts-working lane-arm row (the dispatch cap counts only working workers, D-8792)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes("VALUES ('cap-counts-working', 'shadow', 0)")) + 1;
+  const ENTRY = /^INSERT OR IGNORE INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('cap-counts-working', 'shadow', 0\);$/;
+  it('ONE SEED ROW, shadow, nothing else, the entry after the waiting workers\' sleep row (D-8790)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes("VALUES ('working-idle-sleep', 'shadow', 0)")) + 2);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the row lands shadow, and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'anchor-slot'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'cap-counts-working'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+
+  it('a file one version back that already holds the row keeps it as it was, and the migration does not refuse', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'live', 9)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'cap-counts-working'").get()).toEqual({ choice: 'live', updatedAt: 9 });
     db.close();
   });
 });

@@ -18,6 +18,8 @@ import {
 import { VIEWER_OPEN_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES, type FleetSession, type RunState } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import { CoordStore } from '../src/coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR } from '../src/coord/delivery.js';
+import { mailHoldsSleep } from '../src/sleep.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { Viewers } from '../src/viewer.js';
 import { Bus } from '../src/bus.js';
@@ -252,6 +254,33 @@ describe('hibernatePass: the store reads, on a real store', () => {
     expect((await pass(f))[0]!.verdict).not.toEqual({ act: 'hold', reason: 'mail' });
     send();
     expect((await pass(f))[0]!.verdict).toEqual({ act: 'hold', reason: 'mail' });
+  });
+
+  it('a delivery this server GAVE UP on does not hold, though the mailbox still shows it; an outstanding one beside it still does', async () => {
+    const f = fake();
+    const send = (): number => {
+      const m = f.coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId: ID, runId: null,
+        kind: 'status', subject: 's', body: 'b', artifacts: [] });
+      return f.coord.queueDelivery(m.id, ID, 'env').id;
+    };
+    const given = send();
+    expect(f.coord.rejectDelivery(given, 'undeliverable', MAIL_REPLAY_CEILING_ERROR).changed).toBe(true);
+    // the mailbox read still answers it (a person should look at it), which is what held the session before
+    expect(f.coord.outstandingMailFor(ID).map((m) => m.state)).toEqual(['rejected']);
+    expect((await pass(f))[0]!.verdict).not.toEqual({ act: 'hold', reason: 'mail' });
+    send();
+    expect((await pass(f))[0]!.verdict).toEqual({ act: 'hold', reason: 'mail' });
+  });
+});
+
+describe('mailHoldsSleep: which mailbox rows keep a session awake', () => {
+  it('an outstanding row holds, a given-up or acked one does not, a parked one does not, and a state this build cannot name holds', () => {
+    expect(mailHoldsSleep({ state: 'queued', parkedAt: null })).toBe(true);
+    expect(mailHoldsSleep({ state: 'delivered' })).toBe(true);
+    expect(mailHoldsSleep({ state: 'rejected', parkedAt: null })).toBe(false);
+    expect(mailHoldsSleep({ state: 'acked' })).toBe(false);
+    expect(mailHoldsSleep({ state: 'queued', parkedAt: 1 })).toBe(false);
+    expect(mailHoldsSleep({ state: 'unknown' })).toBe(true);
   });
 });
 

@@ -1152,6 +1152,15 @@ const W4_PWA_FILES = [
   'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
   'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
   'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+  // Desktop polish C48 (D-8782): the worktrees of a session moved from the fleet list into its own details; these three files
+  // draw and label them, and name the wire types and the words module like the files above. No quote mark in a comment here:
+  // the health test mirrors this block by reading every quoted string in it.
+  'pwa/src/fleet/WorktreeControls.tsx', 'pwa/src/fleet/sessionWorktrees.ts', 'pwa/src/session/SessionWorktrees.tsx',
+  // Desktop polish H4 (D-8828): the Archive screen holds the work no session owns. The section, the screen that draws it and the
+  // route that reads the frame into it name the wire types and the words module like the files above.
+  'pwa/src/fleet/ArchiveUnownedWork.tsx', 'pwa/src/screens/ArchiveScreen.tsx', 'pwa/src/app.tsx',
+  // Fix round 1: the Archived row at the fleet foot is the door to the section, so the fleet screen reads the frame for its count.
+  'pwa/src/screens/FleetScreen.tsx',
 ] as const;
 /** Wave 5 PR8c's PWA files (D-8114): the Settings card over the adoption switch. It reads the switch's door and the lane's counts
  *  and list (`GET /api/coord/delegation-adopt`), so its files name the door and the wire's types; no string they make public says
@@ -1687,18 +1696,19 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: main's twenty-three (the twenty-third, `models`, is model classes R3's W4a op, D-8687,
+    // the request ops are a small closed set: main's twenty-four (the twenty-fourth, `testbox-capture`, is the build capture
+    // runner's op, spec 2026-11-22 §2.5; the twenty-third, `models`, is model classes R3's W4a op, D-8687,
     // declared as two arms of one request type, so the scan below meets its word twice; the twenty-second, `overlord-history`, is the Overlord W1 history
     // op, its PR A; the twentieth, `backup`, is backup health's D-7858; the twenty-first, `testbox-admin`, is the test box connect plan's TC11, D-8166; the eighteenth and nineteenth, `testbox` and `testbox-tools-sync`, are the test box plan's TB9, D-7411; the seventeenth, `pressure`, is the host-pressure read of #1170; the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
     // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
-    // interface-shaped parse cannot see), and exactly main's twenty-three members of the union
+    // interface-shaped parse cannot see), and exactly main's twenty-four members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
       'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk', 'testbox-admin', 'pressure', 'testbox', 'testbox-tools-sync', 'backup',
-      'overlord-history', 'models', 'models']);
+      'overlord-history', 'models', 'models', 'testbox-capture']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
       'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq', 'PressureReq',
-      'TestboxReq', 'TestboxToolsSyncReq', 'TestboxAdminReq', 'BackupReq', 'OverlordHistoryReq', 'ModelsReq']);
+      'TestboxReq', 'TestboxToolsSyncReq', 'TestboxAdminReq', 'BackupReq', 'OverlordHistoryReq', 'ModelsReq', 'TestboxCaptureReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's

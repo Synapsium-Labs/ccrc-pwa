@@ -1287,12 +1287,18 @@ describe('ccrc models <id> hold, release and revert (auto-advance spec §2.7, D1
     expect(oneObject(run(['models', ID, verb, 'opus', 'extra']))['error']).toBe('unknown-argument');
   });
 
-  it('an Anthropic lane refuses all three', () => {
-    for (const verb of ['hold', 'release', 'revert']) {
-      const r = run(['models', ROSTER.accounts[1]!.id, verb, 'opus']);
-      expect(r.code, verb).toBe(1);
-      expect(oneObject(r)['error']).toBe('anthropic-lane');
-    }
+  // Model-class Anthropic arm A2.3: an Anthropic lane has its own path for the three (no `anthropic-lane` refusal). Until
+  // ccd applies a held id at launch (Task A3.4), hold and revert refuse at that path's door, writing nothing (D-8820);
+  // release stays open, and with nothing held it has nothing to do.
+  it('an Anthropic lane takes its own path: hold and revert refuse alias-hold-not-applied, release has nothing to do', () => {
+    const verb = (v: string): { code: number; body: Record<string, unknown> } => {
+      const r = run(['models', ROSTER.accounts[1]!.id, v, 'opus']);
+      return { code: r.code, body: oneObject(r) };
+    };
+    expect(verb('hold')).toMatchObject({ code: 1, body: { error: 'alias-hold-not-applied' } });
+    expect(verb('revert')).toMatchObject({ code: 1, body: { error: 'alias-hold-not-applied' } });
+    expect(fs.existsSync(join(home, '.ccrc', 'models', `${ROSTER.accounts[1]!.id}.advance.json`))).toBe(false);
+    expect(verb('release')).toMatchObject({ code: 0, body: { ok: true, changed: false } });
   });
 
   it('show names a held class in its summary, with the act and the time', () => {
@@ -1691,7 +1697,9 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
       expect(run(['models', id, 'init', 'codex']).code).toBe(0);
     }
     const r = run(['models', 'refresh', '--all'], { CHATGPT_TOKEN_DIR: poisonedDir(), CCRC_CODEX_PYTHON: poison });
-    expect(rowsOf(r).map((x) => [x['id'], x['ok']])).toEqual([['codex-a', true], ['codex-b', true]]);
+    // The two Anthropic rows of the roster come after the Codex rows (D-8751; their step runs after the Codex steps).
+    expect(rowsOf(r).map((x) => [x['id'], x['ok']]))
+      .toEqual([['codex-a', true], ['codex-b', true], ['claude', true], ['claude-a', true]]);
     expect(r.code, 'refresh --all').toBe(0);
     const calls = probeRuntimeCalls(pr.rec);
     expect(calls.map((c) => c.env['CHATGPT_TOKEN_DIR']).sort())
@@ -2085,15 +2093,18 @@ describe('ccrc models refresh', () => {
     run(['models', 'router', 'init', 'openrouter']);
     const r = refreshFaked('--all');
     const refreshed = oneObject(r)['refreshed'] as { id: string }[];
-    expect(refreshed.map((x) => x.id)).toEqual(['router', 'codex-a']);
+    // The Anthropic lanes follow the Codex rows (D-8751): their step has no probe and runs after the Codex steps.
+    expect(refreshed.map((x) => x.id)).toEqual(['router', 'codex-a', 'claude', 'claude-a']);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude-a.json'))).toBe(false);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude.json'))).toBe(false);
   });
 
-  it('--all with NO registries anywhere is an empty, successful run', () => {
+  it('--all with NO registries anywhere is a successful run of the Anthropic lanes\' aliases step alone (D-8751)', () => {
+    // This harness runs with the advance budget at 0, so each Anthropic lane's step is deferred, not failed.
     const r = run(['models', 'refresh', '--all']);
     expect(r.code).toBe(0);
-    expect(oneObject(r)['refreshed']).toEqual([]);
+    expect(oneObject(r)['refreshed']).toEqual(['claude', 'claude-a'].map((id) => (
+      { id, ok: true, aliases: { ok: false, error: 'budget-deferred', moved: [] } })));
   });
 
   it('--all exits 1 when any lane failed, and still reports the ones that worked', async () => {
@@ -2125,7 +2136,7 @@ describe('ccrc models refresh', () => {
     const b = oneObject(r);
     expect(b['ok']).toBe(false);
     const rows = b['refreshed'] as { id: string; ok: boolean; reason?: string; litellm?: string }[];
-    expect(rows).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
+    expect(rows.filter((x) => x.id === 'codex-a')).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
     expect(rows[0]!.reason!.length).toBeGreaterThan(0);
     // The probe's own effect stands (§6.1 amendment: a failed materialise
     // does not undo a successful catalogue fetch) — only the derived files
@@ -2148,10 +2159,14 @@ describe('ccrc models refresh', () => {
     expect(String(oneObject(r)['detail'])).toMatch(/init/);
   });
 
-  it('refuses an anthropic lane by name — there is nothing to probe (§5)', () => {
+  it('an anthropic lane named on its own runs its aliases step, never a probe (§5, D-8751)', () => {
+    // Before D-8751 this was refused `no-such-lane`: there is no registry to probe. The lane's own step runs instead
+    // (budget 0 in this harness defers it, so the row says so and nothing is written).
     const r = run(['models', 'refresh', 'claude-a']);
-    expect(r.code).toBe(1);
-    expect(String(oneObject(r)['detail'])).toMatch(/Claude Code's own defaults/);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['refreshed']).toEqual([
+      { id: 'claude-a', ok: true, aliases: { ok: false, error: 'budget-deferred', moved: [] } }]);
+    expect(laneCalls()).toEqual([]);
   });
 
   it('passes a compatible lane\'s baseUrl to the probe', () => {
@@ -2280,6 +2295,113 @@ describe('ccrc models refresh', () => {
     expect(r.code).toBe(1);
     expect(oneObject(r)['error']).toBe('registry-invalid');
     expect(String(oneObject(r)['detail'])).toContain('subagent');
+  });
+});
+
+// Programme wave 3, effort-level-dropped: when a newer catalogue no longer offers an effort level a class stores, the
+// registry stopped parsing against it, the refresh's materialise refused, and every later hour `lanes` read the lane as
+// registry-invalid and never probed it again, so its catalogue was never replaced. Now the refresh keeps running for
+// the lane, and the class falls back to the next level down, recorded on its advance file.
+describe('ccrc models refresh: a stored effort level the new catalogue drops (programme wave 3, effort-level-dropped)', () => {
+  /** CODEX_RAW with the opus class's model (`gpt-5.6-sol`) no longer offering `max`, and optionally one more model. */
+  const dropMax = (extra: boolean): string => {
+    const raw = JSON.parse(fs.readFileSync(CODEX_RAW, 'utf8')) as { models: Record<string, unknown>[] };
+    for (const m of raw.models) {
+      if (m['slug'] === 'gpt-5.6-sol') {
+        m['supported_reasoning_levels'] = (m['supported_reasoning_levels'] as { effort: string }[])
+          .filter((l) => l.effort !== 'max');
+      }
+    }
+    if (extra) raw.models.push({ ...raw.models.find((m) => m['slug'] === 'gpt-5.5')!, slug: 'gpt-5.5-extra', display_name: 'gpt-5.5-extra' });
+    const p = join(home, `raw-dropped-${extra ? 'b' : 'a'}.json`);
+    fs.writeFileSync(p, JSON.stringify(raw));
+    return p;
+  };
+  const models = (f: string): any => JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', f), 'utf8'));
+
+  it('the refresh keeps running for the lane, the class falls back to an offered level, and the advance file records it', async () => {
+    await seatCodexA();
+    expect(models('codex-a.classes.json').effort.opus).toBe('max');
+    const r1 = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(false) });
+    expect(r1.code, r1.stdout + r1.stderr).toBe(0);
+    // D-8842: never silent: the row says what was written, and that the advance file recorded it.
+    expect((oneObject(r1)['refreshed'] as Record<string, unknown>[])[0]).toMatchObject({ id: 'codex-a', ok: true,
+      effortFallback: [{ class: 'opus', model: 'gpt-5.6-sol', from: 'max', to: 'xhigh' }], effortFallbackRecord: 'recorded' });
+    // gpt-6-astra still lists max, so it ranks the level: the next one down that gpt-5.6-sol offers is xhigh.
+    expect(models('codex-a.classes.json').effort.opus).toBe('xhigh');
+    expect(models('codex-a.effort.json').byModel['gpt-5.6-sol']).toBe('xhigh');
+    expect(models('codex-a.advance.json').classes.opus.effortFallback)
+      .toMatchObject({ model: 'gpt-5.6-sol', from: 'max', to: 'xhigh' });
+    // The next hour probes the lane again, so a changed catalogue reaches it.
+    const r2 = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(true) });
+    expect(r2.code, r2.stdout + r2.stderr).toBe(0);
+    expect((models('codex-a.json').models as { id: string }[]).map((m) => m.id)).toContain('gpt-5.5-extra');
+    expect((oneObject(r2)['refreshed'] as Record<string, unknown>[])[0], 'nothing more to fall back')
+      .not.toHaveProperty('effortFallback');
+  });
+
+  it('a lane with no advance file still falls back, and its row says the record has nowhere to go', async () => {
+    await seatCodexA();
+    fs.rmSync(join(home, '.ccrc', 'models', 'codex-a.advance.json'), { force: true });
+    const r = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(false) });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((oneObject(r)['refreshed'] as Record<string, unknown>[])[0]).toMatchObject({ ok: true,
+      effortFallback: [{ class: 'opus', from: 'max', to: 'xhigh' }], effortFallbackRecord: 'no-advance-file' });
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'codex-a.advance.json')), 'none is created for it').toBe(false);
+  });
+
+  it('a LiteLLM render that fails after the fallback was written: the failed row still names the fallback (D-8865)', async () => {
+    await seatCodexA();
+    const stub = '_models_litellm() { printf \'%s\\n\' \'{"ok":false,"detail":"the proxy could not be stopped"}\'; return 1; }';
+    const r = sourced(`${stub}\ncmd_models refresh codex-a`, ['lock', 'ours', 'stop', 'start'],
+      { CCRC_MODELS_PROBE_FIXTURE: dropMax(false) });
+    expect(r.code, r.stderr).toBe(1);
+    expect((oneObject(r)['refreshed'] as Record<string, unknown>[])[0]).toEqual({ id: 'codex-a', ok: false,
+      reason: 'the proxy could not be stopped', effortFallback: [{ class: 'opus', model: 'gpt-5.6-sol', from: 'max', to: 'xhigh' }],
+      effortFallbackRecord: 'recorded' });
+    expect(models('codex-a.classes.json').effort.opus, 'the materialise that wrote it succeeded').toBe('xhigh');
+  });
+});
+
+describe('ccrc models refresh: the measured two-hour flap of a missing pin (programme wave 3, backward-move, D-8838)', () => {
+  const T0 = '2026-11-10T22:16:58Z';
+  const later = (m: number): string => new Date(Date.parse(T0) + m * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  /** CODEX_RAW with an older sol model beside the opus pin, and the pin itself left out unless `listed`. */
+  const raw = (listed: boolean): string => {
+    const r = JSON.parse(fs.readFileSync(CODEX_RAW, 'utf8')) as { models: Record<string, unknown>[] };
+    const pin = r.models.find((m) => m['slug'] === 'gpt-5.6-sol')!;
+    r.models.push({ ...pin, slug: 'gpt-5.5-sol', display_name: 'gpt-5.5-sol' });
+    if (!listed) r.models = r.models.filter((m) => m['slug'] !== 'gpt-5.6-sol');
+    const p = join(home, `raw-flap-${listed ? 'listed' : 'gone'}.json`);
+    fs.writeFileSync(p, JSON.stringify(r));
+    return p;
+  };
+  const models = (f: string): any => JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', f), 'utf8'));
+  const advance = (): any => models('codex-a.advance.json');
+  /** One hourly refresh, at `m` minutes after the first sighting. */
+  const hour = (m: number, listed: boolean): Record<string, unknown> => {
+    const r = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: raw(listed), CCRC_MODELS_NOW: later(m) });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    return (oneObject(r)['refreshed'] as Record<string, unknown>[])[0]!;
+  };
+
+  it('two sightings without the pin, listed again on the third: the record follows each one, and nothing moves', async () => {
+    await seatCodexA();
+    expect(hour(0, false)).toMatchObject({ id: 'codex-a', ok: true });
+    expect(advance().classes.opus.missing).toEqual({ model: 'gpt-5.6-sol', since: T0, seen: T0 });
+    hour(60, false);
+    expect(advance().classes.opus.missing).toEqual({ model: 'gpt-5.6-sol', since: T0, seen: later(60) });
+    hour(120, true);
+    expect(advance().classes.opus.missing, 'listed again: the run ends').toBeUndefined();
+    expect(models('codex-a.classes.json').classes.opus).toBe('gpt-5.6-sol');
+    expect(advance().classes.opus.history, 'no move, and no failed try').toEqual([]);
+  });
+
+  it('a missed hour between two sightings restarts the run at the second', async () => {
+    await seatCodexA();
+    hour(0, false);
+    hour(180, false);
+    expect(advance().classes.opus.missing).toEqual({ model: 'gpt-5.6-sol', since: later(180), seen: later(180) });
   });
 });
 
@@ -3336,6 +3458,45 @@ describe('the hourly refresh lowers a refused window on a direct lane (codex-bri
     expect(oneObject(r)['refreshed']).toEqual([{ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered',
       lowered: [{ model: OPUS, from: 400000, to: 225000, refused: 250000 }] }]);
     expect(eighthKey()).toBe('225000');
+  });
+
+  // Programme wave 3 (D-8842), the precedence in the first hour after a dropped effort level: the lowering pass runs
+  // before the probe, on the registry as stored, which is still refused, so it fails that hour and says so; the
+  // probe's materialise then writes the fallback; the lowering waits for the next hour, and the fallback never hides
+  // its failure (both are on the row, which stays ok, as any lowering failure leaves it).
+  it('the first hour after a dropped level: the refused lowering is named beside the fallback, and the next hour lowers', async () => {
+    await seatLane('direct', 250000);
+    const drop = (): string => {
+      const r = JSON.parse(fs.readFileSync(CODEX_RAW, 'utf8')) as { models: Record<string, unknown>[] };
+      for (const m of r.models) {
+        if (m['slug'] === OPUS) {
+          m['supported_reasoning_levels'] = (m['supported_reasoning_levels'] as { effort: string }[])
+            .filter((l) => l.effort !== 'max');
+        }
+      }
+      const p = join(home, 'raw-dropped.json');
+      fs.writeFileSync(p, JSON.stringify(r));
+      return p;
+    };
+    // An earlier hour's probe (an older build's, whose materialise refused the dropped level) left the new catalogue.
+    const pr = sourced(`_models_refresh_one ${ID} codex ""`, ['lock', 'ours', 'stop', 'start'],
+      { CCRC_MODELS_PROBE_FIXTURE: drop() });
+    expect(pr.code, pr.stdout + pr.stderr).toBe(0);
+    const r1 = refreshFaked(ID, { CCRC_MODELS_PROBE_FIXTURE: drop() });
+    expect(r1.code, r1.stdout + r1.stderr).toBe(0);
+    const row1 = (oneObject(r1)['refreshed'] as Record<string, unknown>[])[0]!;
+    expect(row1).toMatchObject({ id: ID, ok: true, effortFallback: [{ class: 'opus', model: OPUS, from: 'max' }],
+      effortFallbackRecord: 'recorded' });
+    expect(String(row1['lowerFailed'])).toMatch(/effort/);
+    expect(row1).not.toHaveProperty('lowered');
+    expect(tokensOf(OPUS)).toBe(400000);
+    const r2 = refreshFaked(ID, { CCRC_MODELS_PROBE_FIXTURE: drop() });
+    expect(r2.code, r2.stdout + r2.stderr).toBe(0);
+    const row2 = (oneObject(r2)['refreshed'] as Record<string, unknown>[])[0]!;
+    expect(row2).toMatchObject({ id: ID, probe: 'codex', ok: true, count: 9,
+      lowered: [{ model: OPUS, from: 400000, to: 225000, refused: 250000 }] });
+    expect(Object.keys(row2).filter((k) => k === 'lowerFailed' || k === 'effortFallback'), 'nothing left to fall back').toEqual([]);
+    expect(tokensOf(OPUS)).toBe(225000);
   });
 
   it('a lowering the op refuses is named on the row, and never fails it', async () => {

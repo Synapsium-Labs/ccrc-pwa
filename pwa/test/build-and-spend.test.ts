@@ -27,7 +27,7 @@ import { ts } from '../../server/test/scan/parse';
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, SessionUsage } from '../../shared/api';
 import {
-  COORDINATOR_WORD, coordinatorRole, headerFacts, sessionFacts as fleetFacts,
+  COORDINATOR_BADGE, COORDINATOR_WORD, coordinatorRole, headerFacts, sessionFacts as fleetFacts,
 } from '../src/fleet/sessionFacts';
 import { sessionFacts } from '../src/session/buildAndSpend';
 import { fleetSession } from './fleetFixture';
@@ -152,7 +152,7 @@ describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
     const text = (roleFacts[0] as ts.ObjectLiteralExpression).properties.find((p) => p.name?.getText() === 'text');
     expect(text !== undefined && ts.isPropertyAssignment(text) ? text.initializer.getText() : null).toBe('COORDINATOR_WORD');
 
-    // SessionDetails.tsx imports the word and spells it nowhere: no JSX text and no string that is the whole word.
+    // SessionHeader.tsx (the title line's badge) and SessionDetails.tsx spell the word nowhere: no JSX text and no string that is the whole word.
     const details = path.join(SRC, 'session', 'SessionDetails.tsx');
     // The module `name` is imported from, under its own name (an alias either way is refused), or null.
     const importedFrom = (file: string, name: string): string | null => {
@@ -165,9 +165,16 @@ describe('coordinatorRole and COORDINATOR_WORD (D-6714)', () => {
       }
       return null;
     };
-    expect(importedFrom(details, 'COORDINATOR_WORD'), 'SessionDetails.tsx imports COORDINATOR_WORD from fleet/sessionFacts, its one owner').toBe('../fleet/sessionFacts');
-    const spelled = nodes(details, (n) => isCoordinatorLiteral(n) || (ts.isJsxText(n) && n.text.trim() === 'coordinator'));
-    expect(spelled.map((n) => n.getText()), 'SessionDetails.tsx spells the word').toEqual([]);
+    // D-8817, moved by D-8834 (C51): the badge is drawn on the session's TITLE line, by `HeaderTitleText` in SessionHeader.tsx, spread
+    // from `COORDINATOR_BADGE` (its label is COORDINATOR_WORD, in sessionFacts.ts); the details row no longer imports it.
+    const header = path.join(SRC, 'session', 'SessionHeader.tsx');
+    expect(importedFrom(header, 'COORDINATOR_BADGE'), 'SessionHeader.tsx imports COORDINATOR_BADGE from fleet/sessionFacts, its one owner').toBe('../fleet/sessionFacts');
+    expect(importedFrom(details, 'COORDINATOR_BADGE'), 'SessionDetails.tsx draws no badge any more').toBeNull();
+    expect(COORDINATOR_BADGE.label).toBe(COORDINATOR_WORD);
+    for (const file of [header, details]) {
+      const spelled = nodes(file, (n) => isCoordinatorLiteral(n) || (ts.isJsxText(n) && n.text.trim() === 'coordinator'));
+      expect(spelled.map((n) => n.getText()), `${path.basename(file)} spells the word`).toEqual([]);
+    }
 
     // sessionEntries.ts (the palette's session builder) imports the word; its two wording arrows `groupWords` and
     // `labelWords` reference it and hold no string or template text that spells it; nothing else in the file does.

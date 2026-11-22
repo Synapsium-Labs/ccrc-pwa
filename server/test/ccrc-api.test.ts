@@ -246,13 +246,22 @@ describe('the closed route table', () => {
     // The linking standard's read (D-8147): the pane's own project's team key, override and measured visibility. The identity
     // rides the query, as the Linear rows' does, so it runs in a pane.
     [['linking', 'show'], 'GET', '/api/linking'],
+    // A coordinator's suggestion of a team (D-8808): a POST whose body the caller writes and whose identity this client fills, so it runs in a pane.
+    [['linking', 'suggest', '--json', '-'], 'POST', '/api/linking/suggest'],
+    // The Overlord's confirm of a team candidate (D-8809): the suggestion row's form; the door process sends it fenced.
+    [['linking', 'confirm', '--json', '-'], 'POST', '/api/linking/confirm'],
     // The start report (Overlord W1a): the session hook's report of its own SessionStart.
     [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
     [['sessions', 'loads', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start/loads'],
     [['sessions', 'act-key', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/act-key'],
+    [['sessions', 'report', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/report'],
     [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
     // The replay quiz's record (Overlord W1a quiz record): the operator's `ccrc quiz-record` posts its body through this row.
     [['quiz', 'record'], 'POST', '/api/continuity/quiz-runs'],
+    // The unattended confirmation and the coordinator's Live (run 3212).
+    [['quiz', 'confirm', '12'], 'POST', '/api/continuity/quiz-runs/12/confirm'],
+    [['quiz', 'live'], 'POST', '/api/continuity/quiz-baseline/live'],
+    [['quiz', 'status'], 'POST', '/api/continuity/quiz-status'],
     // The note door (Overlord W1a, the notes piece): a session's own notes; every row fills the pane's pair, so each runs in a pane.
     [['note', 'add', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
     [['note', 'close', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
@@ -277,6 +286,7 @@ describe('the closed route table', () => {
     // The inbound path's two (D-8183): `take` by programme slug, `triage` by Linear team key; both carry the pane's identity in the query.
     [['plan', 'take', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/take'],
     [['plan', 'triage', 'AAA'], 'POST', '/api/teams/AAA/plan/triage'],
+    [['plan', 'map-propose', 'AAA'], 'POST', '/api/teams/AAA/plan/map'],
     // The timers (Overlord W1a, the timers piece): parsed whole by `parse_timer`, every one fills the pane's pair, so each runs in a pane.
     [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
     [['timer', 'list'], 'GET', '/api/timers'],
@@ -341,8 +351,11 @@ describe('the closed route table', () => {
     // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
     // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
     // Eighty-nine since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
-    // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1).
-    expect(keys).toHaveLength(91);
+    // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1);
+    // ninety-two since `sessions.report` (Overlord W1 door process B1).
+    // Ninety-three since `plan.map-propose` (the per-team migration, D-8186); ninety-four since `linking.suggest` (D-8808);
+    // ninety-five since `linking.confirm` (D-8809); ninety-eight since `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the unattended quiz).
+    expect(keys).toHaveLength(98);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -357,7 +370,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -527,19 +540,19 @@ describe('the four claimant rows send the question door family, and refuse local
       ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
       ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
-      ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'],
+      ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'], ['linking', 'suggest', '--json', '-'], ['linking', 'confirm', '--json', '-'],
       ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
       ['plan', 'phase-ref', 'prog-a', '--json', '-'], ['plan', 'ticket-done', 'prog-a', '--json', '-'],
-      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'],
-      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'], ['plan', 'map-propose', 'AAA', '--json', '-'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'report', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
       ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
       ['programme', 'remaining', 'prog-a', '--json', '-'],
-      ['quiz', 'record', '--json', '-'],
+      ['quiz', 'record', '--json', '-'], ['quiz', 'confirm', '12', '--json', '-'], ['quiz', 'live', '--json', '-'], ['quiz', 'status', '--json', '-'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');
@@ -1980,7 +1993,7 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'));
     plantPane('demo-ws');
     for (const args of [['plan', 'show', 'prog-a'], ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
-      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-']]) {
+      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'], ['plan', 'map-propose', 'AAA', '--json', '-']]) {
       const r = await run(args, '{}', { TMUX_PANE: '%7' });
       expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'no-plan-door']);
     }
@@ -2058,5 +2071,90 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'), nowS() - 181);
     await run(['plan', 'show', 'prog-a']);
     expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan', '/api/programmes/prog-a/plan']);
+  });
+});
+
+describe('linking confirm fills identity from the pane and refuses a caller-named identity (D-8809)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const BODY = '{"project":"project-a","team":"AAA","workspace":null}';
+  const confirm = (body?: string): Promise<Run> => run(['linking', 'confirm', ...(body === undefined ? [] : ['--json', '-'])], body, pane);
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row is a POST that takes no id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'linking.confirm');
+    expect([row!.method, row!.path, row!.needsId, row!.query]).toEqual(['POST', '/api/linking/confirm', false, []]);
+  });
+
+  it('sends the body with the pane\'s pair added and the box token, and nothing in the query', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await confirm(BODY);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/linking/confirm', TOKEN]);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ byId: 'demo-ws', byUuid: 'uuid-7', ...JSON.parse(BODY) });
+  });
+
+  it('refuses a body naming byId or byUuid, no body, and a non-object, each unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const b of ['{"byId":"someone-else","team":"AAA"}', '{"team":"AAA","byUuid" : "x"}']) {
+      const r = await confirm(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    expect(errorOf(await confirm())).toBe('no-body');
+    expect(errorOf(await confirm('[]'))).toBe('bad-body');
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('linking suggest fills identity from the pane and refuses a caller-named identity (D-8808)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const BODY = '{"project":"project-a","team":"AAA","why":"the branches name it"}';
+  const suggest = (body?: string): Promise<Run> => run(['linking', 'suggest', ...(body === undefined ? [] : ['--json', '-'])], body, pane);
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row is a POST that takes no id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'linking.suggest');
+    expect([row!.method, row!.path, row!.needsId, row!.query]).toEqual(['POST', '/api/linking/suggest', false, []]);
+  });
+
+  it('sends the body with the pane\'s pair added and the box token, and nothing in the query', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await suggest(BODY);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/linking/suggest', TOKEN]);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ byId: 'demo-ws', byUuid: 'uuid-7', ...JSON.parse(BODY) });
+  });
+
+  it('refuses a body naming byId or byUuid, no body, and a non-object, each unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const b of ['{"byId":"someone-else","team":"AAA"}', '{"team":"AAA","byUuid" : "x"}']) {
+      const r = await suggest(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    expect(errorOf(await suggest())).toBe('no-body');
+    expect(errorOf(await suggest('[]'))).toBe('bad-body');
+    expect(seen).toEqual([]);
+  });
+});
+
+// The pane's pair goes LAST on the linking and call doors (review 3245 A2, the note doors' rule of review 2039 F7): the server's
+// JSON parse keeps the later of two duplicate keys, so a spelling of `byId` or `byUuid` the textual refusal misses (a `\u` escape)
+// never outranks the pane's. Red when the client splices the pair first.
+describe('the linking and call doors put the pane\'s pair last (review 3245 A2, D-8808, D-8809)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  it.each([
+    [['linking', 'suggest', '--json', '-'], '/api/linking/suggest', '{"project":"project-a","team":"AAA","why":"w"}'],
+    [['linking', 'confirm', '--json', '-'], '/api/linking/confirm', '{"project":"project-a","team":"AAA","workspace":null}'],
+    [['calls', 'record', 'prog-a', '--json', '-'], '/api/coord/programmes/prog-a/calls', '{"class":"routine","text":"t","options":["a"],"chosen":0,"why":"w"}'],
+  ])('%j: an escaped byId or byUuid key cannot outrank the pane\'s pair', async (args, url, plain) => {
+    plantPane('demo-ws', 'uuid-7');
+    const forged = `{"by\\u0049d":"lane-b-project-a","by\\u0055uid":"u-other",${plain.slice(1)}`;
+    const r = await run(args, forged, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect([seen[0]!.method, seen[0]!.url]).toEqual(['POST', url]);
+    expect(JSON.parse(seen[0]!.body)).toMatchObject({ byId: 'demo-ws', byUuid: 'uuid-7' });
+    expect(seen[0]!.body.endsWith(',"byId":"demo-ws","byUuid":"uuid-7"}')).toBe(true);
+    seen = [];
+    expect((await run(args, plain, pane)).status).toBe(0);
+    expect(seen[0]!.body).toBe(`${plain.slice(0, -1)},"byId":"demo-ws","byUuid":"uuid-7"}`);
   });
 });

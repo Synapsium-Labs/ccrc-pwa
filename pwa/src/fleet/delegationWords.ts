@@ -1,13 +1,15 @@
-// THE DELEGATION ROWS' WORDS (delegation broker wave 4, spec §5.8; D-6999, D-7002; delegation visibility). L1:
-// one module for every label a delegation row, group, chip, the session header's entry list or the fleet foot's region
-// draws, so no component spells one. The server decides every word on the wire
-// (`server/src/coord/delegation-projection.ts`): liveness, the group, an activity's placement, and which worktree is
-// `inferred`. This module names those words and tolerates a word this build has never heard of.
+// THE DELEGATION WORDS (delegation broker wave 4, spec §5.8; D-6999, D-7002; delegation visibility). L1:
+// one module for every label a worktree row, its controls and the Archive's section draw, so no component spells one.
+// The server decides every word on the wire (`server/src/coord/delegation-projection.ts`): liveness, the group, an
+// activity's placement, and which worktree is `inferred`. This module reads those words and tolerates a word this build
+// has never heard of.
 //
-// THE WORDS SAY WHAT THE BROKER RECORDED (delegation visibility, spec §4). The wire's `live` means only that an entry's
-// session is live in the run that started it: nothing measures the helper itself. So no word here says "running", and
-// none claims recency. Each liveness has a short visible word and a title (`LIVENESS_QUALIFIER`); a count of entries
-// keeps the noun "delegated", which claims no execution.
+// NO PAGE SAYS A LIVENESS (session helpers H3, D-8875; spec 2026-11-19 §4.4). The wire's `live` means only that an entry's
+// session is live in the run that started it: nothing measures the helper itself, so its words are not a fact the operator
+// can act on. The fleet list draws no delegation row (D-8782), the session panel no recorded entry and no count of them
+// (its Helpers section is the one list), and a worktree row says its path, its disposition and its controls. So no word
+// here says "running" or claims recency, and `LIVENESS_QUALIFIER` is what the words WOULD say, kept as the census's list
+// of what no page may draw.
 //
 // THE OPERATOR'S WORD IS "worktree". The wire's lease is never called that on the page.
 //
@@ -16,13 +18,15 @@
 // nothing acts on it automatically: only the operator's own tap (wave 5's "Attach to…", below) does. `inferredChip`
 // keys on `sourceKind === 'raw'` as well as on `inferred`, so a raw row whose marker went missing still says so.
 //
-// Imports only `shared/api` and `lib/wire` (never `./fleetTree` or `./nestFleet`, which import from here: a cycle).
+// Imports only `shared/api`, `lib/wire` and the design system's elapsed ladder (never `./fleetTree` or `./nestFleet`, which
+// import from here: a cycle).
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, delegationLeaseDispositionOf,
-  delegationLeaseExpiresAtOf, isArchivedRow, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal,
+  delegationLeaseExpiresAtOf, inArchivedFold, isArchivedRow, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal,
   type SessionBucket, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
-  type DelegationProjectionWire, type DelegationUnownedWire,
+  type DelegationProjectionWire, type DelegationUnownedWire, type FleetSession,
 } from '../../../shared/api';
+import { elapsedShort } from '@ccrc/ui';
 import { isRecord } from '../lib/wire';
 
 /** The chip every raw worktree wears (D-6999). */
@@ -32,27 +36,10 @@ export const UNRECOGNISED_WORD = 'unrecognised';
 
 export interface Chip { readonly text: string; readonly title: string }
 
-/** A delegation row's words. `nameAt` is the index of its one free-text part (a delegated agent's name, a worktree's
- *  admin record), the only part a narrow row may cut short; every other part, its condition word and its `from` part
- *  among them, is always drawn whole (D-7783: a phone shows no titles). `null` when the row has no such part. */
+/** A worktree row's words. `nameAt` is the index of its one free-text part, its path (`null` when the row has none). Every
+ *  part is drawn whole (D-7783: a phone shows no titles), the path too since H3 (D-8875): it wraps, at the break points
+ *  `pathBreaks` names, and below the desk on a line of its own (session helpers HF2, D-8877; review 3123 F3 and F8). */
 export interface WorkWords { readonly parts: readonly string[]; readonly title: string; readonly nameAt: number | null }
-
-/** The two group headers of a card (rules 9 and 10 of `nestFleet`). */
-export const GROUP_WORDS: Readonly<Record<'offline-coordinator' | 'unowned', { label: string; title: string }>> = {
-  'offline-coordinator': {
-    label: 'Offline coordinator',
-    title: 'work whose session is no longer the one that started it, or is not on this card',
-  },
-  unowned: {
-    label: 'Unowned work',
-    title: 'worktrees no session could be tied to; being listed here never makes one eligible for removal',
-  },
-};
-
-export const ACTIVITY_WORD: Readonly<Record<DelegationActivityWire['sourceKind'], string>> = {
-  agent: 'agent',
-  workflow: 'workflow',
-};
 
 export const WORKTREE_WORD: Readonly<Record<DelegationLeaseSourceKind, string>> = {
   agent: 'agent worktree',
@@ -61,9 +48,10 @@ export const WORKTREE_WORD: Readonly<Record<DelegationLeaseSourceKind, string>> 
   attached: 'attached worktree',
 };
 
-/** What the broker RECORDED about an entry, never a claim that a helper is executing (delegation visibility, spec §4).
- *  The visible word is short for a 360 px row; the title adds the sentence, but is never the only carrier, because a
- *  phone shows no titles. Keyed by `DelegationLiveness`, so the totality rows (W4-U10, VIS-W1) cover it. */
+/** What the broker RECORDED about an entry, as delegation visibility (spec §4) worded it: a short word and its sentence.
+ *  Since H3 (D-8875) no page draws either: the session panel's word census (`session-panel-sheds.test.tsx`) and the real
+ *  browser's (`delegation-rows.browser.test.ts`) read this table as the words and sentences that must not appear. Keyed by
+ *  `DelegationLiveness`, so the totality rows (W4-U10, VIS-W1) cover it and a new liveness joins the census. */
 export const LIVENESS_QUALIFIER: Readonly<Record<DelegationLiveness, { readonly word: string; readonly title: string }>> = {
   live: {
     word: 'not confirmed',
@@ -84,45 +72,9 @@ export const LIVENESS_QUALIFIER: Readonly<Record<DelegationLiveness, { readonly 
   },
 };
 
-/** A present worktree says nothing; an unmeasured one says so. */
-export const WORKSPACE_WORD: Readonly<Record<DelegationLeaseWire['workspace'], string | null>> = {
-  present: null,
-  unmeasured: 'unmeasured',
-};
-
-export const VERDICT_WORD: Readonly<Record<DelegationUnownedWire['verdict'], string>> = {
-  unresolved: 'no owner found',
-  conflicting: 'two owners claimed it',
-};
-
-/** The session header's description of its entry list (spec §5). */
-export const ENTRIES_NOTE = 'Recorded entries, not a current agent count. Execution is not confirmed for any of them.';
-
-/** The fleet foot's region: entries whose session the fleet list no longer carries (spec §5). */
-export const UNLISTED_WORDS = {
-  label: 'Delegated work, session not listed',
-  title: 'recorded delegation entries whose session is not in the fleet list; not a current agent count, and execution is not confirmed',
-} as const;
-
-/** The region's toggle: its label and its count. */
-export function unlistedToggle(n: number): string {
-  return `${UNLISTED_WORDS.label} (${n})`;
-}
-
-/** The session an entry came from, on a row that is not under that session (an offline-group row, an unlisted row):
- *  its listed label, or its raw id when the fleet does not carry it. Display only: never a join key, never an
- *  ownership claim (spec §5). */
-export function fromPart(label: string): string {
-  return `from ${label}`;
-}
-
 /** A table's word for `key`, or the unrecognised word when the table has none (a newer server's word). */
 const wordOf = (table: Readonly<Record<string, string>>, key: string): string =>
   Object.hasOwn(table, key) ? table[key]! : UNRECOGNISED_WORD;
-
-/** A liveness's qualifier. A word this build cannot name reads `unmeasured`, as `readDelegation` re-files it: never live. */
-const qualifierOf = (l: string): { readonly word: string; readonly title: string } =>
-  Object.hasOwn(LIVENESS_QUALIFIER, l) ? LIVENESS_QUALIFIER[l as DelegationLiveness] : LIVENESS_QUALIFIER.unmeasured;
 
 const groupOf = (g: unknown): DelegationActivityWire['group'] =>
   (DELEGATION_ROW_GROUPS as readonly unknown[]).includes(g) ? g as DelegationActivityWire['group'] : 'offline-coordinator';
@@ -130,8 +82,8 @@ const placementOf = (p: unknown): DelegationActivityWire['placement'] =>
   (DELEGATION_ACTIVITY_PLACEMENTS as readonly unknown[]).includes(p) ? p as DelegationActivityWire['placement'] : 'row';
 const livenessOf = (l: unknown): DelegationLiveness =>
   (DELEGATION_LIVENESS as readonly unknown[]).includes(l) ? l as DelegationLiveness : 'unmeasured';
-const workspaceOf = (w: unknown): DelegationLeaseWire['workspace'] =>
-  Object.hasOwn(WORKSPACE_WORD, String(w)) ? w as DelegationLeaseWire['workspace'] : 'unmeasured';
+/** Only `present` is a measured presence; anything else (`unmeasured`, a newer server's word) is not measured. */
+const workspaceOf = (w: unknown): DelegationLeaseWire['workspace'] => (w === 'present' ? 'present' : 'unmeasured');
 /** A marker this build cannot read is still a marker: it keeps the chip, with an unmeasured creator. */
 const inferredOf = (i: unknown): DelegationLeaseWire['inferred'] => {
   if (i === null || i === undefined) return null;
@@ -188,87 +140,41 @@ export function creatorChip(l: DelegationLeaseWire): Chip | null {
   return { text: `Bash call …${id.slice(-8)}`, title: `the Bash call that created this worktree: ${id}` };
 }
 
-/** A worktree's row. `viaLabel` is the worker the server's R9 names (already resolved to a label by the caller);
- *  `sourceProject` is `workingOnCard`'s answer for the row's own project, handed back for the caller's folder icon;
- *  `fromLabel` names the session it came from, on a row that is not under that session. An ended worktree reads
- *  `end recorded`, and its workspace word alone says whether its presence was measured. */
+/** A worktree's row (session helpers H3, D-8875; spec §4.4): what made it, its path and, on a coordinator's page, the worker
+ *  whose worktree it is; the caller adds its disposition (`worktreeStateParts`) and its controls. No liveness word and no
+ *  presence word: the presence on disk not measured is said once, in the section's head (`presenceWord`). `viaLabel` is the
+ *  worker the server's R9 names (already resolved to a label by the caller); `sourceProject` is `workingOnCard`'s answer for
+ *  the row's own project, handed back for the caller's folder icon. The path is the row's one free-text part, its title. */
 export function worktreeLine(
-  l: DelegationLeaseWire, viaLabel: string | null, sourceProject: string | null, fromLabel: string | null = null,
+  l: DelegationLeaseWire, viaLabel: string | null, sourceProject: string | null,
 ): WorkWords & { sourceProject: string | null } {
-  const q = qualifierOf(l.liveness);
-  const parts = [wordOf(WORKTREE_WORD, l.sourceKind), l.adminRecord, q.word];
+  const parts = [wordOf(WORKTREE_WORD, l.sourceKind), l.canonicalPath];
   if (viaLabel !== null) parts.push(`via ${viaLabel}`);
-  const ws = Object.hasOwn(WORKSPACE_WORD, l.workspace) ? WORKSPACE_WORD[l.workspace] : UNRECOGNISED_WORD;
-  if (ws !== null) parts.push(ws);
-  if (fromLabel !== null) parts.push(fromPart(fromLabel));
-  return { parts, title: `${l.canonicalPath}; ${q.title}`, nameAt: 1, sourceProject };
+  return { parts, title: l.canonicalPath, nameAt: 1, sourceProject };
 }
 
-/** A delegated agent's or workflow's row. Its times are the hook events the broker recorded, never helper activity. */
-export function activityLine(a: DelegationActivityWire, fromLabel: string | null = null): WorkWords {
-  const word = wordOf(ACTIVITY_WORD, a.sourceKind);
-  const q = qualifierOf(a.liveness);
-  const name = a.displayName !== null && a.displayName !== '' ? [a.displayName] : [];
-  const parts = [word, ...name, q.word, ...(fromLabel === null ? [] : [fromPart(fromLabel)])];
-  return {
-    parts, nameAt: name.length > 0 ? 1 : null,
-    title: `${word} ${a.upstreamId}: ${q.title}; opened ${a.openedAt}, last recorded hook event ${a.lastEventAt}`,
-  };
+/** Every worktree a session holds, whatever its liveness or group: the session's own details list them (D-8782: the fleet
+ *  list draws no worktree row). The ONE reader of the frame for leases. A lease is the
+ *  session's when it is the display parent (`parentId`, the coordinator under R9) or the worker whose lease it is (`via`);
+ *  an offline coordinator's leases are the ones its own page lists. So a lease shows on its coordinator's page AND on its
+ *  worker's, where the fleet list had drawn one row (an activity is its parent's only). `workdirs` are the listed sessions'
+ *  working directories: a lease whose path is one of them is not drawn, that session's own row being the honest one (the old
+ *  rule 7, W4-U14). A re-check beside the server's own precedence, legitimately different: the `fleet` and `delegation`
+ *  frames arrive separately, so the session can be listed before the next frame drops the lease. In `firstObservedAt` order. */
+export function leasesStartedBy(
+  id: string, w: DelegationProjectionWire, workdirs: ReadonlySet<string> = NO_WORKDIRS,
+): readonly DelegationLeaseWire[] {
+  return w.leases.filter((l) => (l.parentId === id || l.via === id) && !atASessionWorkdir(l, workdirs))
+    .sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId));
 }
 
-/** An unowned tree's row. */
-export function unownedLine(u: DelegationUnownedWire): WorkWords {
-  const parts = [u.adminRecord, wordOf(VERDICT_WORD, u.verdict)];
-  const ws = Object.hasOwn(WORKSPACE_WORD, u.workspace) ? WORKSPACE_WORD[u.workspace] : UNRECOGNISED_WORD;
-  if (ws !== null) parts.push(ws);
-  return { parts, title: `${u.canonicalPath ?? u.adminRecord}: ${u.reason}`, nameAt: 0 };
-}
+const NO_WORKDIRS: ReadonlySet<string> = new Set();
 
-/** A sort key read from a member as it arrived: `readDelegation` keeps a member's other fields as they came, so one
- *  with no string here sorts first rather than throwing (review 1424 f). */
-const sortKey = (v: unknown): string => (typeof v === 'string' ? v : '');
-
-/** Entries in the order they opened, then by id: the one order of every list of them (`nestFleet`'s rows, the
- *  fleet foot's region, the session header's list). A malformed member sorts first and never throws. */
-export const byOpened = (a: DelegationActivityWire, b: DelegationActivityWire): number =>
-  sortKey(a.openedAt).localeCompare(sortKey(b.openedAt)) || sortKey(a.activityId).localeCompare(sortKey(b.activityId));
-
-/** One line of the session header's entry list, in an activity row's words. */
-export interface EntryRow extends WorkWords { readonly key: string }
-
-/** A session's recorded entries: the header's disclosure (`N delegated`), its description and its list. */
-export interface DelegatedSummary extends Chip {
-  readonly note: string;
-  readonly rows: readonly EntryRow[];
-}
-
-/** D-7781: the header's `N delegated` disclosure counts EVERY entry it is handed, of every liveness: the session header
- *  hands it every entry the session started, so the count is of recorded entries, never of running helpers. The fleet
- *  list's row draws no such count and no chip (D-8771). `null` when handed none. */
-export function delegatedChip(activities: readonly DelegationActivityWire[]): DelegatedSummary | null {
-  if (activities.length === 0) return null;
-  const n = activities.length;
-  const rows = [...activities].sort(byOpened).map((a): EntryRow => ({ key: a.activityId, ...activityLine(a) }));
-  return {
-    text: `${n} delegated`,
-    title: `${n} recorded delegation ${n === 1 ? 'entry' : 'entries'}, not a current agent count; execution not confirmed`,
-    note: ENTRIES_NOTE, rows,
-  };
-}
-
-/** Every entry a session started, whatever its placement or liveness: the session header lists them all. */
-export function activitiesStartedBy(id: string, w: DelegationProjectionWire): readonly DelegationActivityWire[] {
-  return w.activities.filter((a) => a.parentId === id);
-}
-
-/** The words a fold line uses for a coordinator's delegation children: `delegated`, `worktrees`. Neither is counted: the
- *  operator ruled the number of a session's delegated entries noise in the fleet list (D-8771), and the fold keeps the
- *  word so a line holding only these rows still says what it holds. A kind with no row says nothing. */
-export function delegationParts(rows: readonly { kind: 'activity' | 'lease' }[]): { readonly word: string }[] {
-  return [
-    ...(rows.some((r) => r.kind === 'activity') ? [{ word: 'delegated' }] : []),
-    ...(rows.some((r) => r.kind === 'lease') ? [{ word: 'worktrees' }] : []),
-  ];
+/** The old rule 7 (W4-U14), the one reader of it: a lease whose path is a listed session's working directory is not drawn
+ *  as a worktree, that session's own row being the honest one. `leasesStartedBy` (the session pages) and `unlistedLeases`
+ *  (the Archive's section) both ask it, so the two cannot disagree about which leases exist. */
+export function atASessionWorkdir(l: DelegationLeaseWire, workdirs: ReadonlySet<string>): boolean {
+  return workdirs.has(l.canonicalPath);
 }
 
 // THE WORKTREE CONTROLS (delegation broker wave 5, PR10). The operator keeps a worktree, attaches an inferred one to its own
@@ -309,12 +215,6 @@ export function dispositionOf(l: DelegationLeaseWire): keyof typeof DISPOSITION_
 /** `expiresAt`'s reader on this page: the wire's one reader (`delegationLeaseExpiresAtOf`); absent or null, no hold known. */
 export function expiryOf(l: DelegationLeaseWire): string | null {
   return delegationLeaseExpiresAtOf(l);
-}
-/** `leaseId`'s one reader: the lease the projection hid for a conflict on an unowned row's tree, or null when it hid none,
- *  the row came from an older server, or the member is not a non-empty string. */
-export function hiddenLeaseOf(u: DelegationUnownedWire): string | null {
-  const id: unknown = u.leaseId;
-  return typeof id === 'string' && id !== '' ? id : null;
 }
 /** The lease's OWN parent, the only attach choice (re-parenting is never offered). Under R9 the row's `parentId` is the
  *  display parent, the coordinator, and `via` is the worker whose lease it is. */
@@ -378,13 +278,6 @@ export function worktreeControls(l: DelegationLeaseWire, liveParentLabel: string
     ? [{ act: 'attach', parent: leaseParentOf(l), parentLabel: liveParentLabel }] : [];
   return [...(held ? [{ act: 'keep' } as const] : []), ...attach, { act: 'foreign' }];
 }
-/** An unowned row's controls: only through the lease the projection hid on its tree (O5-8 (c)), and only Not delegated
- *  (D-8095: the wire names no parent for that lease). Null when it hid none. */
-export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: string; readonly controls: readonly WorktreeControl[] } | null {
-  const leaseId = hiddenLeaseOf(u);
-  return leaseId === null ? null : { leaseId, controls: [{ act: 'foreign' }] };
-}
-
 /** Whether `controls` still offers the asked control: the same act and, for an attach, the same session (F4 of review
  *  1623), so an ask whose act or parent the row no longer offers never posts. */
 export function offersControl(controls: readonly WorktreeControl[], asked: WorktreeControl): boolean {
@@ -472,3 +365,160 @@ export const notDelegatedConfirm: ConfirmWords = {
 export function confirmFor(c: WorktreeControl): ConfirmWords | null {
   return c.act === 'attach' ? attachConfirm(c.parentLabel) : c.act === 'foreign' ? notDelegatedConfirm : null;
 }
+
+// THE ARCHIVE'S SECTION, "Work no session owns" (session helpers design 2026-11-19 §6 and Table 8; desktop polish H4, D-8828).
+// C48 took unowned trees and the leases of two unlisted sessions off the fleet list and gave them no home; the Archive screen
+// is that home. One pure read of the frame builds both kinds of row, so the section draws what this says and decides nothing.
+// The rows carry no liveness word and no bare `unmeasured` (§4.4): where presence on disk was not measured, `presenceWord`
+// says it once, in the section's head. An unowned tree acts only through the lease the projection hid on it, and only by
+// Not delegated (D-8095: the unowned wire names no parent and no disposition, so Attach and Keep wait for those fields).
+
+/** An unowned tree's verdict, as its row says it. */
+export const VERDICT_WORD: Readonly<Record<DelegationUnownedWire['verdict'], string>> = {
+  unresolved: 'no owner found',
+  conflicting: 'two owners claimed it',
+};
+
+/** `leaseId`'s one reader: the lease the projection hid for a conflict on an unowned row's tree, or null when it hid none,
+ *  the row came from an older server, or the member is not a non-empty string. */
+export function hiddenLeaseOf(u: DelegationUnownedWire): string | null {
+  const id: unknown = u.leaseId;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
+/** An unowned row's controls: only through the lease the projection hid on its tree, and only Not delegated (the wire names
+ *  no parent and no disposition for that lease). Null when it hid none. */
+export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: string; readonly controls: readonly WorktreeControl[] } | null {
+  const leaseId = hiddenLeaseOf(u);
+  return leaseId === null ? null : { leaseId, controls: [{ act: 'foreign' }] };
+}
+
+/** The session fields "listed" reads: the fleet list's own fold (`inArchivedFold`) and the working directory. */
+export type ListedSession = Pick<FleetSession, 'id' | 'bucket' | 'workspace' | 'status' | 'stoppedBy' | 'hibernatedAt' | 'workdir'>;
+
+/** Whether the fleet list carries a session as a row of its live part: not in the Archived fold, by the fold's own
+ *  predicate (`inArchivedFold`, never a copy of it). So a cleanup session, which the fleet list keeps at its top level, is
+ *  listed; an archived workspace and a stopped main checkout, which it folds, are unlisted (an archived session is unlisted,
+ *  not gone). Legitimately different from `listedLive`, which answers whether Attach may offer a session (the door refuses
+ *  only a session whose registry row is absent). */
+export function listedOnFleet(s: Pick<ListedSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy' | 'hibernatedAt'> | null | undefined): boolean {
+  return s !== null && s !== undefined && !inArchivedFold(s);
+}
+
+/** The leases whose parent AND worker are both unlisted (`listedOnFleet`), drawn nowhere else: either side listed gives the
+ *  lease a session page (`leasesStartedBy`), and a lease at a listed session's working directory is that session's own row
+ *  (`atASessionWorkdir`, the same rule the session pages apply). In `firstObservedAt` order. */
+export function unlistedLeases(w: DelegationProjectionWire, sessions: readonly ListedSession[]): readonly DelegationLeaseWire[] {
+  const listed = new Set(sessions.filter((s) => listedOnFleet(s)).map((s) => s.id));
+  const workdirs = new Set(sessions.map((s) => s.workdir));
+  return w.leases.filter((l) => !listed.has(l.parentId) && (l.via === null || !listed.has(l.via)) && !atASessionWorkdir(l, workdirs))
+    .sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId));
+}
+
+/** The section's own words, one place (L1) for the title, the note under it and the two subheads. The note says what the
+ *  section holds in the subhead's words: an archived session is unlisted, not gone (review 2966 F1). */
+export const UNOWNED_WORDS = {
+  title: 'Work no session owns',
+  purpose: 'Delegated worktrees the broker could not give one owner, and worktrees neither of whose sessions is listed.',
+  trees: 'No single owner',
+  leases: 'Neither session listed',
+} as const;
+
+/** How many of these trees' presence on disk the wire did not measure: only `present` is a measured presence (`workspaceOf`),
+ *  so a newer server's word counts as not measured too. The ONE count the session's worktrees head and the Archive's section
+ *  both say (session helpers HF2, D-8877; review 3123 F14). */
+export function presenceUnmeasured(trees: readonly { readonly workspace: unknown }[]): number {
+  return trees.filter((t) => t.workspace !== 'present').length;
+}
+
+/** The head's one sentence for trees whose presence on disk the wire did not measure; null for none. */
+export function presenceWord(n: number): string | null {
+  return n <= 0 ? null : `presence on disk not measured for ${n} tree${n === 1 ? '' : 's'}`;
+}
+
+/** An attempt's age, on the shared coarse ladder (`elapsedShort`) in whole words: `tried 3 days ago`, `tried just now`
+ *  under a minute; null for a time that cannot be read, which is left out of the row, never guessed. */
+export function triedWord(attemptedAt: string, now: number): string | null {
+  const at = Date.parse(attemptedAt);
+  if (Number.isNaN(at)) return null;
+  const short = elapsedShort(now - at);
+  if (short === null) return 'tried just now';
+  const n = Number(short.slice(0, -1));
+  const unit = { m: 'minute', h: 'hour', d: 'day' }[short.slice(-1) as 'm' | 'h' | 'd'];
+  return `tried ${n} ${unit}${n === 1 ? '' : 's'} ago`;
+}
+
+/** An unowned tree's row: where it is (its path, else its admin record), its verdict and age, and its one act. */
+export interface UnownedTreeRow {
+  readonly key: string;
+  readonly project: string;
+  readonly where: string;
+  /** The admin record: the control's accessible name, the worktree the act is about. */
+  readonly worktree: string;
+  /** The row's one line of words: the verdict, then the attempt's age when its time could be read. */
+  readonly meta: readonly string[];
+  readonly act: { readonly leaseId: string; readonly controls: readonly WorktreeControl[] } | null;
+}
+/** A worktree row whose two sessions are both unlisted: its path, its disposition and its controls (never Attach: it needs
+ *  a listed parent, which these rows do not have). */
+export interface UnlistedLeaseRow {
+  readonly key: string;
+  readonly lease: DelegationLeaseWire;
+  readonly project: string;
+  readonly where: string;
+  readonly worktree: string;
+  readonly state: readonly string[];
+  readonly controls: readonly WorktreeControl[] | null;
+}
+export interface UnownedWork {
+  readonly trees: readonly UnownedTreeRow[];
+  readonly leases: readonly UnlistedLeaseRow[];
+  /** Rows of both kinds, and how many of their trees' presence on disk was not measured (the head says it once). */
+  readonly total: number;
+  readonly unmeasured: number;
+}
+
+const attemptTime = (u: DelegationUnownedWire): number => {
+  const t = Date.parse(u.attemptedAt);
+  return Number.isNaN(t) ? -Infinity : t;
+};
+
+/** What the Archive's section draws, from the frame as it arrived (`readDelegation` re-files an unknown word) and the fleet's
+ *  sessions. An unavailable frame (null) holds no unowned work to draw. Unowned trees newest attempt first. */
+export function unownedWork(
+  frame: DelegationProjectionWire | null, sessions: readonly ListedSession[], now: number,
+): UnownedWork {
+  if (frame === null) return { trees: [], leases: [], total: 0, unmeasured: 0 };
+  const w = readDelegation(frame);
+  const trees = w.unowned.slice().sort((a, b) => attemptTime(b) - attemptTime(a) || a.adminRecord.localeCompare(b.adminRecord))
+    .map((u): UnownedTreeRow => ({
+      key: `${u.project}\u0000${u.adminRecord}\u0000${u.attemptedAt}`,
+      project: u.project,
+      where: u.canonicalPath ?? u.adminRecord,
+      worktree: u.adminRecord,
+      meta: [wordOf(VERDICT_WORD, u.verdict), ...[triedWord(u.attemptedAt, now)].filter((t): t is string => t !== null)],
+      act: unownedControls(u),
+    }));
+  const leases = unlistedLeases(w, sessions).map((l): UnlistedLeaseRow => ({
+    key: l.leaseId, lease: l, project: l.project, where: l.canonicalPath, worktree: l.adminRecord,
+    state: worktreeStateParts(l, now), controls: worktreeControls(l, null),
+  }));
+  const unmeasured = presenceUnmeasured(w.unowned) + presenceUnmeasured(leases.map((r) => r.lease));
+  return { trees, leases, total: trees.length + leases.length, unmeasured };
+}
+
+/** How many rows the Archive's section would draw: what the fleet foot's Archived row asks. The clock only feeds the rows'
+ *  words, never their number. */
+export function unownedTotal(frame: DelegationProjectionWire | null, sessions: readonly ListedSession[]): number {
+  return unownedWork(frame, sessions, 0).total;
+}
+
+/** The fleet foot's one Archived row (review 2966 F5): the same row and the same door (`/archive`) say what is there. The
+ *  archived half is the words the row always had (`archived`, null for none); the unowned half is the section's own title
+ *  and its count. Its halves, in order, joined by ` · ` on the row; none when there is nothing of either, and then no row.
+ *  The row draws each half as one box, so a narrow row breaks between them and never leaves a word of one alone on a line
+ *  (session helpers HF2, review 2988 F8). */
+export function archiveDoorParts(archived: string | null, unowned: number): readonly string[] {
+  return [archived, unowned > 0 ? `${UNOWNED_WORDS.title} · ${unowned}` : null].filter((p): p is string => p !== null);
+}
+

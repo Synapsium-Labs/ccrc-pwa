@@ -35,13 +35,15 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
   type DocsHistoryLoader,
 } from '../docs/failures';
+import type { DocsRangeFrameResponse, DocsRangePrepareResponse } from '../../../shared/docs';
+import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
 import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { EpicView, HierarchyAnswer, HierarchyProjectRow, PlanView } from '../../../shared/plan';
+import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
@@ -566,13 +568,19 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     hierarchy: () => getJson<HierarchyAnswer>('/api/hierarchy'),
     saveHierarchy: (project: string, body: Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>) =>
       postJson<{ ok: true; settings: typeof body }>(`/api/projects/${encodeURIComponent(project)}/hierarchy`, body),
-    /** `GET /api/programmes/:slug/plan` and `GET /api/projects/:project/upkeep` (D-8184): the plan, and a project's Upkeep epic (null before first use) with the closes Linear refused. */
-    plan: (slug: string) => getJson<{ ok: true; plan: PlanView }>(`/api/programmes/${encodeURIComponent(slug)}/plan`),
+    /** `GET /api/programmes/:slug/plan` and `GET /api/projects/:project/upkeep` (D-8184): the plan, and a project's Upkeep epic (null before first use) with the closes Linear refused.
+     *  `work` is the work map beside the plan (WM2, D-8823): absent from an older server, which draws no Work card. */
+    plan: (slug: string) => getJson<{ ok: true; plan: PlanView; work?: WorkAnswer }>(`/api/programmes/${encodeURIComponent(slug)}/plan`),
     upkeep: (project: string) => getJson<UpkeepAnswer>(`/api/projects/${encodeURIComponent(project)}/upkeep`),
     /** `POST /api/items/:id/linear` (D-8184): one act on a hierarchy item (map, report, drift, initiatives, owner). */
     linearItemAct: (id: number, body: { act: LinearItemAct; note?: string; owner?: string }) =>
       postJson<{ ok: true; queued?: boolean }>(`/api/items/${id}/linear`, body),
     ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: number }>('/api/hierarchy/owner', { linearOwner }),
+    /** The migration (D-8186): `POST /api/projects/:project/hierarchy/migrate` (no body; asks the team's Linear owner for the map) and
+     *  `GET /api/migrations/:id` (a map's or report's body). */
+    migrate: (project: string) =>
+      postJson<{ ok: true; migrationId: number }>(`/api/projects/${encodeURIComponent(project)}/hierarchy/migrate`),
+    migration: (id: number) => getJson<MigrationView>(`/api/migrations/${id}`),
     /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
      *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
     openTemplatePr: (project: string) =>
@@ -1113,6 +1121,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
+    /** The operator's ruling on a parked permission prompt (approvals PR 3), posted to the questions answer door as
+     *  `{kind: 'approval', verdict}`. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`,
+     *  `park-ruled`, `hook-gone`, `coordinator-denied`, `auth-off`, or a guard's word from the door's approval arm) rejects with an
+     *  `ApiError` like every non-2xx. */
+    ruleParkedApproval: async (id: number, verdict: 'allow' | 'deny'): Promise<unknown> =>
+      (await request(`/api/questions/approval-${id}/answer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ kind: 'approval', verdict }),
+      })).json().catch(() => ({})),
     /** `POST /api/continuity/quiz-runs/:id/rule` (Overlord W1a, the replay quiz record): the operator confirms or discards one pending
      *  quiz run. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`, `bad-request` with
      *  `already <state>`, …) rejects with an `ApiError` like every non-2xx. */
@@ -1121,6 +1139,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ action }),
+      })).json() as Promise<QuizRuleAnswer>,
+    /** `POST /api/continuity/quiz-runs/:id/withdraw` (review 3232 F1e): the operator withdraws the confirmed baseline. Session-gated
+     *  when armed, no step-up (it only narrows); dark it answers `auth-off`. A refusal rejects with an `ApiError`. */
+    withdrawQuizBaseline: async (id: number): Promise<QuizRuleAnswer> =>
+      (await request(`/api/continuity/quiz-runs/${id}/withdraw`, {
+        method: 'POST', headers: { accept: 'application/json' },
       })).json() as Promise<QuizRuleAnswer>,
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
@@ -1197,11 +1221,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders & DocsHistoryLoader => {
+    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader } => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
-      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 20 s, after a
+      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 30 s, after a
       // read lane's wait of at most 10 s).
       const unlimited: ReadOpts = { timeoutMs: null };
       const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
@@ -1239,6 +1263,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           body: JSON.stringify({ ref: body.ref, reason: body.reason }),
         }),
         history: (project, ask) => read<DocsHistoryResponse>(docsApi.history(project, ask), ['log'], { headers: marker }),
+        // X2 P1.3: the range read's loader (`docs/range/readRange.ts`'s `RangeLoader`), beside `DocsLoaders` and not in it,
+        // as `history` is: each call resolves the answer's inner value (`prepared`, `frame`), with the same union.
+        range: {
+          prepare: async (target, signal) => {
+            const got = await read<DocsRangePrepareResponse>(
+              docsApi.rangePrepare(target.project, target.pin, target.range), ['prepared'], { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.prepared } : got;
+          },
+          frame: async (target, snapshot, offset, length, signal) => {
+            const got = await read<DocsRangeFrameResponse>(
+              docsApi.rangeFrame(target.project, target.pin, target.range, snapshot, offset, length), ['frame'],
+              { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.frame } : got;
+          },
+        },
       };
     })(),
     /** `POST /api/leases/:lease/operator-retain` (delegation broker wave 5, PR8; PR10's "Keep worktree"): the operator keeps a

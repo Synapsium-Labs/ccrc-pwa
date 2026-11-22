@@ -1045,6 +1045,21 @@ export const CCD_ARGV = {
    *  `['docs-log','--project']`, behind `DOCS_LOG_CAP`. The path is a value read by fixed index, never a pathspec. */
   docsLog: (project: string, commit: string, section: DocSectionSlug, path: string) =>
              argv(['docs-log', '--project', project, '--commit', commit, '--section', section, '--path', path]),
+
+  /** One file read by range (X2 spec 2026-11-18 section 4.3, plan P1.2), under its own grant
+   *  `['docs-show-range','--project']`, behind `DOCS_RANGE_CAP`. ONE builder for its four argv shapes, the way
+   *  `docsShowCommitted` and `docsShowDraft` split by the pin's source: `where` is `{commit}` for a committed doc or
+   *  `{branch, head}` for a draft (bare branch, as `docsShowDraft` takes it), `pin` is the pin's wire form
+   *  (`blob:<sha>`, `fp:<sha>` or `stat:<size>:<mtimeNs>`), and `step` is `'prepare'` (one trailing `--prepare`) or
+   *  `{snapshot, offset, length}` (a frame). Every value reaches ccd UNVALIDATED, as for the other docs builders. */
+  docsShowRange: (project: string, where: { commit: string } | { branch: string; head: string },
+                  section: DocSectionSlug, path: string, pin: string,
+                  step: 'prepare' | { snapshot: string; offset: number; length: number }) =>
+                   argv(['docs-show-range', '--project', project,
+                         ...('commit' in where ? ['--commit', where.commit] : ['--draft-branch', where.branch, '--head', where.head]),
+                         '--section', section, '--path', path, '--pin', pin,
+                         ...(step === 'prepare' ? ['--prepare']
+                           : ['--snapshot', step.snapshot, '--offset', String(step.offset), '--length', String(step.length)])]),
 } as const;
 
 /**
@@ -1173,6 +1188,13 @@ export const ROUTE_DEFAULT_CAP = 'route-default-v1';
  *  `route-omitted:no-browser-route-cap`. Read with `capSupported` (null refuses). ccd's `echo browser-route-v1` and
  *  `ccdCapTokens.ts` are the other spellings. */
 export const BROWSER_ROUTE_CAP = 'browser-route-v1';
+
+/** The `ccd caps` token that says `mailhold` is a routing field this box takes (mid-turn mail spec §3.3, plan PR 3): the
+ *  lane-only marker the mailhold projection writes through `route --set mailhold=…`. An older ccd refuses the field by name
+ *  ("unknown routing field"), so the projection (`coord/mailHoldLane.ts`) sends nothing to a box that does not advertise
+ *  it, and every session there holds nothing. Read with `capSupported` (null refuses). ccd's `echo route-mailhold-v1` and
+ *  `ccdCapTokens.ts` are the other spellings. */
+export const MAILHOLD_ROUTE_CAP = 'route-mailhold-v1';
 
 /** The `ccd caps` token that says this box parses `--child <runId>` on
  *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
@@ -1347,6 +1369,12 @@ export const DOCS_SECTIONS_CAP = 'docs-sections-v2';
  *  Read through `ccdCan`'s `docsLog` row (refuses on no evidence), inside the docs gate's tri-state. */
 export const DOCS_LOG_CAP = 'docs-log-v1';
 
+/** The `ccd caps` token that says this box's ccd has `docs-show-range` at exactly the argv `docsShowRange` builds
+ *  (X2 spec 2026-11-18 section 4.3, P1.2). Spelled ONCE in `server/src`; ccd's `echo docs-range-v1` and
+ *  `ccdCapTokens.ts` are the other two spellings. Read through `ccdCan`'s `docsShowRange` row (refuses on no evidence),
+ *  inside the docs gate's tri-state. */
+export const DOCS_RANGE_CAP = 'docs-range-v1';
+
 /** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
  *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
  *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
@@ -1441,6 +1469,12 @@ export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
  *  `SessionHost`): with no token `renew` answers `capability-missing` and sends nothing (`capSupported`, false on no
  *  evidence). ccd's `echo hibernate-fresh` and `server/test/ccdCapTokens.ts` are the other two spellings. */
 export const HIBERNATE_FRESH_CAP = 'hibernate-fresh';
+
+/** The `ccd caps` token that says this box's session hook sends the witness (Overlord W1 door process B1): the call digest of
+ *  each door call, reported before the call runs. The Overlord's witness port answers `unmeasured` until it is advertised, so a
+ *  server updated first refuses the Overlord's writes 502 and fires no latch (`capSupported`, false on no evidence). ccd's
+ *  `echo door-witness-v1` and `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const DOOR_WITNESS_CAP = 'door-witness-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
@@ -1605,6 +1639,7 @@ export const CCD_CAN = {
   docsShowDraft: capRow(DOCS_CAP),
   docsFetch: capRow(DOCS_CAP),
   docsLog: capRow(DOCS_LOG_CAP),
+  docsShowRange: capRow(DOCS_RANGE_CAP),
 } as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
 
 /** A `CCD_ARGV` row name: what `ccdCan` is asked about. */

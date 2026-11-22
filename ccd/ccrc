@@ -2537,7 +2537,7 @@ MODELS_SUBS="clear-window discovery hold init release revert rm set-class set-ef
 # `deploy/models-op.mjs`'s `OPS` rows marked `writes: true`, which `single-definition.test.ts` checks in both
 # directions; `ccrc-models-lock.test.ts` forbids a bare call of any of them (`materialise --check true` excepted,
 # since it writes nothing).
-MODELS_WRITE_OPS="advance-backfill advance-commit clear-window discovery hold init lower-windows materialise release revert rm set-class set-effort set-subagent set-window"
+MODELS_WRITE_OPS="advance-backfill advance-commit aliases-refresh clear-window discovery hold init lower-windows materialise release revert rm set-class set-effort set-subagent set-window"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -12630,6 +12630,9 @@ _codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yam
 #      `how: "hand"`) is recorded in the advance file as the hand move it was, and is no event and no push (ruling
 #      RC3). The recovery is read whether or not the answer was ok (D-6067): a refusal after the writer's first
 #      successful write still carries it. When the backfill created the file or settled a move, the plan is read again.
+#      It never writes a class's run of sightings of a missing pin: the first pass's `materialise --refresh true` does,
+#      after every successful probe, so an hour this step skips (readiness, budget, a held lock) still records it, and
+#      a pin listed again ends the run before any step here reads it (programme wave 3, D-8838).
 #   3. READINESS, asked once, no lock (D22): the lane's mode first, by a bounded read; on `litellm`,
 #      `_codex_tier_ours --bounded-read` for the LiteLLM tier and then the shim, each 0 (ours and running; the shim's 0
 #      is its proof that the listener answers as THIS lane, D-5210), then the check-only `litellm` op answering
@@ -12732,7 +12735,7 @@ _models_canary_reserve_secs() {   # (C + 15 + 8) + T + J + 2H
 # `$HOME/.cc-sessions` - with its `--push` flag, so the server sends it to the phone as well as the banner
 # (`/api/notify`, which pushes only a line `modelsPushOf` reads). Best-effort by the hook's own contract: its output is
 # dropped and its status never ends the refresh. DELIVERY IS NOT PROMISED: the server refuses to push a line over
-# `modelsPushOf`'s cap (long model ids make a failed-canary line long) or of a lane not codex-kind in ITS roster. IN THE
+# `modelsPushOf`'s cap (long model ids make a failed-canary line long) or of a lane that is neither codex-kind nor an Anthropic lane (D-8751) in ITS roster. IN THE
 # AUTOMATIC CONTEXT the COMPLETE hook (not only its curl) is a strict deadline, admitted first (a hook with no time to
 # run is skipped, never run late); a hand caller's call is a best-effort deadline with today's fallbacks. ONE RESIDUAL:
 # the hook itself is the strict call's direct child, so a TERM-ignoring HELPER the hook starts can outlive the hook's
@@ -12771,6 +12774,7 @@ MODELS_JQ_DEFS='def tok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._:/-]
 def word: type == "string" and test("^[a-z][a-z0-9-]{0,39}\\z");
 def flat($n): if type == "string" then (gsub("[^ -~]+"; " ") | gsub("^ +| +$"; "") | .[0:$n]) else "" end;
 def ofpin: if . == null then "none" else . end;
+def moveline($id): "\($id): \(.class) \(.from | ofpin) → \(.to)";
 def eff: type == "string" and test("^[\\x21-\\x7e]([\\x20-\\x7e]{0,62}[\\x21-\\x7e])?\\z");
 def recovered($id):
   (.recoveredMove // null) as $rm
@@ -13186,6 +13190,49 @@ _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `e
   return 0
 }
 
+# The Anthropic arm's step of the hourly refresh (model-class Anthropic arm A2.4, D-8751): ONE lane's `aliases-refresh`,
+# under the lane-files lock, in the AUTOMATIC context (the run's one advance deadline, `MODELS_AUTO_DEADLINE`, set as the
+# non-exported local the Codex step sets), so a spent budget answers `budget-deferred` and nothing is written. Prints ONE
+# row object for the refresh's output and rc 0, or rc 1 for a row that failed (the caller's `failed`).
+#   {id, ok: true,  aliases: {ok: true,  moved: [...]}}                 refreshed
+#   {id, ok: true,  aliases: {ok: false, error: <word>, moved: []}}     NOT RUN: `budget-deferred`, or `not-capable` (no
+#                                                                       flock or no strong deadline on this box), which the
+#                                                                       Codex step skips silently too; the next hour retries
+#   {id, ok: false, reason, aliases: {ok: false, error: <word>, moved: []}}   the op or the lock refused (`lock-busy`, the
+#                                                                       op's own cause word, `no-answer`): a failed row
+# Each class that moved is pushed through `_models_push`, one line each, built by `moveline` in the Codex step's own
+# shape after `tok` and `word` have checked the tokens, as `recovered` does; a refresh with no move pushes nothing.
+_models_aliases_lane() {   # <id> <roster file> <deadline-secs> -> prints ONE row; rc 0 unless the row failed
+  local id="$1" file="$2" body='{"ok":false,"error":"budget-deferred"}' rc=0 pre=1 line row MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
+  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then :
+  elif ! _models_advance_capable "$id"; then body='{"ok":false,"error":"not-capable"}'
+  else pre=0
+    body="$(_models_node_locked "$id" aliases-refresh --file "$file" --id "$id" --reg "$_SVC_REG" 2>/dev/null)" || rc=$?
+    body="$(printf '%s' "$body" | tail -n1)"
+  fi
+  # ONE jq decides the row from the answer: refreshed; NOT RUN (a deferral before the op, or `budget-deferred` from the
+  # lock when the budget ran out between the admission and the lock); or failed, with the op's word, or `no-answer`.
+  row="$(jq -cn --arg id "$id" --arg rc "$rc" --arg pre "$pre" --arg body "$body" '
+    ($body | fromjson? // null) as $b
+    | if $pre == "0" and $rc == "0" and ($b | type) == "object" and $b.ok == true and $b.op == "aliases-refresh"
+      then {id: $id, ok: true, aliases: {ok: true, moved: ($b.moved | if type == "array" then . else [] end)}}
+      else (if ($b | type) == "object" and ($b.error | type) == "string" then $b.error else "no-answer" end) as $w
+        | if $pre == "1" or $w == "budget-deferred" then {id: $id, ok: true, aliases: {ok: false, error: $w, moved: []}}
+          else {id: $id, ok: false, aliases: {ok: false, error: $w, moved: []},
+                reason: (if $w == "no-answer" then "aliases-refresh exited \($rc) with no answer"
+                         elif ($b.detail | type) == "string" then $b.detail else "aliases-refresh refused with \($w)" end)}
+          end end')" || return 1
+  printf '%s\n' "$row"
+  case "$row" in *'"ok":false,"aliases"'*) return 1 ;; *'"aliases":{"ok":true'*) ;; *) return 0 ;; esac
+  while IFS= read -r line; do
+    [ -n "$line" ] && _models_push "$line"
+  done < <(printf '%s' "$body" | jq -r --arg id "$id" "$MODELS_JQ_DEFS"'
+    (.moved // []) | if type == "array" then .[] else empty end
+    | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
+    | moveline($id)' 2>/dev/null)
+  return 0
+}
+
 # D25 (codex-bridge Stage 2, Task 15): a refusal the lane's bridge recorded lowers that model's window, through the
 # hourly refresh. Only a `direct` lane (its mode read from the rendered lane.json by `_codex_lane_mode`, never the
 # roster; a lane whose mode cannot be read is not one) whose lane.json names a stats file (`bridgeFiles.stats`, a bare
@@ -13262,13 +13309,18 @@ _models_box_sub() {   # <subcommand> [args…]
       # lane from this list — `registryInvalid`/`catalogueInvalid` are
       # separate facts a row can carry now, and `probe` is null only when
       # there is no VALID registry.
+      # D-8751: an Anthropic row is collected apart (`select(.anthropic == true)`): it has no registry to probe, so the
+      # registry path below never sees it, and its own step (`_models_aliases_lane`) runs after the Codex steps.
+      local anth
+      anth="$(printf '%s' "$lanes" | jq -c '[.lanes[] | select(.anthropic == true)]')"
       lanes="$(printf '%s' "$lanes" | jq -c '[.lanes[] | select(.hasRegistry)]')"
 
       local wanted="$lanes"
       if [ "$target" != "--all" ]; then
         wanted="$(printf '%s' "$lanes" | jq -c --arg id "$target" 'map(select(.id == $id))')"
-        [ "$(printf '%s' "$wanted" | jq 'length')" -eq 1 ] \
-          || _models_refuse no-such-lane 1 "\"$target\" is not a lane with a class registry on this box. Anthropic lanes have none — their four classes are Claude Code's own defaults, so there is nothing to probe. For any other lane run 'ccrc models $target init <${MODELS_PROBES// /|}>' first; 'ccrc status' lists the ids this box has. Nothing was written."
+        anth="$(printf '%s' "$anth" | jq -c --arg id "$target" 'map(select(.id == $id))')"
+        [ "$(printf '%s' "$wanted" | jq 'length')" -eq 1 ] || [ "$(printf '%s' "$anth" | jq 'length')" -eq 1 ] \
+          || _models_refuse no-such-lane 1 "\"$target\" is not a lane with a class registry, or an Anthropic lane, on this box. For a lane with no registry run 'ccrc models $target init <${MODELS_PROBES// /|}>' first; 'ccrc status' lists the ids this box has. Nothing was written."
         # A lane WITH a registry that does not parse or validate is a
         # DIFFERENT fact from "no registry at all" (Fix round 1, Finding 2,
         # ruling): named directly, with the same error code the general op
@@ -13326,7 +13378,10 @@ _models_box_sub() {   # <subcommand> [args…]
           local mreason="" mat_body mat_rc=0
           # Under the lane-files lock (auto-advance spec D21): a refresh overlapping a hand verb, or another
           # refresh, re-materialises after it, never interleaved. A held lock is this row's reason, never a hang.
-          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
+          # `--refresh true` (programme wave 3, D-8838, D-8842) is this call alone: it writes the fallback for an
+          # effort level the new catalogue dropped, and records this probe's sightings of a missing pin. The switch
+          # and ensure callers' materialise passes nothing, so a dropped level is refused there as before.
+          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" --refresh true 2>/dev/null)" || mat_rc=$?
           if [ "$mat_rc" -ne 0 ]; then
             mreason="$(printf '%s' "$mat_body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
             [ -n "$mreason" ] || mreason="materialise exited $mat_rc with no answer"
@@ -13372,6 +13427,13 @@ _models_box_sub() {   # <subcommand> [args…]
             # row is about to take is kept, so the step's events land on it.
             if [ "$probe" = codex ]; then adv_ids+=("$id"); adv_at+=("${#rows[@]}"); fi
           fi
+          # D-8842, D-8865: a dropped level's fallback is never silent: every row whose materialise kept one, the
+          # LiteLLM-failure row and a refusal whose write-back failed included, carries what materialise wrote and
+          # whether the advance file recorded it (`effortFallbackRecord`), on every lane, with or without that file.
+          local fbrow
+          fbrow="$(printf '%s' "$mat_body" | tail -n1 | jq -c --argjson r "$row" \
+            '$r + (if (.effortFallback | type) == "array" then {effortFallback, effortFallbackRecord} else {} end)' \
+            2>/dev/null)" && [ -n "$fbrow" ] && row="$fbrow"
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
           # probe's own first stderr line, captured by `_models_refresh_one`.
@@ -13417,6 +13479,17 @@ _models_box_sub() {   # <subcommand> [args…]
           case "$adv" in *'"restored":false'*) failed=1 ;; esac
         done
       fi
+      # THE ANTHROPIC ARM (D-8751), after the Codex steps and inside the same deadline: one `aliases-refresh` per Anthropic
+      # row, each in the automatic context, its row appended to `rows` so that BOTH output paths below carry it (the
+      # advance overlays are keyed by the indexes the registry rows took above, which an append never moves). A budget that
+      # is spent defers a lane, never fails it.
+      local anth_n anth_i anth_id anth_row
+      anth_n="$(printf '%s' "$anth" | jq 'length')"
+      for (( anth_i = 0; anth_i < anth_n; anth_i++ )); do
+        anth_id="$(printf '%s' "$anth" | jq -r ".[$anth_i].id")"
+        anth_row="$(_models_aliases_lane "$anth_id" "$file" "$adv_deadline")" || failed=1
+        rows+=("$anth_row")
+      done
       if [ "$adv_entered" -eq 1 ]; then
         # The final output, bounded: ONE strict jq assembles the rows and the advance overlays and writes the result
         # straight to stdout (no capture, no outer printf, no per-lane merge elsewhere). Its allowance is the 18 s
@@ -19044,6 +19117,10 @@ _inst_units() {
     # none. Gated `!= server`, so `fleet` and `both` take it.
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.service" "$dir/ccd-land-probe.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.timer" "$dir/ccd-land-probe.timer" 644
+    # The weekly replay quiz's pair (Overlord W1a), role-gated for its own reason: a server box keeps no history store and
+    # runs no sessions. The unit runs the tree's deploy/history-quiz-unattended.mjs through node, so no bin is placed.
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.timer" "$dir/ccd-quiz-weekly.timer" 644
     # The test box durations timer's pair (D-7413): the fleet host's gh fetches them for its own `ccrc test`, so `!= server`.
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.service" "$dir/ccd-testbox-times.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.timer" "$dir/ccd-testbox-times.timer" 644
@@ -19541,6 +19618,8 @@ _inst_enable() {
   # idiom: a radar is a reading, not the guardrail `ccd-cap-scopes.timer` is, and it measures nothing until the
   # operator opts a project in with a conf under ~/.ccrc/landing/.
   [ "$INST_ROLE" = server ] || _inst_enable_timer land-probe ccd-land-probe.timer
+  # Same gate as its unit files, and the same DEGRADE-rather-than-die idiom: the weekly quiz is an unattended reading, not a guardrail.
+  [ "$INST_ROLE" = server ] || _inst_enable_timer quiz-weekly ccd-quiz-weekly.timer
   [ "$INST_ROLE" = server ] || _inst_enable_timer testbox-times ccd-testbox-times.timer   # a reading; with no test box URL it fetches nothing
   [ "$INST_ROLE" = server ] || _inst_enable_timer carry-dedupe ccd-carry-dedupe.timer   # housekeeping, a dry run until the operator arms it
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
@@ -28978,7 +29057,7 @@ _uninst_units() {
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
       ccd-limit-watchdog.timer ccd-limit-watchdog.service \
-      ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
+      ccd-land-probe.timer ccd-land-probe.service ccd-quiz-weekly.timer ccd-quiz-weekly.service ccd-testbox-times.timer ccd-testbox-times.service \
       ccd-carry-dedupe.timer ccd-carry-dedupe.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
@@ -29010,7 +29089,7 @@ _uninst_units() {
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
     "$dir/ccd-limit-watchdog.service" "$dir/ccd-limit-watchdog.timer" \
-    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
+    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
     "$dir/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \

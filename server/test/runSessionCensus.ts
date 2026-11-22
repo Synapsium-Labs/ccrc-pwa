@@ -94,6 +94,14 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'drops the opener itself from claimantsOfSession\'s answer (a self-claimed run is admitted, D-3012): the binding is decided in claimantsOf' },
   { file: 'server/src/coord/planRunFacts.ts', text: 'r.run.claimedBy === claimedBy',
     why: 'the claimant of the ONE run that holds a ticket against the claimant of this open request (D-8181): a retried open of the same claimant sees its own planned run\'s ticket as free; no session is asked which run is its' },
+  { file: 'server/src/coord/dispatchDecide.ts', text: 'run.claimedBy !== by',
+    why: 'the in-place bind (decideInPlaceRequest) compares the claimant of the ONE planned run it was handed with the caller: an attribute of one run row, no session is asked which run is its (D-8126)' },
+  { file: 'server/src/coord/dispatchDecide.ts', text: 'run.sessionId !== by',
+    why: 'the in-place bind (decideInPlaceRequest) refuses a planned run already bound to another session: it reads the one run row it holds, and no session is asked which run is its (D-8126)' },
+  { file: 'server/src/coord/rundefs.ts', text: 'run.sessionId === run.claimedBy',
+    why: 'actsOnClaimant compares two fields of the ONE run being closed or watched (bound to its own claimant, as an in-place run reads after a rebuild): no session is asked which run is its (D-6096)' },
+  { file: 'server/src/coord/dispatchDecide.ts', text: 'run.sessionId === run.claimedBy',
+    why: 'the self-dispatch refusal compares two fields of the ONE run being dispatched (bound to its own claimant): no session is asked which run is its (D-6096, D-8126)' },
   { file: 'server/src/coord/dispatchDecide.ts', text: 'r.id === f.sessionId',
     why: 'a lookup of a REGISTRY record by its id, to measure the wrapper and identity of the session: no run is read' },
   { file: 'server/src/coord/landingWrites.ts', text: 'c.claimedBy === command.setBy',
@@ -181,6 +189,10 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "a delivery not addressed to the coordinator under judgement is skipped (the coord-blocked arm's held mail): the mail ledger's recipient, no run is read" },
   { file: 'server/src/coord/stall.ts', text: 'x.toId === who.sessionId',
     why: "a mail row or delivery addressed to the session under judgement: the mail ledger's recipient, no run is read" },
+  { file: 'server/src/coord/coordBall.ts', text: 'd.toId === si.sessionId',
+    why: "a delivery addressed to the coordinator under judgement (the coord-ball rung holds on held mail, D-8126): the mail ledger's recipient, no run is read" },
+  { file: 'server/src/coord/coordBall.ts', text: 'm.fromId === si.sessionId',
+    why: "a mail row the coordinator under judgement sent itself (its newest wait: mail, D-8126): the mail ledger's sender, no run is read" },
   { file: 'server/src/coord/store.ts', text: 'existing.claimedBy !== input.claimedBy',
     why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader" },
   { file: 'server/src/coord/store.ts', text: '"SELECT CAST(id AS TEXT) AS idText, state FROM runs " +"WHERE program = ? AND wave = ? AND (waveOf IS ?) " +"AND claimed',
@@ -211,6 +223,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "lastRunBySession's open-worker set, part of the counted last-closed reader: its own query, not a caller's decision" },
   { file: 'server/src/coord/store.ts', text: '`SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`',
     why: "lastRunBySession's parked-worker set, part of the counted last-closed reader: its own query, not a caller's decision" },
+  { file: 'server/src/coord/store.ts', text: "`SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +'",
+    why: "lastRunBySession's other-open-worker set (D-8790), part of the counted last-closed reader: its own query, not a caller's decision" },
   { file: 'server/src/coord/store.ts', text: "`SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +'JOIN runs rr ON rr.id = m.runId ' ",
     why: "mail of a PROGRAM, joined to its runs by the mail's run id: the detector reads the templated WHERE, and no session or claimant is asked" },
   { file: 'server/src/coord/store.ts', text: 'c.heldBy === input.sessionId',
@@ -261,6 +275,10 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the live process file's conversation id, unread when empty (Overlord W2 forecasts B, F3's conversationAfterClearFor): Claude Code's conversation, no run is read" },
   { file: 'server/src/turnverdict.ts', text: 'live.state.sessionId !== prior',
     why: "the live process file's conversation id against the one before the /clear, until it rotates (Overlord W2 forecasts B, F3): Claude Code's conversation, no run is read" },
+  { file: 'server/src/continuity/routes.ts', text: 'owner.value.sessionId !== id',
+    why: "the private store's addressee of an operator message against the session reporting it picked up (Overlord W1 door process B1, the report door's picked-up arm): a message's recipient, no run is read" },
+  { file: 'server/src/coord/admissionWake.ts', text: 'w.claimedBy === b.madeBy',
+    why: 'a capacity block is matched to an admission waiter of the coordinator that recorded it (capacity follow-ups, T4 F3): one waiter row\'s claimant against one call row\'s maker, no session is asked about' },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
@@ -331,6 +349,8 @@ export const RUN_NAMES_SESSION_CALLERS: readonly NamesSessionCaller[] = [
     why: 'the minting run is ONE run with no series in hand: childBirthOf asks only whether it names the session before it places a birth' },
   { file: 'server/src/childReclaimSweep.ts', count: 2,
     why: 'a hold candidate and a minting run are single runs with no series in hand: the sweep asks only whether the run names the session' },
+  { file: 'server/src/sleepLane.ts', count: 1,
+    why: 'the run a hold names is ONE run with no series in hand: heldKindOf asks only whether that run names this session (run-own)' },
 ];
 
 const HELPER = 'runNamesSession';

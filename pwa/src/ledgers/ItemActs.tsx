@@ -90,9 +90,10 @@ export const releaseReviewOf = (item: ItemView): ReleaseReviewAction | null => {
 
 /** Where an item's controls are drawn: a row of the Waiting list, or the item's own page. */
 export type ControlsPlace = 'row' | 'item';
-/** The hierarchy actions whose controls are light enough for a row (Hand and Keep, Check again). The map's Approve and the report's
- *  Put back need the body on screen and Name needs the coordinator list, so those three are the item page's alone. */
-const ROW_LINEAR_VERBS: ReadonlySet<LinearActionVerb> = new Set<LinearActionVerb>(['linear-drift', 'linear-initiatives']);
+/** The hierarchy actions whose controls are light enough for a row (Hand and Keep, Check again, the shared-key item's settings link).
+ *  The map's Approve and the report's Put back need the body on screen and Name needs the coordinator list, so those three are the
+ *  item page's alone. */
+const ROW_LINEAR_VERBS: ReadonlySet<LinearActionVerb> = new Set<LinearActionVerb>(['linear-drift', 'linear-initiatives', 'linear-team-workspace']);
 
 /** The hierarchy action an open item carries at `place`, or `null` (Linear hierarchy, D-8184). */
 export const linearOf = (item: ItemView, place: ControlsPlace = 'item'): LinearItemAction | null => {

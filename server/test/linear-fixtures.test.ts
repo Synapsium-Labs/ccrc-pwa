@@ -32,11 +32,11 @@ const RECORDS = new Map<string, LinearRecord>(FILES.map((f) => [f, linearRecord(
 /** The hierarchy documents FX2 did not record (D-8180, D-8407), each with its constructed file. `changedProjects` and
  *  `changedMilestones` answered HTTP 400 for the milestone `creator` D-8407 removed, so their corrected documents are
  *  unsent; `changedIssues`, `teamOpenIssues` and `projectUpdate` were not in the run, and `initiativeToProjectDelete`
- *  ran only as the capture's unrecorded cleanup. */
+ *  ran only as the capture's unrecorded cleanup. `attachmentsForUrl` (D-8808) was never run: it awaits the operator's one live capture. */
 const HIERARCHY_FILE: Readonly<Partial<Record<keyof typeof LINEAR_HIERARCHY_DOCUMENTS, string>>> = {
   changedProjects: 'read-changed-projects', changedMilestones: 'read-changed-milestones', changedIssues: 'read-changed-issues',
   teamOpenIssues: 'read-team-open-issues', initiativeToProjectDelete: 'mutation-initiative-to-project-delete',
-  projectUpdate: 'mutation-project-update',
+  projectUpdate: 'mutation-project-update', attachmentsForUrl: 'read-attachments-for-url',
 };
 /** The same files, in file-name order. */
 const HIERARCHY_CONSTRUCTED = Object.values(HIERARCHY_FILE).sort().map((n) => `${n}-constructed.json`);
@@ -47,8 +47,8 @@ describe('every fixture parses, one capture record each', () => {
   it('holds the recorded set and the constructed answers', () => {
     // 31 recorded answers of FX1 (the capture's cleanup and cleanup-verify calls are not kept), 38 of FX2 (D-8407; its
     // cleanup is not kept either), the constructed 429, the constructed link mutation (D-8141) and the six constructed
-    // hierarchy answers FX2 did not record (D-8180).
-    expect(FILES).toHaveLength(77);
+    // hierarchy answers FX2 did not record (D-8180) and the constructed attached-issues read (D-8808).
+    expect(FILES).toHaveLength(78);
     expect(FILES.filter((f) => FX2(f))).toHaveLength(38);
     expect(FILES.filter((f) => f.includes('constructed'))).toEqual(
       ['error-429-ratelimited-constructed.json', 'mutation-attachment-link-url-constructed.json', ...HIERARCHY_CONSTRUCTED].sort());

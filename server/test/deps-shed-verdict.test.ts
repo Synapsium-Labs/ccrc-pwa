@@ -62,7 +62,8 @@ describe('depsShedVerdict (D-7278)', () => {
   describe('the box and the operator', () => {
     it('a box whose ccd lacks the verb holds `no-verb`', () => expect(word(input({ verb: false }))).toBe('no-verb'));
     it('the opt-out marker holds `opted-out`', () => expect(word(input({ optedOut: true }))).toBe('opted-out'));
-    it.each(['operator', 'run-live', 'unreadable'] as const)('a %s hold keeps the row (`held`)', (k) => {
+    // D-8789: `run-own` (a hold naming the worker's own open run) passes the run-done sleep, never this arm.
+    it.each(['operator', 'run-live', 'run-own', 'unreadable'] as const)('a %s hold keeps the row (`held`)', (k) => {
       expect(word(input({ heldKind: k }))).toBe('held');
     });
     it.each(['none', 'programme', 'run-terminal'] as const)('a %s hold passes', (k) => {

@@ -21,8 +21,8 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
-  type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
+  DOCS_CLASS_CAP, contentClass, docListPinKey, docsApi, docsPageUrl, entryView, githubBlobUrl,
+  type DocListPin, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
 import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
@@ -121,7 +121,7 @@ type LeafSource =
   | { readonly kind: 'version'; readonly commit: string }
   | { readonly kind: 'draft'; readonly badge: EntryBadge | null; readonly label: string; readonly worktreePath: string | null };
 
-function leafSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): LeafSource {
+function leafSource(tree: DocsTreeOk, page: Leaf, opened: DocListPin | null): LeafSource {
   if (opened === null) return { kind: 'none' };
   if (opened.kind === 'committed' && page.at !== null) return { kind: 'version', commit: opened.commit };
   if (opened.kind === 'committed') return { kind: 'committed', viewCommitted: page.view === 'committed' };
@@ -134,7 +134,7 @@ function leafSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): LeafSo
 }
 
 /** The pin the leaf has open: the visit's file slot's, else the one the tree implies (nothing read yet). */
-function openedPin(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): DocPin | null {
+function openedPin(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): DocListPin | null {
   return file.s === 'none' ? pinFor(tree, page) : file.pin;
 }
 
@@ -145,7 +145,7 @@ function badgeText(badge: EntryBadge | null): string {
 /** The truth line's source for a leaf (spec 4.5): `committed`, `committed (view=committed)`, `version <short>` (a page
  *  with `at`), or `draft · <state> in <worktree label>`. `opened` is the pin the leaf opened; null = nothing opened yet (or nothing
  *  to open), which reads "nothing opened". */
-export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): string {
+export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocListPin | null): string {
   const s = leafSource(tree, page, opened);
   switch (s.kind) {
     case 'none':
@@ -185,7 +185,7 @@ export function shareStateFor(
   // A directory, or a leaf that opens nothing (a symlink, a submodule, a withheld new file): refinement (r).
   if (k.kind !== 'leaf' || expected === null) return none;
   const updating: ShareState = { s: 'updating', to: pinCommit(expected) };
-  const readyAt = (pin: DocPin, show: DocsShowOk | null): ShareState => ({ s: 'ready', opened: { kind: 'file', pin, show } });
+  const readyAt = (pin: DocListPin, show: DocsShowOk | null): ShareState => ({ s: 'ready', opened: { kind: 'file', pin, show } });
   if (contentClass(page.path) === 'raster') {
     // `DocImage` refuses a raster over its class cap and never loads it, as nothing is read for a file slot's
     // `too-large`: the leaf is ready at `pinFor`'s pin.
@@ -258,6 +258,9 @@ export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: F
   if (cls === 'raster') {
     const size = expected.kind === 'draft' ? k.entry.draft?.size : k.entry.committed?.size;
     if (typeof size === 'number' && size > DOCS_CLASS_CAP.raster) return EXPORT_ABSENT;
+    // A draft image with no fingerprint is read by range and registered under its opened pin (the snapshot's digest),
+    // which the listing's pin does not hold: it exports nothing here.
+    if (expected.kind === 'draft' && expected.fp === null) return EXPORT_ABSENT;
     const held = x.assets?.get(docsApi.file(page.project, expected));
     if (held === undefined || held.s === 'loading') return updating;
     if (held.s === 'failed') return exportWaits('image-failed');
@@ -653,8 +656,9 @@ function ExportAction(p: {
  *  `ShareAction` is keyed by it, so a sheet left open closes when any of them changes, rather than name a page the
  *  screen no longer shows. */
 function shareKeyOf(page: TreePage, tree: DocsTreeOk, share: Exclude<ShareState, { s: 'absent' }>): string {
-  const opened = share.s === 'updating' ? 'updating'
-    : share.opened.kind === 'none' ? 'none' : docsApi.file(page.project, share.opened.pin);
+  const pin = share.s !== 'updating' && share.opened.kind === 'file' ? share.opened.pin : null;
+  // A draft with no fingerprint has no file URL (it is read by range): the listing-pin key names every pin alike.
+  const opened = share.s === 'updating' ? 'updating' : pin === null ? 'none' : docListPinKey(pin);
   return [docsPageUrl(page), tree.ref.commit, opened].join('\u0000');
 }
 

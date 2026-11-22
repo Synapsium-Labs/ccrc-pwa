@@ -20,6 +20,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { ADV_CATALOGUE, ADV_REGISTRY_BYTES } from './fixtures/advanceCases.js';
+import { aliasesFileName } from '../../shared/models.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -523,6 +524,32 @@ describe.skipIf(!HAVE_FLOCK)('every writing verb takes the lane lock (D21)', () 
       'id=lane-a', 'after unlock free', ''].join('\n'));
   });
 
+  // Model-class Anthropic arm A2.3: `aliases-refresh` writes the lane's aliases file (and, for a move, its advance
+  // file), so it is a writing op. No bash verb calls it yet (Task A2.4 wires the refresh), so it is driven the way that
+  // wiring will: `_models_node_locked <id> aliases-refresh …`, on the roster's Anthropic row.
+  it('aliases-refresh runs under the lane lock: a held lock refuses lock-busy, the file untouched, and the lock is free afterwards', async () => {
+    const h = box();
+    const reg = join(h, 'reg');
+    fs.mkdirSync(reg);
+    const aliases = join(h, '.ccrc', 'models', aliasesFileName('lane-u'));
+    const call = `_models_node_locked lane-u aliases-refresh --file "$(_models_roster_path)" --id lane-u --reg ${shq(reg)}`;
+    const before = modelsState(h);
+    const holder = await holdLock(h, 'lane-u');
+    const busy = lib(h, call, { CCRC_MODELS_LOCK_S: '1' });
+    await release(holder);
+    expect(busy.code, busy.stdout + busy.stderr).toBe(1);
+    expect(oneObject(busy)['error']).toBe('lock-busy');
+    expect(modelsState(h)).toEqual(before);
+    expect(fs.existsSync(aliases)).toBe(false);
+    // CONTROL: the same call with the lock free writes the file, and leaves the lock free.
+    const free = lib(h, `${call}\n${heldOrFree(lockPath(h, 'lane-u'), 'after')}`);
+    expect(free.code, free.stdout + free.stderr).toBe(0);
+    const [answer, after] = free.stdout.split('\n');
+    expect(JSON.parse(answer!)).toMatchObject({ ok: true, op: 'aliases-refresh', id: 'lane-u', moved: [] });
+    expect(after).toBe('after free');
+    expect(fs.existsSync(aliases)).toBe(true);
+  }, 60_000);
+
   it('rm reaps the lane\'s model files and never its lock file', () => {
     const h = box();
     plantLane(h);
@@ -743,6 +770,10 @@ describe('no writing models-op call runs outside the lane lock (D21)', () => {
     }
     expect(bad).toEqual([]);
     expect(sites.length, 'no call site runs lower-windows').toBeGreaterThan(0);
+  });
+
+  it('aliases-refresh is a write op, so the bare-call scan above refuses it unlocked (model-class Anthropic arm A2.3)', () => {
+    expect(writeOps()).toContain('aliases-refresh');
   });
 
   it('the lock order never reverses: no lane-files lock function takes the tier lock (_codex_lock)', () => {

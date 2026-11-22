@@ -1,4 +1,4 @@
-import { IDLE_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { IDLE_RUN_STATES, type FleetSession, type MarkerState, type RunState } from '../../shared/api.js';
 import {
   SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, decideSleep, type SleepInput,
   type SleepPolicy,
@@ -27,11 +27,13 @@ import {
  * close", confirmed as F5 (0) on 2026-10-20). `recent` keeps its word and changes its clock: the turn marker's newest
  * stamp must be at least the grace (`STOP_DONE_GRACE_MS`) old, not hibernation's N, so a finished worker sleeps about
  * ten minutes after its run reads `done`. The holds that guard a WORKSPACE stop holding sleep for this policy (spec
- * §3.0, sleep versus retire): a programme hold, a hold naming a terminal run, a review of an open run, and a `planned`
- * run naming it (a wave not yet dispatched uses nothing). They still guard retirement, which this lane never does. A
- * programme-held child sleeps only through `ccd hibernate --hold-ok <the exact text>` on a box that advertises
- * `hibernate-hold-ok`; an operator's own hold, a hold naming an open or unreadable run, and a box without the token
- * keep `held`. Hibernation's own sweep (`idle-hours`, `hibernateVerdict`) is untouched: it acts only once armed, and
+ * §3.0, sleep versus retire): a programme hold, a hold naming a terminal run, a hold naming the worker's own newest
+ * placed run (D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b)
+ * requires), a review of an open run, and a `planned` run naming it (a wave not yet dispatched uses nothing). They still
+ * guard retirement, which this lane never does. A programme-held child sleeps only through `ccd hibernate --hold-ok <the
+ * exact text>` on a box that advertises `hibernate-hold-ok`; an operator's own hold, a hold naming any other open run
+ * (another session's, or an older or `planned` run of its own) or an unreadable one, and a box without the token keep
+ * `held`. Hibernation's own sweep (`idle-hours`, `hibernateVerdict`) is untouched: it acts only once armed, and
  * `hibernate-disabled` stops this lane too. The words that are this lane's alone say why it is narrower: only a
  * dispatched child (`not-a-child`), only once its newest placed run is finished (`no-run`, `not-done`,
  * `close-unplaced`) and a grace has passed (`grace`), only on a box whose ccd has the verb (`no-verb`), and only with
@@ -45,6 +47,14 @@ import {
  * budget, or a dispatch's `ensure`. Another run still holds the worker (`run-worker`) only while it is ACTIVE
  * (`openPlacedWorkers`, which counts a state this build cannot name, as the caps do), so a producer's own parked run
  * never holds it.
+ *
+ * WAITING (D-8790; waiting workers spec 2026-11-19, Part 2). A worker whose newest placed run is
+ * `working` (`STOP_DONE_WAITING_STATES`) and whose turn marker has been quiet `STOP_DONE_PARKED_IDLE_MS` waits — on the
+ * operator, its coordinator or an outside event — and is put to sleep as a parked producer is. Its own active run holds
+ * it neither as `not-done` nor as `run-worker`; a SECOND active run naming it still holds `run-worker`, and a
+ * `dispatched` run (its brief unread) still holds `not-done`. Every use hold stands. The answer says it is this case
+ * (`waiting`), and the lane keeps it in shadow until the operator sets the `working-idle-sleep` row Live; a live act tells
+ * the run's coordinator once per sleep, at most `WORKER_ASLEEP_MAILS_PER_RUN` times a run (`workerAsleepNotice`, D-8791).
  */
 
 /** Every reason the lane leaves a session running this pass — a `Record`, so the list below is derived and a word
@@ -55,16 +65,17 @@ const STOP_DONE_HOLD_MAP = {
   archived: 'archived: the archive already stopped it',
   stopped: 'already stopped (the registry carries its stop stamp)',
   unmeasured: 'its identity or its status was not measured',
-  held: 'a hold stands that guards more than the workspace: the operator\'s own text, one naming a run that is open or unreadable, or a box whose ccd cannot pass a programme hold (`hibernate-hold-ok`)',
+  held: 'a hold stands that guards more than the workspace: the operator\'s own text, one naming another session\'s open run or a run that is unreadable, or a box whose ccd cannot pass a programme hold (`hibernate-hold-ok`)',
   stranded: 'stranded by an automatic swap',
   'swap-blocked': 'a swap was refused for it',
   substrate: 'a substrate marker stands',
   'runs-unreadable': 'the coordination store could not answer its runs',
   'no-run': 'no placed run names it as worker (a `planned` run is not placed)',
-  'not-done': 'its newest placed run is not finished: neither `done` nor `failed`, nor parked at `awaiting-review`, `merging` or `closing`',
+  'not-done': 'its newest placed run is not finished: neither `done` nor `failed`, nor parked at `awaiting-review`, `merging` or `closing`, nor `working` with its worker waiting',
   'close-unplaced': 'its newest placed run reads `done` or `failed` with no close time',
   grace: 'its run closed less than the grace ago',
-  'run-worker': 'another active run names it as worker',
+  'mail-disabled': 'the waiting case only: `mail-disabled` stands at the pass or at the act, so its coordinator could not be told (D-8791); an unlistable registry is held before this, by the tick\'s fail-shut return and the act\'s `registry-unlistable`',
+  'run-worker': 'another active run names it as worker (beside its own `working` run, a second one)',
   'run-claimant': 'it claims an open run (it coordinates)',
   claim: 'it holds a live claim',
   mail: 'mail to it is outstanding',
@@ -82,7 +93,7 @@ const STOP_DONE_HOLD_MAP = {
   marker: 'its turn marker does not read a finished turn (`done`), or could not be read, or is not this process\'s',
   'marker-background': 'its turn marker\'s last Stop listed background work, or could not say (`bg` not exactly 0; −1 holds)',
   scheduled: 'its last Stop listed a session cron or wakeup, or the marker cannot say (`crons` not exactly 0; absent holds)',
-  recent: 'its last main event is less than the grace old (`STOP_DONE_PARKED_IDLE_MS` for a parked run), or the marker carries no stamp to age',
+  recent: 'its last main event is less than the grace old (`STOP_DONE_PARKED_IDLE_MS` for a parked or `working` run), or the marker carries no stamp to age',
 } as const satisfies Record<string, string>;
 
 export type StopDoneHold = keyof typeof STOP_DONE_HOLD_MAP;
@@ -100,6 +111,32 @@ export const STOP_DONE_PARKED_IDLE_MS = 30 * 60_000;
 /** D-6092 (F5 (b)): the run states a producer is PARKED in — `IDLE_RUN_STATES` but `planned` (a wave not yet
  *  dispatched has no producer to park). Derived, never respelled. */
 export const STOP_DONE_PARKED_STATES: readonly string[] = IDLE_RUN_STATES.filter((st) => st !== 'planned');
+
+/** D-8790: the run state a worker WAITS in when its turn marker is quiet `STOP_DONE_PARKED_IDLE_MS`.
+ *  `dispatched` is not one: its worker has not started, and its brief is unread mail. */
+export const STOP_DONE_WAITING_STATES = ['working'] as const satisfies readonly RunState[];
+
+/** D-8790 (review 2887 F1): a waiting worker is measured from a per-pass budget of its own, never from
+ *  `STOP_DONE_MEASURES_PER_PASS`, so however many `working` workers there are, a finished or parked worker gets exactly
+ *  the measures it had before the waiting case; a spent budget skips the remaining waiting workers, never the others. */
+export const STOP_DONE_WAITING_MEASURES_PER_PASS = 3;
+
+/** D-8790 (review 2887 F1): a waiting worker the live read held (a Monitor, a session cron, a quiet under the bound) is
+ *  not measured again for this long: a third of the 30-minute quiet bound, so a worker that does go quiet is still put
+ *  to sleep within 10 minutes of the bound, and one parked on a cron is measured three times in that half hour, not
+ *  thirty. Derived from `STOP_DONE_PARKED_IDLE_MS`, never respelled. */
+export const STOP_DONE_WAITING_HOLD_OFF_MS = STOP_DONE_PARKED_IDLE_MS / 3;
+
+/** D-8790 (review 2887 F3): a hold-off on the waiting case covers ONE case, the worker on that run in that state, so a
+ *  change of the run's state (to `done`, or parked) leaves the worker to the decision it had before the waiting case. */
+export function waitingCaseKey(workerId: string, runId: number, state: string): string {
+  return `${workerId}\t${runId}\t${state}`;
+}
+
+/** Capacity follow-ups F-D (review 2913): the waiting case's hold-offs lapse when its row reads armed after a pass that
+ *  read it in shadow, so arming measures every waiting worker on the next pass. A first pass (`wasArmed` unset) clears
+ *  nothing: its memory is empty. */
+export const waitingHoldsLapse = (wasArmed: boolean | undefined, armed: boolean): boolean => armed && wasArmed === false;
 
 /** At most this many stops a pass, fleet-wide: a herd of stops is a herd of supervisors restarting on a re-dispatch,
  *  and a slower drain costs nothing (the 2026-08-14 usage-scan herd). */
@@ -140,6 +177,9 @@ export type StopDoneStoreRead =
     /** A run PARKED at review, merge or close names it, newest or not (`parkedPlacedWorkers`;
      *  sibling-parked-run-takes-parked-clock): the marker's quiet is then measured against `STOP_DONE_PARKED_IDLE_MS`. */
     readonly parkedWorker: boolean;
+    /** D-8790: an ACTIVE run other than `last` names it (`otherOpenPlacedWorkers`): what holds a
+     *  waiting worker as `run-worker`, whose own run is active. */
+    readonly otherOpenWorker: boolean;
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;
@@ -171,8 +211,10 @@ export type StopDoneLive =
 /** What the row's `.hold` is, classified by the sweep (L4) so this file still imports L0 alone (D-6091). `none`: no
  *  hold. `operator`: any text outside the programme-hold grammar (`programmeHoldOf`), the unreadable and empty
  *  placeholders included. `programme`: a programme hold naming no run. `run-terminal` / `run-live`: one naming a run
- *  the store reads in / outside `TERMINAL_RUN_STATES`. `unreadable`: one naming a run the store could not read. */
-export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-live' | 'unreadable';
+ *  the store reads in / outside `TERMINAL_RUN_STATES`. `run-own`: one naming the worker's own newest placed run, open;
+ *  D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b) requires.
+ *  `unreadable`: one naming a run the store could not read. */
+export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-own' | 'run-live' | 'unreadable';
 
 export interface StopDoneInput {
   readonly row: StopDoneRow;
@@ -196,6 +238,12 @@ export interface StopDoneInput {
   readonly live: StopDoneLive;
   readonly now: number;
   readonly graceMs: number;
+  /** D-8791 (review 2887 F2): `$REG/mail-disabled` as the pass's listing read it, and again as the act's own listing read
+   *  it (capacity follow-ups F-A). Anything but `clear` holds the
+   *  waiting case (`mail-disabled`): its coordinator must be told of every waiting sleep, and while mail cannot be
+   *  sent the worker stays awake, with no observation row and no mail. Finished and parked sleeps never read it.
+   *  Absent: not read, as `clear` (the input builders a test writes by hand); the lane always reads it. */
+  readonly mailDisabled?: MarkerState;
 }
 
 export type StopDoneVerdict =
@@ -203,6 +251,8 @@ export type StopDoneVerdict =
     readonly act: 'hibernate'; readonly runId: number; readonly idleMs: number;
     /** D-6091: the exact `.hold` text a programme hold passed with; the act hands it to `ccd hibernate --hold-ok`. */
     readonly holdOk?: string;
+    /** D-8790: the waiting case, and when the worker's quiet began. */
+    readonly waiting?: { readonly since: number };
   }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: StopDoneHold };
@@ -216,7 +266,7 @@ export const RUN_DONE_POLICY: SleepPolicy<StopDoneHold> = {
   holds: STOP_DONE_HOLDS,
   entry: { child: true, archivedBucket: false, paneDead: false, stopped: true },
   held: SLEEP_HELD_RULES.workspacePasses,
-  runClock: { kind: SLEEP_RUN_CLOCKS.runClose, parkedStates: STOP_DONE_PARKED_STATES },
+  runClock: { kind: SLEEP_RUN_CLOCKS.runClose, parkedStates: STOP_DONE_PARKED_STATES, waitingStates: STOP_DONE_WAITING_STATES },
   verbBeforeMeasure: true,
   turnVerdict: true,
   liveWord: 'sleep',
@@ -229,9 +279,10 @@ export const RUN_DONE_POLICY: SleepPolicy<StopDoneHold> = {
 export function stopDoneSleepInput(i: StopDoneInput): SleepInput {
   return {
     row: i.row, child: i.row.child, paneDead: null, stopped: i.row.stoppedBy !== null,
-    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal'),
+    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal' || i.heldKind === 'run-own'),
     overlord: i.overlord, optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
     viewerOpenTtlMs: i.viewerOpenTtlMs, verb: i.verb, live: i.live, now: i.now, quietMs: i.graceMs,
+    ...(i.mailDisabled === undefined ? {} : { mailDisabled: i.mailDisabled }),
   };
 }
 
@@ -246,9 +297,10 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   if (v.act !== 'hibernate') return v;
   // The run-close clock always names its run: a `hibernate` answer under this row carries it.
   const runId = v.runId as number;
-  return v.holdOk === undefined
-    ? { act: 'hibernate', runId, idleMs: v.idleMs }
-    : { act: 'hibernate', runId, idleMs: v.idleMs, holdOk: v.holdOk };
+  return {
+    act: 'hibernate', runId, idleMs: v.idleMs,
+    ...(v.holdOk === undefined ? {} : { holdOk: v.holdOk }), ...(v.waiting === undefined ? {} : { waiting: v.waiting }),
+  };
 }
 
 /** Is unread mail the ONE thing keeping this finished worker awake (D-6091)? The verdict asked twice — as measured,
@@ -259,9 +311,44 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
  *  row is asked with its live state unread: `measure` without the mail counts as "would sleep" here. */
 export function mailOnly(i: StopDoneInput): boolean {
   if (!i.store.ok || !i.store.mail) return false;
+  // D-8790: the count is of FINISHED workers (its title and body say so); a waiting worker's run is
+  // still working, so it is never counted, in shadow or live.
+  if (i.store.last !== null && (STOP_DONE_WAITING_STATES as readonly string[]).includes(i.store.last.state)) return false;
   const v = stopDoneVerdict(i);
   if (v.act !== 'hold' || v.reason !== 'mail') return false;
   const without = stopDoneVerdict({ ...i, store: { ...i.store, mail: false } });
   return without.act === 'hibernate' || without.act === 'measure';
 }
 
+
+/** D-8791: the notice a live sleep of a waiting worker sends its run's coordinator, keyed the stall watch's way
+ *  (`queueStallNotice`): a `run_events` observation row whose `detail` names the worker and the instant its quiet began
+ *  (`since`, the marker's newest stamp), written in ONE transaction with the mail. The row is durable and deduped on
+ *  `(runId, detail)`, so a restart or a later pass never mails the same sleep twice, acked or not. */
+export const WORKER_ASLEEP_DETAIL_PREFIX = 'worker-asleep:';
+export const WORKER_ASLEEP_SUBJECT_PREFIX = 'worker-asleep:';
+
+/** D-8791: at most this many sleep notices a run, over its whole life. A worker that wakes on mail and goes quiet again
+ *  is a new sleep; past the bound its coordinator has been told enough times that the run waits, and the sleep still
+ *  happens, unmailed. */
+export const WORKER_ASLEEP_MAILS_PER_RUN = 3;
+
+/** The bound, decided: is another sleep notice due, given the run's `run_events` details? Pure; the lane reads the rows. */
+export function workerAsleepNoticeDue(details: readonly (string | null)[]): boolean {
+  return details.filter((d) => d !== null && d.startsWith(WORKER_ASLEEP_DETAIL_PREFIX)).length < WORKER_ASLEEP_MAILS_PER_RUN;
+}
+
+const utcMinute = (ms: number): string => (Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(0, 16)}Z` : 'an unrecorded time');
+
+export function workerAsleepNotice(workerId: string, runId: number, since: number): {
+  readonly detail: string; readonly subject: string; readonly body: string;
+} {
+  const at = utcMinute(since);
+  return {
+    detail: `${WORKER_ASLEEP_DETAIL_PREFIX}${workerId}:${Number.isFinite(since) ? Math.trunc(since) : 'unrecorded'}`,
+    subject: `${WORKER_ASLEEP_SUBJECT_PREFIX} run ${runId}, last turn ended ${at}`,
+    body: `Your worker ${workerId} on run ${runId} was put to sleep: the run is working, and the worker's last turn ended at `
+      + `${at} with nothing running or scheduled since. Its workspace, branch and transcript are kept. Mail to it, or a `
+      + 'send-back, wakes it.',
+  };
+}

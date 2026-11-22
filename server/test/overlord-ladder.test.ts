@@ -30,10 +30,10 @@ describe('the rung words', () => {
 
 describe('every exported union has its runtime list', () => {
   it('the lists hold exactly the members', () => {
-    expect(L0.LADDER_CAUSES).toEqual(['generation-degraded', 'rung-word-missing']);
+    expect(L0.LADDER_CAUSES).toEqual(['generation-degraded', 'off-model', 'rung-word-missing', 'unwitnessed-third']);
     expect(L0.LADDER_READERS).toEqual(['launch-profile-unmet']);
     expect(L0.LADDER_NOTICES).toEqual(['none', 'push', 'item']);
-    expect(L0.LADDER_ACT_KINDS).toEqual(['read', 'write-note', 'acknowledge']);
+    expect(L0.LADDER_ACT_KINDS).toEqual(['read', 'write-note', 'acknowledge', 'link-team']);
     expect(L0.CONDITION_READINGS).toEqual(['standing', 'lifted', 'unmeasured']);
     expect(L0.NARROWING_WHYS).toEqual(['no-witness-yet', 'witness-unmeasured', 'not-journalled']);
     expect(L0.LADDER_EFFECT_KINDS).toEqual(['cap', 'one-under-operator', 'read-by', 'server-words']);
@@ -98,10 +98,13 @@ describe('the cause table', () => {
 
 describe('the rung cells', () => {
   it('W1\'s act kinds each have a cell at chat, advise and full, and off has none', () => {
-    for (const act of L0.LADDER_ACT_KINDS) {
-      expect(Object.keys(L0.RUNG_CELLS[act])).toEqual(['chat', 'advise', 'full']);
+    for (const act of L0.LADDER_ACT_KINDS) expect(Object.keys(L0.RUNG_CELLS[act])).toEqual(['chat', 'advise', 'full']);
+    for (const act of ['read', 'write-note', 'acknowledge'] as const) {
       for (const c of Object.values(L0.RUNG_CELLS[act])) expect(c).toBe('allow');
     }
+  });
+  it('D-8809: the Overlord\'s team link is allowed at full only', () => {
+    expect(L0.RUNG_CELLS['link-team']).toEqual({ chat: 'refuse', advise: 'refuse', full: 'allow' });
   });
 });
 

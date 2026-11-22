@@ -846,9 +846,11 @@ describe('Build 7 nouns', () => {
     // `ledgersStore.ts`' idiom; the one caller reaches it through the `DecisionAskStore` port and never holds the handle.
     // The Overlord gate (W1 gates B): `overlordGateStore.ts` is the guarded act counter and `overlord_fence_refusals`' one writer,
     // in the same idiom; it names the handle by `import type`, and every function takes it as an argument.
+    // The admission wake (D-6095, capacity Task 4): `admissionWakeTx.ts` is its one write, the observation row, the mail and
+    // the woken stamp in one transaction, in `rundefsTx.ts`' idiom (`queueStallNotice`), beside it while that file is frozen.
     const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
       'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts',
-      'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts']);
+      'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts', 'approvalParkStore.ts', 'admissionWakeTx.ts', 'skillRolloutTx.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
@@ -1106,8 +1108,10 @@ describe('the Overlord gate words have one home (W1 gates B, Task 6)', () => {
       'server/src/retire.ts',
     ]);
   });
-  it("'unwitnessed' is held by the gate alone (door process B's hookReports.ts joins when it lands)", async () => {
-    expect(await holders('unwitnessed')).toEqual([GATE]);
+  it("'unwitnessed' is held by the gate and by door process B's two files that name its verdict arm and its recorded outcome (hookReports.ts answers the gate's WitnessVerdict; witnessPorts.ts acts on it; hookReportStore.ts imports the gate's outcome type, review 2870 F10; none refuses a route)", async () => {
+    expect(await holders('unwitnessed')).toEqual([
+      'server/src/continuity/hookReports.ts', 'server/src/continuity/witnessPorts.ts', GATE,
+    ]);
   });
   it('CONTROL: a planted refuseRoute(reply, gate word) in another file is red, in each word', async () => {
     for (const w of ['not-the-overlord', 'stale-designation', 'card-unread']) {

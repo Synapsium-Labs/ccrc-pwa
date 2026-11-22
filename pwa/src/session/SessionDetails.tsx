@@ -5,27 +5,28 @@
 // line lives HERE, each fact in full: who this session works for (its
 // programme and wave and its coordinator, each a link, with the coordinator's
 // state), whose code it works on, the run number, the verbatim hold, the role,
-// the waiting question, the task tally, the subagents (a disclosure), the last
-// spawn, the graph counters, and EVERY attention marker, not just the first.
+// the waiting question, the task tally, the last spawn, the graph counters, the
+// worktrees it holds, and EVERY attention marker, not just the first. Its helpers
+// are not here: the Helpers section lists and counts them (session helpers H3, D-8875).
 // The facts come from `sessionFacts` — the same model the card reads — so the
 // header can never know less than the card.
 //
 // At every width every fact stays reachable: from 900px up the details row is
 // always shown; on a phone it folds behind one "details" door beside the
 // coordination row, so the header stays short until it is asked.
-import { useCallback, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Door, Icon, elapsedShort } from '@ccrc/ui';
+import { Door, Icon } from '@ccrc/ui';
 import { navigate } from '../lib/router';
 import { runPath, sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
-import { WorkLine } from '../fleet/WorkLine';
-import { cardFacts, contextFact, COORDINATOR_ROLE_TITLE, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
+import { SessionWorktrees } from './SessionWorktrees';
+import { cardFacts, contextFact, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { openRunAt } from '../fleet/openers';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
-import { coordinationClauses } from './sessionHeaderView';
+import { coordinationClauses, detailRows, detailsHaveFacts } from './sessionHeaderView';
 
 /** A plain detail — one fact in words, its tooltip when it has one. */
 function Detail({ children, title }: { children: ReactNode; title?: string }): ReactNode {
@@ -94,22 +95,6 @@ export function SessionCoordination({ facts, coordination, goals = null }: {
   );
 }
 
-/** D-7784 (review 1424 F2; review 1431 F): bring the entry list the operator just opened into view, sideways only. On
- *  a phone Refined draws the header's facts as one sideways rail, which the operator has swiped to reach the toggle; the
- *  list opens on a line of its own at the rail's start (refined.css), so without this it opens scrolled off to the left.
- *  Only the nearest ancestor that scrolls sideways (`overflow-x` auto or scroll, with something to scroll) moves, and only
- *  sideways: never a page, a pane or an `overflow: hidden` box. Where none scrolls (the shared header, the desk) nothing
- *  moves. */
-const bringIntoRail = (el: HTMLElement): void => {
-  for (let p = el.parentElement; p !== null; p = p.parentElement) {
-    const x = getComputedStyle(p).overflowX;
-    if ((x === 'auto' || x === 'scroll') && p.scrollWidth > p.clientWidth) {
-      p.scrollLeft += el.getBoundingClientRect().left - p.getBoundingClientRect().left;
-      return;
-    }
-  }
-};
-
 /** Everything else, in full. Always shown from 900px; behind one "details" door on a phone. */
 export function SessionDetails({ facts, coordination }: {
   facts: SessionFactSet;
@@ -117,67 +102,36 @@ export function SessionDetails({ facts, coordination }: {
 }): ReactNode {
   const wide = useMediaQuery(DESK_QUERY);
   const [open, setOpen] = useState(false);
-  const [subagentsOpen, setSubagentsOpen] = useState(false);
-  const subagentsId = useId();
-  const [delegatedOpen, setDelegatedOpen] = useState(false);
-  // Set by the tap that opens the list and spent by the list's first mount after it, so a remount (a withdrawn frame
-  // coming back while the disclosure is still open) never scrolls anything (review 1431 F).
-  const openedByTap = useRef(false);
-  const showEntries = useCallback((el: HTMLElement | null): void => {
-    if (el === null || !openedByTap.current) return;
-    openedByTap.current = false;
-    bringIntoRail(el);
-  }, []);
-  // Derived from the subagent list's id, never a `useId` of its own: the header adds a `useState`, a `useRef` and a
-  // `useCallback`, and no `useId`, so React's id counter numbers every later id as before.
-  const delegatedId = `${subagentsId}-entries`;
   const detailsId = useId();
   const s = facts.session;
   const ctx = contextFact(facts);
   const run = ctx?.key === 'programme' ? (facts.heldRun ?? facts.activeRun) : null;
-  const runId = coordination?.run?.id ?? null;
-  const asking = !facts.dead && s.hookState === 'waiting' && s.askSummary !== null && s.askSummary !== '';
-  const subagents = facts.subagents ?? [];
+  const rows = detailRows(facts, coordination);
+  const runId = rows.runId;
+  // The row is drawn only when it has something to show (`detailsHaveFacts`, review 2963 F3 to F6): with nothing, no row and no door.
+  const shown = detailsHaveFacts(facts, coordination);
+  // Review 2995 F2: whether the details region is drawn, decided by THIS render, which every change of the facts makes. The
+  // worktree controls read it when their row leaves holding the focus: a region that goes in the same commit (its last
+  // worktree and its only other fact left together) cannot take the focus, so it goes to the header's title.
+  // One answer, read by the render below and by the worktree controls (review 3123 F14: it was spelled twice).
+  const drawnNow = shown && (wide || open);
+  const drawn = useRef(false);
+  drawn.current = drawnNow;
   const details = (
-    <div className="chat-facts" id={detailsId}>
-      {/* A main checkout's heading is its project; the name the card leads with is here. */}
-      {s.workspace === null && s.name !== null && <Detail title="this session's name">{s.name}</Detail>}
+    <div className="chat-facts" id={detailsId} tabIndex={-1}>
+      {rows.name !== null && <Detail title="this session's name">{rows.name}</Detail>}
       {runId !== null && <Detail title="the run this wave belongs to — the run board names it">{`run #${runId}`}</Detail>}
-      {facts.coordinatorRole && <Detail title={COORDINATOR_ROLE_TITLE}>{COORDINATOR_WORD}</Detail>}
-      {s.held !== null && ctx?.key === 'programme' && <Detail title="the hold, verbatim">{heldWords(s.held)}</Detail>}
-      {s.pr?.number != null && <Detail>{`PR #${s.pr.number}`}</Detail>}
-      {facts.lane.away && facts.offPool === null && facts.lane.label !== undefined && <Detail>{facts.lane.label}</Detail>}
-      {asking && <Detail title="the question it is waiting on">{`asks: ${s.askSummary ?? ''}`}</Detail>}
+      {rows.held !== null && <Detail title="the hold, verbatim">{heldWords(rows.held)}</Detail>}
+      {rows.pr !== null && <Detail>{`PR #${rows.pr}`}</Detail>}
+      {rows.lane !== null && <Detail>{rows.lane}</Detail>}
+      {rows.asks !== null && <Detail title="the question it is waiting on">{`asks: ${rows.asks}`}</Detail>}
       <SessionMeta
         facts={facts}
         mode="header"
         onOpenRun={run?.id !== undefined ? openRunAt(run.id) : runId !== null && s.held !== null ? openRunAt(runId) : null}
-        subagentsOpen={subagentsOpen}
-        subagentsId={subagentsId}
-        onToggleSubagents={() => setSubagentsOpen((v) => !v)}
-        delegatedOpen={delegatedOpen}
-        delegatedId={delegatedId}
-        onToggleDelegated={() => { openedByTap.current = !delegatedOpen; setDelegatedOpen(!delegatedOpen); }}
       />
-      {/* The subagent disclosure's content: name and elapsed time, nothing else (the hooks hand over no more). */}
-      {subagentsOpen && subagents.length > 0 && (
-        <ul id={subagentsId} className="sess-subagent-list">
-          {subagents.map((sa) => (
-            <li key={`${sa.name}-${sa.startedAt}`} className="sess-subagent-row">
-              <span className="sess-subagent-name" title={sa.name}>{sa.name}</span>
-              <span className="sess-subagent-elapsed">{elapsedShort(Date.now() - sa.startedAt) ?? '<1m'}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {/* The recorded entries this session started, each in its row's words, under the description the words module
-          gives (`facts.delegated.note`). Drawn only while the disclosure is open. */}
-      {delegatedOpen && facts.delegated !== null && (
-        <div id={delegatedId} className="sess-entries" ref={showEntries}>
-          <span className="chat-fact sess-entries-note">{facts.delegated.note}</span>
-          {facts.delegated.rows.map((r) => <WorkLine key={r.key} parts={r.parts} title={r.title} nameAt={r.nameAt} />)}
-        </div>
-      )}
+      {/* The worktrees this session holds, each with its controls (D-8782: they moved here from the fleet list). */}
+      <SessionWorktrees worktrees={facts.worktrees} project={s.project} detailsStay={() => drawn.current} />
     </div>
   );
 
@@ -201,14 +155,14 @@ export function SessionDetails({ facts, coordination }: {
       {lifted.map((x) => (
         <span key={x.key} className="chat-fact chat-glance" data-glance={x.key} title={x.title}>{x.text}</span>
       ))}
-      {!wide && (
+      {!wide && shown && (
         <Door className="chat-details-toggle" glyph={open ? '▾' : '▸'}
           aria-label="Session details" aria-expanded={open} aria-controls={open ? detailsId : undefined}
           onClick={() => setOpen((v) => !v)}>
           details
         </Door>
       )}
-      {(wide || open) && details}
+      {drawnNow && details}
     </>
   );
 }

@@ -9,7 +9,7 @@ import { SWAP_REFUSALS, TESTBOX_ADMIN_ROUTE_REFUSALS, TESTBOX_PARITY_REQUIRED_SE
 import { TESTBOX_ADMIN_CODE_SENTENCE } from '../../../shared/testbox-admin';
 import type { LinkingRefusal } from '../../../shared/linking';
 import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
-import { ANSWER_MAX } from '../../../shared/ledgers';
+import { ANSWER_MAX, type LinearItemAct } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
 
 /** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
@@ -402,6 +402,10 @@ export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
   'ticket-slug-public': 'This repository is public, so a workspace name cannot be just a ticket id. Name the workspace in words.',
   'template-failed': 'The template pull request could not be opened. Nothing was changed. Try again.',
   'override-private-public': 'GitHub reads this repository as public, so it cannot be set to Private: a private rule would write ticket ids into a public repository. Choose Automatic or Public.',
+  'team-unknown': 'That team and workspace pair is not in any connected Linear workspace. Choose a workspace that holds the key, or check the workspace key.',
+  'team-set': 'This project already has a Linear team, so a suggestion is not needed.',
+  'team-ambiguous': 'More than one connected Linear workspace has that team key. Choose the workspace, then link it.',
+  'not-a-coordinator': 'Only a coordinator of a programme can suggest a Linear team. Nothing was recorded.',
 };
 
 /** The words the linking POST routes answer beside the fixed table (D-8147): not in `LINKING_REFUSAL_TEXT`, because
@@ -415,13 +419,41 @@ export const LINKING_ROUTE_TEXT: Readonly<Record<'write-failed' | 'bad-request',
 /** A linking route's failure in words: the route words first, then every other refusal's sentence. */
 export const linkingErrorText = (err: unknown): string => refusalText(err, LINKING_ROUTE_TEXT) ?? apiErrorText(err);
 
-/** `POST /api/items/:id/linear`'s one word that has no sentence above (D-8184); its other refusals read `linkingErrorText`. */
-export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found', string>> = {
-  'not-found': 'The server does not know that item. Reload the page.',
+/** The migration's own refusals (D-8186): `POST /api/projects/:project/hierarchy/migrate` answers `no-team-key`, `migration-in-flight`
+ *  and `unreachable` (no readable Linear key serves the team, or its Linear owner is not measured; nothing was written). `no-team-key` is said here for the migration, not as the
+ *  template sentence of `LINKING_REFUSAL_TEXT`, which names the template pull request. */
+export const MIGRATE_REFUSAL_TEXT: Readonly<Record<'no-team-key' | 'migration-in-flight' | 'unreachable', string>> = {
+  'no-team-key': "Set this project's Linear team key first, then reshape the team in Linear. Nothing was changed.",
+  'migration-in-flight': 'Teams are reshaped one team at a time: another team\'s migration is still open, or this team is already migrated. Nothing was changed.',
+  unreachable: 'ccrc could not find a readable Linear key for this team, or could not measure its Linear owner, so nothing was asked of Linear. Check the workspace in Settings, then try again.',
 };
-/** `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
-export const linearItemErrorText = (err: unknown): string =>
-  refusalText(err, { ...LINEAR_ITEM_REFUSAL_TEXT, 'not-open': LEDGER_REFUSAL_TEXT['not-open'] }) ?? linkingErrorText(err);
+/** The migration's refusal in its fixed sentence, or null for a word that is not one of its own. */
+export const migrateRefusalText = (err: unknown): string | null => refusalText(err, MIGRATE_REFUSAL_TEXT);
+
+/** `POST /api/items/:id/linear`'s words that have no sentence above (D-8184, D-8186); its other refusals read `linkingErrorText`. On an
+ *  item act `migration-in-flight` is Put back after the team's next migration started: refused for good (review 2892 A3). */
+export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found' | 'migration-in-flight', string>> = {
+  'not-found': 'The server does not know that item. Reload the page.',
+  'migration-in-flight': 'The team\'s next migration has started, so this one can no longer be put back. Nothing was changed.',
+};
+/** The words an item act's refusal says the same for every act: `unreachable` is the owner's measurement failing on Hand and
+ *  Return alike (nothing was changed; D-8186, D-8808); `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
+const LINEAR_ITEM_ALL_ACTS_TEXT = (): Readonly<Record<string, string>> => ({
+  ...LINEAR_ITEM_REFUSAL_TEXT,
+  'not-open': LEDGER_REFUSAL_TEXT['not-open'],
+  unreachable: 'The Linear owner could not be measured, so nothing was changed. Try again.',
+});
+/** The sentences only one act says, read through `refusalText` like the rest. Return's two owner refusals keep the map and the
+ *  note (the item stays open); Hand's `no-linear-owner` stays in `LINKING_REFUSAL_TEXT`. */
+const LINEAR_ITEM_ACT_TEXT: Readonly<Partial<Record<LinearItemAct, Readonly<Record<string, string>>>>> = {
+  return: {
+    'no-linear-owner': "This project has no Linear owner to return the map to, so the map and your note are kept. Name a Linear owner for the project, then return it again.",
+    'team-ambiguous': 'More than one connected Linear workspace has this team key, so the map and your note are kept. Choose the project\'s workspace in Settings, then return it again.',
+  },
+};
+/** An item act's refusal in words: the act's own sentences first, then the words every act shares, then the linking sentences. */
+export const linearItemErrorText = (err: unknown, act: LinearItemAct): string =>
+  refusalText(err, { ...LINEAR_ITEM_ALL_ACTS_TEXT(), ...(LINEAR_ITEM_ACT_TEXT[act] ?? {}) }) ?? linkingErrorText(err);
 
 /** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
  *  code). `null`: the answer did not carry it, so the fixed sentence above is what is said. */

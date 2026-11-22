@@ -263,6 +263,8 @@ export const RAN_NARROW_WINDOW = 12;
 /** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
 export const RAN_CARRY_READERS: readonly string[] = [
   'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
+  // The `ccd route --set` answer's reader (`server/src/routeSetOutcome.ts`, mid-turn mail PR 4): `ran === false` is `unreachable` first.
+  'routeSetOutcome',
   // The project add's reader (`server/src/projectAdd.ts`), `classifyAddFailure`'s shape: `ran === false` is `other` first.
   'classifyProjectAddFailure',
 ];
@@ -304,6 +306,7 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/coord/dispatch.ts', text: 'const holdRes = await deps.runCcd(holdArgv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/dispatch.ts', text: 'const routeRes = await deps.runCcd(', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
@@ -313,6 +316,7 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.pin.kind === \'committed\'', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsLog(call.project, call.log.commit, call.log.section, call.log.path)),', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsShowRange(call.project, call.target.where, call.target.section,', nth: 1, arm: 'carried' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },

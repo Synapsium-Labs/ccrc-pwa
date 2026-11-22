@@ -126,6 +126,10 @@ export const MODELS_DIR_NAME = 'models';
 export const registryFileName = (id) => `${id}.classes.json`;
 /** `<id>.json`: the lane's catalogue (§4.2). */
 export const catalogueFileName = (id) => `${id}.json`;
+/** `<id>.aliases.json`: an Anthropic lane's aliases file, the id each class's alias resolves to and where that reading
+ *  comes from (model-class Anthropic arm, Task A2.3). It sits beside the advance file; a lane that carries a class
+ *  registry has none. `deploy/models-op.mjs` writes it and `rm` reaps it. */
+export const aliasesFileName = (id) => `${id}.aliases.json`;
 
 /** The longest models notice `/api/notify` sends to the phone (auto-advance
  *  plan W2 Task 12). A CEILING, not a promise that every well-formed line
@@ -185,7 +189,8 @@ export function modelsPushOf(message) {
  *  Task 12, D-5211): pure, no I/O, no Fastify, no push call. The box token
  *  proves only "a process on the fleet box" (`deploy/notify.sh`'s own header),
  *  so the route sends a message to the phone only when `modelsPushOf` reads it
- *  AND its lane is a row of `roster` whose `exec.kind` is `codex`. The roster
+ *  AND its lane is a row of `roster` whose `exec.kind` is `codex` or whose `telemetry` is `anthropic` (D-8751: an
+ *  Anthropic lane's class moves are pushed in the same line shape). The roster
  *  arrives as a PARAMETER, anything with a `get(laneId)` that answers the
  *  lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`, is
  *  one), so this file reads no file and imports nothing.
@@ -196,7 +201,8 @@ export function modelsPushOf(message) {
  *    `not-a-model-line`  no shape of `modelsPushOf` matched (or not a string)
  *    `over-cap`          longer than MODELS_PUSH_MAX, so `modelsPushOf` refused it
  *    `unknown-lane`      a model line of a lane the roster has no row for
- *    `not-a-codex-lane`  a model line of a row whose exec kind is not codex.
+ *    `not-a-codex-lane`  a model line of a row that is neither codex-kind nor an Anthropic lane (the word is kept
+ *                        so an older reader's vocabulary holds).
  *  The last two also carry the `lane` (grammar-checked, so safe to print), for
  *  the operator's remedy. The roster is asked only about a line that matched,
  *  once. The tag is per lane AND class (D-5212): a phone REPLACES a
@@ -216,7 +222,7 @@ export function modelsPushDecision(message, roster) {
   if (line === null) return { verdict: 'refused', reason: overCap(message) ? 'over-cap' : 'not-a-model-line' };
   const row = roster.get(line.lane);
   if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane', lane: line.lane };
-  if (row.exec.kind !== 'codex') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
+  if (row.exec.kind !== 'codex' && row.telemetry !== 'anthropic') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
   return { verdict: 'pushable', lane: line.lane, cls: line.cls, kind: line.kind, tag: `models-advance:${line.lane}:${line.cls}` };
 }
 
@@ -302,8 +308,9 @@ function requestShapeOf(raw) {
 }
 
 /** D-8743: a plain `X.Y.Z` of decimal numbers, no leading zero, each at most six digits: the one shape a catalogue's
- *  `clientVersion` takes. The probe's Codex arm applies the same bound in its own language (`_codex_release_lookup_program`,
- *  the request program and the normaliser, ccd/ccrc-models-probe). */
+ *  `clientVersion` takes. This is the server's reader, in its own language; on the box the version's grammar is the
+ *  Codex auth library's `CLIENT_VERSION_RE` (ccd/ccgpt-auth.py, which the probe's release lookup and request program
+ *  load), and the probe's normaliser, which loads no library, checks the value it is handed with the same bound. */
 const PLAIN_VERSION_RE = /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/;
 const isPlainVersion = (v) => typeof v === 'string' && PLAIN_VERSION_RE.test(v);
 

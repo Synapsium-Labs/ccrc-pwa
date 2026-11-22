@@ -24,6 +24,7 @@ import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPO
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
+import type { RangeLoader } from '../src/docs/range/readRange';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import { HighlighterContext } from '../src/lib/highlighterContext';
 import type { Highlighter } from '../src/lib/highlightProtocol';
@@ -31,7 +32,7 @@ import type { HighlightClock } from '../src/lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
+  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, NO_RANGE_VISIT, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okFile, okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter, syncTestStore, withSyncHighlight } from './highlightTestStore';
@@ -63,6 +64,17 @@ const pngBytes = (): Uint8Array<ArrayBuffer> => new Uint8Array([...DOCS_RASTER_T
 const okPng = (): DocsRasterAnswer => ({ s: 'ok', value: { bytes: pngBytes(), mime: 'image/png' } });
 
 /** Loaders whose `file` answers by path (an unknown path answers `absent-path`). */
+/** X2 P1: `f` with a range loader whose prepare never answers, so a leaf read by range stays at "Reading…"; `calls`
+ *  names each prepare's path. */
+function withHeldRange(f: FakeLoaders): FakeLoaders & { readonly rangeCalls: string[] } {
+  const rangeCalls: string[] = [];
+  const range: RangeLoader = {
+    prepare: (target) => { rangeCalls.push(target.pin.path); return new Promise(() => undefined); },
+    frame: () => new Promise(() => undefined),
+  };
+  return { ...f, loaders: { ...f.loaders, range }, rangeCalls };
+}
+
 function byPath(tree: DocsTreeOk, files: Readonly<Record<string, DocsFileAnswer>>): FakeLoaders {
   const f = fakeLoaders({ tree: okTree(tree) });
   f.file.mockImplementation(async (_project: string, pin: DocPin) => files[pin.path] ?? failedAnswer('absent-path'));
@@ -700,17 +712,18 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     expect(blob.type).toBe('application/octet-stream');
   });
 
-  it('a listed size over DOCS_CLASS_CAP is the too-large sentence with zero file requests (spec 4.4, 6.1)', async () => {
+  it('a listed size over DOCS_CLASS_CAP is read by range, with zero file requests (spec 4.4, 6.1; X2 P1, spec 4.3)', async () => {
     const big = DOCS_CLASS_CAP.markdown + 1;
-    const f = byPath(treeOk({ entries: [
+    const f = withHeldRange(byPath(treeOk({ entries: [
       entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: big } }),
       entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } }),
-    ] }), {});
+    ] }), {}));
     open('/docs/demo/specs/a.md', f);
-    expect(await screen.findByText('This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB.')).toBeInTheDocument();
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(f.file).not.toHaveBeenCalled();
     act(() => { navigate('/docs/demo/specs/p.png'); });
-    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    await waitFor(() => expect(f.rangeCalls).toEqual(['a.md', 'p.png']));
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(f.raster).not.toHaveBeenCalled();
   });
 
@@ -851,13 +864,13 @@ describe('a fragment belongs to the page it was meant for (refinement (o), revie
     const page = pageAt('/docs/demo/specs/' + path);
     if (page.kind !== 'path') throw new Error('fixture: not a leaf');
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture: no pin');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture: no pin');
     const base = fileResponse(text);
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 },
       file: { s: 'ok', pin, answer: { ...base, contentClass }, receivedAt: 0 },
       freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
       ...over,
     };
     return { visit, ...render(<DocsLeaf visit={visit} tree={tree} page={page} parser={parser} />) };
@@ -1274,7 +1287,7 @@ describe("Review 439 F23: a direct load's #fragment survives the linked-worktree
 describe("W5 Share: a raster leaf's own image reports the pin it settled at (spec 4.3 item 5, 4.16; refinement (f))", () => {
   const visitOf = (tree: DocsTreeOk, file: DocsVisit['file']): DocsVisit => ({
     tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 }, file, freshness: { s: 'idle' }, updatedTo: null,
-    pendingFragment: null, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
+    pendingFragment: null, ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
     setFragment: vi.fn(),
   });
 
@@ -1327,7 +1340,7 @@ describe("W5 Share: a raster leaf's own image reports the pin it settled at (spe
   it('an image inside a Markdown document reports nothing', async () => {
     const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'x.png')] });
     const pin = pinFor(tree, pageAt('/docs/demo/specs/a.md'));
-    if (pin === null) throw new Error('fixture: no pin');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture: no pin');
     const f = fakeLoaders({ tree: okTree(tree) });
     f.raster.mockResolvedValue(okPng());
     const seen = vi.fn();
@@ -1664,7 +1677,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const mdTree = treeOk();
     const inline = pageAt('/docs/demo/specs/a.md');
     const mdPin = pinFor(mdTree, inline);
-    if (mdPin === null || inline.kind !== 'path') throw new Error('fixture');
+    if (mdPin === null || (mdPin.kind === 'draft' && mdPin.fp === null) || inline.kind !== 'path') throw new Error('fixture');
     const mdFile: FileSlot = { s: 'ok', pin: mdPin, answer: fileResponse('# T\n'), receivedAt: 0 };
     const mdParsed = parseMarkdown('# T\n', 'docs');
     if (mdParsed.kind !== 'tree') throw new Error('fixture');
@@ -1775,7 +1788,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const tree = treeOk();
     const page = pageAt('/docs/demo/specs/a.md');
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
     const file: FileSlot = { s: 'ok', pin, answer: fileResponse('# New\n'), receivedAt: 0 };
     const old = parseMarkdown('# Old\n', 'docs');
     if (old.kind !== 'tree') throw new Error('fixture');
@@ -1908,15 +1921,15 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     expect(document.querySelector('.docs-export')).toBeNull();
     cleanup();
     const big = treeOk({ entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: DOCS_CLASS_CAP.markdown + 1 } })] });
-    open('/docs/demo/specs/a.md', byPath(big, {}));
-    expect(await screen.findByText(/^This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB/)).toBeInTheDocument();
+    open('/docs/demo/specs/a.md', withHeldRange(byPath(big, {})));
+    expect(await screen.findByText(/^Reading 0 MiB of 2\.1 MiB/)).toBeInTheDocument();
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 
   it('a raster listed over its cap offers no Export', async () => {
     const tree = treeOk({ entries: [entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } })] });
-    open('/docs/demo/specs/p.png', byPath(tree, {}));
-    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    open('/docs/demo/specs/p.png', withHeldRange(byPath(tree, {})));
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 });

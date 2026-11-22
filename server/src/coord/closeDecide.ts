@@ -5,7 +5,7 @@ import type { CloseCause, CloseOutcome, CloseRunBody, ChildGate } from './close.
 import type { DoneClaim, DoneVerdict } from './fingerprint.js';
 import type { PrHistoryRead } from './prhistory.js';
 import type { SingleRead } from '../registry.js';
-import { HANDOFF_SHA, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
+import { HANDOFF_SHA, actsOnClaimant, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
 import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from './store.js';
 
 /**
@@ -226,10 +226,16 @@ function decideVerified(f: VerifiedFacts): CloseDecision<{ line: CcdPrLine | nul
 /** The fleet verb a close composes, and the reason a hold carries. */
 export type FleetAct = { verb: 'wsArchive' } | { verb: 'wsRelease' } | { verb: 'wsHold'; reason: string };
 
+/** The child gate of a close that read none: the workspace is not a child. An in-place run's close answers it, because the
+ *  workspace beneath it is its coordinator's own (D-6096). */
+export const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child' }, request: null };
+
 export interface ActPlan {
   /** The child gate the close read, carried to the hand-off after the commit. */
   gate: ChildGate;
-  fleet: FleetAct;
+  /** The fleet verb to compose, or `null` for NONE: an in-place run's close and abandon compose no `ws-*` verb, because the
+   *  session they would name is the claimant, whose workspace is the coordinator's own (D-6096). */
+  fleet: FleetAct | null;
   /** Is the workspace's claim GONE as a result: `true` only after a `ws-release`. */
   released: boolean;
 }
@@ -244,6 +250,15 @@ export interface CloseActFacts {
 }
 
 async function decideCloseAct(f: CloseActFacts): Promise<CloseDecision<ActPlan>> {
+  // D-6096: an in-place run's workspace is its coordinator's. No release, no hold for wave N+1 (the next wave's run names no
+  // session, never the claimant), no archive and no child gate: the sibling list and the gate are not even read.
+  if (actsOnClaimant(f.run)) {
+    if (f.state === 'failed' && f.archive) {
+      return refused({ ok: false, kind: 'hold-invalid',
+        detail: 'archive: this run is bound to its own coordinator, so its workspace is the coordinator\'s and is never archived' });
+    }
+    return go({ gate: NO_CHILD_GATE, fleet: null, released: false });
+  }
   // Fail-shut ahead of the child gate and the fleet act alike: "the sibling rows could not be read" must never
   // arrive at an irreversible act spelled `[]` (D-2545).
   if (!f.siblings.ok) return refused({ ok: false, kind: 'hold-invalid', detail: f.siblings.detail });
@@ -273,6 +288,8 @@ export interface AbandonFacts {
 }
 
 async function decideAbandon(f: AbandonFacts): Promise<CloseDecision<ActPlan>> {
+  // D-6096: as the close above, an in-place run's abandon composes no `ws-*` verb on its claimant.
+  if (actsOnClaimant(f.run)) return go({ gate: NO_CHILD_GATE, fleet: null, released: false });
   if (!f.siblings.ok) return refused({ ok: false, kind: 'hold-invalid', detail: f.siblings.detail });
   const siblings = f.siblings.siblings;
   // An abandon is FINISHED (spec §5.7), so an eligible child is exactly the no-survivor case: already released.
@@ -335,12 +352,14 @@ export interface RecheckFacts {
   stop: DeadCoordinatorStop | null;
   /** Which act ran: a release (nothing else claimed the workspace) or a re-hold under the surviving run. */
   release: boolean;
+  /** D-6096 (review 2993 F6): whether a fleet act ran at all (`ActPlan.fleet !== null`); none for an in-place run. */
+  acted: boolean;
 }
 
 function decideRecheck(f: RecheckFacts): CloseDecision<null> {
   // A revive that landed during the release keeps its run open: the stale arm names which act already ran.
-  return f.stop === null ? go(null)
-    : { kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop: f.stop, fleetAct: f.release ? 'released' : 're-held' } };
+  const fleetAct = !f.acted ? 'none' : f.release ? 'released' : 're-held';
+  return f.stop === null ? go(null) : { kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop: f.stop, fleetAct } };
 }
 
 export interface CommitFacts {

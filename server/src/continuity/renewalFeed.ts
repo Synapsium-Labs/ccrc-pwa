@@ -245,6 +245,20 @@ export const RENEWAL_HANDOVER_BODY = 'Your renewal is starting. Write your hando
 /** The spot round's notice (ask 415): one system mail telling the session to answer its round. */
 export const SPOT_PROBE_SUBJECT = 'probe';
 export const SPOT_PROBE_BODY = 'A probe round is open for you. Answer it with `ccrc-api probe`.';
+/** The Overlord's forms of the two mails (door process B1, carrying door A2's ruling `card-body-still-names-ccrc-api`): it has
+ *  no shell, so they name its doors, as its first line does; every other role keeps the `ccrc-api` form. */
+export const OVERLORD_HANDOVER_BODY = 'Your renewal is starting. Write your handover note now with your note handover door.';
+export const OVERLORD_SPOT_PROBE_BODY = 'A probe round is open for you. Answer it with your probe door.';
+/** Each role's handover ask body and spot round body, chosen as `FIRST_PROMPT_OF_ROLE` chooses the first line. */
+export const RENEWAL_MAIL_OF_ROLE: Readonly<Record<FleetRole, { readonly handover: string; readonly spotProbe: string }>> = {
+  overlord: { handover: OVERLORD_HANDOVER_BODY, spotProbe: OVERLORD_SPOT_PROBE_BODY },
+  auditor: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  replay: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  worker: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  reviewer: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  coordinator: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+  plain: { handover: RENEWAL_HANDOVER_BODY, spotProbe: SPOT_PROBE_BODY },
+};
 
 /** The states whose deliveries the mail gate holds (`renewing`): from `draining` to `probing` (A3). */
 export const RENEWING_STATES: ReadonlySet<GenerationState> = new Set<GenerationState>(['draining', 'checkpointed', 'clearing', 'carded', 'probing']);

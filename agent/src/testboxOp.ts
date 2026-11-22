@@ -21,12 +21,18 @@
 // THE BOX CALL: one WebSocket to `CCRC_TESTBOX_URL`, the `hello` with the token, and the status answer the service
 // sends in reply (D-7501), all within `CCRC_TESTBOX_STATUS_DEADLINE`. The tools sync sends one `tools.sync` frame on the
 // same connection after that answer, carrying the release in `build.json` and the versions just measured.
+//
+// THE CAPTURE OP (build capture runner, spec 2026-11-22 §2.5): `captureTestbox` reads the same settings through the same
+// fixed settings spawn (no user manager environment, no probe), opens the same connection, and after the status answer
+// sends ONE `capture.submit` for the one build the request named, then waits up to `TESTBOX_CAPTURE_DEADLINE_MS` for that
+// capture's `refused` or `ended` state. The build is used only inside that frame: it reaches no spawn and no path.
+import { randomBytes } from 'node:crypto';
 import { closeSync, constants as fsConstants, openSync, readSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  TESTBOX_PROBE_DEADLINE_MS, updateLauncherPath,
-  type TestboxBoxRead, type TestboxHostMeasure, type TestboxHostTools, type TestboxOpReply, type TestboxToolsSyncReply,
+  TESTBOX_CAPTURE_DEADLINE_MS, TESTBOX_PROBE_DEADLINE_MS, readTestboxCaptureReply, updateLauncherPath,
+  type TestboxBoxRead, type TestboxCaptureReply, type TestboxHostMeasure, type TestboxHostTools, type TestboxOpReply, type TestboxToolsSyncReply,
 } from '../../shared/agent-protocol.js';
 import { isReleaseTag } from '../../shared/api.js';
 import { parseBuildInfo } from '../../shared/buildinfo.js';
@@ -129,22 +135,25 @@ interface HostRead {
 
 const firstLine = (s: string): string => s.split('\n').find((l) => l.trim() !== '')?.trim().slice(0, 200) ?? '';
 
+/** The fleet host's test box settings: the fixed `ccrc test --testbox-knobs host` spawn on `pathEnv`, validated by the
+ *  wrapper's own printer. The settings printer needs a shell's PATH of its own; the `testbox` ops give it the user
+ *  manager's, the capture op the agent's. Never throws. */
+async function readKnobs(home: string, pathEnv: string, s: TestboxOpSeams): Promise<HostRead['knobs']> {
+  // The launcher every fixed spawn of the update, token-sync and account ops starts from (`updateLauncherPath`).
+  const knobRun = await Promise.resolve().then(() => s.exec({ HOME: home, PATH: pathEnv, LANG: 'C' }, TESTBOX_PROBE_DEADLINE_MS)(
+    updateLauncherPath(home), KNOBS_ARGV,
+  )).catch((e: unknown) => ({ status: 1, stdout: '', stderr: String(e), killed: false }));
+  if (knobRun.status !== 0 || knobRun.killed) return { ok: false, why: firstLine(knobRun.stderr) || `exit ${knobRun.status}` };
+  try { return { ok: true, lines: parseKnobLines(knobRun.stdout) }; } catch (e) { return { ok: false, why: e instanceof Error ? e.message : String(e) }; }
+}
+
 /** The user manager's environment, the settings and the six probes. Never throws. */
 async function readHost(home: string, s: TestboxOpSeams): Promise<HostRead> {
   const shown = await s.exec({ ...s.userBus, HOME: home, PATH: s.agentPath, LANG: 'C' }, TESTBOX_PROBE_DEADLINE_MS)('systemctl', SHOW_ENV_ARGV)
     .catch(() => null);
   const userEnv = shown !== null && shown.status === 0 && !shown.killed ? parseShowEnvironment(shown.stdout) : new Map<string, string>();
   const userPath = userEnv.get('PATH') ?? null;
-  // The settings printer needs a shell's PATH of its own; with the user manager's unknown it has the agent's.
-  // The launcher every fixed spawn of the update, token-sync and account ops starts from (`updateLauncherPath`).
-  const knobRun = await Promise.resolve().then(() => s.exec({ HOME: home, PATH: userPath ?? s.agentPath, LANG: 'C' }, TESTBOX_PROBE_DEADLINE_MS)(
-    updateLauncherPath(home), KNOBS_ARGV,
-  )).catch((e: unknown) => ({ status: 1, stdout: '', stderr: String(e), killed: false }));
-  let knobs: HostRead['knobs'];
-  if (knobRun.status !== 0 || knobRun.killed) knobs = { ok: false, why: firstLine(knobRun.stderr) || `exit ${knobRun.status}` };
-  else {
-    try { knobs = { ok: true, lines: parseKnobLines(knobRun.stdout) }; } catch (e) { knobs = { ok: false, why: e instanceof Error ? e.message : String(e) }; }
-  }
+  const knobs = await readKnobs(home, userPath ?? s.agentPath, s);
   const tools = {} as Record<TestboxTool, string | null>;
   // No PATH from the user manager: nothing is measured, because a version found on another PATH is not the one the
   // sessions run (D-7427).
@@ -254,4 +263,94 @@ export async function syncTestboxTools(home: string = os.homedir(), seams: Parti
   const frame = built.value;
   const r = await callBox(target, frame);
   return r.ok ? { outcome: 'sent', detail: null, frame } : { outcome: r.failure, detail: r.detail, frame };
+}
+
+/** What the capture op's tests may replace: the id's source and the wait. */
+export interface TestboxCaptureSeams {
+  /** A fresh capture id: 32 lowercase hex characters. */
+  readonly randomId?: () => string;
+  /** How long to wait, after the submit, for the capture's `refused` or `ended` state. */
+  readonly deadlineMs?: number;
+}
+
+const freshCaptureId = (): string => randomBytes(16).toString('hex');
+
+/** One connection for a capture: the hello, the status answer, one `capture.submit`, then that capture's states until
+ *  `refused` or `ended`. Frames of another type or for another capture id are not this call's and are ignored. */
+function callBoxCapture(t: BoxTarget, build: string, captureId: string, deadlineMs: number): Promise<TestboxCaptureReply> {
+  return new Promise((resolve) => {
+    let done = false;
+    let submitted = false;
+    let ws: WebSocket;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (outcome: TestboxCaptureReply['outcome'], rest: Partial<Omit<TestboxCaptureReply, 'outcome'>> = {}): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch { /* closed */ }
+      const reply: TestboxCaptureReply = { outcome, refusal: rest.refusal ?? null, result: rest.result ?? null, detail: rest.detail ?? null };
+      // The server's reader is the judge of a reply: one it would refuse is an unanswered capture, never sent on.
+      if (readTestboxCaptureReply(reply, build) === null) {
+        resolve({ outcome: submitted ? 'unanswered' : 'bad-answer', refusal: null, result: null, detail: 'the reply was off its shape' });
+        return;
+      }
+      resolve(reply);
+    };
+    timer = setTimeout(() => finish('unreachable', { detail: `no status answer within ${t.deadlineMs} ms` }), t.deadlineMs);
+    try { ws = new WebSocket(wsUrl(t.url)); } catch (e) {
+      finish('unreachable', { detail: `bad URL: ${e instanceof Error ? e.message : String(e)}` });
+      return;
+    }
+    ws.addEventListener('open', () => ws.send(JSON.stringify({ t: 'hello', token: t.token })));
+    ws.addEventListener('message', (e) => {
+      const text = typeof e.data === 'string' ? e.data : Buffer.from(e.data as ArrayBuffer).toString('utf8');
+      if (!submitted) {
+        const r = readTestboxFrame(text);
+        if (!r.ok || r.value.t !== 'status') {
+          finish('bad-answer', { detail: r.ok ? `a ${r.value.t} frame in place of the status` : r.reason });
+          return;
+        }
+        submitted = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => finish('unanswered', { detail: `no verdict within ${deadlineMs} ms` }), deadlineMs);
+        ws.send(JSON.stringify({ t: 'capture.submit', captureId, build }));
+        return;
+      }
+      // Whether a frame is this capture's is read off its own fields, so a frame the reader refuses is still told apart.
+      let raw: unknown;
+      try { raw = JSON.parse(text); } catch { return; }
+      if (typeof raw !== 'object' || raw === null || (raw as { t?: unknown }).t !== 'capture.state' || (raw as { captureId?: unknown }).captureId !== captureId) return;
+      const r = readTestboxFrame(text);
+      if (!r.ok) { finish('unanswered', { detail: `a frame for this capture was refused: ${r.reason}` }); return; }
+      if (r.value.t !== 'capture.state') return;
+      const f = r.value;
+      if (f.build !== build) { finish('unanswered', { detail: 'a state for another build' }); return; }
+      if (f.state === 'refused') finish('refused', { refusal: f.refusal, detail: f.detail });
+      else if (f.state === 'ended') finish('answered', { result: f.result, detail: f.detail });
+    });
+    ws.addEventListener('close', (e) => {
+      if (!submitted) {
+        finish('unreachable', {
+          detail: e.code === POLICY_CLOSE_CODE ? `refused: ${e.reason}` : `the connection closed (code ${e.code}${e.reason === '' ? '' : `: ${e.reason}`})`,
+        });
+      } else if (e.code === POLICY_CLOSE_CODE) finish('not-taken', { detail: `the box refused the frame: ${e.reason}` });
+      else finish('unanswered', { detail: `the connection closed (code ${e.code}${e.reason === '' ? '' : `: ${e.reason}`})` });
+    });
+    ws.addEventListener('error', () => {
+      finish(submitted ? 'unanswered' : 'unreachable', { detail: 'the connection failed' });
+    });
+  });
+}
+
+/** The `testbox-capture` op: one `capture.submit` for `build` on the box named by the fleet host's settings, and the
+ *  capture's verdict, refusal or silence. Spawns only the settings printer; reads only the token file. Never throws. */
+export async function captureTestbox(
+  build: string, seams: TestboxOpSeams & TestboxCaptureSeams, home: string = os.homedir(),
+): Promise<TestboxCaptureReply> {
+  const knobs = await readKnobs(home, seams.agentPath, seams);
+  const target = boxTarget(home, knobs);
+  if (!('url' in target)) {
+    return { outcome: target.failure, refusal: null, result: null, detail: target.detail };
+  }
+  return callBoxCapture(target, build, (seams.randomId ?? freshCaptureId)(), seams.deadlineMs ?? TESTBOX_CAPTURE_DEADLINE_MS);
 }

@@ -46,6 +46,7 @@ export type DoorRow = OverlordDoorRow | OperatorDoorRow;
 const CONTINUITY = 'server/src/continuity/routes.ts';
 const OVERLORD = 'server/src/coord/overlordRoutes.ts';
 const LEDGERS = 'server/src/coord/ledgersRoutes.ts';
+const LINKING = 'server/src/linking/routes.ts';
 
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
@@ -74,6 +75,12 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   handover: continuity('POST', '/api/sessions/:id/handover', 'operate', true, 'write-note'),
   'probe-read': continuity('GET', '/api/sessions/:id/probe', 'view', false, 'read'),
   'probe-answer': continuity('POST', '/api/sessions/:id/probe', 'operate', true, 'write-note'),
+  // D-8809: the Overlord's confirm of one team candidate (Linear hierarchy wave 8): the first Overlord door of class `other`,
+  // so every step of the order runs, and its act is allowed at `full` only.
+  'link-team': {
+    group: 'overlord', method: 'POST', path: '/api/linking/confirm', file: LINKING, verbClass: 'operate', write: true,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'link-team',
+  },
 };
 
 /** The row a registration names, by its key. A key the table lacks throws: a programming error the census catches. */
@@ -89,6 +96,7 @@ export const NOT_OVERLORD_DOORS: Readonly<Record<string, { readonly file: string
   'POST /api/sessions/:id/start': { file: CONTINUITY, why: "the hook's SessionStart report: a box-token machine lane in the hook's group" },
   'POST /api/sessions/:id/start/loads': { file: CONTINUITY, why: "the hook's report of what a start loaded: the hook's group, box token" },
   'POST /api/sessions/:id/act-key': { file: CONTINUITY, why: "the door process's one claim of its act key: a box-token machine lane, before any fence (W1 door process A1)" },
+  'POST /api/sessions/:id/report': { file: CONTINUITY, why: "the hook's report door (witness, reader and model-switch reports): a box-token machine lane in the hook's group (W1 door process B1)" },
   'POST /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
   'GET /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
   'POST /api/timers/:id/cancel': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },

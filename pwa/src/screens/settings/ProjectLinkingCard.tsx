@@ -12,23 +12,26 @@
 // act shows the pull request's URL as a link. A refusal is its word's fixed sentence (`LINKING_REFUSAL_TEXT`); the box's
 // own text never reaches the screen. A project whose cell is absent (an older server) draws nothing.
 // Layout is `settings.css`'s `.linking-*` (a container query on the card, so the pane's width decides, not the window's).
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, OptionRow, QuickConfirm, Section, Select, TextInput, TextLink, elapsedWords, useNow } from '@ccrc/ui';
-import type { LinkingOverride, ProjectLinkingWire } from '../../../../shared/linking';
+import type { LinkingOverride, LinkingWriteBody, ProjectLinkingWire, TeamCandidateWire } from '../../../../shared/linking';
+import type { LinearLegacyRow, LinearWorkspaceShown } from '../../../../shared/linear';
 import { LINKING_TEMPLATE_PATH } from '../../../../shared/linking';
 import type { ProjectRow } from '../../../../shared/api';
 import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/plan';
 import { ResultLine, SETTINGS_CARDS, inAppClick, useResultLine } from '../../fleet/settingsText';
 import { itemPath } from '../../ledgers/ledgerWords';
 import {
-  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyWriteText, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
+  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyOutcomeUnknown, hierarchyWriteText, inboundWords, migrateOutcomeUnknown, migrateWriteText, reshapeConsequence, reshapeOffered, reshapeTitle, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
 import { upkeepPath } from '../../lib/routes';
-import { writeOutcomeUnknown } from '../../lib/apiError';
 import { loadProjects } from '../../fleet/useProjectRows';
-import { candidateLabel, candidateWhy, candidatesShown, linkingRowsOf, teamLinkLine } from '../../fleet/linkingWords';
+import {
+  PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, keyWriteText,
+  linkingRowsOf, overlordCallLink, pickerWorkspacesOf, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+} from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
 
 /** The card's words. Short labels only; the sentences a refusal says are `LINKING_REFUSAL_TEXT`'s. */
@@ -99,8 +102,24 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
         () => { result.say(LINKING_TEXT.saved); raise(reread()); },
         (err: unknown) => {
           // A write whose result is unknown (no answer, or a 5xx that can follow a commit) may have landed: lock behind a read, as after a success.
-          if (writeOutcomeUnknown(err)) raise(reread());
+          if (hierarchyOutcomeUnknown(err)) raise(reread());
           result.say(hierarchyWriteText(err), 'refusal');
+        },
+      )
+      .finally(() => { track(-1); setBusy(false); });
+  };
+  // Reshape in Linear (D-8186): asks the team's Linear owner for the map. The hierarchy is read again, so the state line follows.
+  const [reshaping, setReshaping] = useState(false);
+  const reshape = (): void => {
+    setBusy(true);
+    track(1);
+    result.clear();
+    void api.migrate(name)
+      .then(
+        () => { result.say(HIERARCHY_TEXT.reshapeAsked); raise(reread()); },
+        (err: unknown) => {
+          if (migrateOutcomeUnknown(err)) raise(reread());
+          result.say(migrateWriteText(err), 'refusal');
         },
       )
       .finally(() => { track(-1); setBusy(false); });
@@ -132,20 +151,28 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
           ? <TextLink href={itemPath(h.itemId)} onClick={inAppClick(itemPath(h.itemId))}>{HIERARCHY_TEXT.mapWaiting}</TextLink>
           : <p className="settings-note">{stateWords(h)}</p>}
         {inbound !== null && <p className="settings-note">{inbound}</p>}
+        {reshapeOffered(h) && (
+          <Button variant="ghost" className="linking-reshape" disabled={busy || locked} onClick={() => setReshaping(true)}>{HIERARCHY_TEXT.reshape}</Button>
+        )}
         {h.teamKey !== null && <TextLink href={upkeepPath(name)} onClick={inAppClick(upkeepPath(name))}>{HIERARCHY_TEXT.upkeep}</TextLink>}
       </div>
+      <QuickConfirm open={reshaping} onClose={() => setReshaping(false)} title={reshapeTitle(h.teamKey ?? '')}
+        consequence={reshapeConsequence(h.teamKey ?? '')} confirmLabel={HIERARCHY_TEXT.reshapeConfirm} onConfirm={reshape} />
     </div>
   );
 }
 
-function LinkingRow({ name, linking, now, onStored, answer, landed, floor, inflight, raise, track, reread }: {
-  name: string; linking: ProjectLinkingWire; now: number; onStored: (project: string, linking: ProjectLinkingWire) => void;
+function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, answer, landed, floor, inflight, raise, track, reread }: {
+  name: string; linking: ProjectLinkingWire; now: number; workspaces: readonly LinearWorkspaceShown[] | null; onStored: (project: string, linking: ProjectLinkingWire) => void; refreshList: () => Promise<void>;
   answer: HierarchyAnswer | null; landed: number; floor: number; inflight: number; raise: (seq: number) => void; track: (d: 1 | -1) => void; reread: () => number;
 }): ReactNode {
   const keyId = useId();
   const overrideId = useId();
+  const workspaceId = useId();
   const [draft, setDraft] = useState(linking.teamKey ?? '');
   const [busy, setBusy] = useState(false);
+  const [listBusy, setListBusy] = useState(false);
+  const locked = busy || listBusy;
   // The seq of the re-read this row's last write needs: the hierarchy controls stay locked until a read that new has landed.
   const [need, setNeed] = useState(0);
   const [asking, setAsking] = useState(false);
@@ -154,25 +181,42 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
 
   // The stored row is what the field shows: a re-read (the answer of a write) puts the field back on it.
   useEffect(() => { setDraft(linking.teamKey ?? ''); }, [linking.teamKey]);
+  // D-8808: the workspace the typed key lives in, among the connected workspaces that hold it; the stored one is preselected.
+  const [chosen, setChosen] = useState(linking.teamWorkspace ?? '');
+  useEffect(() => { setChosen(linking.teamWorkspace ?? ''); }, [linking.teamWorkspace]);
+  const holders = workspacesHoldingKey(workspaces, draft);
 
-  const write = (body: { teamKey: string | null; override: LinkingOverride | null }): void => {
+  const write = (body: LinkingWriteBody): void => {
     setBusy(true);
     result.clear();
     void api.saveLinking(name, body)
       .then(
         (a) => { onStored(name, a.linking); setNeed(reread()); result.say(LINKING_TEXT.saved); },
         (err: unknown) => {
-          if (writeOutcomeUnknown(err)) setNeed(reread());
-          result.say(hierarchyWriteText(err), 'refusal');
+          // The project list holds the linking cell, so it is read again too, and the row's controls stay locked until it lands (D-8186 A1).
+          if (hierarchyOutcomeUnknown(err)) { setNeed(reread()); setListBusy(true); void refreshList().finally(() => setListBusy(false)); }
+          result.say(keyWriteText(err, holders.length), 'refusal');
         },
       )
       .finally(() => setBusy(false));
   };
+  // A key held by several workspaces needs one chosen: Save and Enter wait for it.
+  const needsWorkspace = holders.length > 1 && workspaceToWrite(holders, chosen) === undefined;
   const saveKey = (): void => {
+    if (locked || needsWorkspace) return;
     const key = draft.trim().toUpperCase();
-    write({ teamKey: key === '' ? null : key, override: linking.override });
+    const workspace = key === '' ? undefined : workspaceToWrite(workspacesHoldingKey(workspaces, key), chosen);
+    write({ teamKey: key === '' ? null : key, override: linking.override, ...(workspace === undefined ? {} : { workspace }) });
+  };
+  // A candidate's tap (`candidateTap`): its pair is written, or, for a key several workspaces hold and the candidate names none of,
+  // the key goes into the field with no workspace chosen, so the picker asks and Save waits for it (final review I2).
+  const tapCandidate = (c: TeamCandidateWire): void => {
+    const tap = candidateTap(c, workspaces);
+    if (tap.kind === 'pick') { setDraft(c.key); setChosen(''); return; }
+    write({ teamKey: c.key, override: linking.override, ...(tap.workspace === undefined ? {} : { workspace: tap.workspace }) });
   };
   const linkLine = teamLinkLine(linking);
+  const callLink = overlordCallLink(linking.teamLink);
   const candidates = candidatesShown(linking);
   const openTemplate = (): void => {
     setBusy(true);
@@ -200,21 +244,36 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
             autoComplete="off"
             autoCapitalize="characters"
             spellCheck={false}
-            disabled={busy}
+            disabled={locked}
             onChange={(e) => setDraft(e.target.value.toUpperCase())}
             onKeyDown={(e) => { if (e.key === 'Enter') saveKey(); }}
           />
-          <Button variant="ghost" disabled={busy} onClick={saveKey}>{LINKING_TEXT.save}</Button>
+          <Button variant="ghost" disabled={locked || needsWorkspace} onClick={saveKey}>{LINKING_TEXT.save}</Button>
         </div>
+        {holders.length > 1 && (
+          <div className="linking-workspace" data-linking-workspace="">
+            <label htmlFor={workspaceId} className="settings-note">{PICKER_WORDS.label}</label>
+            <Select id={workspaceId} value={chosen} disabled={locked} onChange={(e) => setChosen(e.target.value)}>
+              <option value="">{PICKER_WORDS.choose}</option>
+              {holders.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </Select>
+            {needsWorkspace && <p className="settings-note">{PICKER_WORDS.needed}</p>}
+          </div>
+        )}
         {linkLine !== null && <p className="settings-note linking-auto" data-linking-auto="">{linkLine}</p>}
+        {callLink !== null && (
+          <TextLink href={callLink.href} onClick={inAppClick(callLink.href)}>{callLink.words}</TextLink>
+        )}
         {candidates.length > 0 && (
           <div className="linking-candidates" role="group" aria-label={LINKING_TEXT.candidates}>
             <p className="settings-note">{LINKING_TEXT.candidates}</p>
             {candidates.map((c) => (
-              <div key={c.key} className="linking-candidate" data-linking-candidate={c.key}>
-                <Button variant="ghost" disabled={busy} onClick={() => write({ teamKey: c.key, override: linking.override })}>
+              <div key={candidateKeyOf(c)} className="linking-candidate" data-linking-candidate={c.key}>
+                <Button variant="ghost" disabled={locked} aria-label={candidateAriaLabel(c)}
+                  onClick={() => tapCandidate(c)}>
                   {candidateLabel(c)}
                 </Button>
+                {candidateWorkspaceLine(c) !== null && <p className="settings-note">{candidateWorkspaceLine(c)}</p>}
                 <p className="settings-note">{candidateWhy(c)}</p>
               </div>
             ))}
@@ -227,7 +286,7 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
         <Select
           id={overrideId}
           value={linking.override ?? ''}
-          disabled={busy}
+          disabled={locked}
           onChange={(e) => write({ teamKey: linking.teamKey, override: overrideOf(e.target.value) })}
         >
           <option value="">{LINKING_TEXT.automatic}</option>
@@ -240,11 +299,11 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
           <p className="settings-note">{template === 'present' ? LINKING_TEXT.templatePresent : LINKING_TEXT.templateAbsent}</p>
         )}
         {templateOffered(linking) && (
-          <Button variant="ghost" disabled={busy} onClick={() => setAsking(true)}>{LINKING_TEXT.openTemplate}</Button>
+          <Button variant="ghost" disabled={locked} onClick={() => setAsking(true)}>{LINKING_TEXT.openTemplate}</Button>
         )}
         {pr !== null && <TextLink href={pr}>{LINKING_TEXT.templatePr}</TextLink>}
       </div>
-      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={busy} locked={inflight > 0 || landed < Math.max(need, floor)} setBusy={setBusy} raise={raise} track={track} result={result} />}
+      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={locked} locked={inflight > 0 || landed < Math.max(need, floor)} setBusy={setBusy} raise={raise} track={track} result={result} />}
       <div className="linking-result"><ResultLine line={result.line} /></div>
       <QuickConfirm
         open={asking}
@@ -277,7 +336,7 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
     void api.ownerForAll(pick)
       // It wrote every row: every row stays locked until a read at least as new as this write has landed (the card's floor).
       .then(() => { result.say(HIERARCHY_TEXT.allDone); setFloor(reread()); }, (err: unknown) => {
-        if (writeOutcomeUnknown(err)) setFloor(reread());
+        if (hierarchyOutcomeUnknown(err)) setFloor(reread());
         result.say(hierarchyWriteText(err), 'refusal');
       })
       .finally(() => { track(-1); setBusy(false); });
@@ -300,7 +359,13 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
 /** One read of the project list, and the rows the cards draw from it. */
 type Read = { kind: 'loading' } | { kind: 'failed' } | { kind: 'read'; rows: ProjectRow[] };
 
-export function ProjectLinkingCard(): ReactNode {
+/** `workspaces` and `legacy` are the Settings frame's one read of `GET /api/linear/workspaces` (the Linear card's poll), never a
+ *  read of the card's own: `workspaces` is `null` while it is unread or unreadable, so no picker (D-8808). The picker offers the
+ *  file slots and the legacy key's workspace while it routes (`pickerWorkspacesOf`, review 2971 A1). */
+export function ProjectLinkingCard({ workspaces: slots, legacy = null }: {
+  workspaces: readonly LinearWorkspaceShown[] | null; legacy?: LinearLegacyRow | null;
+}): ReactNode {
+  const workspaces = useMemo(() => pickerWorkspacesOf(slots, legacy), [slots, legacy]);
   const card = SETTINGS_CARDS.security.linking;
   const now = useNow(30_000);
   const [read, setRead] = useState<Read>({ kind: 'loading' });
@@ -351,6 +416,18 @@ export function ProjectLinkingCard(): ReactNode {
   const stored = useCallback((project: string, linking: ProjectLinkingWire): void => {
     setRead((r) => r.kind !== 'read' ? r : { kind: 'read', rows: r.rows.map((p) => p.name === project ? { ...p, linking } : p) });
   }, []);
+  // The project list read again after a write whose outcome is unknown: its linking cell may be stale. The newest read wins; a
+  // failed one leaves a list that cannot be trusted, so the card says so (D-8186 A1).
+  const listSeq = useRef(0);
+  const refreshList = useCallback(async (): Promise<void> => {
+    const mine = ++listSeq.current;
+    try {
+      const r = await loadProjects();
+      if (mine === listSeq.current) setRead({ kind: 'read', rows: r.projects });
+    } catch {
+      if (mine === listSeq.current) setRead({ kind: 'failed' });
+    }
+  }, []);
   const answer = hier.kind === 'read' ? hier.answer : null;
 
   let body: ReactNode;
@@ -362,7 +439,7 @@ export function ProjectLinkingCard(): ReactNode {
       : shown.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
         : (
           <ul className="linking-list">
-            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} inflight={inflight} raise={raise} track={track} reread={reread} />)}
+            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} workspaces={workspaces} onStored={stored} refreshList={refreshList} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} inflight={inflight} raise={raise} track={track} reread={reread} />)}
           </ul>
         );
   }

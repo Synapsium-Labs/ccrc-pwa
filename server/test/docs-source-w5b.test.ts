@@ -11,7 +11,7 @@ import type { CcdResult, CcdRunner } from '../src/lifecycle.js';
 import { ccdDocsReader } from '../src/docs/ccdsource.js';
 import { HISTORY_JOB, docsShowPlan } from '../src/docs/policy.js';
 import type { DocsShowAsk } from '../src/docs/ports.js';
-import type { DocPin, DocsLogAsk } from '../../shared/docs.js';
+import type { DocFilePin, DocsLogAsk } from '../../shared/docs.js';
 
 /** A recording runner: every argv it is handed, and one scripted answer for all of them. */
 function recorder(answer: CcdResult): { run: CcdRunner; calls: string[][] } {
@@ -29,9 +29,9 @@ const SHA = 'a'.repeat(40);
 const PLAN = docsShowPlan('a.md', undefined);
 const ASK: DocsShowAsk = { maxBytes: PLAN.maxBytes, job: PLAN.job, listedBlob: null };
 const SRC = { node: 'n', project: 'demo' };
-const committed = (section: 'specs' | 'vision' | 'promise'): DocPin =>
+const committed = (section: 'specs' | 'vision' | 'promise'): DocFilePin =>
   ({ kind: 'committed', commit: SHA, servedRef: 'refs/remotes/origin/main', section, path: 'a.md' });
-const draft = (section: 'specs' | 'vision' | 'promise'): DocPin =>
+const draft = (section: 'specs' | 'vision' | 'promise'): DocFilePin =>
   ({ kind: 'draft', branch: 'ws/a', head: SHA, section, path: 'a.md', fp: 'b'.repeat(64) });
 
 const OLD = state(['caps', DOCS_CAP]);

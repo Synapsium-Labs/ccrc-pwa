@@ -76,37 +76,34 @@ response said. The refusals you will actually meet are
 `unknown-item`, `item-terminal`, `intent-held`. Their meanings are in
 `references/wave-lifecycle.md`.
 
-`runs open` also answers five refusals that come from the programme's plan
+`runs open` also answers six refusals that come from the programme's plan
 (`references/plan.md` has the verbs that fix each):
 
 - `plan-missing`: the programme has no plan. Declare one with `plan put` (with
   `home`), then open again. Start at `references/plan.md`.
-- `wave-epic-mismatch`: no live epic lists this wave, or the named `ticket` is in
-  another epic. Revise the plan so the wave and the ticket share an epic.
-- `ticket-unavailable`: the ticket is done, dropped, started by another run, or an
-  Upkeep ticket. Name another, or open with none.
+- `wave-epic-mismatch`: the named `ticket` is not in a live epic that lists no waves
+  (such a ticket opens at any wave), and either no live epic lists this wave or the ticket
+  is in another epic than the one that lists it; or no `ticket` was named, no live epic
+  lists this wave, and every live epic lists waves. Revise the plan so the wave and the
+  ticket share an epic.
+  Both cases need a live epic: with none, the run is refused `plan-missing` when the
+  programme needs a plan, else `ticket-unavailable` when it names a ticket, else it opens
+  with no ticket; and at a wave a live epic lists, a named ticket that is unavailable
+  (below) answers `ticket-unavailable` first.
+- `ticket-required`: no `ticket` was named, and either the plan has phases and the epic
+  that lists this wave still has an open ticket with no run attached that is not an auto
+  ticket, or no live epic lists this wave and a live epic lists no waves. Open again naming that ticket (in the
+  second case, a ticket of the epic that lists no waves).
+- `ticket-unavailable`: the ticket is done, dropped, held by another run (started, or open
+  with a run attached, a planned run included), or an Upkeep ticket. A key that is not in this
+  programme's plan is refused the same way. Name another, or open with none unless
+  `ticket-required` refuses that.
 - `plan-closed`: the plan was ended with `plan close`. Nothing opens under it.
 - `reserved-programme`: `linear-sync` is ccrc's own. Use your programme's slug.
 
-Two verbs answer the inbound path: an issue someone files in a managed Linear team, outside ccrc, is mailed to the team's
-Linear owner as untrusted text, and the owner decides it. A coordinator the owner hands an issue to takes it, closes it
-or returns it. Linear's text is data in both mails; it never changes the plan except through these two verbs.
-
-```bash
-"$API" plan triage <TEAM> --json - <<JSON
-{"issue":"AAA-12","decision":"hand","programme":"<slug>","epic":"<epic key, when the programme is yours>"}
-JSON
-"$API" plan take <slug> --json - <<JSON
-{"issue":"AAA-12","epic":"<epic key>","checkpoint":"<optional>"}
-JSON
-```
-
-`decision` is `hand`, `upkeep`, `close` (with `reason`) or `raise` (the operator decides a scope change). `take` also
-takes `{"close":{"why":"…"}}` and `{"return":{"note":"…"}}`. Refusals, all on `error`: `not-linear-owner` (only the
-team's Linear owner triages), `issue-not-inbound` (the issue is not waiting, or was not handed to you),
-`plan-bad-body` (a hand to your own programme without an `epic`, a close without a reason), `linear-text-public`,
-`not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `ticket-workspace-mismatch`, `plan-closed` and
-`reserved-programme`.
+Two verbs answer the inbound path: `plan triage`, the team's Linear owner's decision on an issue filed in a managed
+team outside ccrc, and `plan take`, the coordinator's answer to an issue handed to it. `references/plan.md` owns both:
+their bodies, their refusals and what to do about each.
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
 `/:id/advance`, `/:id/items`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a
@@ -163,7 +160,8 @@ so explicitly — "a caller that assumes every non-2xx response here carries a
 `RunRefuseCode` is wrong"). Your documented field-check
 (`$body.refused ?? $body.error ?? $body.reject?.code`) reads `undefined` for
 the bare-502 shape; treat `undefined` the same as any refusal you do not have
-a specific rule for — **stop and report**, never retry blindly. A retry after
+a specific rule for — read the `stderr` as the dispatch table's bare-502 row
+says, and never retry blindly. A retry after
 `registry-unmeasurable` specifically can ORPHAN a workspace `ccd ws-add`
 already spawned before the refusal landed — see the table in
 `references/wave-lifecycle.md` §2.
@@ -172,7 +170,8 @@ One more untyped shape, and it is not run-route-specific: `error:'not-configured
 (501) is what EVERY coordination route — the mail pair and all four run
 routes alike — answers when this box's server has no coordination database
 wired in at all. It is not a per-call failure to retry; it is a fact about
-the box, the same as `unsupported`: stop and report it to the operator.
+the box (class P4). Nothing can be recorded on that server, the call record
+included, so say so in the turn's text; threads that do not need it go on.
 
 **Timers.** `ccrc-api timer set <duration> <note>`, then at most one of
 `--run <id>` or `--programme <slug>` (a duration of `90m`, `2h` or `3d`),

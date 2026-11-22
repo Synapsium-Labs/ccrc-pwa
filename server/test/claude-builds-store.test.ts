@@ -57,7 +57,7 @@ describe('the record\'s writers (D-8289)', () => {
     expect(c.noteClaudeBuildsSeen(['2.1.320', '2.1.302'], 100)).toEqual(['2.1.320']);
     expect(c.noteClaudeBuildsSeen(['2.1.320'], 200)).toEqual([]);
     expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toEqual({
-      build: '2.1.320', source: 'fleet', capture: 'queued', cwd: false, seenAt: 100, attempts: 0, lastAttemptAt: null, notSent: null, verdictAt: null, output: null,
+      build: '2.1.320', source: 'fleet', capture: 'queued', cwd: false, seenAt: 100, attempts: 0, lastAttemptAt: null, notSent: null, verdictAt: null, output: null, fails: 0,
     });
     expect(c.claudeBuilds().find((r) => r.build === '2.1.302')?.source).toBe('rig');
   });
@@ -95,5 +95,62 @@ describe('the record\'s writers (D-8289)', () => {
     expect(buildTrustOf(c.claudeBuilds(), '2.1.320')).toEqual({ kind: 'untrusted', reason: 'capture-failed' });
     expect(c.requeueClaudeBuild('2.1.320')).toBe('queued');
     expect(c.claudeBuilds().find((r) => r.build === '2.1.320')).toMatchObject({ capture: 'queued', lastAttemptAt: null, notSent: null, verdictAt: null, output: null, attempts: 1 });
+  });
+
+  it('a failed verdict counts one more fails, a pass none, and the automatic re-queue keeps the count (slug capture-retry-ceiling)', () => {
+    const c = store();
+    c.noteClaudeBuildsSeen(['2.1.320', '2.1.321'], 100);
+    const fails = (b: string): number | undefined => c.claudeBuilds().find((r) => r.build === b)?.fails;
+    expect(fails('2.1.320')).toBe(0);
+    for (let k = 1; k <= 3; k++) {
+      expect(c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'red' }, 100 + k)).toBe(true);
+      expect(fails('2.1.320')).toBe(k);
+      expect(c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'red' }, 100 + k), 'a verdict never overwrites another').toBe(false);
+      expect(fails('2.1.320')).toBe(k);
+      expect(c.requeueClaudeBuild('2.1.320', { keepLadder: true })).toBe('queued');
+      expect(fails('2.1.320')).toBe(k);
+    }
+    c.recordClaudeBuildVerdict({ build: '2.1.321', pass: true, cwd: true, output: 'ok' }, 200);
+    expect(fails('2.1.321')).toBe(0);
+    expect(c.claudeBuilds().filter((r) => r.source === 'rig').map((r) => r.fails)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('the operator\'s Capture again restarts the ladder; the automatic retry keeps the count and the last output (review 3234 F6, F12)', () => {
+    const c = store();
+    c.noteClaudeBuildsSeen(['2.1.320'], 100);
+    const row = () => c.claudeBuilds().find((r) => r.build === '2.1.320');
+    c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'replay: 1 failed' }, 160);
+    expect(c.requeueClaudeBuild('2.1.320', { keepLadder: true })).toBe('queued');
+    expect(row()).toMatchObject({ capture: 'queued', fails: 1, output: 'replay: 1 failed', verdictAt: 160, lastAttemptAt: null, notSent: null });
+    c.recordClaudeBuildVerdict({ build: '2.1.320', pass: false, cwd: false, output: 'replay: 2 failed' }, 170);
+    expect(row()).toMatchObject({ capture: 'fail', fails: 2, output: 'replay: 2 failed', verdictAt: 170 });
+    expect(c.requeueClaudeBuild('2.1.320')).toBe('queued');
+    expect(row()).toMatchObject({ capture: 'queued', fails: 0, output: null, verdictAt: null });
+  });
+});
+
+describe('claude_builds.fails is one more entry: one column and its backfill (slug capture-retry-ceiling)', () => {
+  const ADD = /ALTER TABLE claude_builds ADD COLUMN fails(?![A-Za-z0-9_])/;
+  const FAILS_SLOT = MIGRATIONS.findIndex((m) => ADD.test(m)) + 1;
+  it('the slot is found by its DDL, after the table, once', () => {
+    expect(FAILS_SLOT).toBeGreaterThan(SLOT);
+    expect(MIGRATIONS.filter((m) => ADD.test(m)).length).toBe(1);
+  });
+  it('a failed row from before the entry counts its one failure; every other row counts none; no table or index is added', () => {
+    const p = path.join(mkTmp('ccrc-mig-claude-fails-'), '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => { for (let v = 0; v < FAILS_SLOT - 1; v++) raw.exec(MIGRATIONS[v]!); raw.exec(`PRAGMA user_version = ${FAILS_SLOT - 1}`); });
+    raw.exec("INSERT INTO claude_builds (build, source, capture, seenAt, verdictAt, attempts) VALUES ('2.1.320', 'fleet', 'fail', 1, 2, 1), ('2.1.321', 'fleet', 'queued', 1, NULL, 0)");
+    const names = (): string[] => (raw.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'")
+      .all() as unknown as { name: string }[]).map((r) => r.name).sort();
+    const had = names();
+    raw.exec(MIGRATIONS[FAILS_SLOT - 1]!);
+    expect(names()).toEqual(had);
+    expect(raw.prepare("SELECT build, fails FROM claude_builds WHERE source = 'fleet' ORDER BY build").all()).toEqual([
+      { build: '2.1.320', fails: 1 }, { build: '2.1.321', fails: 0 },
+    ]);
+    expect(raw.prepare("SELECT DISTINCT fails FROM claude_builds WHERE source = 'rig'").all()).toEqual([{ fails: 0 }]);
+    raw.close();
   });
 });

@@ -2,8 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, dispatchWaitVerdict, probeEpisodeText, probeRecheckDue, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
-  requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, textFactsOf, textRefusalOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
+  adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, dispatchWaitVerdict, probeEpisodeText, probeRecheckDue, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, putBackTicketsOf, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
+  requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, textFactsOf, textRefusalOf, textFactOfTeam, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { givenUpReason, givenUpWord, inboundActVerdict, inboundHeld, keyWaitMail } from '../src/linear/inboundPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
@@ -725,5 +725,54 @@ describe('textRefusalOf and textFactsOf (review 2457 F3)', () => {
   it('an object the plan does not hold is judged unknown, public, with the binding\'s own team', () => {
     const s = snap({ mode: 'private', tickets: [tk()] });
     expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 999, teamKey: 'BBB' }))).toEqual([{ teamKey: 'BBB', mode: 'unknown' }]);
+  });
+
+  it('a project the snapshot does not describe is judged unknown, public, with the binding\'s own team (review 2874 A5)', () => {
+    const s = { ...snap({ mode: 'private', tickets: [tk()] }), projects: [] };
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 1, teamKey: 'BBB' }))).toEqual([textFactOfTeam(null, 'BBB')]);
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 1, teamKey: 'BBB' }))).toEqual([{ teamKey: 'BBB', mode: 'unknown' }]);
+  });
+});
+
+describe('textFactOfTeam (review 2834 F1)', () => {
+  it('an owner reading stands as it is; no owner is the issue\'s own team, unknown (public)', () => {
+    expect(textFactOfTeam({ teamKey: 'AAA', mode: 'private' }, 'ZZZ')).toEqual({ teamKey: 'AAA', mode: 'private' });
+    expect(textFactOfTeam(null, 'CCC')).toEqual({ teamKey: 'CCC', mode: 'unknown' });
+    expect(textFactOfTeam(null, null)).toEqual({ teamKey: null, mode: 'unknown' });
+    expect(textRefusalOf(['dup of CCC-77'], [textFactOfTeam(null, 'CCC')], [])).toBe('tracker id');
+  });
+});
+
+describe('wave 3 F3/F5, carried to wave 7 (D-8186): a bound ticket put back keeps its held team on its project', () => {
+  const extra: SyncSnapshot['projects'] = [{ project: 'proj-k', teamKey: 'KEY', workspaceId: WS, mode: 'private', initiatives: 'on' }];
+  const t2 = tk({ id: 2, key: 't2', project: 'proj-k' });
+  const held = (state: BindingRow['state']) => bind({ localKind: 'ticket', localId: 2, teamKey: 'KEY', identifier: 'KEY-2', state });
+  const afterPutBack = (b: BindingRow, putBack: { epicId: number; ticketId: number }[]): SyncSnapshot => {
+    const first = planSyncSteps(snap({ tickets: [t2], extraProjects: extra })).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (first?.kind !== 'create') throw new Error('no project create');
+    expect(first.input['teamIds']).toEqual([TEAM, U(3)].sort());
+    // the snapshot as `withoutPutBack` leaves it: the ticket gone, its epic id kept
+    return { ...snap({ tickets: [], extraProjects: extra, bindings: [bind({ localKind: 'epic', localId: 1, fingerprint: first.fingerprint }), b] }), putBackTickets: putBack };
+  };
+  const projectUpdates = (x: SyncSnapshot) => planSyncSteps(x).steps.filter((st) => st.kind !== 'skip' && st.op === 'projectUpdate');
+
+  it('no project update drops the team its issue still sits in', () => {
+    expect(projectUpdates(afterPutBack(held('bound'), [{ epicId: 1, ticketId: 2 }]))).toEqual([]);
+    // the control: without the put-back ticket in the snapshot, the update takes the team off the project
+    const control = projectUpdates(afterPutBack(held('bound'), []));
+    expect(control).toHaveLength(1);
+    expect((control[0] as { input: Record<string, unknown> }).input['teamIds']).toEqual([TEAM]);
+  });
+
+  it('a retired binding (an issue the migration set aside) holds no team', () => {
+    expect(projectUpdates(afterPutBack(held('retired'), [{ epicId: 1, ticketId: 2 }]))).toHaveLength(1);
+  });
+
+  it('withoutPutBack keeps the epic id of every ticket put back under an epic that stays', () => {
+    const plan: StoredPlan = { program: 'prog', planBy: null, required: true, epics: [
+      { ...epic(), checkpoints: [], tickets: [tk(), tk({ id: 2, key: 't2', putBackAt: 5 })] },
+      { ...epic({ id: 2, key: 'e2', putBackAt: 5 }), checkpoints: [], tickets: [tk({ id: 3, key: 't3', epicId: 2, putBackAt: 5 })] },
+    ] };
+    expect(putBackTicketsOf(plan)).toEqual([{ epicId: 1, ticketId: 2 }]);
   });
 });

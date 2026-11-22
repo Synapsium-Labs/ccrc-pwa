@@ -299,13 +299,13 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(code(), 'stall.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
     expect(code(), 'stall.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
   });
-  it('imports values only from shared/api.ts, shared/stall-watch.ts, shared/switches.ts, shared/hook-events.ts and shared/continuity-timers.ts (L0), stallWatchSays and turnWordOf from sessionReading and sessionRoleOf from roleOf (both L1, importing only L0); anything else is a type import', () => {
+  it('imports values only from shared/api.ts, shared/stall-watch.ts, shared/switches.ts, shared/hook-events.ts and shared/continuity-timers.ts (L0), stallWatchSays and turnWordOf from sessionReading and sessionRoleOf from roleOf and actsOnClaimant from rundefs (all L1, importing only L0); anything else is a type import', () => {
     const c = code();
     expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
     expect(c, 'a re-export').not.toMatch(RE_EXPORT);
     for (const spec of valueImportSpecifiers(c)) {
-      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../../../shared/hook-events.js', '../../../shared/continuity-timers.js', '../sessionReading.js', '../roleOf.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
+      expect(['../../../shared/api.js', '../../../shared/stall-watch.js', '../../../shared/switches.js', '../../../shared/hook-events.js', '../../../shared/continuity-timers.js', '../sessionReading.js', '../roleOf.js', './rundefs.js'], `stall.ts takes a value import from ${spec}`).toContain(spec);
     }
     // From shared/continuity-timers.ts (L0; slug stall-import-pin-admits-the-timer-vocabulary, a widening like D-8236's), the
     // timer mail's sender and the hold's cap ALONE: the lane leaves timer mail out of its facts and caps the hold, nothing else.
@@ -324,6 +324,11 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     // role of its own. roleOf.ts is L1 and imports only L0.
     const fromRoleOf = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\.\/roleOf\.js\1;?$/gm)].map((m) => m[0].trim());
     expect(fromRoleOf, 'the one import from roleOf').toEqual([`import { sessionRoleOf } from '../roleOf.js';`]);
+    // From rundefs, `actsOnClaimant` ALONE (D-6096, review 2993 F8: the one predicate the close and the stall watch share
+    // for which session a run's acts reach). rundefs.ts is L1 and imports only L0; a second name would let the lane read
+    // the run vocabulary's other rules.
+    const fromRundefs = [...c.matchAll(/^\s*import\s[^'"]*?\bfrom\s*(['"])\.\/rundefs\.js\1;?$/gm)].map((m) => m[0].trim());
+    expect(fromRundefs, 'the one import from rundefs').toEqual([`import { actsOnClaimant } from './rundefs.js';`]);
     // From shared/stall-watch.ts (L0), the arm list and its guard, by name and source, on one line; the type import
     // (`StallArm`) is a separate `import type` line.
     const fromStallWatch = [...c.matchAll(/^\s*import\s(?!type\b)[^'"]*?\bfrom\s*(['"])\.\.\/\.\.\/\.\.\/shared\/stall-watch\.js\1;?$/gm)].map((m) => m[0].trim());
@@ -391,6 +396,13 @@ describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark (D-3
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', FULL) === 'shadow')).toEqual(WAVE2_ARMS);
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', { ...FULL, w2Live: true }) === 'shadow')).toEqual([]);
   });
+  it('coord-ball: the mail rungs (2 and 3) are wave 2 and shadow until w2Live; rung 1 keeps wave 1', () => {
+    const arming = { disabled: false, live: true, escalate: true };
+    expect(stallNotifyDelivery('coord-ball', 'worker', arming, 2)).toBe('shadow');
+    expect(stallNotifyDelivery('coord-ball', 'worker', arming, 3)).toBe('shadow');
+    expect(stallNotifyDelivery('coord-ball', 'worker', { ...arming, w2Live: true }, 2)).toBe('send');
+    expect(stallNotifyDelivery('coord-ball', 'operator', arming, 1)).toBe('send');
+  });
   it.each([
     ['quiet', 'worker', { disabled: false, live: true, escalate: false }, 'send'],
     ['quiet', 'worker', { disabled: false, live: false, escalate: false, w2Live: true }, 'shadow'],
@@ -415,7 +427,7 @@ describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark (D-3
 describe('wave 2: rungRecipient is one total per-arm table (planning departure rung-recipient-per-arm (D-3632))', () => {
   const TABLE: Record<StallArm, readonly StallRecipient[]> = {
     quiet: ['worker', 'coordinator', 'operator'],
-    'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
+    'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator', 'worker', 'worker'],
     'orphan-d': ['worker', 'operator'], restarted: ['worker', 'coordinator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
     frozen: ['coordinator'], dead: ['coordinator'],
     'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],

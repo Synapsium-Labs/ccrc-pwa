@@ -306,13 +306,15 @@ export const PROBE_GRADES = Object.keys(PROBE_GRADE_MAP) as ProbeGrade[];
 export function isProbeGrade(v: unknown): v is ProbeGrade {
   return typeof v === 'string' && (PROBE_GRADES as readonly string[]).includes(v);
 }
-/** Whether the session read anything between ask and answer (C41, closed-book). In W1a the server can attribute only its
- *  own continuity reads (the card, the notes), so an answer is `open` after one of them and `unmeasured` otherwise; `closed`
- *  needs W1's witness (slug closed-book-is-unmeasured-in-w1a). */
+/** Whether the session read anything between ask and answer (C41, closed-book). The server attributes its own continuity reads
+ *  (the card, the notes) and, for the designated session, the lines of its read ledger (W1 door process B1, slug
+ *  closed-book-reads-the-ledger; no read door writes the ledger yet, so those count 0 until they do). An answer is `open` after
+ *  one of them, `closed` when the ledger covers the session, was measured and holds none and no card or notes read was found,
+ *  and `unmeasured` otherwise. */
 const BOOK_STATE_MAP = {
-  closed: 'nothing was read between ask and answer (W1, the witness)',
+  closed: "the designated session's ledger and card and notes show no read between ask and answer",
   open: 'the session read its card or its notes between ask and answer',
-  unmeasured: 'no read the server can attribute; reads through other doors carry no attribution in W1a',
+  unmeasured: 'no read the server can attribute: a session its ledger does not cover, or a read it could not measure',
 } as const;
 export type BookState = keyof typeof BOOK_STATE_MAP;
 export const BOOK_STATES = Object.keys(BOOK_STATE_MAP) as BookState[];

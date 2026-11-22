@@ -165,4 +165,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   docsFetch: ['demo', null],
   // NATIVE DOCS READER W5b-1: one doc's history, its own grant `['docs-log','--project']`.
   docsLog: ['demo', 'a'.repeat(40), 'specs', 'a.md'],
+  // X2 P1.2: one builder, four argv shapes, its own grant `['docs-show-range','--project']`. The sample is the committed
+  // prepare; `whitelist-subset.test.ts` pins the other three shapes token for token.
+  docsShowRange: ['demo', { commit: 'a'.repeat(40) }, 'specs', 'a.md', `blob:${'d'.repeat(40)}`, 'prepare'],
 };

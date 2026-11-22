@@ -16,18 +16,27 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, EFFORTS4 } from './fixtures/advanceCases.js';
-import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvance } from '../../shared/model-advance.mjs';
+import {
+  backfillAdvance, chooseCandidate, familyOf, lastMoveOf, parseAdvance, recordMove, seedAnthropicAdvance, serializeAdvance,
+} from '../../shared/model-advance.mjs';
+import { parseAliases } from '../../shared/model-aliases.mjs';
+import type { Aliases } from '../../shared/model-aliases.mjs';
 import type { Advance, HistoryEntry } from '../../shared/model-advance.mjs';
 import type { ModelClass, Registry } from '../../shared/models.js';
-import { parseRegistry } from '../../shared/models.js';
+import { aliasesFileName } from '../../shared/models.mjs';
+import { CLASSES, parseRegistry } from '../../shared/models.js';
 // Auto-advance plan W2 (Tasks 8 and 9). Only names this file does not bind yet:
 // W1 already imports `parseRegistry` and the type `Advance`.
-import { BLOCKED_CAUSES, REASON_MAX, causeOf, unmeasuredMoveNotice } from '../../shared/model-advance.mjs';
+import {
+  BLOCKED_CAUSES, CANDIDATE_REASONS, REASON_MAX, causeOf, clientWindowNotice, unmeasuredMoveNotice,
+} from '../../shared/model-advance.mjs';
+// Auto-advance plan W3 Task 14: advance-health's bounded runs, in a process group of their own.
+import { spawnSyncGroup } from './spawnGroup.js';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
 import { contextWindowFor, modelEnvBlock } from '../../shared/modelenv.mjs';
 import { laneClassModels, parseCatalogue, parseWindows } from '../../shared/models.js';
@@ -36,10 +45,12 @@ import type { FleetIO } from '../src/io.js';
 import {
   STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster, stepRow,
 } from './fixtures/advanceCases.js';
+import { HOLDS_GATE_LINE, holdsAppliedOp, pointImports } from './modelsOpCopy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const OP = path.join(REPO, 'deploy', 'models-op.mjs');
+const ARM = path.join(REPO, 'deploy', 'models-anthropic.mjs');
 
 let home: string;
 const rosterPath = (): string => path.join(home, '.ccrc', 'accounts.json');
@@ -74,7 +85,12 @@ function op(...args: string[]): Result {
 
 /** `op`, with `extra` laid over its environment (`CCRC_MODELS_NOW`, the advance file's clock). */
 function opEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Result {
-  const r = spawnSync(process.execPath, [OP, ...args],
+  return opThrough(OP, extra, ...args);
+}
+
+/** `opEnv`, through another copy of the op (`script`): the Anthropic hold path runs through `holdsAppliedOp`'s. */
+function opThrough(script: string, extra: NodeJS.ProcessEnv, ...args: string[]): Result {
+  const r = spawnSync(process.execPath, [script, ...args],
     { env: { ...process.env, HOME: home, ...extra }, encoding: 'utf8' });
   const stdout = r.stdout ?? '';
   // THE CONTRACT: exactly one JSON object on stdout, newline-terminated. A
@@ -306,10 +322,14 @@ describe('the roster read', () => {
 });
 
 describe('lanes', () => {
-  it('lists every account that can carry a registry, and flags the anthropic ones', () => {
+  it('lists every account that can carry a registry, and every Anthropic lane, flagged (D-8751)', () => {
     const r = op('lanes', '--file', rosterPath());
     expect(r.code).toBe(0);
     expect(r.body['lanes']).toEqual([
+      { id: 'claude', configDirSuffix: '.claude', anthropic: true, hasRegistry: false,
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [], ids: null },
+      { id: 'claude-a', configDirSuffix: '.claude-a', anthropic: true, hasRegistry: false,
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [], ids: null },
       { id: 'gpt', configDirSuffix: '.claude-gpt', anthropic: false, hasRegistry: false,
         registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [] },
       { id: 'router', configDirSuffix: '.claude-router', anthropic: false, hasRegistry: false,
@@ -329,9 +349,10 @@ describe('lanes', () => {
     });
   });
 
-  it('an upstream account is never a lane a registry can sit on', () => {
-    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as { id: string }[];
-    expect(lanes.map((l) => l.id)).not.toContain('claude');
+  it('the upstream account is listed as an Anthropic row, never as a lane a registry can sit on (D-8751)', () => {
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as { id: string; anthropic: boolean; hasRegistry: boolean }[];
+    expect(lanes.find((l) => l.id === 'claude')).toMatchObject({ anthropic: true, hasRegistry: false });
+    expect(lanes.filter((l) => l.hasRegistry)).toEqual([]);
   });
 
   // Fix round 1, Finding 2 (ruling): the old code passed `{ registry: null }`
@@ -2654,7 +2675,7 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     const WRITE = "return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');";
     expect(src.split(WRITE), 'writeAdvance has its one write').toHaveLength(2);
     const copy = path.join(home, 'models-op-advance-unwritable.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+    fs.writeFileSync(copy, pointImports(src)
       .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), parsed, 'advance-unwritable');"));
     const run = spawnSync(process.execPath, [copy, 'init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex'],
       { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8', timeout: 10_000 });
@@ -2803,7 +2824,7 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     const WRITE = "return writeJsonFile(registryPath(id), registry, 'registry-unwritable');";
     expect(src.split(WRITE), 'writeRegistry has its one line').toHaveLength(2);
     const copy = path.join(home, 'models-op-unwritable.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+    fs.writeFileSync(copy, pointImports(src)
       .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), registry, 'registry-unwritable');"));
     const run = spawnSync(process.execPath,
       [copy, 'set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta'],
@@ -2930,10 +2951,12 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
   };
   const verb = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
     opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', ID, '--class', cls);
-  /** Every file under ~/.ccrc/models, name → bytes: what "writes nothing" is measured against. */
+  /** Every file under ~/.ccrc/models, name → bytes (a directory standing where a file goes, as one): what "writes
+   *  nothing" is measured against. */
   const modelFiles = (): Record<string, string> => {
     const d = path.join(home, '.ccrc', 'models');
-    return Object.fromEntries(fs.readdirSync(d).sort().map((n) => [n, fs.readFileSync(path.join(d, n), 'utf8')]));
+    return Object.fromEntries(fs.readdirSync(d).sort().map((n) => [n,
+      fs.statSync(path.join(d, n)).isDirectory() ? '<directory>' : fs.readFileSync(path.join(d, n), 'utf8')]));
   };
 
   it('hold records when and by what act; a second hold changes nothing; release clears it; a second release changes nothing', () => {
@@ -3014,10 +3037,14 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     advanced();
     const reg0 = fs.readFileSync(regPath(ID), 'utf8');
     const opus0 = advanceOf(ID).classes.opus;
-    fs.writeFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), '{ this is not json');
+    // A failure no read can foresee (programme wave 3: a settings file the merge would refuse is refused BEFORE the
+    // hold, below): a directory where the lane's classes file goes, so the materialise's rename fails.
+    const tsv = path.join(home, '.ccrc', 'models', `${ID}.classes.tsv`);
+    fs.rmSync(tsv, { force: true });
+    fs.mkdirSync(tsv);
     const r = verb('revert');
     expect(r.code).toBe(1);
-    expect(r.body['error']).toBe('settings-unwritable');
+    expect(r.body['error']).toBe('materialise-failed');
     expect(String(r.body['detail'])).toMatch(/opus is held, on model-6\.1-gamma/);
     expect(fs.readFileSync(regPath(ID), 'utf8')).toBe(reg0);
     const opus = advanceOf(ID).classes.opus;
@@ -3048,13 +3075,47 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
       advanced({ model: null, effort: null }, { probe: 'codex', classes: { haiku: 'model-6.1-alpha', sonnet: null,
         opus: null, fable: null }, subagent: 'haiku', discovery: 'catalogue' }, 'haiku');
     }, 'haiku', 'unroutable-lane'],
+    // Programme wave 3 (revert-writes-before-refusing): a lane settings file the materialise would refuse to merge
+    // into, in each shape it refuses, is refused before the hold is written, so the class is not left held.
+    ['settings-unwritable: the lane settings file is not JSON', (): void => {
+      advanced();
+      fs.writeFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), '{ this is not json');
+    }, 'opus', 'settings-unwritable'],
+    ['settings-unwritable: the lane settings file is not an object', (): void => {
+      advanced();
+      fs.writeFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), '[1, 2]');
+    }, 'opus', 'settings-unwritable'],
+    ['settings-unwritable: the lane settings file cannot be read', (): void => {
+      advanced();
+      const p = path.join(home, LEGACY_SUFFIX, 'settings.json');
+      fs.rmSync(p, { force: true });
+      fs.mkdirSync(p);
+    }, 'opus', 'settings-unwritable'],
+    ['advance-file-invalid: the advance file does not parse', (): void => {
+      advanced();
+      fs.writeFileSync(path.join(home, '.ccrc', 'models', `${ID}.advance.json`), '{"v": 1}');
+    }, 'opus', 'advance-file-invalid'],
+    ['advance-file-unreadable: the advance file cannot be read', (): void => {
+      advanced();
+      const p = path.join(home, '.ccrc', 'models', `${ID}.advance.json`);
+      fs.rmSync(p, { force: true });
+      fs.mkdirSync(p);
+    }, 'opus', 'advance-file-unreadable'],
+    ['unknown-class: not one of the four', (): void => { advanced(); }, 'bogus', 'unknown-class'],
+    ['registry-invalid: a registry refused when it is read', (): void => {
+      advanced();
+      fs.writeFileSync(regPath(ID), `${JSON.stringify({ ...registryOf(ID), extra: 1 }, null, 2)}\n`);
+    }, 'opus', 'registry-invalid'],
   ] as [string, () => void, string, string][])('revert refuses %s, and writes nothing', (_why, plant, cls, error) => {
     plant();
     const before = modelFiles();
+    const settings = path.join(home, LEGACY_SUFFIX, 'settings.json');
+    const settings0 = fs.statSync(settings, { throwIfNoEntry: false })?.isFile() ? fs.readFileSync(settings, 'utf8') : null;
     const r = verb('revert', cls);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     expect(r.body['error']).toBe(error);
     expect(modelFiles()).toEqual(before);
+    if (settings0 !== null) expect(fs.readFileSync(settings, 'utf8')).toBe(settings0);
   });
 
   it('revert puts back an effort level its model no longer offers through resolveEffort (D-5189)', () => {
@@ -3120,8 +3181,10 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     expect(fs.readFileSync(advPath(ID), 'utf8')).toBe('{"v": 2}');
   });
 
-  it.each([['hold'], ['release'], ['revert']])('%s is refused on an Anthropic lane, as every op but show is', (v) => {
-    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id, '--class', 'opus');
+  // Model-class Anthropic arm A2.3: an Anthropic lane has its own path for these three (and `aliases-refresh`), so
+  // they are no longer refused as `anthropic-lane`; every other op still is (`an anthropic lane: ...` block).
+  it.each([['set-subagent']])('%s is still refused on an Anthropic lane, as every op but show and the four it admits is', (v) => {
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id, '--class', 'haiku');
     expect([r.code, r.body['error']]).toEqual([1, 'anthropic-lane']);
   });
 
@@ -3206,7 +3269,7 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     const src = fs.readFileSync(OP, 'utf8');
     expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
     const copy = path.join(home, 'models-op-copy.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+    fs.writeFileSync(copy, pointImports(src)
       .replace(line, instead));
     return copy;
   };
@@ -3697,9 +3760,8 @@ describe('readAdvance and writeAdvance keep to their answers before any op calls
   const probe = (line: string): { code: number | null; stdout: string; stderr: string } => {
     const src = fs.readFileSync(OP, 'utf8');
     expect(src.split(LAST), 'models-op ends in its one main call').toHaveLength(2);
-    const shared = pathToFileURL(path.join(REPO, 'shared')).href;
     const file = path.join(home, 'models-op-probe.mjs');
-    fs.writeFileSync(file, src.replaceAll("from '../shared/", `from '${shared}/`).replace(LAST, line));
+    fs.writeFileSync(file, pointImports(src).replace(LAST, line));
     const r = spawnSync(process.execPath, [file], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   };
@@ -4049,10 +4111,14 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
   // reads differently from an advance. One case per reason `chooseCandidate` computes.
   it.each([
     ['newer', (): void => plantStep(), {}, 'opus', 'model-6.1-gamma'],
+    // Programme wave 3 (backward-move, D-8838): retired only once six hours of sightings have missed the pin, the
+    // last of them this catalogue's own observation (fetchedAt, 2026-09-10T00:26:40Z), so the plant carries that run.
     ['retired', (): void => plantStep({
       registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
         effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } },
       catalogue: { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') },
+      advance: stepAdvance({ opus: { missing: { model: 'model-6.1-gamma', since: '2026-09-09T18:26:40Z',
+        seen: '2026-09-10T00:26:40Z' } } }),
     }), { from: 'model-6.1-gamma', to: 'model-5.6-gamma' }, 'opus', 'model-5.6-gamma'],
     ['empty', (): void => plantStep({ advance: stepAdvance({ fable: { family: 'delta' } }) }),
       { cls: 'fable', from: 'none', to: 'model-6-delta' }, 'fable', 'model-6-delta'],
@@ -4354,7 +4420,7 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
       src = src.replace(line, instead);
     }
     const copy = path.join(home, 'models-op-copy.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`));
+    fs.writeFileSync(copy, pointImports(src));
     const [verb, ...args] = argv;
     const r = spawnSync(process.execPath, [copy, verb!, '--file', rosterPath(), '--id', 'lane-a', ...args],
       { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8' });
@@ -4933,3 +4999,1671 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
       .toEqual({ tokens: 450000, setAt: written['setAt'] });
   });
 });
+
+// ── auto-advance plan W3 Task 14: `advance-health`, doctor's one read ──────────────────────────────────────────
+// Box-wide and READ-ONLY. Its two paths come from its caller (`--reg`, `--lock-template`), so these cases put the
+// session registry at the fixture's own `~/.cc-sessions` and the lock directory under a neutral `<home>/lk`: the op
+// assumes neither. Every run is BOUNDED, because a reader that opened a FIFO would block inside the open. Neutral
+// ids only; the one path outside the fixture HOME, `/var/tmp`, is only lstat-ed and access-ed, never written.
+describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
+  const H_NOW = '2026-10-23T09:00:00Z';
+  const H_MOVED = '2026-10-21T14:05:11Z';
+  const H_TURN = '2026-10-22T09:11:40Z';
+  const H_RENDER = '2026-10-22T09:12:03Z';
+  const H_SID = 'lane-a-demo';
+  const isRootH = typeof process.getuid === 'function' && process.getuid() === 0;
+  const sessDir = (): string => path.join(home, '.cc-sessions');
+  const lockDir = (): string => path.join(home, 'lk');
+  const lockTpl = (): string => path.join(lockDir(), 'models-{id}.lock');
+  const lockOf = (id = 'lane-a'): string => path.join(lockDir(), `models-${id}.lock`);
+
+  /** `advance-health`, ended at 20 s: a hang reds the case, never the suite. `args` replaces the whole argument
+   *  list after the op's name. In its own process group (`spawnSyncGroup`, `spawn-group-pin.test.ts`), so a bound
+   *  that fires takes the whole tree with it; a timeout comes back as `error` (ETIMEDOUT), never as a lone signal. */
+  function health(o: { now?: string; args?: string[] } = {}): Result {
+    const args = o.args ?? ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', lockTpl()];
+    const r = spawnSyncGroup(process.execPath, [OP, 'advance-health', ...args],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: o.now ?? H_NOW }, encoding: 'utf8', timeout: 20_000 });
+    expect(r.error, `advance-health was ended at the bound: ${r.stderr}`).toBeUndefined();
+    const stdout = r.stdout ?? '';
+    const lines = stdout.split('\n');
+    expect(lines.length, `stdout carried ${lines.length - 1} lines, not one`).toBe(2);
+    return { code: r.status ?? -1, body: JSON.parse(lines[0]!), stderr: r.stderr ?? '', stdout };
+  }
+  const laneH = (r: Result, id = 'lane-a'): Record<string, unknown> =>
+    (r.body['lanes'] as Record<string, unknown>[]).find((l) => l['id'] === id)!;
+
+  /** A lane's files as their writers leave them, with NO materialise: this op reads no settings, and a pin that
+   *  breaks the grammar is one no materialise should be asked to render. `null` leaves that file absent. */
+  function plantH(o: { id?: string; registry?: unknown; catalogue?: unknown; advance?: unknown } = {}): void {
+    const id = o.id ?? 'lane-a';
+    fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(regPath(id), `${JSON.stringify(o.registry ?? STEP_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    if (o.catalogue !== null) writeCatalogue(id, o.catalogue ?? STEP_CATALOGUE);
+    if (o.advance !== null) {
+      fs.writeFileSync(advPath(id), `${JSON.stringify(o.advance ?? stepAdvance(), null, 2)}\n`, { mode: 0o600 });
+    }
+  }
+  /** lane-a after one advance: opus moved from model-5.6-gamma to model-6.1-gamma at H_MOVED. */
+  const MOVED_REG = { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } };
+  const MOVE = { at: H_MOVED, how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: true,
+    canary: 'passed', effort: { from: 'max', to: 'xhigh' } };
+  const MOVED_ADV = stepAdvance({ opus: { previous: { model: 'model-5.6-gamma', effort: 'max' }, history: [MOVE] } });
+  /** opus's advance refused three times: the newest entry, a failed advance to the class's standing candidate. */
+  const failedH = (o: Record<string, unknown> = {}): Record<string, unknown> => ({
+    at: '2026-10-22T10:05:12Z', how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: false,
+    canary: 'failed', reason: 'http 500: upstream error', tries: 3, lastAt: '2026-10-22T12:05:09Z', ...o });
+  const HOLD = { at: '2026-10-22T08:00:00Z', by: 'hand' };
+
+  /** One session's three registry files, as ccd, the session hook and the status line write them. `sidecar: null`
+   *  writes no usage sidecar; a string is written as the sidecar verbatim. */
+  function plantSessionH(o: { sid?: string; lane?: string; model?: string; sidecar?: string | null } = {}): void {
+    const sid = o.sid ?? H_SID;
+    fs.mkdirSync(path.join(sessDir(), 'usage'), { recursive: true });
+    fs.writeFileSync(path.join(sessDir(), `${sid}.wrapper`), o.lane ?? 'lane-a');
+    const turnAt = Date.parse(H_TURN);
+    fs.writeFileSync(path.join(sessDir(), `${sid}.turn.json`), `${JSON.stringify({ v: 1, sessionId: `uuid-${sid}`,
+      state: 'done', event: 'Stop', at: turnAt + 30_000, turnAt, stopAt: turnAt + 30_000, bg: -1, bgKinds: '',
+      bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' })}\n`);
+    if (o.sidecar === null) return;
+    fs.writeFileSync(path.join(sessDir(), 'usage', `${sid}.json`), o.sidecar ?? `${JSON.stringify({
+      ts: Date.parse(H_RENDER) / 1000, uuid: `uuid-${sid}`, account: o.lane ?? 'lane-a',
+      model: o.model ?? 'model-5.6-gamma', effort: 'low', ctxPct: 12, cost: 0.1, agent: null })}\n`);
+  }
+  const BEHIND_ROW = { session: H_SID, class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+    movedAt: H_MOVED, turnAt: H_TURN, renderAt: H_RENDER };
+
+  beforeEach(() => { seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') })); });
+
+  it('answers one object: the time, the session registry\'s word, and one entry per lane with a registry, in roster order', () => {
+    plantH();
+    const r = health();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'advance-health', now: H_NOW, sessions: 'absent', sessionsUnmeasured: [],
+      lanes: [{ id: 'lane-a', anthropic: false, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [],
+        sessionsUnmeasured: [] }] });
+    plantH({ id: 'lane-b' });
+    expect((health().body['lanes'] as Record<string, unknown>[]).map((l) => l['id'])).toEqual(['lane-a', 'lane-b']);
+  });
+
+  it('heldBack: a failed newest advance to the candidate that still stands, with the step that failed', () => {
+    plantH({ advance: stepAdvance({ opus: { history: [failedH()] } }) });
+    expect(laneH(health())['heldBack']).toEqual([{ class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+      reason: 'http 500: upstream error', tries: 3, since: '2026-10-22T10:05:12Z', canary: 'failed' }]);
+  });
+
+  it('heldBack names a move that failed after its canary passed', () => {
+    plantH({ advance: stepAdvance({ opus: { history: [failedH({ canary: 'passed', tries: 1, reason: 'materialise: EISDIR' })] } }) });
+    expect(laneH(health())['heldBack']).toEqual([{ class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+      reason: 'materialise: EISDIR', tries: 1, since: '2026-10-22T10:05:12Z', canary: 'passed' }]);
+  });
+
+  it('heldBack clears once an advance succeeds', () => {
+    plantH({ registry: MOVED_REG, advance: stepAdvance({ opus: {
+      previous: { model: 'model-5.6-gamma', effort: 'max' }, history: [failedH(), { ...MOVE, at: '2026-10-22T13:05:10Z' }] } }) });
+    expect(laneH(health())['heldBack']).toEqual([]);
+  });
+
+  it('heldBack clears when its candidate has left the catalogue (D-5191)', () => {
+    plantH({ catalogue: { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') },
+      advance: stepAdvance({ opus: { history: [failedH()] } }) });
+    expect(laneH(health())['heldBack']).toEqual([]);
+  });
+
+  it('a held class is never held back: the hold stopped its retries, and heldBehind names it (D-5221)', () => {
+    plantH({ advance: stepAdvance({ opus: { hold: HOLD, history: [failedH()] } }) });
+    const lane = laneH(health());
+    expect(lane['heldBack']).toEqual([]);
+    expect(lane['heldBehind']).toEqual([{ class: 'opus', pin: 'model-5.6-gamma', newer: 'model-6.1-gamma', reason: 'newer',
+      hold: HOLD }]);
+  });
+
+  it('heldBehind: a held class with a newer model of its family; nothing when released, or when nothing is newer', () => {
+    plantH({ advance: stepAdvance({ opus: { hold: HOLD }, haiku: { hold: HOLD } }) });
+    const rows = laneH(health())['heldBehind'] as Record<string, unknown>[];
+    // D-8689: `reason` is #2701's vocabulary, the words a successful advance records as its `cause`; no new list.
+    // Asserted first, so a row that loses its `reason` reds here (mutation A23), not only at the exact row below.
+    for (const row of rows) expect(CANDIDATE_REASONS).toContain(row['reason']);
+    expect(rows).toEqual([{ class: 'opus', pin: 'model-5.6-gamma', newer: 'model-6.1-gamma',
+      reason: 'newer', hold: HOLD }]);
+    plantH({ advance: stepAdvance({ haiku: { hold: HOLD } }) });
+    expect(laneH(health())['heldBehind']).toEqual([]);
+  });
+
+  it('a move to a model with no measured window is the models row\'s finding, not advance-health\'s (D-8689)', () => {
+    plantH({ registry: MOVED_REG, advance: MOVED_ADV });
+    plantWindows('lane-a', windowsFor({ 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 }));
+    const s = op('show', '--file', rosterPath(), '--id', 'lane-a');
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    expect(s.body['windowNotices'] as unknown[]).toHaveLength(1);
+    expect(laneH(health())).toEqual({ id: 'lane-a', anthropic: false, heldBack: [], heldBehind: [], blocked: [],
+      sessionsBehind: [], sessionsUnmeasured: [] });
+  });
+
+  it('an empty class held by a revert is behind the newest model of its stored family', () => {
+    const hold = { at: '2026-10-22T08:00:00Z', by: 'revert' };
+    plantH({ advance: stepAdvance({ fable: { family: 'delta', hold } }) });
+    expect(laneH(health())['heldBehind']).toEqual([{ class: 'fable', pin: null, newer: 'model-6-delta', reason: 'empty',
+      hold }]);
+  });
+
+  it('a held class whose pin has left the catalogue is named with reason retired: its fallback may be OLDER than the pin', () => {
+    // model-7-gamma is listed nowhere; the newest gamma the fresh catalogue lists is model-6.1-gamma, an older version.
+    // Its record is a run of sightings six hours long, ending at this catalogue's own observation (D-8838).
+    plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-7-gamma' } },
+      advance: stepAdvance({ opus: { hold: HOLD, missing: { model: 'model-7-gamma', since: '2026-09-09T18:26:40Z',
+        seen: '2026-09-10T00:26:40Z' } } }) });
+    expect(laneH(health())['heldBehind']).toEqual([{ class: 'opus', pin: 'model-7-gamma', newer: 'model-6.1-gamma',
+      reason: 'retired', hold: HOLD }]);
+  });
+
+  it.each([
+    ['an advance file of another version', 'advance-file-invalid', null, (): void => {
+      fs.writeFileSync(advPath('lane-a'), `${JSON.stringify({ ...stepAdvance(), v: 2 }, null, 2)}\n`);
+    }],
+    ['an advance file that is a directory', 'advance-file-unreadable', null, (): void => {
+      fs.rmSync(advPath('lane-a')); fs.mkdirSync(advPath('lane-a'));
+    }],
+    ['a registry that is not JSON', 'registry-invalid', null, (): void => { fs.writeFileSync(regPath('lane-a'), '{ not json'); }],
+    // JSON that `parseRegistry` refuses (an unknown field): `readRegistry`'s `{invalid}` arm, not its `{err}` arm.
+    ['a registry with a field it does not know', 'registry-invalid', null, (): void => {
+      fs.writeFileSync(regPath('lane-a'), `${JSON.stringify({ ...STEP_REGISTRY, extra: 1 }, null, 2)}\n`);
+    }],
+    ['a registry that is a directory', 'registry-unreadable', null, (): void => {
+      fs.rmSync(regPath('lane-a')); fs.mkdirSync(regPath('lane-a'));
+    }],
+    ['a catalogue that is not a catalogue', 'catalogue-invalid', null, (): void => { writeCatalogue('lane-a', { probe: 'codex' }); }],
+    ['a catalogue that is a directory', 'catalogue-unreadable', null, (): void => {
+      const p = path.join(home, '.ccrc', 'models', 'lane-a.json');
+      fs.rmSync(p); fs.mkdirSync(p);
+    }],
+    ['a windows file that cannot be read while a class has a candidate', 'windows-unreadable', null, (): void => {
+      plantWindows('lane-a', '{ not json');
+    }],
+    ['a pin that breaks the id grammar', 'pin-grammar', 'opus', (): void => {
+      plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-x-gamma' } } });
+    }],
+    ['two classes on one family whose newest model one of them pins', 'shared-family', 'opus', (): void => {
+      plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-5.6-alpha' } },
+        advance: stepAdvance({ opus: { family: 'alpha' } }) });
+    }],
+  ] as [string, string, string | null, () => void][])('%s is blocked %s, a BLOCKED_CAUSES word, with its detail', (_w, cause, cls, spoil) => {
+    plantH();
+    spoil();
+    const r = health();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const blocked = laneH(r)['blocked'] as Record<string, unknown>[];
+    expect(blocked.map((b) => [b['class'], b['cause']])).toEqual([[cls, cause]]);
+    expect(String(blocked[0]!['detail']).length).toBeGreaterThan(0);
+    expect(BLOCKED_CAUSES).toContain(cause);
+  });
+
+  it('a pin that breaks the grammar names itself in the detail', () => {
+    plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-x-gamma' } } });
+    expect(laneH(health())['blocked']).toEqual([{ class: 'opus', cause: 'pin-grammar',
+      detail: 'model-x-gamma is not <vendor>-<version>-<family>' }]);
+  });
+
+  it('an external-kind lane with a codex registry is blocked lane-not-codex-kind and gets no other codex finding (Review Focus 14)', () => {
+    plantH({ id: 'lane-b', advance: stepAdvance({ opus: { hold: HOLD, history: [failedH()] } }) });
+    const lane = laneH(health(), 'lane-b');
+    expect(lane['blocked']).toEqual([{ class: null, cause: 'lane-not-codex-kind',
+      detail: 'its roster row is exec.kind "external", and only an exec.kind "codex" lane advances' }]);
+    expect(lane['heldBack']).toEqual([]);
+    expect(lane['heldBehind']).toEqual([]);
+  });
+
+  describe('a lane-files lock path a writer could not use is lock-unwritable, measured with lstat and access only (D-5193)', () => {
+    const lockFindings = (r: Result): Record<string, unknown>[] =>
+      (laneH(r)['blocked'] as Record<string, unknown>[]).filter((b) => b['cause'] === 'lock-unwritable');
+    /** A directory that exists, this account can write, and another account owns — the case `chmod 700` refuses.
+     *  `/var/tmp` where it is one; read-only here. */
+    const SHARED_TMP = '/var/tmp';
+    const foreignUsable = ((): boolean => {
+      try {
+        if (isRootH || typeof process.getuid !== 'function') return false;
+        const st = fs.lstatSync(SHARED_TMP);
+        fs.accessSync(SHARED_TMP, fs.constants.W_OK);
+        return st.isDirectory() && st.uid !== process.getuid();
+      } catch {
+        return false;
+      }
+    })();
+
+    beforeEach(() => { plantH(); });
+
+    it('no lock directory yet is not a finding, and advance-health makes none', () => {
+      expect(lockFindings(health())).toEqual([]);
+      expect(fs.existsSync(lockDir())).toBe(false);
+    });
+
+    it('a lock file this account can write, in a directory it owns, is not a finding', () => {
+      fs.mkdirSync(lockDir(), { mode: 0o700 });
+      fs.writeFileSync(lockOf(), '', { mode: 0o600 });
+      expect(lockFindings(health())).toEqual([]);
+    });
+
+    it.each([
+      ['a FIFO at the lock path', (): void => { expect(spawnSync('mkfifo', [lockOf()]).status).toBe(0); },
+        /models-lane-a\.lock is not a regular file \(a FIFO, a directory or a socket\), which the lane-files lock never opens$/],
+      ['a directory at the lock path', (): void => { fs.mkdirSync(lockOf()); },
+        /models-lane-a\.lock is not a regular file \(a FIFO, a directory or a socket\), which the lane-files lock never opens$/],
+      ['a symlink to a regular file at the lock path', (): void => {
+        fs.writeFileSync(path.join(lockDir(), 'target'), ''); fs.symlinkSync(path.join(lockDir(), 'target'), lockOf());
+      }, /models-lane-a\.lock is a symlink, which the lane-files lock never opens$/],
+      ['a dangling symlink at the lock path', (): void => { fs.symlinkSync(path.join(lockDir(), 'nowhere'), lockOf()); },
+        /models-lane-a\.lock is a symlink, which the lane-files lock never opens$/],
+    ] as [string, () => void, RegExp][])('%s is a finding, and is never opened', (_w, plant, detail) => {
+      fs.mkdirSync(lockDir(), { mode: 0o700 });
+      plant();
+      const before = fs.lstatSync(lockOf());
+      const found = lockFindings(health());
+      expect(found.map((b) => b['class'])).toEqual([null]);
+      expect(String(found[0]!['detail'])).toMatch(detail);
+      const after = fs.lstatSync(lockOf());
+      expect([after.mode, after.ino, after.mtimeMs]).toEqual([before.mode, before.ino, before.mtimeMs]);
+    });
+
+    it('a lock directory that is a symlink is a finding', () => {
+      fs.mkdirSync(path.join(home, 'real-lk'), { mode: 0o700 });
+      fs.symlinkSync(path.join(home, 'real-lk'), lockDir());
+      const found = lockFindings(health());
+      expect(found).toHaveLength(1);
+      expect(String(found[0]!['detail'])).toMatch(/\/lk is a symlink, which the lane-files lock never follows$/);
+    });
+
+    it('a lock directory that is a file is a finding', () => {
+      fs.writeFileSync(lockDir(), '');
+      const found = lockFindings(health());
+      expect(found).toHaveLength(1);
+      expect(String(found[0]!['detail'])).toMatch(/\/lk is not a directory$/);
+    });
+
+    it.skipIf(isRootH)('a lock file this account cannot write is a finding', () => {
+      fs.mkdirSync(lockDir(), { mode: 0o700 });
+      fs.writeFileSync(lockOf(), '', { mode: 0o400 });
+      expect(String(lockFindings(health())[0]?.['detail'])).toMatch(/models-lane-a\.lock is not writable by this account \(EACCES\)$/);
+    });
+
+    // Ruling RC7's letter ("whose lock directory it cannot write"): reported although W1's `_models_lock` would
+    // `chmod 700` a directory this account owns and go on; the remedy says the next writer repairs it.
+    it.skipIf(isRootH)('a lock directory this account owns but cannot write is a finding', () => {
+      fs.mkdirSync(lockDir(), { mode: 0o500 });
+      expect(String(lockFindings(health())[0]?.['detail'])).toMatch(/\/lk is not writable by this account \(EACCES\)$/);
+    });
+
+    it.skipIf(!foreignUsable)('a writable lock directory another account owns is a finding: its chmod 700 would fail', () => {
+      const r = health({ args: ['--file', rosterPath(), '--reg', sessDir(), '--lock-template',
+        path.join(SHARED_TMP, 'models-{id}.lock')] });
+      expect(String(lockFindings(r)[0]?.['detail']))
+        .toMatch(/belongs to another account \(uid \d+\), so the lane-files lock cannot make it 0700$/);
+    });
+  });
+
+  describe('sessionsBehind, read from the session registry its caller names (D-5194)', () => {
+    beforeEach(() => { plantH({ registry: MOVED_REG, advance: MOVED_ADV }); });
+
+    it('lists a session still rendering the replaced model, from its files alone: whether it runs is the doctor\'s question', () => {
+      plantSessionH();
+      const r = health();
+      expect(r.body['sessions']).toBe('read');
+      expect(laneH(r)['sessionsBehind']).toEqual([BEHIND_ROW]);
+    });
+
+    /** The turn marker's path, emptied of the file `plantSessionH` wrote there. */
+    const markerAt = (): string => {
+      const p = path.join(sessDir(), `${H_SID}.turn.json`);
+      fs.rmSync(p);
+      return p;
+    };
+    const un = (why: string): Record<string, unknown>[] => [{ session: H_SID, why }];
+
+    // Never behind; and named in the lane's `sessionsUnmeasured` exactly when a file it needed could not be read as
+    // one JSON object, so a lane nobody could measure is never a PASS that measured nothing.
+    it.each([
+      ['a session whose registry row names another lane', [], (): void => { plantSessionH({ lane: 'lane-b' }); }],
+      ['a session whose main render is the new model, though a subagent\'s own sidecar shows the old one', [], (): void => {
+        plantSessionH({ model: 'model-6.1-gamma' });
+        const agents = path.join(sessDir(), 'usage', `${H_SID}.agents`);
+        fs.mkdirSync(agents, { recursive: true });
+        fs.writeFileSync(path.join(agents, 'helper.json'), `${JSON.stringify({ ts: Date.parse(H_RENDER) / 1000,
+          uuid: `uuid-${H_SID}`, model: 'model-5.6-gamma', agent: 'helper' })}\n`);
+      }],
+      ['a session with no turn marker', un('marker-absent'), (): void => { plantSessionH(); markerAt(); }],
+      ['a turn marker that is not JSON', un('marker-unreadable'), (): void => {
+        plantSessionH(); fs.writeFileSync(markerAt(), '{ not json\n');
+      }],
+      ['a turn marker holding null', un('marker-unreadable'), (): void => {
+        plantSessionH(); fs.writeFileSync(markerAt(), 'null\n');
+      }],
+      ['a FIFO at the turn marker', un('marker-unreadable'), (): void => {
+        plantSessionH();
+        expect(spawnSync('mkfifo', [markerAt()]).status).toBe(0);
+      }],
+      ['a session whose home writes no usage sidecar (its own status line)', un('sidecar-absent'), (): void => {
+        plantSessionH({ sidecar: null });
+      }],
+      ['a usage sidecar over its 4096-byte cap', un('sidecar-unreadable'), (): void => {
+        plantSessionH({ sidecar: `${JSON.stringify({ ts: Date.parse(H_RENDER) / 1000, uuid: `uuid-${H_SID}`,
+          model: 'model-5.6-gamma', agent: null })}${' '.repeat(5000)}\n` });
+      }],
+      ['a usage sidecar holding a JSON list', un('sidecar-unreadable'), (): void => { plantSessionH({ sidecar: '[]\n' }); }],
+      ['a FIFO at the usage sidecar', un('sidecar-unreadable'), (): void => {
+        plantSessionH({ sidecar: null });
+        expect(spawnSync('mkfifo', [path.join(sessDir(), 'usage', `${H_SID}.json`)]).status).toBe(0);
+      }],
+    ] as [string, Record<string, unknown>[], () => void][])('%s is not listed as behind, and nothing blocks', (_w, unmeasured, plant) => {
+      plant();
+      const r = health();
+      expect(laneH(r)['sessionsBehind']).toEqual([]);
+      expect(laneH(r)['sessionsUnmeasured']).toEqual(unmeasured);
+      expect(laneH(r)['blocked']).toEqual([]);
+      expect(r.body['sessionsUnmeasured']).toEqual([]);
+    });
+
+    it('a .wrapper it cannot read is a session of no known lane: named at the top level, never skipped, never opened', () => {
+      plantSessionH();
+      const fifo = path.join(sessDir(), 'lane-a-x.wrapper');
+      expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+      const r = health();
+      expect(r.body['sessionsUnmeasured']).toEqual([{ session: 'lane-a-x', why: 'wrapper-unreadable' }]);
+      expect(laneH(r)['sessionsBehind']).toEqual([BEHIND_ROW]);
+      expect(fs.lstatSync(fifo).isFIFO()).toBe(true);
+    });
+
+    it('a lane whose advance file cannot be read names every session of it unmeasured: its moves were not read', () => {
+      plantSessionH();
+      fs.rmSync(advPath('lane-a'));
+      fs.mkdirSync(advPath('lane-a'));
+      const lane = laneH(health());
+      expect(lane['sessionsBehind']).toEqual([]);
+      expect(lane['sessionsUnmeasured']).toEqual([{ session: H_SID, why: 'advance-file-unreadable' }]);
+    });
+
+    // Programme wave 3 (wave 7's D-8821 carried to Codex lanes): an advance file that reads but is not one this build
+    // reads names its sessions with its own word, never folded into the unreadable one.
+    it('a lane whose advance file does not parse names every session of it unmeasured as advance-file-invalid', () => {
+      plantSessionH();
+      fs.writeFileSync(advPath('lane-a'), `${JSON.stringify({ ...stepAdvance(), v: 2 }, null, 2)}\n`);
+      const lane = laneH(health());
+      expect(lane['sessionsBehind']).toEqual([]);
+      expect(lane['sessionsUnmeasured']).toEqual([{ session: H_SID, why: 'advance-file-invalid' }]);
+    });
+
+    // D-5220, a finding of R2's review: a registry that cannot be read or parsed ends
+    // the lane before any session is judged, so each of the lane's sessions is named unmeasured with the registry's
+    // own word, as the advance-file arm above names its own; never in neither list. With no advance file nothing has
+    // moved, so no session is read there, whatever the registry says.
+    it.each([
+      ['cannot be read', 'registry-unreadable', (): void => { fs.rmSync(regPath('lane-a')); fs.mkdirSync(regPath('lane-a')); }],
+      ['cannot be parsed', 'registry-invalid', (): void => {
+        fs.writeFileSync(regPath('lane-a'), `${JSON.stringify({ ...MOVED_REG, extra: 1 }, null, 2)}\n`);
+      }],
+    ] as [string, string, () => void][])('a lane whose registry %s names every session of it unmeasured, as %s', (_w, why, spoil) => {
+      plantH({ registry: MOVED_REG, advance: MOVED_ADV });
+      plantSessionH();
+      spoil();
+      const lane = laneH(health());
+      expect(lane['sessionsBehind']).toEqual([]);
+      expect(lane['sessionsUnmeasured']).toEqual([{ session: H_SID, why }]);
+      fs.rmSync(advPath('lane-a'));
+      expect(laneH(health())['sessionsUnmeasured']).toEqual([]);
+    });
+
+    it('a hand set-class a crash cut short is judged as the next locked writer will record it, and the file is not written', () => {
+      const adv = `${JSON.stringify(stepAdvance({}, { how: 'hand', class: 'opus', from: 'model-5.6-gamma',
+        to: 'model-6.1-gamma', emptied: [], at: H_MOVED }), null, 2)}\n`;
+      fs.writeFileSync(advPath('lane-a'), adv, { mode: 0o600 });
+      plantSessionH();
+      expect(laneH(health())['sessionsBehind']).toEqual([BEHIND_ROW]);
+      expect(fs.readFileSync(advPath('lane-a'), 'utf8')).toBe(adv);
+    });
+
+    it('with no advance file nothing has moved, so no session is behind and none is unmeasured', () => {
+      fs.rmSync(advPath('lane-a'));
+      plantSessionH();
+      const lane = laneH(health());
+      expect(lane['sessionsBehind']).toEqual([]);
+      expect(lane['sessionsUnmeasured']).toEqual([]);
+    });
+
+    it.each([
+      ['absent', (): void => {}],
+      ['read', (): void => { fs.mkdirSync(sessDir(), { recursive: true }); }],
+      ['unreadable', (): void => { fs.writeFileSync(sessDir(), 'not a directory\n'); }],
+    ] as [string, () => void][])('the session registry has its own word: %s', (word, plant) => {
+      plant();
+      expect(health().body['sessions']).toBe(word);
+    });
+  });
+
+  it('writes nothing: ~/.ccrc and the session registry keep their bytes and mtimes, and no lock path is made', () => {
+    plantH({ registry: MOVED_REG, advance: stepAdvance({}, { how: 'hand', class: 'opus', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', emptied: [], at: H_MOVED }) });
+    plantSessionH();
+    const sessions = (): string[] => fs.readdirSync(sessDir(), { recursive: true }).map(String).sort()
+      .map((f) => `${f} ${fs.statSync(path.join(sessDir(), f)).mtimeMs}`);
+    const before = [...snapshot(), ...sessions()];
+    expect(health().code).toBe(0);
+    expect(health().code).toBe(0);
+    expect([...snapshot(), ...sessions()]).toEqual(before);
+    expect(fs.existsSync(lockDir())).toBe(false);
+  });
+
+  it.each([
+    ['a relative --reg', (): string[] => ['--file', rosterPath(), '--reg', '.cc-sessions', '--lock-template', lockTpl()]],
+    ['a lock template with no {id}', (): string[] =>
+      ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', path.join(lockDir(), 'models.lock')]],
+    ['a lock template with {id} twice', (): string[] =>
+      ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', path.join(lockDir(), '{id}', 'models-{id}.lock')]],
+    ['a relative lock template', (): string[] => ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', 'lk/models-{id}.lock']],
+    ['no --lock-template', (): string[] => ['--file', rosterPath(), '--reg', sessDir()]],
+    ['no --reg', (): string[] => ['--file', rosterPath(), '--lock-template', lockTpl()]],
+    ['an --id, which a box-wide op does not take', (): string[] =>
+      ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', lockTpl(), '--id', 'lane-a']],
+  ] as [string, () => string[]][])('%s is bad-argv at exit 2', (_w, args) => {
+    plantH();
+    const r = health({ args: args() });
+    expect(r.code).toBe(2);
+    expect(r.body).toMatchObject({ ok: false, error: 'bad-argv' });
+  });
+
+  it('a clock that is not a time is refused at exit 2, never a run judged against no time', () => {
+    plantH();
+    const r = health({ now: 'not-a-time' });
+    expect(r.code).toBe(2);
+    expect(r.body).toMatchObject({ ok: false, error: 'bad-argv' });
+  });
+});
+
+// ── auto-advance ruling 11: the hourly writer reaps a stale catalogue staging file ───────────────────────────
+// `ccd/ccrc-models-probe` stages a lane's catalogue as `$OUT.tmp.$$` beside it, with an EXIT trap; a probe killed
+// hard leaves that file. The probe runs OUTSIDE the lane-files lock, so `advance-backfill` (the one write op the
+// hourly step runs on every advancing lane) reaps one only when it is proved stale: a regular file, named for this
+// lane, whose pid no longer runs and whose mtime is an hour or more before the op's clock. Every planted entry's own
+// times are set two hours before NOW (`lutimesSync`: a symlink's own, a file's or a directory's like `utimesSync`)
+// unless a case says otherwise, because a real mtime is later than this fixed NOW, so an entry left unset would be
+// kept by the age test alone and hide the guard its case is about. Neutral ids only.
+describe('advance-backfill reaps a stale catalogue staging file, and only that (ruling 11)', () => {
+  const R_NOW = '2026-10-23T09:00:00Z';
+  const TWO_HOURS_BEFORE = new Date(Date.parse(R_NOW) - 2 * 3_600_000);
+  /** Above Linux's largest `pid_max` (2^22) and above macOS's: a pid no process holds. */
+  const DEAD_PID = 4194305;
+  const dir = (): string => path.join(home, '.ccrc', 'models');
+  const at = (name: string): string => path.join(dir(), name);
+  const aged = (p: string, when: Date = TWO_HOURS_BEFORE): void => { fs.lutimesSync(p, when, when); };
+  const listing = (): string[] => fs.readdirSync(dir()).sort();
+  const backfill = (): Result =>
+    opEnv({ CCRC_MODELS_NOW: R_NOW }, 'advance-backfill', '--file', rosterPath(), '--id', 'lane-a');
+  /** A regular staging file holding a cut-short catalogue, its times two hours before NOW unless `when` says otherwise. */
+  const plantTmp = (name: string, when?: Date): string => {
+    const p = at(name);
+    fs.writeFileSync(p, '{"partial":');
+    aged(p, when);
+    return p;
+  };
+
+  beforeEach(() => {
+    seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') }));
+    plantStep();
+    for (const n of fs.readdirSync(dir())) aged(at(n));
+  });
+
+  it('a regular <lane>.json.tmp.<pid> whose pid is gone, two hours old, is removed and named; the catalogue keeps its bytes', () => {
+    const catBefore = fs.readFileSync(at('lane-a.json'));
+    plantTmp(`lane-a.json.tmp.${DEAD_PID}`);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['reapedTmp']).toEqual([`lane-a.json.tmp.${DEAD_PID}`]);
+    expect(listing()).toEqual(before.filter((n) => n !== `lane-a.json.tmp.${DEAD_PID}`));
+    expect(fs.readFileSync(at('lane-a.json'))).toEqual(catBefore);
+  });
+
+  it('the same file 59 minutes old is kept: a probe may still be writing it', () => {
+    plantTmp(`lane-a.json.tmp.${DEAD_PID}`, new Date(Date.parse(R_NOW) - 59 * 60_000));
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  it('a staging file whose pid still runs is kept, however old', () => {
+    plantTmp(`lane-a.json.tmp.${process.pid}`);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  // EPERM is a live process of ANOTHER account, so its file is kept. Pid 1 is root's on Linux and macOS alike, and
+  // signal 0 to it from any other account answers EPERM; the case runs only where that is measured true here (never
+  // as root, nor in a namespace where pid 1 is this account's own).
+  const pid1Eperm = ((): boolean => {
+    try { process.kill(1, 0); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+  })();
+  it.skipIf(!pid1Eperm)('a staging file whose pid runs under another account (EPERM) is kept, however old', () => {
+    plantTmp('lane-a.json.tmp.1');
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  it('a symlink with the staging name is kept, the link and its target intact', () => {
+    const target = path.join(home, 'link-target');
+    fs.writeFileSync(target, 'kept\n');
+    aged(target);
+    const link = at(`lane-a.json.tmp.${DEAD_PID}`);
+    fs.symlinkSync(target, link);
+    aged(link);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link)).toBe(target);
+    expect(fs.readFileSync(target, 'utf8')).toBe('kept\n');
+  });
+
+  it('a directory with the staging name is kept', () => {
+    const d = at(`lane-a.json.tmp.${DEAD_PID}`);
+    fs.mkdirSync(d);
+    aged(d);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+    expect(fs.lstatSync(d).isDirectory()).toBe(true);
+  });
+
+  it('another lane\'s staging file, a suffix that is not a pid, pid 0, models-op\'s own staging spelling and the registry\'s are all kept', () => {
+    for (const n of [`lane-b.json.tmp.${DEAD_PID}`, 'lane-a.json.tmp.abc', 'lane-a.json.tmp.0',
+      `lane-a.json.${DEAD_PID}.tmp`, `lane-a.classes.json.tmp.${DEAD_PID}`]) plantTmp(n);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  it('with nothing to reap, the answer carries no reapedTmp key', () => {
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(r.body).toMatchObject({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false });
+  });
+});
+
+// ── D-8685 (public issue #2607): a stale catalogue under a class model with no measured window ───────────────
+// The other way a lane's window falls. `contextWindowFor` reads a model's advertised window only from a FRESH
+// catalogue (`providerWindow`), so once the catalogue goes stale a class model nobody measured has no window at all,
+// and the lane falls to the client's own default. The live lanes' shape is (b): the move left a model nobody
+// measured, from a model nobody measured either, so `unmeasuredMoves` has no measured old window to name. Each case
+// moves opus by a real `advance-commit`, then rewrites the catalogue `stale: true` with the same models.
+describe('a stale catalogue under a class model with no measured window (D-8685, public issue #2607)', () => {
+  const S_NOW = '2026-10-22T10:05:12Z';
+  const PROMISED = { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.map((m) => (m.id === 'model-6.1-gamma'
+    ? { ...m, context: 500000 } : m)) };
+  const commit = (): Result => opEnv({ CCRC_MODELS_NOW: S_NOW }, 'advance-commit', '--file', rosterPath(),
+    '--id', 'lane-a', '--class', 'opus', '--from', 'model-5.6-gamma', '--to', 'model-6.1-gamma', '--canary', 'passed');
+  /** The lane after the move, its catalogue now stale (or `fresh` left as it is), and what each reader says. */
+  function moveThenStale(byModel: Record<string, number>, o: { fresh?: boolean; dropAdvance?: boolean } = {}): {
+    show: unknown; lanes: unknown; room: ReturnType<typeof contextWindowFor>;
+  } {
+    plantStep({ catalogue: PROMISED });
+    plantWindows('lane-a', windowsFor(byModel));
+    const c = commit();
+    expect(c.body['outcome'], c.stdout + c.stderr).toBe('moved');
+    const catalogue = o.fresh === true ? PROMISED : { ...PROMISED, stale: true };
+    writeCatalogue('lane-a', catalogue);
+    if (o.dropAdvance === true) fs.rmSync(advPath('lane-a'));
+    const shown = op('show', '--file', rosterPath(), '--id', 'lane-a');
+    expect(shown.code, shown.stdout + shown.stderr).toBe(0);
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    const room = contextWindowFor(parseRegistry(registryOf('lane-a')), parseCatalogue(catalogue),
+      parseWindows(JSON.parse(fs.readFileSync(winPath('lane-a'), 'utf8'))));
+    return { show: shown.body['windowNotices'], lanes: lanes.find((l) => l['id'] === 'lane-a')!['windowNotices'], room };
+  }
+  const MEASURED_OLD = { 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 };
+  const UNMEASURED_OLD = { 'model-6-alpha': 400000, 'model-6-beta': 400000 };
+  const CLIENT_ROOM = { tokens: 200000, rule: 'default', unmeasured: ['model-6.1-gamma'], model: 'model-6.1-gamma',
+    source: 'client' as const };
+  /** The move notice (D-8384) the lane already carries in case (a). */
+  const MOVE_NOTICE = unmeasuredMoveNotice('lane-a', { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+    fromTokens: 400000, how: 'advance', cause: 'newer' }, 200000);
+  /** lane-a's registry after the move: opus on model-6.1-gamma. */
+  const MOVED_REGISTRY = parseRegistry({ ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } });
+  /** What (b) and (c) are named by (D-8685), in its one spelling's literal text. */
+  const CLIENT_NOTICE = "lane-a's opus class model model-6.1-gamma has no measured window, and the lane's catalogue is "
+    + 'stale, so its advertised window is not read: every session on the lane now runs at the client\'s own default '
+    + 'window, 200000 tokens; refresh the catalogue (ccrc models refresh lane-a), or measure model-6.1-gamma, then: '
+    + 'ccrc models lane-a set-window model-6.1-gamma <tokens>';
+
+  beforeEach(() => { seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') })); });
+
+  it('(a) the move left a measured model: the window falls to the client default, and the move notice alone names it', () => {
+    const r = moveThenStale(MEASURED_OLD);
+    expect(r.room).toEqual(CLIENT_ROOM);
+    expect(r.show).toEqual([MOVE_NOTICE]);
+    expect(r.lanes).toEqual(r.show);
+  });
+
+  it('(b) the move left an unmeasured model (the live lanes\' shape): the window falls to the client default, named once', () => {
+    const r = moveThenStale(UNMEASURED_OLD);
+    expect(r.room).toEqual(CLIENT_ROOM);
+    expect(r.show).toEqual([CLIENT_NOTICE]);
+    expect(r.show).toEqual([clientWindowNotice('lane-a', MOVED_REGISTRY, true, CLIENT_ROOM)]);
+    expect(r.lanes).toEqual(r.show);
+  });
+
+  it('(c) as (b), with the advance file removed after the move: still named, for it needs no move', () => {
+    const r = moveThenStale(UNMEASURED_OLD, { dropAdvance: true });
+    expect(r.room).toEqual(CLIENT_ROOM);
+    expect(r.show).toEqual([CLIENT_NOTICE]);
+    expect(r.lanes).toEqual(r.show);
+  });
+
+  // Controls: nothing is named.
+  it('the same lane with a FRESH catalogue reads the advertised window, and names nothing', () => {
+    const r = moveThenStale(UNMEASURED_OLD, { fresh: true });
+    expect(r.room).toMatchObject({ tokens: 400000, rule: 'default', source: 'measured' });
+    expect(r.show).toEqual([]);
+    expect(r.lanes).toEqual([]);
+  });
+
+  it('a stale catalogue on which every class model is measured names nothing', () => {
+    const r = moveThenStale({ ...UNMEASURED_OLD, 'model-6.1-gamma': 300000 });
+    expect(r.room).toMatchObject({ tokens: 300000, rule: 'measured', source: 'measured' });
+    expect(r.show).toEqual([]);
+    expect(r.lanes).toEqual([]);
+  });
+
+  it('a FRESH catalogue that promises no window (context 0) also falls to the client default, and is not D-8685\'s case', () => {
+    // `providerWindow` reads only a positive integer, so `context: 0` promises nothing; `parseCatalogue` accepts it.
+    const silent = { ...PROMISED, models: PROMISED.models.map((m) => (m.id === 'model-6.1-gamma' ? { ...m, context: 0 } : m)) };
+    plantStep({ catalogue: silent });
+    plantWindows('lane-a', windowsFor(UNMEASURED_OLD));
+    expect(commit().body['outcome']).toBe('moved');
+    const room = contextWindowFor(parseRegistry(registryOf('lane-a')), parseCatalogue(silent),
+      parseWindows(JSON.parse(fs.readFileSync(winPath('lane-a'), 'utf8'))));
+    expect(room).toEqual(CLIENT_ROOM);
+    expect(op('show', '--file', rosterPath(), '--id', 'lane-a').body['windowNotices']).toEqual([]);
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    expect(lanes.find((l) => l['id'] === 'lane-a')!['windowNotices']).toEqual([]);
+  });
+});
+
+// ── Model-class Anthropic arm A2, Task A2.3: the writer on an Anthropic lane ───────────────────────────────────────
+// Plan docs/superpowers/plans/2026-11-18-model-class-advance-anthropic-arm.md. An Anthropic lane carries no registry:
+// its own path admits `hold`, `release`, `revert` and `aliases-refresh`, and it keeps the lane's aliases file (what
+// each class's alias resolves to) and the holds in its advance file. Every case runs in a fixture HOME with invented
+// ids (`claude-opus-9-1`, `claude-opus-9-2`): nothing reads a real home, a cache of the box or a credential.
+describe('an anthropic lane: the aliases file, holds and the writer (model-class Anthropic arm A2.3)', () => {
+  const LANE = 'lane-a';
+  const OTHER = 'lane-b';
+  const SUFFIX = '.claude-lane-a';
+  const OTHER_SUFFIX = '.claude-lane-b';
+  const anthropicRow = (id: string, suffix: string): Record<string, unknown> => ({
+    id, label: id, configDirSuffix: suffix, exec: { kind: 'generated' }, homeAble: true, hue: 'violet',
+    telemetry: 'anthropic',
+  });
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const X3 = 'claude-opus-9-3';
+  const S1 = 'claude-sonnet-9-1';
+  // Times: caches are fetched before the refresh that reads them, each a whole second.
+  const C1 = '2026-11-16T00:00:00Z';
+  const T0 = '2026-11-16T06:00:00Z';
+  const C2 = '2026-11-16T12:00:00Z';
+  const T1 = '2026-11-16T18:00:00Z';
+  const C3 = '2026-11-17T00:00:00Z';
+  const T2 = '2026-11-17T06:00:00Z';
+  const T3 = '2026-11-17T12:00:00Z';
+
+  const regDir = (): string => path.join(home, 'reg');
+  beforeEach(() => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, anthropicRow(LANE, SUFFIX), anthropicRow(OTHER, OTHER_SUFFIX)] });
+    fs.mkdirSync(regDir(), { recursive: true });
+  });
+
+  const aliasesFile = (id: string = LANE): string => path.join(home, '.ccrc', 'models', aliasesFileName(id));
+  const readAliases = (id: string = LANE): Aliases => parseAliases(JSON.parse(fs.readFileSync(aliasesFile(id), 'utf8')));
+  const advFile = (id: string = LANE): string => advPath(id);
+  const writeText = (p: string, text: string): void => {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, text);
+  };
+  /** One catalogue cache file, in the current format: `targets` maps a class to the id its alias resolves to. */
+  const cacheJson = (fetchedAt: string, targets: Partial<Record<ModelClass, string>>,
+    rows: { id: string; min?: string | null }[]): unknown => ({
+    version: 2, fetchedAt: Date.parse(fetchedAt), staleAt: Date.parse(fetchedAt) + 3_600_000, resolution: 'token_org',
+    catalog: { config: {
+      provider_alias_targets: Object.fromEntries(Object.entries(targets).map(([c, id]) => [c, { default: id }])),
+      models: rows.map((r) => ({
+        id: r.id, name: `Name ${r.id}`, min_claude_code_version: r.min ?? null,
+        runtime: { effort_levels: ['low', 'high'], default_effort: 'high' }, thinking: { type: 'effort' },
+      })),
+    } },
+  });
+  const plantCache = (suffix: string, name: string, json: unknown): void => {
+    writeText(path.join(home, suffix, 'cache', 'model-catalog', `${name}.json`), `${JSON.stringify(json)}\n`);
+  };
+  const plantBuild = (suffix: string, version: unknown): void => {
+    writeText(path.join(home, suffix, '.last-update-result.json'), `${JSON.stringify({ version_to: version })}\n`);
+  };
+  /** A launch marker as ccd writes it (Task A3.2): `<born-epoch> <wrapper> <class> <id|->`. */
+  const plantLaunch = (sid: string, bornAt: string, wrapper: string, cls: string, id: string): void => {
+    writeText(path.join(regDir(), `${sid}.aliaslaunch`), `${Date.parse(bornAt) / 1000} ${wrapper} ${cls} ${id}\n`);
+  };
+  const refreshArgs = (id: string): string[] => ['aliases-refresh', '--file', rosterPath(), '--id', id, '--reg', regDir()];
+  const refresh = (at: string, id: string = LANE, extra: NodeJS.ProcessEnv = {}): Result =>
+    opEnv({ CCRC_MODELS_NOW: at, ...extra }, ...refreshArgs(id));
+  const adv = (id: string = LANE): Advance => JSON.parse(fs.readFileSync(advFile(id), 'utf8')) as Advance;
+  const plantSeeded = (): string => {
+    const bytes = serializeAdvance(seedAnthropicAdvance());
+    fs.mkdirSync(path.dirname(advFile()), { recursive: true });
+    fs.writeFileSync(advFile(), bytes);
+    return bytes;
+  };
+  // The hold path runs through a copy with the hold gate open (D-8820: the shipped op refuses `hold` and `revert` on an
+  // Anthropic lane until Task A3.4); the gate's own cases below run the shipped op.
+  const hold = (cls = 'opus', id: string = LANE, at: string = NOW): Result =>
+    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: at }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
+  const verbOf = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
+    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
+  /** The op through a COPY with one line replaced: the one way to make one of its writes fail for real. A line of the
+   *  Anthropic arm (`inArm`) is replaced in a copy of that module, which the op's copy imports in place of the shipped one. */
+  const copyOf = (line: string, instead: string, inArm = false): string => {
+    const armCopy = path.join(home, 'models-anthropic-copy.mjs');
+    const src = fs.readFileSync(inArm ? ARM : OP, 'utf8');
+    expect(src.split(line), `the ${inArm ? 'arm' : 'op'} has the line ${line}`).toHaveLength(2);
+    const copy = path.join(home, 'models-op-copy.mjs');
+    if (inArm) {
+      fs.writeFileSync(armCopy, pointImports(src).replace(line, instead));
+      fs.writeFileSync(copy, pointImports(fs.readFileSync(OP, 'utf8'), armCopy));
+    } else {
+      fs.writeFileSync(copy, pointImports(src).replace(line, instead));
+    }
+    return copy;
+  };
+  const refreshThrough = (copy: string, at: string): Result => {
+    const r = spawnSync(process.execPath, [copy, ...refreshArgs(LANE)],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: at }, encoding: 'utf8' });
+    const stdout = r.stdout ?? '';
+    expect(stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(stdout)} ${r.stderr}`).toHaveLength(2);
+    return { code: r.status ?? -1, body: JSON.parse(stdout.split('\n')[0]!), stderr: r.stderr ?? '', stdout };
+  };
+  /** The baseline every move case starts from: one cache naming X1 for opus, refreshed at T0. */
+  const baseline = (rows: { id: string; min?: string | null }[] = [{ id: X1 }]): void => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1 }, rows));
+    const r = refresh(T0);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['moved']).toEqual([]);
+  };
+
+  it("aliases-refresh writes the file: the lane's own cache gives each class its id, 0600, with no advance file made for it", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2, sonnet: S1 }, [{ id: X2 }, { id: S1 }]));
+    // Another home's cache is read for ROWS only: its target never names this lane's class.
+    plantCache(OTHER_SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X3 }, [{ id: X3 }]));
+    const r = refresh(T0);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'aliases-refresh', id: LANE, moved: [] });
+    const a = readAliases();
+    expect(a).toMatchObject({ v: 1, at: T0, stale: false, cache: { fetchedAt: C1, format: 'current' } });
+    expect(a.classes.opus).toMatchObject({ id: X2, source: 'cache', evidenceAt: C1, idSince: T0, cacheTarget: X2 });
+    expect(a.classes.sonnet).toMatchObject({ id: S1, source: 'cache' });
+    expect(a.classes.haiku.id).toBeNull();
+    expect(a.classes.opus.row).toMatchObject({ id: X2, label: `Name ${X2}` });
+    expect(fs.statSync(aliasesFile()).mode & 0o777).toBe(0o600);
+    expect(fs.existsSync(advFile()), 'a refresh with no move makes no advance file').toBe(false);
+  });
+
+  it("aliases-refresh reads a row from another home, by id, and never that home's target", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, []));
+    plantCache(OTHER_SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X3 }, [{ id: X2, min: null }, { id: X3 }]));
+    expect(refresh(T0).code).toBe(0);
+    const o = readAliases().classes.opus;
+    expect(o).toMatchObject({ id: X2, rowFrom: 'box', cacheTarget: X2 });
+    expect(o.row).toMatchObject({ id: X2 });
+  });
+
+  it("aliases-refresh reads the lane's build and a home with no cache reads as absent", () => {
+    plantBuild(SUFFIX, '9.2.0');
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      env: { SOME_KEY: 'x' }, modelSettings: { [X1]: { effortLevel: 'high' }, 'not a model id!': { effortLevel: 'low' } },
+    }));
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2, min: '9.9.0' }]));
+    expect(refresh(T0).code).toBe(0);
+    // The build (9.2.0) is below the row's minimum, so the target is no candidate.
+    expect(readAliases().classes.opus.id).toBeNull();
+    expect(readAliases().cache).toEqual({ fetchedAt: C1, format: 'current' });
+    expect(refresh(T1, OTHER).code).toBe(0);
+    expect(readAliases(OTHER).cache).toEqual({ none: 'absent' });
+    expect(readAliases(OTHER).classes.opus.id).toBeNull();
+  });
+
+  it('saved levels reach the file: a level under another id of the class is orphaned, a level under the current id is not', () => {
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      modelSettings: { [X1]: { effortLevel: 'high' }, [X2]: { effortLevel: 7 }, 'not a model id!': { effortLevel: 'low' } },
+    }));
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().classes.opus.orphaned).toEqual({ id: X1, level: 'high' });
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      modelSettings: { [X1]: { effortLevel: 'high' }, [X2]: { effortLevel: 'low' } },
+    }));
+    expect(refresh(T1).code).toBe(0);
+    expect(readAliases().classes.opus.orphaned).toBeNull();
+  });
+
+  it('an unreadable cache directory is cache.none unreadable, and a build that is no version reads as unknown', () => {
+    writeText(path.join(home, SUFFIX, 'cache', 'model-catalog'), 'a file where the directory belongs');
+    plantBuild(SUFFIX, { not: 'a version' });
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().cache).toEqual({ none: 'unreadable' });
+  });
+
+  it('a cache file that is not JSON is cache.none invalid', () => {
+    writeText(path.join(home, SUFFIX, 'cache', 'model-catalog', 'cache-fixture.json'), '{ not json');
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().cache).toEqual({ none: 'invalid' });
+  });
+
+  it('aliases-refresh records a move: the second refresh after the target moved appends one entry, sets previous and names it', () => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const r = refresh(T1);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, evidenceAt: C2, idSince: T1 });
+    const opus = adv().classes.opus;
+    expect(opus.history).toHaveLength(1);
+    expect(opus.previous).toEqual({ model: X1, effort: null });
+    for (const c of CLASSES.filter((k) => k !== 'opus')) expect(adv().classes[c].history).toEqual([]);
+  });
+
+  it("a move's entry is complete: ok, cause newer, the evidence time, and lastMoveOf returns it", () => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const entry = adv().classes.opus.history[0]!;
+    expect(entry).toEqual({ at: T1, how: 'advance', from: X1, to: X2, ok: true, canary: 'not-run', cause: 'newer',
+      evidenceAt: C2 });
+    expect(lastMoveOf(adv().classes.opus)).toEqual(entry);
+    expect(causeOf(entry)).toBe('newer');
+    expect(adv().pending).toBeNull();
+    expect(adv().classes.opus.family).toBe('opus');
+  });
+
+  it('a source change is not a move: the cache then a newer launch of the same id records nothing', () => {
+    baseline();
+    const seeded = plantSeeded();
+    plantLaunch('s1', C2, LANE, 'opus', X1);
+    const r = refresh(T1);
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, source: 'use', seenId: X1 });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it('a first id is not a move: null to an id records no entry, no previous and no push', () => {
+    const seeded = plantSeeded();
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1 }, [{ id: X1 }]));
+    const r = refresh(T0);
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, idSince: T0 });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it('a swap and a wake record no backward move: a marker that goes never hands the class back, and nothing is recorded', () => {
+    const seeded = plantSeeded();
+    // No usable cache. S1 was marked before a release and filled X1; S2 was marked after it and filled X2.
+    plantLaunch('s1', '2026-11-16T01:00:00Z', LANE, 'opus', X1);
+    plantLaunch('s2', '2026-11-16T03:00:00Z', LANE, 'opus', X2);
+    expect(refresh(T0).body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, source: 'use', seenId: X2 });
+    // A swap or a wake's respawn removes S2's marker.
+    fs.rmSync(path.join(regDir(), 's2.aliaslaunch'));
+    const second = refresh(T1);
+    expect(second.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, seenId: X2 });
+    // And S1's too.
+    fs.rmSync(path.join(regDir(), 's1.aliaslaunch'));
+    expect(refresh(T2).body['moved']).toEqual([]);
+    expect(readAliases().classes.opus.id).toBe(X2);
+    expect(fs.readFileSync(advFile(), 'utf8'), 'no history entry and no previous').toBe(seeded);
+  });
+
+  it('a marker of another lane, an unfilled one, an unknown class and a malformed one are not readings; a 1M reading fills the bare id', () => {
+    plantLaunch('s1', '2026-11-16T01:00:00Z', OTHER, 'opus', X2);
+    plantLaunch('s2', '2026-11-16T01:00:00Z', LANE, 'opus', '-');
+    plantLaunch('s3', '2026-11-16T01:00:00Z', LANE, 'turbo', X2);
+    writeText(path.join(regDir(), 's4.aliaslaunch'), 'not a marker\n');
+    writeText(path.join(regDir(), 's5.aliaslaunch'), `${'9'.repeat(5000)}\n`);
+    plantLaunch('s6', '2026-11-16T01:00:00Z', LANE, 'sonnet', `${S1}[1m]`);
+    expect(refresh(T0).code).toBe(0);
+    const a = readAliases();
+    expect(a.classes.opus.id).toBeNull();
+    expect(a.classes.sonnet).toMatchObject({ id: S1, source: 'use', seenId: S1 });
+  });
+
+  it('a stale cache records no backward move: a launch older than the cache never hands the class back', () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson('2026-11-10T00:00:00Z', { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh('2026-11-12T00:00:00Z').code).toBe(0);
+    const seeded = plantSeeded();
+    plantLaunch('s1', '2026-11-08T00:00:00Z', LANE, 'opus', X1);
+    const r = refresh('2026-11-20T00:00:00Z');
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases()).toMatchObject({ stale: true });
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, source: 'cache' });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it('an unreadable prior is never written over: the cause word, both files and the advance mtime untouched', () => {
+    baseline();
+    const seeded = plantSeeded();
+    fs.rmSync(aliasesFile());
+    fs.mkdirSync(aliasesFile());
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const advMtime = fs.statSync(advFile()).mtimeMs;
+    const r = refresh(T1);
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'aliases-file-unreadable']);
+    expect(r.body['moved']).toBeUndefined();
+    expect(fs.statSync(aliasesFile()).isDirectory()).toBe(true);
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+    expect(fs.statSync(advFile()).mtimeMs).toBe(advMtime);
+  });
+
+  it("an invalid prior is never written over: the cause word, the file's bytes and mtime, and the advance file untouched", () => {
+    baseline();
+    const seeded = plantSeeded();
+    const bad = '{"v": 2}\n';
+    fs.writeFileSync(aliasesFile(), bad);
+    const mtime = fs.statSync(aliasesFile()).mtimeMs;
+    const advMtime = fs.statSync(advFile()).mtimeMs;
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const r = refresh(T1);
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'aliases-file-invalid']);
+    expect(r.body['moved']).toBeUndefined();
+    expect(fs.readFileSync(aliasesFile(), 'utf8')).toBe(bad);
+    expect(fs.statSync(aliasesFile()).mtimeMs).toBe(mtime);
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+    expect(fs.statSync(advFile()).mtimeMs).toBe(advMtime);
+  });
+
+  it('an advance file it cannot read refuses the refresh and writes neither file', () => {
+    baseline();
+    const aliases0 = fs.readFileSync(aliasesFile(), 'utf8');
+    fs.writeFileSync(advFile(), '{"v": 2}');
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const r = refresh(T1);
+    expect([r.code, r.body['error']]).toEqual([1, 'advance-file-invalid']);
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe('{"v": 2}');
+    expect(fs.readFileSync(aliasesFile(), 'utf8')).toBe(aliases0);
+  });
+
+  it.each([
+    // The aliases writer lives in the Anthropic arm (`deploy/models-anthropic.mjs`), the advance writer in the op.
+    ['the aliases write fails after the move is recorded', "    return writeJsonFile(aliasesPath(id), parsed, 'aliases-unwritable');",
+      "    return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'aliases-unwritable');", 'aliases-unwritable', 1, true],
+    ['the advance write fails before anything is recorded', "  return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
+      "  return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'advance-unwritable');", 'advance-unwritable', 0, false],
+  ] as [string, string, string, string, number, boolean][])('a cut-short move is recorded once when newer evidence arrives: %s', (_w, line, instead, error, entries, inArm) => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const cut = refreshThrough(copyOf(line, instead, inArm), T1);
+    expect([cut.code, cut.body['error']], cut.stdout + cut.stderr).toEqual([1, error]);
+    expect(cut.body['moved'], 'the cut refresh answered no move').toBeUndefined();
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, idSince: T0 });
+    expect(fs.existsSync(advFile()) ? adv().classes.opus.history : []).toHaveLength(entries);
+    // Newer evidence for X2 arrives (a cache refetched later); the next refresh runs at T2.
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const next = refresh(T2);
+    expect(next.code, next.stdout + next.stderr).toBe(0);
+    expect(next.body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(adv().classes.opus.history, 'one entry for the move, whichever file was cut').toHaveLength(1);
+    expect(adv().classes.opus.history[0]).toMatchObject({ from: X1, to: X2, at: entries === 1 ? T1 : T2 });
+    expect(adv().classes.opus.previous).toEqual({ model: X1, effort: null });
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, evidenceAt: C3 });
+    // And a refresh after that finds nothing to say.
+    expect(refresh(T3).body['moved']).toEqual([]);
+    expect(adv().classes.opus.history).toHaveLength(1);
+  });
+
+  it('a repeated move gets its own entry: X1 to X2, X2 unlaunchable and replaced by X1 with no move, then X1 to X2 again', () => {
+    plantBuild(SUFFIX, '9.2.0');
+    const rows = [{ id: X1 }, { id: X2, min: '9.2.0' }];
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1 }, rows));
+    expect(refresh(T0).body['moved']).toEqual([]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, rows));
+    expect(refresh(T1).body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(adv().classes.opus.history).toHaveLength(1);
+    // The lane's build falls below X2's minimum; a fresh launch fills X1, which replaces X2 with no move.
+    plantBuild(SUFFIX, '9.1.0');
+    plantLaunch('s1', '2026-11-16T14:00:00Z', LANE, 'opus', X1);
+    const replaced = refresh(T2);
+    expect(replaced.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, source: 'use', idSince: T2 });
+    expect(adv().classes.opus.history).toHaveLength(1);
+    // The build returns and a refetched cache names X2 again.
+    plantBuild(SUFFIX, '9.2.0');
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X2 }, rows));
+    const again = refresh(T3);
+    expect(again.body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    const h = adv().classes.opus.history;
+    expect(h).toHaveLength(2);
+    expect(h[1]).toMatchObject({ at: T3, from: X1, to: X2, ok: true });
+    expect(adv().classes.opus.previous).toEqual({ model: X1, effort: null });
+  });
+
+  it("an unlaunchable id's replacement is not a move, and neither is the id staying unlaunchable", () => {
+    plantBuild(SUFFIX, '9.2.0');
+    const rows = [{ id: X2, min: '9.2.0' }, { id: X3 }];
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, rows));
+    expect(refresh(T0).code).toBe(0);
+    const seeded = plantSeeded();
+    plantBuild(SUFFIX, '9.1.0');
+    expect(refresh(T1).body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, unobserved: true, unlaunchable: { needs: '9.2.0', laneVersion: '9.1.0' } });
+    plantLaunch('s1', '2026-11-16T12:00:00Z', LANE, 'opus', X3);
+    const r = refresh(T2);
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X3, unlaunchable: null });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it("hold records the held id: the class's current id from the aliases file, and the first hold seeds the advance file with the class words", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    expect(fs.existsSync(advFile())).toBe(false);
+    const r = hold();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'hold', class: 'opus', changed: true, anthropic: true });
+    const a = adv();
+    expect(a.classes.opus.hold).toEqual({ at: NOW, by: 'hand', model: X2 });
+    for (const c of CLASSES) {
+      expect(a.classes[c].family, `${c}'s family is its own class word`).toBe(c);
+      expect(a.classes[c].previous).toBeNull();
+      expect(a.classes[c].history).toEqual([]);
+    }
+    expect(a.pending).toBeNull();
+    expect(parseAdvance(a)).toEqual(a);
+    // A second hold changes nothing.
+    const held = fs.readFileSync(advFile(), 'utf8');
+    expect(hold('opus', LANE, T3).body).toMatchObject({ changed: false });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(held);
+  });
+
+  it('hold with no id refuses alias-source-absent, writing nothing: no aliases file, a class with no id, or an unlaunchable id', () => {
+    const r0 = hold();
+    expect([r0.code, r0.body['error']], r0.stdout + r0.stderr).toEqual([1, 'alias-source-absent']);
+    expect(fs.existsSync(advFile())).toBe(false);
+    plantBuild(SUFFIX, '9.2.0');
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2, min: '9.2.0' }]));
+    expect(refresh(T0).code).toBe(0);
+    expect(hold('sonnet').body['error']).toBe('alias-source-absent');
+    plantBuild(SUFFIX, '9.1.0');
+    expect(refresh(T2).code).toBe(0);
+    expect(readAliases().classes.opus.unlaunchable).not.toBeNull();
+    expect(hold('opus').body['error']).toBe('alias-source-absent');
+    expect(fs.existsSync(advFile())).toBe(false);
+  });
+
+  it.each([
+    ['unreadable', 'aliases-file-unreadable', (p: string): void => { fs.mkdirSync(p); }],
+    ['invalid', 'aliases-file-invalid', (p: string): void => { fs.writeFileSync(p, '{"v": 2}\n'); }],
+  ] as [string, string, (p: string) => void][])('hold refuses an aliases file that is %s, naming it, and writes nothing', (_w, word, plant) => {
+    fs.mkdirSync(path.dirname(aliasesFile()), { recursive: true });
+    plant(aliasesFile());
+    const r = hold();
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, word]);
+    expect(fs.existsSync(advFile())).toBe(false);
+  });
+
+  it("hold refuses settings-overrides-hold when the home's settings env names that class's key, and a key of another class does not", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'something' } }));
+    const r = hold();
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'settings-overrides-hold']);
+    expect(fs.existsSync(advFile())).toBe(false);
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'something' } }));
+    expect(hold().code).toBe(0);
+  });
+
+  it('revert holds the previous id: by revert, at previous.model, records no history entry and keeps previous', () => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const r = verbOf('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const opus = adv().classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert', model: X1 });
+    expect(opus.history).toHaveLength(1);
+    expect(opus.previous).toEqual({ model: X1, effort: null });
+  });
+
+  it('revert with nothing to revert to refuses no-previous, and a settings key refuses a revert too', () => {
+    const r = verbOf('revert');
+    expect([r.code, r.body['error']]).toEqual([1, 'no-previous']);
+    expect(fs.existsSync(advFile())).toBe(false);
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const before = fs.readFileSync(advFile(), 'utf8');
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'something' } }));
+    expect(verbOf('revert').body['error']).toBe('settings-overrides-hold');
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(before);
+  });
+
+  // THE GATE (D-8820): until ccd applies a held id at launch (Task A3.4), the shipped op refuses `hold` and `revert` on an
+  // Anthropic lane at its door, in a state where each would otherwise succeed, and writes nothing; `release` stays open.
+  it('the shipped op refuses hold and revert on an Anthropic lane, alias-hold-not-applied, writing nothing; release stays open', () => {
+    expect(fs.readFileSync(ARM, 'utf8').split(HOLDS_GATE_LINE), 'the arm carries the gate, closed').toHaveLength(2);
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const before = fs.readFileSync(advFile(), 'utf8');
+    for (const v of ['hold', 'revert']) {
+      const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+      expect([r.code, r.body['error']], `${v}: ${r.stdout}${r.stderr}`).toEqual([1, 'alias-hold-not-applied']);
+      expect(String(r.body['detail'])).toContain('Nothing was written.');
+      expect(fs.readFileSync(advFile(), 'utf8'), v).toBe(before);
+    }
+    // The same two, through the copy with the gate open, would have held: the refusal above is the gate's alone.
+    expect(verbOf('revert').code).toBe(0);
+    // A hold made before (by hand, or by A3.4's build before a rollback) is still released by the shipped op.
+    const r = opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([r.code, r.body['changed']], r.stdout + r.stderr).toEqual([0, true]);
+    expect(adv().classes.opus.hold).toBeNull();
+  });
+
+  it('a settings.json that is not JSON refuses the hold without quoting any of its text', () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    // An unquoted value: the parser's own message would quote the text around it.
+    writeText(path.join(home, SUFFIX, 'settings.json'), '{"env":{"SOME_KEY": unquotedvalue12345}}\n');
+    const r = hold();
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'settings-overrides-hold']);
+    expect(String(r.body['detail'])).toContain('settings.json is not valid JSON, so it cannot be shown not to name');
+    expect(r.stdout + r.stderr).not.toMatch(/unquoted|12345|SOME_KEY/);
+    expect(fs.existsSync(advFile())).toBe(false);
+  });
+
+  it('release keeps releasedAt and spends no history: ten entries before, ten after, lastMoveOf unchanged', () => {
+    const a = seedAnthropicAdvance();
+    a.classes.opus.history = Array.from({ length: 10 }, (_v, i) => ({
+      at: `2026-11-${String(i + 1).padStart(2, '0')}T00:00:00Z`, how: 'advance' as const, from: X1, to: X2, ok: true, canary: 'not-run' as const,
+      cause: 'newer' as const,
+    }));
+    a.classes.opus.hold = { at: '2026-11-12T00:00:00Z', by: 'hand', model: X2 };
+    fs.mkdirSync(path.dirname(advFile()), { recursive: true });
+    fs.writeFileSync(advFile(), serializeAdvance(a));
+    const lastBefore = lastMoveOf(a.classes.opus);
+    const r = verbOf('release');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ op: 'release', changed: true });
+    const after = adv().classes.opus;
+    expect(after.hold).toBeNull();
+    expect(after['releasedAt']).toBe(NOW);
+    expect(after.history).toEqual(a.classes.opus.history);
+    expect(after.history).toHaveLength(10);
+    expect(lastMoveOf(after)).toEqual(lastBefore);
+    // A release of a class not held changes nothing and keeps the earlier releasedAt.
+    expect(opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus').body)
+      .toMatchObject({ changed: false });
+    expect(adv().classes.opus['releasedAt']).toBe(NOW);
+  });
+
+  it('set-class still refuses anthropic-lane, and so does every other registry op', () => {
+    for (const args of [['set-class', '--class', 'opus', '--model', X2], ['set-subagent', '--class', 'haiku'],
+      ['materialise'], ['advance-backfill'], ['init', '--probe', 'codex']]) {
+      const r = op(args[0]!, '--file', rosterPath(), '--id', LANE, ...args.slice(1));
+      expect([r.code, r.body['error']], args[0]).toEqual([1, 'anthropic-lane']);
+    }
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', `${LANE}.classes.json`))).toBe(false);
+  });
+
+  it('aliases-refresh refuses a lane that is not an Anthropic lane, and an unknown account', () => {
+    const r = refresh(T0, 'gpt');
+    expect([r.code, r.body['error']]).toEqual([1, 'not-an-anthropic-lane']);
+    expect(refresh(T0, 'ghost').body['error']).toBe('no-such-account');
+  });
+
+  it('aliases-refresh needs --reg, an absolute one', () => {
+    expect(op('aliases-refresh', '--file', rosterPath(), '--id', LANE).code).toBe(2);
+    const r = op('aliases-refresh', '--file', rosterPath(), '--id', LANE, '--reg', 'reg');
+    expect([r.code, r.body['error']]).toEqual([2, 'bad-argv']);
+  });
+
+  it('an absent session registry means no launches', () => {
+    fs.rmSync(regDir(), { recursive: true });
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().classes.opus.id).toBeNull();
+  });
+
+  it("rm reaps the aliases file and still clears only ccrc's keys from the settings", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      env: { DISABLE_TELEMETRY: '1', ANTHROPIC_DEFAULT_OPUS_MODEL: 'x' }, model: 'kept', modelSettings: { [X2]: { effortLevel: 'high' } },
+    }));
+    const r = op('rm', '--file', rosterPath(), '--id', LANE);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['removed']).toContain(aliasesFile());
+    expect(fs.existsSync(aliasesFile())).toBe(false);
+    const s = JSON.parse(fs.readFileSync(path.join(home, SUFFIX, 'settings.json'), 'utf8'));
+    expect(s).toEqual({ env: { DISABLE_TELEMETRY: '1' }, model: 'kept', modelSettings: { [X2]: { effortLevel: 'high' } } });
+  });
+
+  it("refresh and hold never write the home's settings, a cache or a build file", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    plantBuild(SUFFIX, '9.2.0');
+    writeText(path.join(home, SUFFIX, 'settings.json'), '{"env":{"A":"1"}}\n');
+    const snap = (): string[] => ['settings.json', '.last-update-result.json', 'cache/model-catalog/cache-fixture.json']
+      .map((n) => `${fs.readFileSync(path.join(home, SUFFIX, n), 'utf8')}@${fs.statSync(path.join(home, SUFFIX, n)).mtimeMs}`);
+    const before = snap();
+    expect(refresh(T0).code).toBe(0);
+    expect(hold().code).toBe(0);
+    expect(snap()).toEqual(before);
+  });
+
+  it('lanes lists an Anthropic lane: anthropic true, no registry, no other kind field, and ids null with no aliases file (D-8751)', () => {
+    const rows = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    const row = rows.find((l) => l['id'] === LANE)!;
+    expect(row).toEqual({
+      id: LANE, configDirSuffix: SUFFIX, anthropic: true, hasRegistry: false, registryInvalid: null,
+      catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [], ids: null,
+    });
+    expect(rows.find((l) => l['id'] === OTHER)).toMatchObject({ anthropic: true, hasRegistry: false });
+    // A registry row is unchanged: it carries no `ids` and is not Anthropic.
+    const reg = rows.find((l) => l['id'] === 'gpt')!;
+    expect(reg).toMatchObject({ anthropic: false });
+    expect(reg).not.toHaveProperty('ids');
+    // An aliases file that cannot be read or is not one this build reads is `ids: null` too, and the lane stays listed.
+    fs.mkdirSync(path.dirname(aliasesFile()), { recursive: true });
+    fs.writeFileSync(aliasesFile(), '{"v": 2}\n');
+    expect((op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === LANE)).toMatchObject({ anthropic: true, ids: null });
+    fs.rmSync(aliasesFile());
+    fs.mkdirSync(aliasesFile());
+    expect((op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === LANE)).toMatchObject({ anthropic: true, ids: null });
+  });
+
+  it('lanes carries both ids: the id kept, the cache target and the id a fresh launch reported, when they disagree (D-8751)', () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1, sonnet: S1 }, [{ id: X1 }, { id: X2 }, { id: S1 }]));
+    plantLaunch('s1', C2, LANE, 'opus', X2);
+    expect(refresh(T0).code).toBe(0);
+    const row = (op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === LANE)!;
+    const ids = row['ids'] as Record<string, unknown>;
+    expect(Object.keys(ids)).toEqual(['haiku', 'sonnet', 'opus', 'fable']);
+    expect(ids['opus']).toEqual({ id: X2, cacheTarget: X1, seenId: X2 });
+    expect(ids['sonnet']).toEqual({ id: S1, cacheTarget: S1, seenId: null });
+    expect(ids['haiku']).toEqual({ id: null, cacheTarget: null, seenId: null });
+    // The other lane has no aliases file: its ids are null, not an empty object.
+    expect((op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === OTHER)).toMatchObject({ ids: null });
+  });
+
+  it('show answers aliases beside advance: the parsed file, or its state', () => {
+    const absent = op('show', '--file', rosterPath(), '--id', LANE);
+    expect(absent.body['aliases']).toEqual({ state: 'absent' });
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    const ok = op('show', '--file', rosterPath(), '--id', LANE);
+    expect(ok.body['aliases']).toEqual(JSON.parse(fs.readFileSync(aliasesFile(), 'utf8')));
+    expect(ok.body['advance']).toEqual({ state: 'absent' });
+    fs.writeFileSync(aliasesFile(), '{"v": 2}\n');
+    expect(op('show', '--file', rosterPath(), '--id', LANE).body['aliases']).toMatchObject({ state: 'invalid' });
+    fs.rmSync(aliasesFile());
+    fs.mkdirSync(aliasesFile());
+    expect(op('show', '--file', rosterPath(), '--id', LANE).body['aliases']).toMatchObject({ state: 'unreadable' });
+    // A lane that carries a registry answers no `aliases` at all.
+    expect(op('show', '--file', rosterPath(), '--id', 'gpt').body).not.toHaveProperty('aliases');
+  });
+
+  it('nothing reads a secret path: the op and the resolver name no credential file', () => {
+    // The three names are built from halves so this file does not spell them either.
+    const names = [`.cred${'entials'}`, `.cc-sec${'rets'}`, `oauth${'Account'}`];
+    // The Anthropic arm lives in its own module, the one the op imports: read it too, and red if it is not there.
+    expect(fs.readFileSync(OP, 'utf8'), 'the op imports its Anthropic arm from ARM').toContain("from './models-anthropic.mjs'");
+    expect(fs.existsSync(ARM), 'the Anthropic arm module').toBe(true);
+    for (const f of [OP, ARM, path.join(REPO, 'shared', 'model-aliases.mjs')]) {
+      const src = fs.readFileSync(f, 'utf8');
+      for (const word of names) expect(src.includes(word), `${path.basename(f)} names ${word}`).toBe(false);
+    }
+  });
+});
+
+// ── Programme wave 3 through the ops: the retired grace (backward-move) and the effort fallback (effort-level-dropped) ──
+describe('programme wave 3 through the ops', () => {
+  beforeEach(() => { seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') })); });
+  const T0 = '2026-11-10T22:16:58Z';
+  const later = (h: number): string => new Date(Date.parse(T0) + h * 3_600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const at = (when: string, ...args: string[]): Result => opEnv({ CCRC_MODELS_NOW: when }, ...args, '--file', rosterPath(),
+    '--id', 'lane-a');
+  /** The measured shape: opus pinned on a model the lane's fresh catalogue has stopped listing, its older sibling left. */
+  const FLAP_REG = { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } };
+  /** The catalogue as the probe wrote it `h` hours after T0 (its `fetchedAt`), with or without the pin. */
+  const observed = (h: number, listed = false) => ({ ...STEP_CATALOGUE, fetchedAt: Date.parse(later(h)) / 1000,
+    models: listed ? STEP_CATALOGUE.models : STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') });
+  /** One hourly first pass: the probe's catalogue, then the refresh's own `materialise --refresh true`, a minute on. */
+  const sight = (h: number, listed = false): Result => {
+    writeCatalogue('lane-a', observed(h, listed));
+    const r = at(later(h + 1 / 60), 'materialise', '--refresh', 'true');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    return r;
+  };
+  const run = (since: number, seen: number) => ({ model: 'model-6.1-gamma', since: later(since), seen: later(seen) });
+  const opusPlan = (r: Result): Record<string, unknown> =>
+    (r.body['classes'] as Record<string, unknown>[]).find((c) => c['class'] === 'opus')!;
+
+  it('the refresh\'s materialise records each sighting; nothing moves within six hours of them, then it retires', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    for (const h of [0, 1, 2]) sight(h);
+    expect(laneAdvance().classes.opus['missing']).toEqual(run(0, 2));
+    const early = at(later(2.1), 'advance-plan');
+    expect(early.body['eligible']).toBe(true);
+    expect(opusPlan(early)).toMatchObject({ candidate: null, reason: null });
+    // A commit planned before the grace, or by an older plan, is re-checked under the lock and abandoned.
+    const c = at(later(2.1), 'advance-commit', '--class', 'opus', '--from', 'model-6.1-gamma', '--to', 'model-5.6-gamma',
+      '--canary', 'passed');
+    expect(c.body).toMatchObject({ outcome: 'abandoned', why: 'candidate-changed' });
+    expect(classesOf('lane-a')['opus']).toBe('model-6.1-gamma');
+    for (const h of [3, 4, 5]) sight(h);
+    expect(opusPlan(at(later(5.1), 'advance-plan')), 'five hours of sightings').toMatchObject({ candidate: null });
+    sight(6);
+    expect(opusPlan(at(later(6.1), 'advance-plan'))).toMatchObject({ candidate: 'model-5.6-gamma', reason: 'retired' });
+    const moved = at(later(6.1), 'advance-commit', '--class', 'opus', '--from', 'model-6.1-gamma', '--to', 'model-5.6-gamma',
+      '--canary', 'passed');
+    expect(moved.body).toMatchObject({ outcome: 'moved' });
+  });
+
+  it('the plan clock never counts: one sighting, then a plan twelve hours on with no refresh between, moves nothing', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    sight(0);
+    expect(opusPlan(at(later(12), 'advance-plan'))).toMatchObject({ candidate: null });
+  });
+
+  it('a catalogue whose sighting was never recorded proposes nothing, however long the run before it', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    for (const h of [0, 1, 2, 3, 4, 5, 6]) sight(h);
+    // The probe wrote a newer catalogue, and no materialise --refresh recorded it (a held lock, a failed write).
+    writeCatalogue('lane-a', observed(7));
+    expect(opusPlan(at(later(7.1), 'advance-plan'))).toMatchObject({ candidate: null });
+  });
+
+  it('a pin listed again ends the run at the materialise, with no advance step at all; a later absence starts again', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    sight(0);
+    sight(1);
+    sight(2, true);
+    expect(laneAdvance().classes.opus['missing']).toBeUndefined();
+    sight(3);
+    expect(laneAdvance().classes.opus['missing']).toEqual(run(3, 3));
+  });
+
+  it('a missed hour restarts the run; a stale catalogue, the same one again, or a materialise with no --refresh records nothing', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    sight(0);
+    sight(1);
+    sight(3);
+    expect(laneAdvance().classes.opus['missing'], 'a two-hour gap').toEqual(run(3, 3));
+    const before = fs.statSync(advPath('lane-a')).mtimeMs;
+    expect(at(later(3.5), 'materialise', '--refresh', 'true').code, 'the same catalogue again').toBe(0);
+    writeCatalogue('lane-a', { ...observed(4), stale: true });
+    expect(at(later(4.1), 'materialise', '--refresh', 'true').code).toBe(0);
+    writeCatalogue('lane-a', observed(5));
+    expect(at(later(5.1), 'materialise').code, 'the switch and ensure callers').toBe(0);
+    expect(fs.statSync(advPath('lane-a')).mtimeMs, 'nothing to record: no write').toBe(before);
+    expect(laneAdvance().classes.opus['missing']).toEqual(run(3, 3));
+  });
+
+  it('the backfill never writes the record (D-8838), and a --refresh value other than true is refused', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    expect(at(later(0.1), 'advance-backfill').code).toBe(0);
+    expect(laneAdvance().classes.opus['missing']).toBeUndefined();
+    const before = snapshot();
+    const bad = at(later(0.1), 'materialise', '--refresh', 'yes');
+    expect([bad.code, bad.body['error']]).toEqual([2, 'bad-argv']);
+    expect(snapshot()).toEqual(before);
+  });
+
+  // effort-level-dropped: the registry stores `max` for opus, and its model no longer offers it.
+  const DROPPED_CAT = { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.map((m) => (m.id === 'model-5.6-gamma'
+    ? { ...m, efforts: ['low', 'medium', 'high', 'xhigh'] } : m)) };
+  const FB = { class: 'opus', model: 'model-5.6-gamma', from: 'max', to: 'xhigh' };
+  const opusEffort = (): string | undefined => (registryOf('lane-a')['effort'] as Record<string, string>)['opus'];
+
+  it('lanes still lists the lane with its probe, and names the dropped level, never registry-invalid', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const r = op('lanes', '--file', rosterPath());
+    const lane = (r.body['lanes'] as Record<string, unknown>[]).find((l) => l['id'] === 'lane-a')!;
+    expect(lane).toMatchObject({ hasRegistry: true, registryInvalid: null, probe: 'codex', effortDropped: [FB] });
+  });
+
+  it('materialise --refresh writes the fallback, records it, and says so; once', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const chk = op('materialise', '--file', rosterPath(), '--id', 'lane-a', '--check', 'true', '--refresh', 'true');
+    expect(chk.body['error'], '--check writes nothing, so it still refuses').toBe('registry-invalid');
+    const m = at(T0, 'materialise', '--refresh', 'true');
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    expect(m.body).toMatchObject({ effortFallback: [FB], effortFallbackRecord: 'recorded' });
+    expect(opusEffort()).toBe('xhigh');
+    expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'lane-a.effort.json'), 'utf8'))['byModel']['model-5.6-gamma'])
+      .toBe('xhigh');
+    expect(laneAdvance().classes.opus['effortFallback']).toEqual({ at: T0, model: 'model-5.6-gamma', from: 'max', to: 'xhigh' });
+    const again = at(later(1), 'materialise', '--refresh', 'true');
+    expect(again.code).toBe(0);
+    expect(again.body).not.toHaveProperty('effortFallback');
+    expect(laneAdvance().classes.opus.effortFallback?.at, 'recorded once').toBe(T0);
+  });
+
+  it('a materialise with no --refresh (the switch and ensure callers) refuses the registry as before, and writes nothing', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const before = snapshot();
+    const m = at(T0, 'materialise');
+    expect([m.code, m.body['error']]).toEqual([1, 'registry-invalid']);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('with no advance file the fallback is still written and answered, and no advance file is created', () => {
+    plantStep({ advance: null });
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = at(T0, 'materialise', '--refresh', 'true');
+    expect(m.body).toMatchObject({ ok: true, effortFallback: [FB], effortFallbackRecord: 'no-advance-file' });
+    expect(opusEffort()).toBe('xhigh');
+    expect(fs.existsSync(advPath('lane-a'))).toBe(false);
+  });
+
+  it('an advance file it cannot read is left as it is, and the answer names the read\'s word', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    fs.rmSync(advPath('lane-a'));
+    fs.mkdirSync(advPath('lane-a'));
+    const m = at(T0, 'materialise', '--refresh', 'true');
+    expect(m.body).toMatchObject({ ok: true, effortFallback: [FB], effortFallbackRecord: 'advance-file-unreadable' });
+    expect(fs.statSync(advPath('lane-a')).isDirectory()).toBe(true);
+  });
+
+  // D-8865 (review 2999 N1, A-7): a preload makes the nth rename onto a named file fail, the way a full disk or a
+  // directory in its place would, so each arm of a failed materialise is reached through the op's own writes.
+  const EFFORT = (): string => path.join(home, '.ccrc', 'models', 'lane-a.effort.json');
+  const LANE = (): string => path.join(home, '.ccrc', 'codex', 'lane-a', 'lane.json');
+  const CLASSES_TSV = (): string => path.join(home, '.ccrc', 'models', 'lane-a.classes.tsv');
+  const failing = (fail: Record<string, number[]>, ...args: string[]): Result => {
+    const pre = path.join(home, 'fail-rename.mjs');
+    fs.writeFileSync(pre, [
+      "import fs from 'node:fs';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      'const fail = JSON.parse(process.env.FAIL_RENAMES); const seen = {}; const rename = fs.renameSync;',
+      'fs.renameSync = (from, to) => {',
+      '  seen[to] = (seen[to] ?? 0) + 1;',
+      "  if ((fail[to] ?? []).includes(seen[to])) throw Object.assign(new Error('injected rename failure'), { code: 'EIO' });",
+      '  return rename(from, to);',
+      '};',
+      'syncBuiltinESMExports();',
+    ].join('\n'));
+    return opEnv({ CCRC_MODELS_NOW: T0, NODE_OPTIONS: `--import=${pre}`, FAIL_RENAMES: JSON.stringify(fail) }, ...args,
+      '--file', rosterPath(), '--id', 'lane-a');
+  };
+  const effortOnDisk = (): string | undefined => JSON.parse(fs.readFileSync(EFFORT(), 'utf8'))['byModel']['model-5.6-gamma'];
+  const opusDropped = (): string => {
+    const h = opEnv({ CCRC_MODELS_NOW: T0 }, 'advance-health', '--file', rosterPath(), '--reg', path.join(home, '.cc-sessions'),
+      '--lock-template', path.join(home, 'lk', 'models-{id}.lock'));
+    const lane = (h.body['lanes'] as Record<string, unknown>[]).find((l) => l['id'] === 'lane-a')!;
+    const row = (lane['blocked'] as Record<string, unknown>[]).find((b) => b['class'] === 'opus')!;
+    expect(row['cause']).toBe('effort-dropped');
+    return String(row['detail']);
+  };
+
+  it('a materialise that fails puts the stored registry back and renders the lane\'s files from it: no fallback applied', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const reg0 = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const m = failing({ [LANE()]: [1] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'materialise-failed']);
+    expect(String(m.body['detail'])).toMatch(/The effort fallback was not applied: the stored registry was written back, and the lane's files rendered from it\.$/);
+    expect(m.body).not.toHaveProperty('effortFallback');
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8'), 'the stored level, so the lane still reads as refused').toBe(reg0);
+    expect(effortOnDisk(), 'the effort file rendered from the stored registry, which names no offered level').toBeUndefined();
+    expect(fs.existsSync(LANE()), 'the second render wrote lane.json').toBe(true);
+    expect(laneAdvance().classes.opus['effortFallback']).toBeUndefined();
+    expect(opusDropped()).not.toMatch(/already carries/);
+  });
+
+  it('a failed third write whose second render fails too: its own word, and no applied level claimed', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const reg0 = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const m = failing({ [LANE()]: [1, 2] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'effort-fallback-unrestored']);
+    expect(String(m.body['detail'])).toMatch(/The stored registry was written back, but rendering the lane's files from it failed too \(materialise-failed: .*\), so they may carry the effort fallback\.$/);
+    expect(m.body).not.toHaveProperty('effortFallback');
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8')).toBe(reg0);
+    expect(effortOnDisk(), 'the second render reached the effort file before lane.json').toBeUndefined();
+    expect(opusDropped(), 'measured: the effort file does not carry the fallback').not.toMatch(/already carries/);
+  });
+
+  it('a second render that fails before the effort file leaves it at the fallback, and advance-health names that', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = failing({ [LANE()]: [1], [CLASSES_TSV()]: [2] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'effort-fallback-unrestored']);
+    expect(effortOnDisk()).toBe('xhigh');
+    expect(opusDropped()).toBe('model-5.6-gamma no longer offers effort max, so the lane\'s registry is refused until the '
+      + 'hourly refresh writes the fallback, xhigh; the lane\'s effort file already carries the fallback\'s levels, not the '
+      + 'stored registry\'s');
+  });
+
+  // Review 3015 F1: opus and fable on one model, fable's level still offered. The effort file is keyed by model and fable
+  // comes after opus, so the stored and the fallback renderings are the same bytes: the file tells nothing about which
+  // was written, and the detail is the ordinary one.
+  const SHARED_REG = { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, fable: 'model-5.6-gamma' },
+    effort: { ...STEP_REGISTRY.effort, fable: 'high' } };
+  const ORDINARY = 'model-5.6-gamma no longer offers effort max, so the lane\'s registry is refused until the hourly '
+    + 'refresh writes the fallback, xhigh';
+
+  it('two classes on one model: after a restore that succeeded, the detail is the ordinary refused registry', () => {
+    plantStep({ registry: SHARED_REG });
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = failing({ [LANE()]: [1] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'materialise-failed']);
+    expect(effortOnDisk(), 'fable\'s level, in both renderings').toBe('high');
+    expect(opusDropped()).toBe(ORDINARY);
+  });
+
+  it('two classes on one model: a registry refused before any refresh, over the file it had, is the ordinary detail', () => {
+    plantStep({ registry: SHARED_REG });
+    const m = at(T0, 'materialise');
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    writeCatalogue('lane-a', DROPPED_CAT);
+    expect(effortOnDisk()).toBe('high');
+    expect(opusDropped()).toBe(ORDINARY);
+  });
+
+  it('a write-back that fails leaves the fallback applied: answered, and recorded like any other', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = failing({ [EFFORT()]: [1], [regPath('lane-a')]: [2] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'materialise-failed']);
+    expect(String(m.body['detail'])).toMatch(/Writing the stored registry back failed too \(registry-unwritable\), so the registry keeps the effort fallback, applied\.$/);
+    expect(m.body).toMatchObject({ effortFallback: [FB], effortFallbackRecord: 'recorded' });
+    expect(opusEffort()).toBe('xhigh');
+    expect(laneAdvance().classes.opus['effortFallback']).toEqual({ at: T0, model: 'model-5.6-gamma', from: 'max', to: 'xhigh' });
+  });
+
+  it('a record write that fails is answered unwritten, and the fallback stands', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const adv0 = fs.readFileSync(advPath('lane-a'), 'utf8');
+    const m = failing({ [advPath('lane-a')]: [1] }, 'materialise', '--refresh', 'true');
+    expect(m.code, m.stderr).toBe(0);
+    expect(m.body).toMatchObject({ ok: true, effortFallback: [FB], effortFallbackRecord: 'unwritten' });
+    expect(m.stderr).toMatch(/the advance file was not updated/);
+    expect(fs.readFileSync(advPath('lane-a'), 'utf8')).toBe(adv0);
+    expect(opusEffort()).toBe('xhigh');
+  });
+
+  it('a --refresh value other than true is bad argv, exit 2, on a refused registry and beside --check (review 2999 A-2)', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const before = snapshot();
+    for (const extra of [[], ['--check', 'true']]) {
+      const m = at(T0, 'materialise', ...extra, '--refresh', 'yes');
+      expect([m.code, m.body['error']], extra.join(' ')).toEqual([2, 'bad-argv']);
+    }
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('a set-effort that succeeds ends the record, at the level the class runs at too; a refused one does not', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    expect(at(T0, 'materialise', '--refresh', 'true').code).toBe(0);
+    const no = at(later(1), 'set-effort', '--class', 'opus', '--level', 'max');
+    expect([no.code, no.body['error']]).toEqual([1, 'registry-invalid']);
+    expect(laneAdvance().classes.opus['effortFallback'], 'refused: kept').toBeDefined();
+    const same = at(later(1), 'set-effort', '--class', 'opus', '--level', 'xhigh');
+    expect(same.code, same.stdout + same.stderr).toBe(0);
+    expect(laneAdvance().classes.opus['effortFallback'], 'the same level: ended').toBeUndefined();
+    expect(opusEffort()).toBe('xhigh');
+  });
+
+  it('the old level offered again ends the record at the next refresh, and keeps the level the class runs at', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    expect(at(T0, 'materialise', '--refresh', 'true').code).toBe(0);
+    writeCatalogue('lane-a', { ...STEP_CATALOGUE, fetchedAt: Date.parse(later(1)) / 1000 });
+    const m = at(later(1.1), 'materialise', '--refresh', 'true');
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    expect(m.body).not.toHaveProperty('effortFallback');
+    expect(laneAdvance().classes.opus['effortFallback']).toBeUndefined();
+    expect(opusEffort(), 'never put back over the chosen level').toBe('xhigh');
+  });
+
+  it('every other op still refuses the registry until the refresh has written the fallback', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const before = snapshot();
+    for (const args of [['show'], ['advance-plan'], ['hold', '--class', 'opus'], ['set-effort', '--class', 'opus',
+      '--level', 'high'], ['revert', '--class', 'opus']]) {
+      const r = at(T0, ...args);
+      expect(r.body['error'], args.join(' ')).toBe('registry-invalid');
+    }
+    expect(snapshot()).toEqual(before);
+  });
+});
+

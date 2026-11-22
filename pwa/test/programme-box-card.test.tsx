@@ -91,7 +91,9 @@ describe('a programme box in its project card', () => {
   it('heads the box with a kicker naming the programme and its progress', () => {
     const { sessions, runs } = fleet();
     const kicker = drawCard(sessions, runs, 'project-c').querySelector('.pg-kicker')!;
-    expect(kicker.textContent).toContain('Programme');
+    // D-8817: the icon, the hue and the waves bar say programme; the word is not drawn (`coordinator-badge.test.tsx`).
+    expect(kicker.textContent).not.toMatch(/programme/i);
+    expect(kicker.querySelector('.pg-ico')?.getAttribute('aria-label')).toBe('Programme');
     expect(kicker.querySelector('.pg-title')?.textContent).toBe('Port the API');
     expect(kicker.querySelector('.pg-count')?.textContent).toBe('3/6 waves');
     expect(kicker.querySelector('.pg-bar')).not.toBeNull();

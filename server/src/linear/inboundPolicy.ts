@@ -11,12 +11,13 @@
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from '../coord/untrusted.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
+import { LINEAR_PROJECTS_SETTINGS_PATH } from '../../../shared/ledgers.js';
 import { withCcrcProvenance } from './hierarchyOps.js';
 import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
 import type { InboundNote, InboundRow } from '../coord/planStore.js';
 import { inboundRetirable, type RetireWhy } from './inboundRetire.js';
 import type { LinearAnswerRefusalWord } from './ops.js';
-import { deferralOf, deferralUntil, deferralUsesBackoff, egress, type DeferCause } from './planSyncPolicy.js';
+import { deferralOf, deferralUntil, deferralUsesBackoff, egress, uuidOf, type DeferCause } from './planSyncPolicy.js';
 
 /** What the texts need of an inbound row. */
 export interface InboundText { identifier: string; teamKey: string; title: string; body: string | null }
@@ -185,6 +186,41 @@ export function givenUpWord(reason: string | null): string | null { return reaso
 /** The comment a close leaves on the issue before it is canceled: the reason, egress-redacted, with the ccrc provenance line. */
 export const closeCommentBody = (reason: string): string => withCcrcProvenance(egress(`Closed: ${reason}`));
 
+/** The comment a close leaves when its stored reason no longer passes the public-text check (spec §6.1): it carries no stored text. */
+export const closeRefusedCommentBody = (): string => withCcrcProvenance(egress('Closed by ccrc. The reason is not shown here: it did not pass the public-text check.'));
+
+/** The time part of a close's identity (review 2834 A1/A2): the row's `mailedAt`, else `seenAt`. A retire and a reopen reset
+ *  `mailedAt` and the lane mails the row again, so a later close of the same issue carries a later time. */
+export const closeTimeOf = (row: { mailedAt: number | null; seenAt: number }): number => row.mailedAt ?? row.seenAt;
+
+/** The first 12 hex digits of a digest of a stored reason. The digest is `uuidOf`'s (L1 stays free of `node:` imports); its first
+ *  12 hex digits are the sha256's own. It keys the REASON comment (that text is posted anyway) and the owner mail's subject (which
+ *  stays inside ccrc), and NEVER the fallback comment's key (the `fallback` kind of `closeCommentSeedOf`). */
+export const reasonDigestOf = (reason: string | null): string => uuidOf(reason ?? '').replace(/-/g, '').slice(0, 12);
+
+/** A close's identity: the reason's digest and the close's time. It tells one close of an issue apart from a later one with another
+ *  reason, or the same reason after a mail between them. RESIDUAL: two closes of one issue with the same reason and no mail between
+ *  them share one identity, so the second sends no new mail. */
+export const closeIdOf = (row: { reason: string | null; mailedAt: number | null; seenAt: number }): string =>
+  `${reasonDigestOf(row.reason)}-${closeTimeOf(row)}`;
+
+/** The seed of the comment's requestId. Linear stores a comment's requestId as the comment's own id, so a key built from a digest of
+ *  the REFUSED reason would let a guessed reason be confirmed from Linear: the `fallback` kind's key carries the issue, the kind and
+ *  the close's time only, never the reason. The `reason` kind keeps the digest (the text is posted). RESIDUAL: two refused closes of
+ *  one issue with no mail between them share the fallback key, so the second posts nothing new (the issue already carries a fallback). */
+export const closeCommentSeedOf = (linearId: string, kind: 'reason' | 'fallback', row: { reason: string | null; mailedAt: number | null; seenAt: number }): string =>
+  kind === 'fallback' ? `inbound:${linearId}:comment:fallback:${closeTimeOf(row)}` : `inbound:${linearId}:comment:reason:${closeIdOf(row)}`;
+
+/** The owner's mail for a close whose reason failed the public-text check at act time: the issue and the class, never the text.
+ *  The subject carries the close's identity (`closeIdOf`), so a second refused close of one issue is mailed again and a retried
+ *  pass of the same close is not. Sent once per close, whenever the fallback comment landed (made now or by an earlier attempt). */
+export function closeTextRefusedMail(row: InboundText, refusalClass: string, closeId: string): { subject: string; body: string } {
+  return {
+    subject: `Linear inbound: ${row.identifier} closed without its reason (close ${closeId})`,
+    body: `The issue ${row.identifier} of team ${row.teamKey} was closed in ccrc. a comment without the reason is on the issue (made now or by an earlier attempt), because the reason failed the public-text check (${refusalClass}); the reason stays in ccrc. If an earlier attempt of this close already posted the reason, that comment stays. ccrc is canceling the issue; if it gives the cancel up, a separate mail says so (a cancel Linear asks to retry is retried).`,
+  };
+}
+
 /** The operator's *Name a Linear owner* item for a project whose owner is gone. `live` are the coordinators live now. */
 export function ownerItemInput(project: string, live: readonly string[]): RaiseItemInput {
   return {
@@ -198,6 +234,26 @@ export function ownerItemInput(project: string, live: readonly string[]): RaiseI
     options: null, action: { verb: 'linear-owner', project },
   };
 }
+
+/** D-8808 (review 3048 F5): the item for a team key two connected Linear workspaces hold, whose holding projects name no workspace,
+ *  so its inbound issues wait with no owner. The remedy is a setting, the project row's Workspace, so the item takes no act; it
+ *  settles itself once no waiting issue of the key is team-ambiguous or unmeasured (`SHARED_KEY_SETTLED_NOTE`). The team key and the
+ *  project names are shape-checked. */
+export function sharedKeyItemInput(teamKey: string, projects: readonly string[]): RaiseItemInput {
+  const holders = projects.length === 1 ? `The project ${projects[0]} holds the key and names no workspace` : `The projects ${projects.join(', ')} hold the key and name no workspace`;
+  return {
+    program: LINEAR_SYNC_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', neededBy: 'later', soonLabel: null, secretSlot: null,
+    title: `Choose the Linear workspace of team ${teamKey}`,
+    why: `Issues were filed in a Linear team ${teamKey} outside ccrc, and more than one connected Linear workspace has a team with that key. ${holders}, so ccrc cannot tell which project owns these issues, and they wait.`,
+    how: [
+      `Open ${LINEAR_PROJECTS_SETTINGS_PATH} and, on the row of the project that owns team ${teamKey}, choose its Workspace, then Save.`,
+      'ccrc then routes the waiting issues to that project\'s Linear owner, or asks you to name one. This item closes itself once no issue of the team waits on the choice.',
+    ],
+    options: null, action: { verb: 'linear-team-workspace', teamKey },
+  };
+}
+/** The note the shared-key item settles with. */
+export const SHARED_KEY_SETTLED_NOTE = 'No issue of this team waits on the choice of workspace any more.';
 
 /** The operator's decision when the owner raises an issue that may change a programme's scope. */
 export function raisedItemInput(row: InboundText, note: string | undefined): RaiseItemInput {
@@ -299,8 +355,10 @@ export function inboundRecheckOf(issue: { teamKey?: unknown; stateType?: unknown
 
 /** The refusal words that are an answer about ONE issue: the walk goes on past them (review 2524 F2). Every other word (the key's
  *  refusal, a transport or rate failure, a policy or journal outage, no key) is about the whole workspace. Typed from Linear's answer
- *  vocabulary, so a word that leaves it is a compile error here. */
-const ROW_WORDS = ['malformed', 'linear-forbidden', 'linear-invalid', 'not-found'] as const satisfies readonly LinearAnswerRefusalWord[];
+ *  vocabulary, so a word that leaves it is a compile error here. `not-found` is not among them (review 2571 F9): the by-id read
+ *  (`InboundLane#readById`) never answers it as unmeasured, it retires the row `moved-out` (an issue Linear no longer answers is no
+ *  issue in a managed team), so the walk rule is never asked about it, and if it ever were, it would stop the walk, the safe side. */
+const ROW_WORDS = ['malformed', 'linear-forbidden', 'linear-invalid'] as const satisfies readonly LinearAnswerRefusalWord[];
 /** Whether an unmeasured by-id answer ends the lane's walk of the workspace: only a workspace-wide one does (the key's refusal, a
  *  transport or rate failure, an unreadable store, no managed team: the null word). A word nobody classified stops it too, the safe
  *  side. An answer about one row marks that row checked and the walk goes on. */
@@ -325,4 +383,19 @@ export type InboundDoorVerdict = { kind: 'go' } | { kind: 'retire'; why: RetireW
 export function inboundDoorVerdict(answer: InboundRecheck | undefined, binds: boolean): InboundDoorVerdict {
   if (answer === undefined || answer.kind === 'unmeasured') return binds ? { kind: 'refuse', word: 'unreachable' } : { kind: 'go' };
   return answer.kind === 'managed' ? { kind: 'go' } : { kind: 'retire', why: answer.why, word: 'issue-not-inbound' };
+}
+
+/** Where `plan take` may look an Upkeep ticket up by identifier when no inbound row was handed to the programme (review 2571 F10).
+ *  A ticket is looked up ONLY in the programme home's measured workspace; an identifier that one ticket in ANY workspace holds must
+ *  never be acted on from here. Three cases: no programme home, or a home whose project has no team key, is `issue-not-inbound` (the
+ *  programme has no workspace to look in); a home with a team key whose workspace could not be resolved (the Linear store read failed,
+ *  was not listed, or no slot routes the team) is `unreachable`, the coordinator's ruled word (review 2834 A4). It is ONE word for two causes:
+ *  a store read that failed, which a retry helps, and a team no slot routes, which a retry never fixes (the project's linking needs a
+ *  slot for the team), so the detail names both; otherwise `lookup`. */
+export type UpkeepLookup = { kind: 'lookup'; workspace: string } | { kind: 'refuse'; word: 'issue-not-inbound' | 'unreachable'; detail: string };
+export function upkeepLookupOf(c: { home: string | null; homeTeamKey: string | null; homeWorkspace: string | null }): UpkeepLookup {
+  if (c.home === null) return { kind: 'refuse', word: 'issue-not-inbound', detail: 'the programme has no home project, so there is no workspace to look an Upkeep ticket up in' };
+  if (c.homeTeamKey === null) return { kind: 'refuse', word: 'issue-not-inbound', detail: 'the programme\'s home project has no Linear team, so there is no workspace to look an Upkeep ticket up in' };
+  if (c.homeWorkspace === null) return { kind: 'refuse', word: 'unreachable', detail: 'the workspace of the programme\'s home could not be measured, so an Upkeep ticket cannot be looked up: either the Linear store could not be read (a retry helps) or no slot routes the home\'s team (a retry does not help: the project\'s linking needs a slot for the team)' };
+  return { kind: 'lookup', workspace: c.homeWorkspace };
 }
