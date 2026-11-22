@@ -95,3 +95,8 @@ coordinator mints its number when it folds this note into the ledger. PR B and P
 - **`health-routed-in-the-browser-harness`.** `pwa/browser/app.ts` routes `GET /health` by its exact path. Unnamed, it
   answers a server with no words, so the existing browser cases see no Overlord with no edit. That held for the word,
   not for the path: the cases that opened `/` meaning the Fleet now open `/fleet` (above).
+- **`store-reads-health-at-start`.** The store's capability read is the app's one read of `/health` at start, before any
+  screen. `ask-inline.browser.test.ts` counted every `/health` request to hold that the ask sheet reads none (W7 C7p), and
+  the full browser leg on this PR counted the store's read too (8 cases, 1 read each). The count now starts when the sheet
+  is drawn, so the sheet's own reads still fail it (measured with a read added to the answer path: all 8 red), and the
+  start read is held to one.
