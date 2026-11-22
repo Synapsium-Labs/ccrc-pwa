@@ -87,9 +87,12 @@ TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
 # (`_tba_is_long`), so no sub can detach without a ceiling. A row that holds a `/` is a part, never a sub: `settings-box/idle` is the
 # ceiling of an Apply when idle (the six-hour wait, then the act), `parity/leg` bounds one step of the parity tool (an install, or
 # one leg), `parity/kill` is the time between a stopped step's TERM and its KILL (the shim's range is 2 to 8), `parity/tail` is the end of a parity act kept
-# back from its legs (half for the tool to stop and clean up, half for the record), and `unit/stop` is the time between the
-# unit's TERM at its ceiling and its KILL.
-declare -gA TBA_DEADLINE_S=([connect]=3480 [repair]=1800 [apply-release]=1800 [settings-box]=1800 [settings-box/idle]=23520 [parity]=3600 [parity/leg]=900 [parity/kill]=8 [parity/tail]=300 [unit/stop]=90)
+# back from its legs (half for the tool to stop and clean up, half for the record), `parity/sample` is the CI-measured seconds of
+# test-file time one act's samples may add up to (split across the rows: the tool's `--sample-budget`), `parity/queue` is the
+# most the local leg may wait in the fleet's heavy-test queue, added to that leg's bound only (the tool's `--queue-wait`), and
+# `unit/stop` is the time between the unit's TERM at its ceiling and its KILL. The light parity check (D-8945, D-8947): a
+# 25-minute act, a 7-minute step (three times the CI pace of a 240-s sample at two workers, plus a minute), the tail unchanged.
+declare -gA TBA_DEADLINE_S=([connect]=3480 [repair]=1800 [apply-release]=1800 [settings-box]=1800 [settings-box/idle]=23520 [parity]=1500 [parity/leg]=420 [parity/kill]=8 [parity/tail]=300 [parity/sample]=240 [parity/queue]=300 [unit/stop]=90)
 # The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the thirty-one box keys (D-8290
 # adds the three live probe keys).
 TBA_FLEET_KEYS=(CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE
@@ -2078,9 +2081,11 @@ _tba_run_tools-home() {
 # The parity tool (ccd/testbox-parity), run by the detached unit, which `_tba_detach` puts in ccrctests.slice. Per installed
 # repository row (read from this host's own record of the rows it sent: its name, fetch URL, first package and first command head): the checkout is the fleet's
 # own clone of that fetch URL under CCRC_PROJECTS_ROOT (default ~/projects), the command is the row's head with `run`, and the
-# scope is the five most recent merged pull requests, or the pull requests named (the first row only; a number belongs to one
-# repository). The three fixtures run once, in the first row that has a checkout. The record is the rows' results merged with
-# the box's release, its tools key, the pin's fingerprint and the box file's sha256; a pass clears the stale mark.
+# scope is the newest merged pull request over a sample of its tests (D-8945: never the whole suite, which took hours on a loaded
+# fleet box), or the pull requests named (the first row only; a number belongs to one repository). The sample's CI-time budget
+# is the table's `parity/sample`, split evenly across the rows and never under a minute each. The three fixtures run once, in
+# the first row that has a checkout. The record is the rows' results merged with the box's release, its tools key, the pin's
+# fingerprint and the box file's sha256; a pass clears the stale mark.
 # `gh` signed out is answered by the parent, before the unit, and writes no record.
 # The tool is ccd/testbox-parity, or the stand-in a test names (TBA_PARITY_TOOL); the merge of the rows' records is the tool's own
 # `--merge` (argv: the result floor, 1 when a row could not run, the meta, then the record files), never the stand-in's.
@@ -2089,7 +2094,7 @@ _tba_run_tools-home() {
 # tool is told that time (`--until`) and starts nothing after it, so a run that is only slow ends `parity-differs` with a record
 # and the log's reason, and the unit's ceiling is left for a real hang. the platform timeout shim on the tool is the backstop for a tool
 # that does not end by itself: half the tail after that time. The other half is the record's.
-TBA_PARITY_RECENT=5
+TBA_PARITY_RECENT=1
 TBA_PARITY_SLICE=ccrctests.slice
 _tba_gh() { if [ -n "${TBA_GH:-}" ]; then "$TBA_GH" "$@"; else gh "$@"; fi; }
 # `<url>` as `host/path`: no scheme, no user, no `.git`, no trailing slash, so an https and an ssh spelling of one repository agree.
@@ -2133,7 +2138,7 @@ _tba_pr_say() {   # <descriptor> <repository name>
 }
 _tba_run_parity() {
   local pre=0 w i=0 name url pkg head co fail=0 fxpending=1 rel="" v="" tk="" fp sha tmp rec final named=() args=() cmd=() recs=() row pass
-  local pid fd end left stop=0 tool=(bash "$TBA_HERE/testbox-parity") TBA_PR_PART=""
+  local pid fd end left stop=0 tool=(bash "$TBA_HERE/testbox-parity") TBA_PR_PART="" budget
   if [ "${1-}" = --precheck ]; then pre=1; shift; fi
   TBA_CODE=""; TBA_CODE_KEYS=""
   _tba_ra_precheck || return 1
@@ -2153,6 +2158,8 @@ _tba_run_parity() {
   _tba_cx_out sh -c 't=$1/current; k=; for n in node chrome; do v=$(basename "$(readlink -f "$t/$n" 2>/dev/null)" 2>/dev/null); [ -n "$v" ] && [ "$v" != "$n" ] && k="${k:+$k+}$n-$v"; done; printf "%s" "${k:-none}"' sh "$(_tba_box_tools)"
   tk="$CX_OUT"; [[ "$tk" =~ ^[A-Za-z0-9._:+-]{1,128}$ ]] || tk=none
   _tba_pr_rows || return 1
+  # Each row's share of the sample budget (D-8945): the table's one row, split evenly, at least a minute.
+  budget=$(( ${TBA_DEADLINE_S[parity/sample]} / ${#PR_ROWS[@]} )); [ "$budget" -ge 60 ] || budget=60
   tmp="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/ccrc-tba-parity.XXXXXXXX")" || { TBA_CODE=status-not-ok; return 1; }
   _tba_rm_on_exit "$tmp"
   for row in "${PR_ROWS[@]}"; do
@@ -2160,7 +2167,7 @@ _tba_run_parity() {
     if ! co="$(_tba_pr_checkout "$url")"; then _tba_log "parity: $name: the fleet host has no clone of its fetch URL"; fail=1; i=$(( i + 1 )); continue; fi
     rec="$tmp/rec.$i"; i=$(( i + 1 ))
     args=(--repo "$co" --package "$pkg" --record "$rec" --repo-name "$name" --release "$rel" --tools-key "$tk" --fingerprint "$fp" --box-sha256 "$sha")
-    args+=(--leg-deadline "${TBA_DEADLINE_S[parity/leg]}" --leg-kill "${TBA_DEADLINE_S[parity/kill]}" --until "$end")
+    args+=(--leg-deadline "${TBA_DEADLINE_S[parity/leg]}" --leg-kill "${TBA_DEADLINE_S[parity/kill]}" --until "$end" --sample-budget "$budget" --queue-wait "${TBA_DEADLINE_S[parity/queue]}")
     if [ "$fxpending" = 1 ] && [ "${#named[@]}" -gt 0 ]; then
       for w in "${named[@]}"; do args+=(--pr "$w"); done
     else

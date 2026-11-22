@@ -219,7 +219,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `npx vitest`** — it resolves a global copy with no jsdom and falsely reports "no tests".
 - **Run suites in the FOREGROUND, timeout ≥600000ms.** Backgrounding hides a hang; the suites are load-sensitive.
 - **Known load flakes** (real suites — re-run IN ISOLATION before calling a real break): `ccd-ws-gc`,
-  `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
+  `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads` (also `server/load-flakes.txt`,
+  which the test box's parity check reads). CI on the quiet box is
   the arbiter, but only for a file it RAN: a pull request runs its selection, so first check that the PR's `select
   tests` summary lists the file. If it is not listed, the arbiter is the daily run's `test (server)` or a
   `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). **Dispatch it ONCE per accepted

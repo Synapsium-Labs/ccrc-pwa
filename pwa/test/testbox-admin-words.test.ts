@@ -76,6 +76,12 @@ describe('the words of the connect flow (D-8166)', () => {
     expect(TESTBOX_CONNECT_TEXT.stepNames).toHaveLength(6);
     expect(new Set(TESTBOX_CONNECT_TEXT.stepNames).size).toBe(6);
   });
+
+  it('the parity record says how many test files it compared on each side (D-8945)', () => {
+    expect(TESTBOX_CONNECT_TEXT.parityFiles(1)).toBe('1 test file compared on each side');
+    expect(TESTBOX_CONNECT_TEXT.parityFiles(54)).toBe('54 test files compared on each side');
+    expect(TESTBOX_CONNECT_TEXT.parityFiles(0)).toBe('0 test files compared on each side');
+  });
 });
 
 describe('stepOf (D-8166, spec §2.2)', () => {

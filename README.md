@@ -7543,9 +7543,14 @@ box guards secrets, so a change to it asks for the step-up too. With sign-in off
    the fleet host and the fleet-side settings land in the overlay `~/.ccrc/testbox.env`, never in `ccrc.env`. The card
    shows each phase with its time and survives a reload; it ends in **Connected** or in the failing phase with its code
    and **Try again**. A fleet host whose `ccrc.env` already sets a pairing key refuses, naming the keys to remove.
-6. **Parity.** **Run parity** runs, in the tests slice on the fleet host, each repository row's five most recent merged
-   pull requests and the test box spec's section 6 fixtures (git state, socket, workers); it needs `gh` signed in on the
-   fleet host. The switch shows beside it, disabled, until the record passes.
+6. **Parity.** **Run parity** runs, in the tests slice on the fleet host, each repository row's newest merged pull
+   request over a sample of its tests, and the test box spec's section 6 fixtures (git state, socket, workers); it
+   needs `gh` signed in on the fleet host. The sample is the tests the pull request changed, the known load flakes
+   (`server/load-flakes.txt`) and a fixed spread of the rest, kept to about four CI minutes by CI's per-file times
+   (no file over 30 s), so the whole check takes about ten minutes on a loaded box and never runs the whole suite
+   there. Without CI's times (a repository whose CI keeps none, or gh failing) it is smaller still: at most four
+   changed tests and eight others, and no flake. The same sample runs on the fleet host and on the box, and the log
+   says how many test files were compared. The switch shows beside it, disabled, until the record passes.
 
 **Connected.** The card shows the address as set (never its text), the pinned fingerprint and the last act, and offers
 four controls, plus **Settings** (fleet-side keys apply at once; a change to a box setting is refused while a run is in
@@ -7565,11 +7570,13 @@ controls again.
 No act holds the lock without a ceiling. One table (`TBA_DEADLINE_S` in `ccd/ccrc-testbox-admin`, mirrored as
 `TESTBOX_ADMIN_DEADLINE_S` in `shared/testbox-admin.ts`) gives every detached act its limit, and the system manager
 enforces it on the unit (`RuntimeMaxSec`): Connect 58 minutes; Repair, Apply release and a box settings edit 30 minutes;
-parity 60 minutes. An Apply when idle has one limit for its 6-hour wait and its edit together, so an edit that hangs
+parity 25 minutes. An Apply when idle has one limit for its 6-hour wait and its edit together, so an edit that hangs
 after a short wait is stopped only when that whole limit ends. An act stopped at its limit reads `interrupted` at the
 next status read, or when the next act begins. A parity act that is only slow ends before its limit by itself: its
-tool starts nothing in the last five minutes and each of its steps (an install, or one run on one side) is stopped
-after 15 minutes, so the act ends `parity-differs` with a record, and the log says which steps did not run. While an act
+tool starts nothing in the last five minutes and each of its steps (an install, the times fetch, or one run on one
+side) is stopped after 7 minutes, so the act ends `parity-differs` with a record, and the log says which steps did not
+run. The fleet host's run may also wait up to 5 minutes for a heavy-test slot first; one stopped while still waiting is
+logged as a busy fleet host, not as a difference. While an act
 holds the lock, another act's `busy` answer names it: which act, when it began and the latest time it can end, and the
 status says the same latest end on its running act (`deadlineAt`), which the card shows. A server older than this
 build cannot read a status that carries it, so roll this build out with `ccrc rollout --server-first`. `ccrc

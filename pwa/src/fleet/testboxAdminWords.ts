@@ -113,7 +113,7 @@ export const TESTBOX_CONNECT_TEXT = {
   connected: 'Connected',
   tryAgain: 'Try again',
   // step 6
-  parityIntro: 'Parity runs recent pull requests on the test box and on the fleet host and compares them. The switch turns on only after it passes.',
+  parityIntro: 'Parity runs a sample of the tests of the newest merged pull request on the test box and on the fleet host and compares them. The switch turns on only after it passes.',
   runParity: 'Run parity',
   parityRunning: 'Running parity…',
   parityPassed: 'Parity passed.',
@@ -121,6 +121,8 @@ export const TESTBOX_CONNECT_TEXT = {
   parityStale: 'Parity must run again: the box or its settings changed since it last passed.',
   parityNone: 'Parity has not run yet.',
   parityPrs: (n: number) => (n === 1 ? '1 pull request compared' : `${n} pull requests compared`),
+  // D-8945: the light check compares a sample of the pull request's tests; an older record carries no count, and shows none
+  parityFiles: (n: number) => (n === 1 ? '1 test file compared on each side' : `${n} test files compared on each side`),
   fixtureWord: (name: string, result: string) => `${name}: ${result}`,
   // the switch, beside the card's own
   switchWaits: TESTBOX_PARITY_REQUIRED_SENTENCE,

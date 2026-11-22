@@ -362,7 +362,8 @@ export const TESTBOX_ADMIN_PHASES: Readonly<Record<TestboxPhasedSub, readonly Te
 /** A row of the deadline table: a long sub (its detached unit's ceiling), or a named part of one. A row that is no sub holds a
  *  `/`, which no sub does. */
 export type TestboxAdminDeadlineRow =
-  | TestboxPhasedSub | 'settings-box/idle' | 'parity/leg' | 'parity/kill' | 'parity/tail' | 'unit/stop';
+  | TestboxPhasedSub | 'settings-box/idle' | 'parity/leg' | 'parity/kill' | 'parity/tail' | 'parity/sample' | 'parity/queue'
+  | 'unit/stop';
 /** THE ONE DEADLINE TABLE, in seconds; `TBA_DEADLINE_S` in `ccd/ccrc-testbox-admin` is its bash twin, held equal by
  *  `server/test/testbox-admin-verb.test.ts`. The system manager enforces a sub's row on its unit (`RuntimeMaxSec`), so an act
  *  that outlives it is stopped and its lock freed, and the next status read ends it `interrupted`.
@@ -372,16 +373,28 @@ export type TestboxAdminDeadlineRow =
  *     minutes on a real box, after at most a fetch, a verify and a copy of the release.
  *   - `settings-box/idle`: an Apply when idle: the six-hour wait for no run in progress (`TBA_IDLE_DEADLINE_DEFAULT`), then
  *     the `settings-box` row, then two minutes for the wait's last look. One ceiling for the wait and the act together.
- *   - `parity`: 60 minutes in all. `parity/leg`: 15 minutes for one step of the parity tool, a lockfile install or one run of
- *     one snapshot on one side (the test box's default run budget), enforced by the platform timeout shim (`_plat_timeout`) in `ccd/testbox-parity`; a step
- *     stopped there fails and the act goes on. `parity/kill`: 8 seconds between a stopped step's TERM and its KILL, and
- *     between the tool's own: the most the shim's grace allows (2 to 8). `parity/tail`: the last five minutes of the act, kept back from its legs: the tool starts
- *     nothing after the act's start plus `parity` less this, is itself stopped half of it later, and the other half is the
- *     record's. So a run that is only slow ends with a record and a reason, and the ceiling is left for a real hang.
+ *   - `parity`: 25 minutes in all, about twice the light check's expected ten minutes on a loaded fleet box, and room for one
+ *     queue wait: one merged pull request per repository row, over a sample of its tests, and the three fixtures (D-8945,
+ *     D-8947). It leaves two stopped steps and a queue wait inside the time before the tail. `parity/leg`: 7 minutes
+ *     for one step of the parity tool (a lockfile install, the per-file times fetch, one run of the sample on one side, or a
+ *     flake's re-run alone), sized as three times the CI pace of a `parity/sample` sample at two workers, plus a minute for
+ *     vitest to start; enforced by the platform timeout shim (`_plat_timeout`) in `ccd/testbox-parity`; a step stopped there
+ *     fails and the act goes on. `parity/kill`: 8 seconds between a stopped step's TERM and its KILL, and between the tool's
+ *     own: the most the shim's grace allows (2 to 8). `parity/tail`: the last five minutes of the act, kept back from its legs
+ *     (unchanged: cleaning a worktree and its installs does not shrink with the sample): the tool starts nothing after the
+ *     act's start plus `parity` less this, is itself stopped half of it later, and the other half is the record's. So a run
+ *     that is only slow ends with a record and a reason, and the ceiling is left for a real hang.
+ *   - `parity/sample`: 240 CI-measured seconds of test-file time (the `testtimes` artifact), not a deadline: what the samples
+ *     of one act may add up to, split evenly across the repository rows (at least 60 each) and passed to the tool as
+ *     `--sample-budget`. It is the fact that makes a sample's leg fit `parity/leg`.
+ *   - `parity/queue`: 5 minutes the local leg may wait for one of the fleet's heavy-test slots (`ccrc test`'s queue), added to
+ *     that leg's bound only and passed to the tool as `--queue-wait`, so a busy queue does not eat the run's own time; a leg
+ *     stopped while still queued is reported as a busy fleet box, not as a difference.
  *   - `unit/stop`: 90 seconds between the unit's TERM at its ceiling and its KILL (`TimeoutStopSec`). */
 export const TESTBOX_ADMIN_DEADLINE_S: Readonly<Record<TestboxAdminDeadlineRow, number>> = Object.freeze({
   'connect': 3480, 'repair': 1800, 'apply-release': 1800, 'settings-box': 1800, 'settings-box/idle': 23520,
-  'parity': 3600, 'parity/leg': 900, 'parity/kill': 8, 'parity/tail': 300, 'unit/stop': 90,
+  'parity': 1500, 'parity/leg': 420, 'parity/kill': 8, 'parity/tail': 300, 'parity/sample': 240, 'parity/queue': 300,
+  'unit/stop': 90,
 });
 
 /** The largest time, in epoch milliseconds, the verb prints and a reader takes for an act: fifteen digits, which a `Date`
@@ -728,7 +741,16 @@ export interface TestboxParityRecord {
   fingerprint: string;
   boxFileSha256: string;
   at: number;
+  /** The test files compared on both sides, summed over the record's pull request legs: the light check's sample (D-8945).
+   *  The reader ships first and nothing writes it yet: a server older than this field refuses a whole status whose record
+   *  carries it, and the default rollout and the console's update both move the fleet box first, so the parity tool starts
+   *  writing it only in a later release, once every server reads it. A record without it reads and arms as before; the
+   *  reader sets it only when the record carries it. */
+  files?: number;
 }
+
+/** The most test files a parity record says it compared. */
+const TESTBOX_PARITY_FILES_MAX = 100_000;
 
 export interface TestboxActState {
   id: string;
@@ -826,7 +848,12 @@ const FIXTURES = { 'git-state': true, socket: true, workers: true } as const;
 const RESULTS = { pass: true, fail: true } as const;
 
 function parityRecord(v: unknown, at: string): TestboxParityRecord {
-  const o = exact(v, at, ['v', 'result', 'prs', 'fixtures', 'release', 'toolsKey', 'fingerprint', 'boxFileSha256', 'at']);
+  // `files` was added after the first record shape (D-8945): a record without one (a full-suite run) reads as before, and the
+  // field is set only when the record carries it, as an act's `deadlineAt` is.
+  const o = exact(plainObject(v) && !Object.hasOwn(v, 'files') ? { ...v, files: null } : v, at,
+    ['v', 'result', 'prs', 'fixtures', 'release', 'toolsKey', 'fingerprint', 'boxFileSha256', 'at', 'files']);
+  const files = !Object.hasOwn(v as Obj, 'files') ? null
+    : int(o['files'], `${at}.files`) <= TESTBOX_PARITY_FILES_MAX ? o['files'] as number : refuse(`${at}.files`, 'more than a record counts');
   if (o['v'] !== 1) refuse(`${at}.v`, 'not 1');
   if (!Array.isArray(o['prs']) || o['prs'].length > 4096) refuse(`${at}.prs`, 'not a list');
   if (!Array.isArray(o['fixtures']) || o['fixtures'].length > 3) refuse(`${at}.fixtures`, 'not a list of at most three');
@@ -853,6 +880,7 @@ function parityRecord(v: unknown, at: string): TestboxParityRecord {
     fingerprint: isHostKeyFingerprint(fp) ? fp : refuse(`${at}.fingerprint`, 'not a host key fingerprint'),
     boxFileSha256: typeof sha === 'string' && SHA256_HEX_RE.test(sha) ? sha : refuse(`${at}.boxFileSha256`, 'not a sha256'),
     at: int(o['at'], `${at}.at`),
+    ...(files === null ? {} : { files }),
   };
 }
 
