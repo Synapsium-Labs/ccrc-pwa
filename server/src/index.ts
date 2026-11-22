@@ -13,6 +13,8 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
+import { codeRootOf, makeIsolationReader, measureServerFacts } from './isolationFacts.js';
+import { IsolationWordLog } from './isolationLog.js';
 import { bootPushOutbox } from './pushSender.js';
 import { responseStampNow } from './responses/stamp.js';
 import { PerfRecorder } from './perf/recorder.js';
@@ -75,6 +77,7 @@ import { mkdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const cfg = loadConfig();
 
@@ -323,6 +326,16 @@ if (cfg.fleetMode === 'remote') {
     fleetState,
   };
 }
+
+// The isolation word (Overlord W1, §7.4, H28): the server's own facts measured once, here, over every path it holds; the
+// reader reads them with the live fleet state on each call. The log holder logs the reading at boot and after each change
+// of the link, by word and cause only.
+deps.isolation = makeIsolationReader(cfg.fleetMode, measureServerFacts(cfg, codeRootOf(fileURLToPath(import.meta.url))),
+  cfg.agentToken, cfg.fleetMode === 'remote' ? deps.fleetState ?? null : null);
+const isolationLog = new IsolationWordLog(deps.isolation, (line) => console.warn(line));
+isolationLog.note();
+fleetClient?.onStateChange(() => isolationLog.note());
+fleetClient?.onConnected(() => isolationLog.note());
 
 // Loaded before anything that could touch it (the watcher's first tick can
 // fire a push the instant it starts) — a load racing a record would let a
