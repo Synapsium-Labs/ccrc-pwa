@@ -2,6 +2,8 @@
 // producer once per pass, answers only the Overlord's fields, and catches each producer on its own (review 2183 F17); PR C adds
 // the designation's two readings and binds the pass's latch raise to the ladder's one raise path.
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { FIT_WINDOW, SPOT_PROBE_EVERY_TOKENS } from '../../shared/continuity.js';
 import type { BackstopRead } from '../../shared/renewal-readings.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
@@ -176,5 +178,14 @@ describe('renewalReadingsOf (PR C: the latch raise)', () => {
     expect(renewalReadingsOf(deps(), journal.coord, []).latch('probes-failed-twice', 'd')).toEqual({ ok: false, why: 'journal-unreadable' });
     const actor = coordOf({ raise: () => ({ ok: false, reason: 'actor' }) as never });
     expect(renewalReadingsOf(deps(), actor.coord, []).latch('probes-failed-twice', 'd')).toEqual({ ok: false, why: 'actor' });
+  });
+});
+
+describe('the watcher binds the latch (PR C)', () => {
+  it('sweepGenerations hands the pass the wiring\'s latch, so a live step can raise it', () => {
+    const src = readFileSync(fileURLToPath(new URL('../src/watch.ts', import.meta.url)), 'utf8');
+    const sweep = src.slice(src.indexOf('async sweepGenerations('), src.indexOf('async sweepLaunchProfile('));
+    expect(sweep).toContain('const w1 = renewalReadingsOf(this.deps, coord, records)');
+    expect(sweep).toMatch(/generationsPass\(\{[^}]*latch: w1\.latch \}/);
   });
 });
