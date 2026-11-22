@@ -14,6 +14,7 @@ import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
 import { MAIL_HOLD_POLICY_MUTANT_SETS } from './mailHoldPolicySets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
+import { SANDBOX_MUTANT_SETS } from './sandboxSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
@@ -199,6 +200,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,
+  ...SANDBOX_MUTANT_SETS,
   ...COMPACTION_MUTANT_SETS,
   ...PROBE_MUTANT_SETS,
   ...PROBE_DOOR_MUTANT_SETS,
