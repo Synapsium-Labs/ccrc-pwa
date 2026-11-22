@@ -7,6 +7,7 @@
 // that is renamed or removed fails the "found" row, so the pin cannot go vacuous.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
+import path from 'node:path';
 import { CCD_ALIASES_LIB, ccdSource } from './ccdWsHelpers.js';
 
 /** The functions that decide or perform a limit rescue without a supervisor tick, or that move a session off a limit. */
@@ -68,5 +69,112 @@ describe('the model-aliases library sends no key', () => {
     expect(b, `${name} was not found in ccd/lib/model-aliases.sh`).not.toBeNull();
     const code = b!.split('\n').filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/\s#\s.*$/, '')).join('\n');
     expect(code).not.toMatch(SENDS);
+  });
+});
+
+// REVIEW 3040 F1 (no-keys-transitive): the scans above see a key sender only when a guarded body names one itself, so a function
+// that types by calling a CALLER of a typing helper (`_route_apply_now`, which calls `_route_type_model`) stays green. This one is
+// transitive. It reads ccd's own shell sources once (the body and every `ccd/lib/*.sh`, listed from the directory, so a new
+// library is covered at once), cuts every function out of them, and builds the call graph from their code: an edge is a whole-word
+// mention of a defined function's name in a body's code lines, strings included (so `bash -c "source … && fn"` is a call). A key
+// sender is any function whose code holds a raw tmux key sender, closed over its callers; nothing here is a hand list of callers.
+// The protected code (the limit rescue above, the watchdog's dispatch, and every function of the model-aliases library, the
+// passive observe path among them) must reach none.
+type Fn = { file: string; line: number; code: string };
+const RAW_SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix/;
+const HEADER = /^([A-Za-z_][A-Za-z0-9_-]*)\(\)\s*\{(.*)$/;
+const CODE = (l: string): string => l.replace(/\s#\s.*$/, '');
+
+/** Every function of one file: a header at column 0; a one-line body ends on its own line, any other at the first line that opens
+ *  with `}` or just before the next header, whichever comes first (a few bodies close with `…; }` at the end of a code line). */
+function cutFunctions(text: string, file: string, into: Map<string, Fn[]>): void {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = HEADER.exec(lines[i]!);
+    if (!m) continue;
+    let end = i;
+    if (!/\}\s*$/.test(CODE(m[2]!).trim())) {
+      end = i + 1;
+      while (end < lines.length && !lines[end]!.startsWith('}') && !HEADER.test(lines[end]!)) end++;
+      if (end < lines.length && HEADER.test(lines[end]!)) end--;
+    }
+    const code = [CODE(m[2]!), ...lines.slice(i + 1, end + 1).filter((l) => !/^\s*#/.test(l)).map(CODE)].join('\n');
+    into.set(m[1]!, [...(into.get(m[1]!) ?? []), { file, line: i + 1, code }]);
+  }
+}
+
+/** The graph and its key senders, from ONE read of each source. `next` names the hop toward a raw sender, for the failure text. */
+function keySenderGraph(sources: ReadonlyArray<[string, string]>) {
+  const fns = new Map<string, Fn[]>();
+  for (const [file, text] of sources) cutFunctions(text, file, fns);
+  const calls = new Map<string, Set<string>>();
+  for (const [name, defs] of fns) {
+    const out = new Set<string>();
+    for (const d of defs) {
+      for (const t of d.code.matchAll(/(?<![A-Za-z0-9_$-])[A-Za-z_][A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g)) {
+        if (t[0] !== name && fns.has(t[0])) out.add(t[0]);
+      }
+    }
+    calls.set(name, out);
+  }
+  const callers = new Map<string, string[]>([...fns.keys()].map((n) => [n, []]));
+  for (const [from, tos] of calls) for (const to of tos) if (!CUT.some((c) => c.from === from && c.to === to)) callers.get(to)!.push(from);
+  const raw = [...fns].filter(([, defs]) => defs.some((d) => RAW_SENDS.test(d.code))).map(([n]) => n);
+  const next = new Map<string, string | null>(raw.map((n) => [n, null]));
+  for (const queue = [...raw]; queue.length; ) {
+    const at = queue.shift()!;
+    for (const by of callers.get(at)!) if (!next.has(by)) { next.set(by, at); queue.push(by); }
+  }
+  const pathTo = (name: string): string[] => {
+    const hops = [name];
+    for (let at = next.get(name); at; at = next.get(at)) hops.push(at);
+    return hops;
+  };
+  return { fns, calls, raw, senders: next, pathTo };
+}
+
+/** The two edges the graph cannot read, ruled on by the coordinator (no-keys-transitive). Each holds only while its `holds`
+ *  condition reads true in the source, and each must still be an edge, so a cut cannot outlive its reason or go stale. */
+const CUT: ReadonlyArray<{ from: string; to: string; why: string; holds: (code: string) => boolean }> = [
+  {
+    from: '_watchdog_resume_run', to: 'cmd_ensure',
+    why: 'the resume kills the old tmux session (the one the rate-limit menu is on) before it ensures a fresh one, so the startup '
+      + 'gates `_accept_first_run_prompts` answers are a NEW process\'s, as after every swap',
+    holds: (code) => /kill-session/.test(code) && code.search(/kill-session/) < code.search(/\bcmd_ensure\b/),
+  },
+  {
+    from: '_operator_choice_promote', to: 'cmd_route',
+    why: 'the promote writes the route record only: it never passes `--apply`, and `cmd_route` returns before `_route_apply_now` '
+      + 'without it',
+    holds: (code) => !/--apply\b/.test(code),
+  },
+];
+
+describe('no key sender is reachable from the protected code (transitive, review 3040 F1)', () => {
+  const libDir = path.dirname(CCD_ALIASES_LIB);
+  const libs = fs.readdirSync(libDir).filter((f) => f.endsWith('.sh')).sort();
+  const sources: Array<[string, string]> = [['ccd/ccd', ccdSource()], ...libs.map((f): [string, string] => [`ccd/lib/${f}`, fs.readFileSync(path.join(libDir, f), 'utf8')])];
+  const g = keySenderGraph(sources);
+  const library = [...g.fns].filter(([, defs]) => defs.some((d) => d.file === 'ccd/lib/model-aliases.sh')).map(([n]) => n);
+  const PROTECTED = [...GUARDED, '_dispatch_swap', ...library];
+
+  it('reads every source and derives the senders from their text (so the scan below cannot be vacuous)', () => {
+    expect(libs).toContain('model-aliases.sh');
+    expect(g.fns.size).toBeGreaterThan(500);
+    expect(library.length).toBeGreaterThan(15);
+    for (const t of TYPERS) expect(g.raw, `${t} holds no raw key sender`).toContain(t);
+    // The indirect sender review 3040 measured: it types only through the helpers it calls.
+    expect(g.raw).not.toContain('_route_apply_now');
+    expect(g.pathTo('_route_apply_now').length, '_route_apply_now is not derived as a key sender').toBeGreaterThan(1);
+  });
+
+  it.each(CUT)('the cut edge $from -> $to is still an edge and its reason still reads in the source', ({ from, to, holds }) => {
+    expect(g.calls.get(from)?.has(to), `${from} no longer calls ${to}: drop the cut`).toBe(true);
+    for (const d of g.fns.get(from)!) expect(holds(d.code), `${from} (${d.file}:${d.line}) no longer meets the cut's condition`).toBe(true);
+  });
+
+  it.each(PROTECTED)('%s reaches no key sender', (name) => {
+    expect(g.fns.has(name), `${name} was not found in ccd's sources`).toBe(true);
+    expect(g.senders.has(name) ? g.pathTo(name).join(' -> ') : null).toBeNull();
   });
 });
