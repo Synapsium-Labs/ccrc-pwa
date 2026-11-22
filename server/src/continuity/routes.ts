@@ -1158,8 +1158,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
  *  and the workspace; ask `sandboxVerdict` and `sandboxSettle`; then `go-live` calls the designation's `live` writer, and
  *  `fail-pending` records `overlord-sandbox-unmet` with its stop owed and drains it (the profile digest cleared, then the
  *  stop). An unreadable read acts on nothing. A refusal or a failed stop is logged; the owed stop stays on the row. Every
- *  check runs again inside the serialiser on each call, so a call for a report that is no longer the newest start's, or for
- *  another session or generation, acts on nothing. */
+ *  check runs again inside the serialiser on each call, so a call for a report that is no longer the newest start's, for a
+ *  start with no stored report, or for another session or generation, acts on nothing. It is the one settle path: the loads
+ *  door calls it after its answer, and designation B's deadline sweep is to re-run it from the stored report (ruled in fix
+ *  round 1), with these same ports and writers. */
 export function settleLoads(port: SandboxSettlePort, coord: Pick<CoordStore, 'startLoadsOfNewestStart'>, id: string, startId: number,
   wall: () => number): Promise<SettleOutcome> {
   return port.serial(async () => {
@@ -1183,6 +1185,8 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
   if (expected === null || read.kind === 'unmeasured' || !newest.ok) return 'unread';
   if (newest.newest === null) return 'none';
   const n = newest.newest;
+  // A newest start with no stored report has nothing to settle: a re-run before its report lands decides nothing (review 3325 F2).
+  if (n.report === null) return 'none';
   const verdict = sandboxVerdict(expected, n.report, await port.workspaceOf(id), n.carry);
   const act = sandboxSettle(read, startId, n.start, verdict);
   if (act.kind === 'go-live') {

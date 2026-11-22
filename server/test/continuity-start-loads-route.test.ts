@@ -18,7 +18,7 @@ import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { goodLoads, startLoadsCases } from './sim/startLoadsSets.js';
 import { expectedSurfaceOf } from '../src/continuity/sandboxCheck.js';
-import type { SettleOutcome } from '../src/continuity/routes.js';
+import { settleLoads, type SandboxSettlePort, type SettleOutcome } from '../src/continuity/routes.js';
 import { BUILD, FIXTURE_OWN_LISTS } from './sim/sandboxSets.js';
 import type { OverlordAuthorityJournal } from '../src/coord/overlordAuthorityJournal.js';
 import { gateActorOf } from '../src/accounts/audit.js';
@@ -202,9 +202,9 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       actor: OPERATOR, at: FAKE_T0 - 1000, opKey: 'designate-settle' }).ok).toBe(true);
     expect(coord!.bindPendingGeneration(OV, GEN, FAKE_T0 - 900).ok).toBe(true);
   };
-  const startAs = (a: FastifyInstance, sid: string, uuid: string, reportId: string, source = 'startup') => a.inject({
+  const startAs = (a: FastifyInstance, sid: string, uuid: string, reportId: string, source = 'startup', gen = GEN) => a.inject({
     method: 'POST', url: `/api/sessions/${sid}/start`, headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN },
-    payload: { fromId: sid, fromUuid: uuid, reportId, source, reportedAt: FAKE_T0 - 50, rowIncarnation: GEN },
+    payload: { fromId: sid, fromUuid: uuid, reportId, source, reportedAt: FAKE_T0 - 50, rowIncarnation: gen },
   });
   const startOv = (a: FastifyInstance, reportId = 'r-ov1-abcd', source = 'startup') => startAs(a, OV, OV_UUID, reportId, source);
   const loads = (over: Record<string, unknown> = {}, reportId = 'r-ov1-abcd') => ({
@@ -327,5 +327,96 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     await startOv(app, 'r-ov4-abcd', 'resume');
     await report(app, loads({}, 'r-ov4-abcd'));
     expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { carry: { kind: 'none' } } });
+  });
+
+  // ── A re-run from the stored report (review 3325 F2, ruled in fix round 1). A 202 clears the hook's spool, so nothing resends
+  // an answered report; a settle lost after the answer is re-run by designation B's deadline sweep, which is not in this PR.
+  // These cases call the one settle path directly over the stored evidence, with the store's own writers and a recorded drain,
+  // so recovery is pinned at the function, not end to end.
+  describe('a re-run of the settle from the stored report (the sweep is designation B\'s)', () => {
+    let drained: string[];
+    const portOf = (over: Partial<SandboxSettlePort> = {}): SandboxSettlePort => ({
+      serial: (fn) => fn(), expected: () => e, read: () => coord!.designationRead(),
+      goLive: (id, g, at) => { const r = coord!.goLive(journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
+      failPending: (id, at) => coord!.failPending(id, 'overlord-sandbox-unmet', at, true),
+      drain: async (id) => { drained.push(id); }, workspaceOf: async () => ({ kind: 'measured', project: 'overlord' }), ...over,
+    });
+    const rerun = (id = OV, startId = 1, port = portOf()) => settleLoads(port, coord!, id, startId, () => FAKE_T0);
+    /** The server with no settle wired: the loads door answers 202 and records, and no settle runs (one lost after the answer). */
+    const openLost = async (): Promise<FastifyInstance> => {
+      migrated();
+      seedRow(home, OV, { uuid: OV_UUID, project: 'overlord' });
+      const rec = recorder();
+      calls = rec.calls;
+      const r = await appFor(home, rec.run, {});
+      coord = r.coord;
+      await r.app.ready();
+      return r.app;
+    };
+    const pendingId = () => { const d = view(); return d.kind === 'not-designated' ? d.row?.pending?.sessionId ?? null : null; };
+    beforeEach(() => { drained = []; });
+
+    it('an accepted report survives a lost settle without a resend; the re-run goes live once, and a duplicate does nothing', async () => {
+      app = await openLost(); pend();
+      await startOv(app);
+      expect((await post(app, loads(), OV)).statusCode).toBe(202);
+      expect(pendingId()).toBe(OV);
+      expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { start: { id: 1 }, report: { startId: 1 } } });
+      expect(await rerun()).toStrictEqual({ sessionId: OV, startId: 1, act: 'go-live' });
+      expect(view()).toMatchObject({ kind: 'designated', sessionId: OV });
+      expect(await rerun()).toMatchObject({ act: 'none' });
+      expect(view()).toMatchObject({ kind: 'designated', sessionId: OV });
+      expect(drained).toStrictEqual([]);
+      expect(calls).toStrictEqual([]);
+    });
+
+    it('a stored failed report takes the same fail-pending and drain on the re-run, once', async () => {
+      app = await openLost(); pend();
+      await startOv(app);
+      await post(app, loads({ launchRc: 'on' }), OV);
+      expect(await rerun()).toMatchObject({ act: 'fail-pending' });
+      expect(view().kind === 'not-designated' && view().row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+      expect(drained).toStrictEqual([OV]);
+      expect(await rerun()).toMatchObject({ act: 'none' });
+      expect(drained).toStrictEqual([OV]);
+    });
+
+    it('a stale start, a newest start with no report yet, and another session\'s report decide nothing', async () => {
+      app = await openLost(); pend();
+      await startOv(app, 'r-ov1-abcd');
+      await post(app, loads(), OV);
+      await startOv(app, 'r-ov2-abcd', 'resume');
+      expect(await rerun(OV, 1)).toMatchObject({ act: 'none' });
+      expect(await rerun(OV, 2)).toMatchObject({ act: 'none' });
+      seedRow(home, ID, { uuid: UUID, project: 'overlord' });
+      await startAs(app, ID, UUID, 'r-pa1-abcd');
+      await post(app, { ...loads({}, 'r-pa1-abcd'), fromId: ID, fromUuid: UUID }, ID);
+      expect(await rerun(ID, 3)).toMatchObject({ sessionId: ID, act: 'none' });
+      expect(pendingId()).toBe(OV);
+      expect(drained).toStrictEqual([]);
+    });
+
+    it('a start of another generation decides nothing, held or not', async () => {
+      app = await openLost(); pend();
+      await startAs(app, OV, OV_UUID, 'r-ov1-abcd', 'startup', '0189abcd-1234-5678-9abc-0123456789ff');
+      await post(app, loads(), OV);
+      expect(await rerun()).toMatchObject({ act: 'none' });
+      expect(pendingId()).toBe(OV);
+      expect(drained).toStrictEqual([]);
+    });
+
+    it('missing or unmeasured facts never go live: an unreadable read is unread, an unmeasured workspace fails the attempt', async () => {
+      app = await openLost(); pend();
+      await startOv(app);
+      await post(app, loads(), OV);
+      expect(await rerun(OV, 1, portOf({ read: () => ({ kind: 'unmeasured', why: 'locked' }) }))).toMatchObject({ act: 'unread' });
+      expect(await rerun(OV, 1, portOf({ expected: () => null }))).toMatchObject({ act: 'unread' });
+      const noRead = { startLoadsOfNewestStart: () => ({ ok: false, detail: 'locked' }) } as unknown as CoordStore;
+      expect(await settleLoads(portOf(), noRead, OV, 1, () => FAKE_T0)).toMatchObject({ act: 'unread' });
+      expect(pendingId()).toBe(OV);
+      expect(await rerun(OV, 1, portOf({ workspaceOf: async () => ({ kind: 'unmeasured', reason: 'registry' }) }))).toMatchObject({ act: 'fail-pending' });
+      expect(view().kind).toBe('not-designated');
+      expect(drained).toStrictEqual([OV]);
+    });
   });
 });

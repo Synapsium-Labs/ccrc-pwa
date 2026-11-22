@@ -32,7 +32,7 @@ marked as moved.
 | `profile-engaged-needs-the-newest-report` (review 3325 F8) | `profileEngagedOf` reads the newest start's own report. | It also refuses a report whose `startId` is not the newest start's id, so a reader handed an older start's report reads `not-engaged`; mutant P1 pins it. |
 | `workspace-read-through-measured-project` | `workspaceOf` reads the registry row's project. | The door's `workspaceOf` is `registry.ts#measuredProjectOf` over `readSessionRecord`, the one decision on `projectEvidence` outside the radar, so an unmeasured project reads `unmeasured`. |
 | `ladder-reads-the-workspace-the-settle-measured` | The ladder's input is `profileEngagedOf` with the workspace fact. | The ladder's inputs are synchronous and the registry read is not, so the input passes the project `overlord` for the bound body: the settle step measured that project when this binding went live, and a body's registry project never changes. Its cwd and instruction files are still each start's own report. A binding made without the settle step (designation B's rebind, a restore) would read the constant as a measurement; that follow-up has to change this input. |
-| `settle-runs-after-the-answer` (corrected, review 3325 F2) | The door's step runs after `insertStartLoads`. | It runs after the door answers 202, on the coordination serialiser (so it never interleaves with a designate or a retire), so the hook's 3 s send budget never waits on a stop. A 202 clears the hook's spool, so nothing resends an answered report: a settle lost after the answer (a restart, a throw, a go-live the journal refuses) leaves the attempt pending with its body running until something re-runs `settleLoads` from the stored report. The first build of this note said a resend retries it; that was wrong. The re-run's home is the designation's reconciliation path, designation B's deadline sweep, which is not in the tree yet; the missing seam was reported to the coordinator in fix round 1 for a ruling. |
+| `settle-runs-after-the-answer` (corrected, review 3325 F2) | The door's step runs after `insertStartLoads`. | It runs after the door answers 202, on the coordination serialiser (so it never interleaves with a designate or a retire), so the hook's 3 s send budget never waits on a stop. A 202 clears the hook's spool, so nothing resends an answered report: a settle lost after the answer (a restart, a throw, a go-live the journal refuses) leaves the attempt pending with its body running until something re-runs `settleLoads` from the stored report. The first build of this note said a resend retries it; that was wrong. Ruled in fix round 1 (option a): designation B's deadline sweep owns the re-run, feeding matching stored reports through this same `settleLoads` with the same ports and writers; no caller, scheduler or writer is added here. `settleLoads` acts on nothing for a newest start with no stored report yet. The re-run is pinned at the function (go-live once, a stored failed report's fail-pending and drain, a duplicate after success, a stale start, a start with no report, another session, another generation, and no go-live from missing or unmeasured facts). **Recovery is outstanding:** no end-to-end restart or loss proof exists until designation B's sweep lands, and no first live designation or readiness claim rests on it. |
 | `settle-reports-its-outcome` (review 3325 F6) | (none) | `settleLoads` answers what it decided (`none`, `go-live`, `fail-pending`, `unread`, `refused`, `threw`) and tells the port's optional `settled` once done. Production passes none; the door suite waits on it, so a case that expects nothing proves the settle ran and decided `none`. |
 | `settle-drains-through-the-designation-drain` | `fail-pending` clears `profiledigest` through `routeSet`, then stops through `stopCreated`. | `failPending('overlord-sandbox-unmet', owesStop)` then `drainOwedStops`, the designation's one drain: keep-awake off, then the set and `profiledigest` cleared, then the stop, with `stopDone` on success. A failed off still stops, and the id stays owed for the next drain (designation B's sweep, or a retire). |
 | `overlord-body-built-once` | `server.ts` wires `stopCreated` into the continuity deps. | The Overlord body (`ccdOverlordBody`, with the stop route's own path) and the designation store are built once, above the continuity routes, and both the designation doors and the settle step take them. |
@@ -50,7 +50,8 @@ marked as moved.
 - **A resume before the first `Stop` fails the attempt.** A resume writes no `prompt_snapshot` (load-path.md §3), so its
   `tools` and `toolServers` read `unmeasured`, and a pending designation whose body respawned before its first `Stop`
   ends `overlord-sandbox-unmet`. That follows the rulings (`resume-carries-its-own-start`); the operator starts it again.
-- **A settle lost after the answer leaves the attempt pending** until its re-run lands (`settle-runs-after-the-answer`).
+- **A settle lost after the answer leaves the attempt pending, its body running,** until designation B's deadline sweep
+  re-runs it from the stored report (`settle-runs-after-the-answer`).
 - **Every Claude Code roll will hold the Overlord until its build is listed.** The lists are keyed by build (question 4). The
   capture inventory, queued, is where each build's own lists come from, so no release is needed per roll.
 
@@ -65,14 +66,15 @@ Scoped runs on this box, each file or group through `ccrc test`, fixture HOMEs a
 suite run; the whole suite has not been run for this PR, and CI is the arbiter for everything else.
 
 - Mutation, scoped to the four sandbox keys plus BASELINE, CONTROL, the decider-name match and the merge-base floor check: 8
-  of 8 tests green, 31 of 31 mutants killed. The whole mutation-floors file was not run: in the reviewer's run this box's
+  of 8 tests green, 31 of 31 mutants killed (one scoped run). The whole mutation-floors file was not run: in the reviewer's run this box's
   6 GiB test slice killed a worker, so that run says nothing either way.
 - By hand, each from a saved copy and restored: the drain's stop replaced by a success stub (the door's fail-pending and
-  stop-throws cases red); the settle's drain call removed (the same two red); a pending designation read as standing by the
+  stop-throws cases red); the settle's drain call removed (the same two red); the settle's no-report guard removed (the
+  re-run's stale-start case red); a pending designation read as standing by the
   ladder input (the pending-only case red); the surface arm's `--tools`/`--agents` guard removed (the `--tools` case red; the
   `--agents` case stays green without it, because `fromjson` on a missing value already errors).
 - Suites, each green: `sandbox-check` and `sandbox-settle` (32 tests); `sandbox-ladder-input` (7); `continuity-start-loads-route`
-  (24); `continuity-profile-lane` with `run-session-census` (56); the five `overlord-ladder*` suites (149); `growth-check`
+  (29, the re-run cases included); `continuity-profile-lane` with `run-session-census` (56); the five `overlord-ladder*` suites (149); `growth-check`
   armed, `growth-caps`, `anchors` and `citations` (97 armed); `rings` and `single-definition` (56 files, 1711 tests). The
   hook packet's `session-hook-surface-arm` (10) and `session-hook-role-skill-deny` (20) ran in this tree before the split.
 - The server typecheck, and a typecheck of the touched test files with everything they import: clean. The whole-tests
