@@ -666,9 +666,9 @@ function pendingCase(act: (db: DatabaseSync, id: string, now: number) => void, m
   } finally { db.close(); }
 }
 const RETIRE_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
-    { id: 'E1 retire leaves the generation live', old: 'endOverlordGeneration(db, bound);', new: '' },
-    { id: 'E2 a pending-only retire leaves the pending body\'s generation live', old: 'endOverlordGeneration(db, id);', new: '' },
-    { id: 'E3 a live retire leaves the pending body\'s generation live', old: 'if (p !== null) endOverlordGeneration(db, p.sessionId);', new: '' },
+    { id: 'E1 retire leaves the generation live', old: 'endOverlordGeneration(db, bound, i.at);', new: '' },
+    { id: 'E2 a pending-only retire leaves the pending body\'s generation live', old: 'endOverlordGeneration(db, id, i.at);', new: '' },
+    { id: 'E3 a live retire leaves the pending body\'s generation live', old: 'if (p !== null) endOverlordGeneration(db, p.sessionId, i.at);', new: '' },
   ], suite: retireEndsGenerationCases };
 
 /** A failed pending attempt whose body started: `failPending` ends its generation (review 2366 N3). */
@@ -680,7 +680,7 @@ export function failPendingEndsGenerationCases(m: DesignationStoreModule): Recor
   };
 }
 const FAIL_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
-    { id: 'E4 failPending leaves the generation live', old: 'endOverlordGeneration(db, sessionId);', new: '' },
+    { id: 'E4 failPending leaves the generation live', old: 'endOverlordGeneration(db, sessionId, at);', new: '' },
   ], suite: failPendingEndsGenerationCases };
 
 export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
