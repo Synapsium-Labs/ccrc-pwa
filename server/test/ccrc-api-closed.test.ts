@@ -480,12 +480,14 @@ describe('the client stays closed', () => {
     // THE APPEND-LAST FILLS, derived from the client's own blocks: every `if [[ "$key" == …` block that fills the pane's pair
     // with `append_body_field` (the pair LAST, so a parser keeping the later of two keys keeps the pane's, review 2039 F7), and
     // no such block that splices it. The goals writes (review 2240 F1) and the remaining-work door (Overlord W2, review 2265 F9)
-    // joined the note and probe rows.
+    // joined the note and probe rows; the call record and the linking suggest and confirm doors joined them (review 3245 A2).
     const blocks = [...code.matchAll(/^  if \[\[ ("\$key" == '[a-z.-]+'(?: \|\| "\$key" == '[a-z.-]+')*) \]\]; then\n([\s\S]*?)^  fi$/gm)];
     const keysOf = (head: string): string[] => [...head.matchAll(/'([a-z.-]+)'/g)].map((m) => m[1]!);
     const appendLast = blocks.filter((b) => /append_body_field 'byId'/.test(b[2]!)).flatMap((b) => keysOf(b[1]!)).sort();
-    expect(appendLast).toEqual(['goals.merged', 'goals.modify', 'goals.pin', 'note.add', 'note.close', 'note.handover', 'probe.answer', 'programme.remaining']);
-    for (const b of blocks.filter((x) => keysOf(x[1]!).includes('programme.remaining'))) {
+    expect(appendLast).toEqual(['calls.record', 'goals.merged', 'goals.modify', 'goals.pin', 'linking.confirm', 'linking.suggest', 'note.add', 'note.close', 'note.handover', 'probe.answer', 'programme.remaining']);
+    const lastFirst = ['programme.remaining', 'calls.record', 'linking.suggest'];
+    expect(blocks.filter((x) => keysOf(x[1]!).some((k) => lastFirst.includes(k)))).toHaveLength(3);
+    for (const b of blocks.filter((x) => keysOf(x[1]!).some((k) => lastFirst.includes(k)))) {
       expect(b[2]).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
       expect(b[2]).not.toMatch(/splice_body_field/);
       expect(b[2]!.indexOf("append_body_field 'byId'")).toBeLessThan(b[2]!.indexOf("append_body_field 'byUuid'"));
