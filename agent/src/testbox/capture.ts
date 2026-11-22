@@ -12,7 +12,7 @@
 // - THE DRIVE: the keys typed at each step and the events that must be recorded before the next.
 // - THE STAND-IN'S REPLIES: one rule per request, keyed on what the request carries, never on a model.
 import path from 'node:path';
-import { TESTBOX_CAPTURE_DEADLINE_MS } from '../../../shared/agent-protocol.js';
+import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
 import { CAPTURE_EVENTS, CAPTURE_WRITE_COMMAND } from '../../../shared/claudeBuildCapture.js';
 import { compareClaudeVersions, isClaudeVersion } from '../../../shared/claudeVersion.js';
 import type { HookEvent } from '../../../shared/hook-events.js';
@@ -197,53 +197,64 @@ export function standInReply(body: unknown): StandInReply {
   return { kind: 'text', text: text.includes(CAPTURE_MARK.subagent) ? 'ok' : 'ccrc capture summary' };
 }
 
-// ── the timings (review 3226 F8) ─────────────────────────────────────────────────────────────────────────────────
+// ── the timing target (review 3226 F8; review 3316 F1, A3) ───────────────────────────────────────────────────────
+//
+// A TARGET, NOT YET THE RUNNER'S. Nothing passes these values to `captureRunner.ts#CaptureRunner` or `#tmuxLauncher`
+// yet: the runner is unwired until PR 3b, its step, exit and poll timeouts are deps nothing sets in production, and
+// `tmuxLauncher`'s bound defaults to 15 s, not the target below. The only production reader today is the desk's late
+// check, `captureStartsLate`. PR 3b's acceptance gate binds them (task note `capture-runner-pr3.md`): the desk and the
+// launched runner read one timing contract, and a test through the production composition goes red when the launched
+// capture, with its queue wait, its teardown and door B2's step, no longer fits `TESTBOX_CAPTURE_DEADLINE_MS`.
 
-/** How long each part of one capture may take. The fleet agent waits `TESTBOX_CAPTURE_DEADLINE_MS` for the verdict and then
- *  closes its connection, so a verdict sent after that is lost; these values are chosen so a capture fits that deadline
- *  with one capture ahead of it in the queue ({@link captureWorstCaseMs}, pinned by `testbox-capture-deadline.test.ts`). */
+/** The target for each part of one capture. The fleet agent waits `TESTBOX_CAPTURE_DEADLINE_MS` for the verdict and then
+ *  closes its connection, so a verdict sent after that is lost; the target is chosen so that two captures, one waiting
+ *  behind the other, fit that deadline under {@link captureWorstCaseMs} (pinned by `testbox-capture-deadline.test.ts`). */
 export interface CaptureTimings {
-  /** One step's events (the runner's `stepTimeoutMs`). */
+  /** The target for the runner's `stepTimeoutMs`: how long one step may take to raise its events. */
   readonly stepMs: number;
-  /** The build's exit after the last step (the runner's `exitTimeoutMs`). */
+  /** The target for the runner's `exitTimeoutMs`: how long the build may take to exit after the last step. */
   readonly exitMs: number;
-  /** The recording's poll (the runner's `pollMs`). */
+  /** The target for the runner's `pollMs`: the recording's poll. */
   readonly pollMs: number;
-  /** One tmux call's bound (`captureRunner.ts#tmuxLauncher`'s `boundMs`). */
+  /** The target bound of one tmux call, for PR 3b to pass as `tmuxLauncher`'s `boundMs` (whose default is 15 s). A call
+   *  answers within its bound plus the bounded spawner's drain (`exec.ts#boundedExec`, `UPDATE_SPAWN_DRAIN_MS`). */
   readonly tmuxCallMs: number;
-  /** After `stop`, the wait for the build to be gone (the runner's `stopWaitMs`). */
-  readonly stopWaitMs: number;
-  /** An allowance for the scratch directory, the seeded config and the stand-in's start, which no call bounds. */
+  /** An ALLOWANCE, not a bound: the scratch directory, the seeded config and the stand-in's start, which nothing bounds. */
   readonly setupMs: number;
 }
 
-/** The production timings. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box,
- *  and keeps the pin with one more typed step than today's six (the model-switch step door B2 adds, coordinator's ruling). */
+/** The target. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box. */
 export const CAPTURE_TIMINGS: CaptureTimings = Object.freeze({
-  stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, stopWaitMs: 5_000, setupMs: 10_000,
+  stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, setupMs: 10_000,
 });
 
 /** The slack kept beside the worst case: the frames' travel and the clocks of two processes. */
 export const CAPTURE_DEADLINE_MARGIN_MS = 30_000;
 
-/** The longest one capture can take under `t`: the setup and the start (one tmux call); each step's typing (the text and
- *  Enter, two calls, and one liveness call when typing fails) and its wait, which can overrun by one poll; one liveness
- *  call when the drive stops unfinished; the exit wait (each pass a call, overrunning by a call and a poll); and the
- *  cleanup (the kill, then the bounded wait for the build to be gone). */
+/** The worst case of ONE capture by the runner as it stands on main (`captureRunner.ts#CaptureRunner`), if it were run
+ *  under the target `t`, each tmux call counted at its bound plus the drain: the start (one call, after the setup
+ *  allowance); each typed step's two calls (the text, then Enter); each step's wait, which can overrun by one poll; the
+ *  exit wait, which can overrun by one call and one poll; and the stop (one call).
+ *
+ *  WHAT IT DOES NOT BOUND: the setup is an allowance, not a bound; the stand-in's close and the scratch directory's
+ *  removal are not counted at all, and a hung stand-in can outlast both; and any teardown or liveness call a later
+ *  runner adds (PR 2's stop wait among them) is not counted until PR 3b's gate counts the runner it wires. */
 export function captureWorstCaseMs(t: CaptureTimings, steps: readonly CaptureStep[] = CAPTURE_STEPS): number {
-  const call = t.tmuxCallMs;
+  const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
   const start = t.setupMs + call;
-  const drive = steps.reduce((ms, s) => ms + (s.type === null ? 0 : 3 * call) + t.stepMs + t.pollMs, 0) + call;
+  const drive = steps.reduce((ms, s) => ms + (s.type === null ? 0 : 2 * call) + t.stepMs + t.pollMs, 0);
   const exit = t.exitMs + call + t.pollMs;
-  const stop = call + t.stopWaitMs + call + t.pollMs;
+  const stop = call;
   return start + drive + exit + stop;
 }
 
 /** What a capture that started too late to answer in time is told: no verdict, and why. */
 export const CAPTURE_LATE_DETAIL = 'the capture waited in the queue too long to finish before the fleet agent stops waiting: not run, no verdict';
 
-/** Whether a capture that has waited `waitedMs` since its submission must not start: its worst case and the margin would
- *  end past the fleet agent's deadline, so its verdict would be lost. The desk ends it with {@link CAPTURE_LATE_DETAIL}. */
+/** Whether a capture that has waited `waitedMs` since its submission must not start, by the TARGET: its worst case under
+ *  {@link CAPTURE_TIMINGS} and the margin would end past the fleet agent's deadline, so its verdict would be lost. The
+ *  desk ends it with {@link CAPTURE_LATE_DETAIL}. Until PR 3b binds the runner to the target, this is the target's worst
+ *  case, not a measured bound on the runner. */
 export function captureStartsLate(waitedMs: number, t: CaptureTimings = CAPTURE_TIMINGS, deadlineMs: number = TESTBOX_CAPTURE_DEADLINE_MS): boolean {
   return waitedMs + captureWorstCaseMs(t) + CAPTURE_DEADLINE_MARGIN_MS > deadlineMs;
 }

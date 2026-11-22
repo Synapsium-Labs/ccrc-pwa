@@ -5,7 +5,7 @@
 // word, never run for an answer nobody hears. And the tool sync's takeover, which replaces the release the capture's
 // recorder runs from, waits for captures as it waits for runs (`service.ts#idle`).
 import { describe, expect, it } from 'vitest';
-import { TESTBOX_CAPTURE_DEADLINE_MS } from '../../shared/agent-protocol.js';
+import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../shared/agent-protocol.js';
 import type { CaptureAnswer, CaptureSubmit } from '../../shared/claudeBuildCapture.js';
 import { readTestboxFrame } from '../../shared/testbox.js';
 import {
@@ -17,15 +17,15 @@ import type { MirrorOps } from '../src/testbox/mirror.js';
 import { TestboxService, type ServiceSettings } from '../src/testbox/service.js';
 import type { SystemManager } from '../src/testbox/systemd.js';
 
-const T: CaptureTimings = { stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, setupMs: 5 };
+const T: CaptureTimings = { stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, setupMs: 5 };
 
-describe('the worst case one capture can take (capture.ts#captureWorstCaseMs)', () => {
-  it('adds the setup, the start, each step (typing and its wait), the drive\'s last liveness check, the exit wait and the cleanup', () => {
+describe('the worst case of one capture by the runner on main, under a target (capture.ts#captureWorstCaseMs)', () => {
+  it('adds the setup allowance, the start, each typed step\'s two calls, each step\'s wait and a poll, the exit wait and the stop, each call at its bound plus the drain', () => {
+    const call = T.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
     const typed = CAPTURE_STEPS.filter((s) => s.type !== null).length;
-    const drive = typed * 3 * T.tmuxCallMs + CAPTURE_STEPS.length * (T.stepMs + T.pollMs) + T.tmuxCallMs;
-    const exit = T.exitMs + T.tmuxCallMs + T.pollMs;
-    const stop = T.tmuxCallMs + T.stopWaitMs + T.tmuxCallMs + T.pollMs;
-    expect(captureWorstCaseMs(T)).toBe(T.setupMs + T.tmuxCallMs + drive + exit + stop);
+    const drive = typed * 2 * call + CAPTURE_STEPS.length * (T.stepMs + T.pollMs);
+    const exit = T.exitMs + call + T.pollMs;
+    expect(captureWorstCaseMs(T)).toBe(T.setupMs + call + drive + exit + call);
   });
   it('grows with each timing it is made of', () => {
     const base = captureWorstCaseMs(T);
@@ -33,12 +33,12 @@ describe('the worst case one capture can take (capture.ts#captureWorstCaseMs)', 
   });
 });
 
-describe('the production timings fit the fleet agent\'s deadline (review 3226 F8)', () => {
-  it('a capture with one capture ahead of it in the queue still ends, with its margin, before the agent stops waiting', () => {
+describe('the TARGET fits the fleet agent\'s deadline (review 3226 F8; a target: PR 3b binds the runner to it, review 3316 F1)', () => {
+  it('under the target, a capture with one capture ahead of it in the queue ends, with its margin, before the agent stops waiting', () => {
     const worst = captureWorstCaseMs(CAPTURE_TIMINGS);
     expect(2 * worst + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
   });
-  it('the pin still holds with one more typed step than the drive has (room for the model-switch step, door B2)', () => {
+  it('the target leaves room for one more typed step than the drive has (door B2\'s step): the target only, the real fit is PR 3b\'s gate', () => {
     const more = [...CAPTURE_STEPS, { type: '/model haiku', waitFor: [] }];
     expect(2 * captureWorstCaseMs(CAPTURE_TIMINGS, more) + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
   });
