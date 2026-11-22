@@ -1074,10 +1074,14 @@ failed with its word), whether a rotation is owed and why, whether the fleet con
 generation, its transport (`http` said as unencrypted), the previous and retired values still presented, the
 proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
 alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
-(`POST /api/token/rotate`, session-only). A **Linear** card follows it (#1444): the Linear keys ccrc holds, one per
+(`POST /api/token/rotate`, session-only). The services ccrc works with have a section of their own,
+**Integrations** (`/settings/integrations`), with three cards. **Linear** (#1444): the Linear keys ccrc holds, one per
 workspace, each row with its workspace's name, teams, key tail and last check, **Add a workspace** to add a key, and
 the older single key as a legacy row; every session reaches Linear through these keys alone, by way of `ccrc-api
-linear` (below), and never signs in to Linear itself. Settings then has
+linear` (below), and never signs in to Linear itself. **Project linking** ("Linking PRs to Linear", below). **GitHub**, which
+is read-only: ccrc holds no GitHub key and reaches GitHub through the GitHub CLI signed in on the fleet box, and the
+card says when GitHub last answered that box, or that it refused its sign-in, from the visibility readings the project
+list already carries. Settings then has
 a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. Settings then has a further section, **Stall watch**
@@ -3763,7 +3767,14 @@ A **public** repository never carries a tracker id anywhere: the PR is linked fr
 linear link <REF> --url …`, and its body cites the ticket's GitHub mirror issue (`Closes #n` or `Refs #n`). The PR sheet
 refuses a public project's title or body that names the project's own team key, and says which id to remove.
 
-The inputs are set in the console. **Settings → Security → Project linking** has one row per project: its **Team key**
+The inputs are set in the console. **Settings → Integrations → Project linking** lists every project, and says the
+counts once at its head. A project that waits for a decision comes first, open: a suggested team, a key two workspaces
+hold, a key two projects share in one workspace with no owning project, a map waiting, or inbound issues with no live
+owner. Each reason is said in words with the one control that settles it under it; the rest of the row is behind "More
+settings". A linked project is one line: its name, its team (key and name), how it was linked, who owns the team now,
+where its migration stands, and a few words where it differs from a quiet row (inbound issues waiting, a public
+repository, no PR template). Projects with no team sit behind one line, "N projects not linked to Linear". A row opens
+to its controls: its **Team key**
 (the Linear team's key, such as `KEY`; empty clears it), the repository's **visibility** as ccrc last read it ("Private,
 read 3h ago", "Not read yet", "Couldn't read: …") with an **override** (Automatic, Private or Public) that wins over the
 reading, and whether the repository has `.github/pull_request_template.md`. For a private project with a key and no

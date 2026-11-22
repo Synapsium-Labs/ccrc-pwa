@@ -380,7 +380,7 @@ describe('.settings-index-row — the Settings index, one row per section (setti
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     renderSettings(null);
     const rows = screen.getAllByRole('link').filter((a) => a.hasAttribute('data-section'));
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     for (const row of rows) expect(row).toHaveClass('settings-index-row');
     navigate('/');
   });
