@@ -442,13 +442,16 @@ export class FleetClient {
     if (msg.t === 'tail') {
       const tailId = msg.tailId;
       if (typeof tailId !== 'number') return;
-      this.tailListeners.get(tailId)?.(msg as unknown as TailData | TailReset);
+      // A listener is called only once it is known to be a function: the id comes from the agent's frame.
+      const tail = this.tailListeners.get(tailId);
+      if (typeof tail === 'function') tail(msg as unknown as TailData | TailReset);
       return;
     }
     if (msg.t === 'pty') {
       const ptyId = msg.ptyId;
       if (typeof ptyId !== 'number') return;
-      this.ptyListeners.get(ptyId)?.(msg as unknown as PtyData | PtyExit);
+      const pty = this.ptyListeners.get(ptyId);
+      if (typeof pty === 'function') pty(msg as unknown as PtyData | PtyExit);
     }
   }
 
