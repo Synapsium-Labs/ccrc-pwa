@@ -3,8 +3,10 @@
 // each row. Pure cases: the mail lane's own drive of the table is in `overlord-prompt-record.test.ts` and
 // `overlord-inbox-wake-lane.test.ts`.
 import { describe, expect, it } from 'vitest';
+import * as envelope from '../src/coord/envelope.js';
+import { fixedLineMailOfCases, sweepDesignationOfCases } from './sim/fixedLineMailSets.js';
 import {
-  FIXED_LINE_MAIL, fixedLineMailOf, mailNudgeOf, renderMailNudge, renderOperatorMessageNudge, resumeRuleOf,
+  FIXED_LINE_MAIL, mailNudgeOf, renderMailNudge, renderOperatorMessageNudge, resumeRuleOf,
 } from '../src/coord/envelope.js';
 import { SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import { INBOX_WAKE_SUBJECT, renderInboxWakeBody, renderInboxWakeLine, renderSpotProbeLine } from '../../shared/overlordInbox.js';
@@ -15,44 +17,13 @@ const OTHER = 'lane-b-project-a';
 const designated = { kind: 'designated', sessionId: OVERLORD } as const;
 const NOW = 1_800_000_000_000;
 const wakeBody = renderInboxWakeBody({ keys: ['probe-round:r1'], waiting: 3, firstDue: { kind: 'by', at: NOW + 140_000 } });
-const mailTo = (toId: string, fromId: string, subject: string) => ({ fromId, subject, toId });
 
-describe('fixedLineMailOf', () => {
-  it('answers each row for its mail to the designated session', () => {
-    expect(fixedLineMailOf(mailTo(OVERLORD, 'operator', operatorMessageSubject(7)), designated)).toMatchObject({ name: 'operator-message', firstDelivery: 'message-delivered' });
-    expect(fixedLineMailOf(mailTo(OVERLORD, 'operator', SPOT_PROBE_SUBJECT), designated)).toMatchObject({ name: 'spot-probe', firstDelivery: 'none' });
-    expect(fixedLineMailOf(mailTo(OVERLORD, 'operator', INBOX_WAKE_SUBJECT), designated)).toMatchObject({ name: 'inbox-wake', firstDelivery: 'none' });
-  });
+describe('fixedLineMailOf: the table\'s row for a mail, or generic', () => {
+  for (const [name, run] of Object.entries(fixedLineMailOfCases(envelope))) it(name, run);
+});
 
-  it('answers generic for the spot-probe notice and the wake to any other session, and for either subject from another sender', () => {
-    for (const subject of [SPOT_PROBE_SUBJECT, INBOX_WAKE_SUBJECT]) {
-      expect(fixedLineMailOf(mailTo(OTHER, 'operator', subject), designated)).toBe('generic');
-      expect(fixedLineMailOf(mailTo(OVERLORD, OTHER, subject), designated)).toBe('generic');
-      expect(fixedLineMailOf(mailTo(OTHER, 'operator', subject), { kind: 'not-designated' })).toBe('generic');
-    }
-  });
-
-  it('answers generic for every other mail', () => {
-    expect(fixedLineMailOf(mailTo(OVERLORD, 'operator', 'handover'), designated)).toBe('generic');
-    expect(fixedLineMailOf(mailTo(OVERLORD, OTHER, 'hi'), designated)).toBe('generic');
-    expect(fixedLineMailOf(mailTo(OVERLORD, 'operator', 'operator-message:not-a-number'), designated)).toBe('generic');
-  });
-
-  it('answers generic for every designatedOnly row under an unmeasured designation, and keeps the operator message\'s row', () => {
-    const only = FIXED_LINE_MAIL.filter((r) => r.designatedOnly);
-    expect(only.map((r) => r.name).sort()).toEqual(['inbox-wake', 'spot-probe']);
-    for (const subject of [SPOT_PROBE_SUBJECT, INBOX_WAKE_SUBJECT]) {
-      expect(fixedLineMailOf(mailTo(OVERLORD, 'operator', subject), { kind: 'unmeasured' })).toBe('generic');
-    }
-    expect(fixedLineMailOf(mailTo(OVERLORD, 'operator', operatorMessageSubject(7)), { kind: 'unmeasured' })).toMatchObject({ name: 'operator-message' });
-  });
-
-  it('names each row once, and a row that matches a mail is the only one that does', () => {
-    expect(FIXED_LINE_MAIL.map((r) => r.name)).toEqual(['operator-message', 'spot-probe', 'inbox-wake']);
-    for (const m of [{ fromId: 'operator', subject: operatorMessageSubject(1) }, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT }, { fromId: 'operator', subject: INBOX_WAKE_SUBJECT }]) {
-      expect(FIXED_LINE_MAIL.filter((r) => r.matches(m))).toHaveLength(1);
-    }
-  });
+describe('sweepDesignationOf: the sweep\'s designation read as the table takes it', () => {
+  for (const [name, run] of Object.entries(sweepDesignationOfCases(envelope))) it(name, run);
 });
 
 describe('the lines the table types', () => {

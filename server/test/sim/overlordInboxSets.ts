@@ -305,6 +305,49 @@ export function inboxProbeSourceCases(m: InboxDecidersModule): Record<string, Su
   };
 }
 
+// ---------------------------------------------------------------------------------------------------- inboxProbeSourceOf
+
+export function inboxProbeSourceOfCases(m: InboxDecidersModule): Record<string, SuiteCase> {
+  /** A reader that counts its calls, and answers `rows`. */
+  const reader = (rows: ProbeRowsFact) => { const calls = { n: 0 }; return { calls, read: (): ProbeRowsFact => { calls.n++; return rows; } }; };
+  const active = { kind: 'state', state: 'active' } as const;
+  return {
+    'an active generation reads the round once and answers from its rows': () => {
+      const r = reader(ROUND_ROWS('spot'));
+      expect(m.inboxProbeSourceOf(active, r.read)).toEqual({ kind: 'measured', value: { roundId: 'r-7', kind: 'spot', questions: 3, askedAt: 4_000 } });
+      expect(r.calls.n).toBe(1);
+    },
+    'an active generation with no rows answers none, after one read': () => {
+      const r = reader({ ok: true, rows: [] });
+      expect(m.inboxProbeSourceOf(active, r.read)).toEqual({ kind: 'measured', value: 'none' });
+      expect(r.calls.n).toBe(1);
+    },
+    'an active generation whose rows could not be read is unmeasured with the reader\'s detail': () => {
+      const r = reader({ ok: false, detail: 'continuity_probes read failed' });
+      expect(m.inboxProbeSourceOf(active, r.read)).toEqual({ kind: 'unmeasured', why: 'continuity_probes read failed' });
+      expect(r.calls.n).toBe(1);
+    },
+    'any other state answers none and never calls the reader': () => {
+      for (const state of GENERATION_STATES.filter((s) => s !== 'active')) {
+        const r = reader(ROUND_ROWS());
+        expect(m.inboxProbeSourceOf({ kind: 'state', state }, r.read), state).toEqual({ kind: 'measured', value: 'none' });
+        expect(r.calls.n, state).toBe(0);
+      }
+    },
+    'no live generation answers none and never calls the reader': () => {
+      const r = reader(ROUND_ROWS());
+      expect(m.inboxProbeSourceOf({ kind: 'none' }, r.read)).toEqual({ kind: 'measured', value: 'none' });
+      expect(r.calls.n).toBe(0);
+    },
+    'an unmeasured generation answers unmeasured with its reason and never calls the reader': () => {
+      const r = reader(ROUND_ROWS());
+      expect(m.inboxProbeSourceOf({ kind: 'unmeasured', why: 'the generations could not be read' }, r.read))
+        .toEqual({ kind: 'unmeasured', why: 'the generations could not be read' });
+      expect(r.calls.n).toBe(0);
+    },
+  };
+}
+
 // ------------------------------------------------------------------------------------------------------------- inboxOrder
 
 const probeRow = (over: Partial<InboxRow> = {}): InboxRow => ({
@@ -728,6 +771,21 @@ const INBOX_PROBE_SOURCE_SET: MutantSet<InboxDecidersModule> = {
   suite: inboxProbeSourceCases,
 };
 
+const INBOX_PROBE_SOURCE_OF_SET: MutantSet<InboxDecidersModule> = {
+  modulePath: L1,
+  mutants: [
+    { id: 'S1 the reader always called', old: "  return asked.kind === 'read-rows' ? inboxProbeSource(gen, readRows()) : asked;", new: "  const r = readRows();\n  return asked.kind === 'read-rows' ? inboxProbeSource(gen, r) : asked;" },
+    { id: 'S2 the reader never called', old: 'inboxProbeSource(gen, readRows())', new: "inboxProbeSource(gen, { ok: true, rows: [] })" },
+    { id: 'S3 the reader called twice', old: 'inboxProbeSource(gen, readRows())', new: '(readRows(), inboxProbeSource(gen, readRows()))' },
+    { id: 'S4 the ask negated', old: "asked.kind === 'read-rows'", new: "asked.kind !== 'read-rows'" },
+    { id: 'S5 the first answer dropped', old: ': asked;', new: ": { kind: 'measured', value: 'none' };" },
+    { id: 'S6 the rows ignored', old: 'inboxProbeSource(gen, readRows())', new: '(readRows(), inboxProbeSource(gen, { ok: true, rows: [] }))' },
+    { id: 'S7 the rows read before the ask', old: 'const asked = inboxProbeSource(gen, \'not-read\');', new: "readRows();\n  const asked = inboxProbeSource(gen, 'not-read');" },
+    { id: 'S8 the reader result passed on as a failure', old: 'inboxProbeSource(gen, readRows())', new: "inboxProbeSource(gen, { ok: false, detail: String(readRows().ok) })" },
+  ],
+  suite: inboxProbeSourceOfCases,
+};
+
 const ROW_NUDGE_SET: MutantSet<InboxDecidersModule> = {
   modulePath: L1,
   mutants: [
@@ -820,6 +878,7 @@ export const OVERLORD_INBOX_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'shared/overlordInbox.ts#renderInboxWakeLine': RENDER_WAKE_LINE_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#composeInbox': COMPOSE_INBOX_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#inboxProbeSource': INBOX_PROBE_SOURCE_SET as MutantSet<never>,
+  'server/src/coord/overlordInbox.ts#inboxProbeSourceOf': INBOX_PROBE_SOURCE_OF_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#inboxOrder': INBOX_ORDER_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#rowNudgeOf': ROW_NUDGE_SET as MutantSet<never>,
   'server/src/coord/overlordInbox.ts#readCeilingVerdict': READ_CEILING_SET as MutantSet<never>,

@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import * as inbox from '../src/coord/overlordInbox.js';
 import {
-  GATE_WORD_LIST, acknowledgeVerdictCases, composeInboxCases, inboxOrderCases, inboxProbeSourceCases, inboxWakeVerdictCases, readCeilingVerdictCases, rowNudgeOfCases,
+  GATE_WORD_LIST, acknowledgeVerdictCases, composeInboxCases, inboxOrderCases, inboxProbeSourceCases, inboxProbeSourceOfCases, inboxWakeVerdictCases, readCeilingVerdictCases, rowNudgeOfCases,
 } from './sim/overlordInboxSets.js';
 
 describe('composeInbox: the one order, a probe round alone, an unmeasured source fails the whole', () => {
@@ -12,6 +12,9 @@ describe('composeInbox: the one order, a probe round alone, an unmeasured source
 });
 describe('inboxProbeSource: the open round, read only while the generation is active, never its text', () => {
   for (const [name, run] of Object.entries(inboxProbeSourceCases(inbox))) it(name, run);
+});
+describe('inboxProbeSourceOf: the reader is called only for an active generation, and its rows are used', () => {
+  for (const [name, run] of Object.entries(inboxProbeSourceOfCases(inbox))) it(name, run);
 });
 describe('inboxOrder: band rank, then each band\'s own key', () => {
   for (const [name, run] of Object.entries(inboxOrderCases(inbox))) it(name, run);
