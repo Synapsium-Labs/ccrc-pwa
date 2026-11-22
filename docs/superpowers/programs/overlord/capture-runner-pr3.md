@@ -48,3 +48,7 @@ Review run 3226's findings carried to PR 3, then the runner wired to the desk.
   (D-8290), so it is not counted; the day a probe runner is wired, `idle()` counts it the same way.
 - **replay-order-is-the-loop** (mutation pass). The first form compared the PostToolUse's index with the allowed prompt's;
   a mutant removing the comparison survived, because the recording is read in order. The check is now the loop's own order.
+- **step-budget-holds-b2s-step** (the coordinator's ruling on door B2's model-switch step, mail 30767). Door B2 (run 3301)
+  adds a typed drive step, `/model haiku`, in its own pull request. At 40 s a step that step would break the deadline pin,
+  so the step budget is 35 s, and a case keeps one more typed step than today's drive inside the pin, whichever pull
+  request lands first.
