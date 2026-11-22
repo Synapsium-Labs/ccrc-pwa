@@ -404,12 +404,14 @@ describe(TABLES_PIN, () => {
       portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
       // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
       answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
-      // The Overlord authority journal's head row (Overlord W1, H27): one writer, the apply step of the journal's append, inside
-      // its caller's transaction. Confirm the restore's `appendConfirmInTx` joins it in authority journal C.
-      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx'],
+      // The Overlord authority journal's head row (Overlord W1, H27): one writer, `writeHeadRow`, inside its caller's transaction,
+      // called by the apply step of `appendInTx` and by Confirm the restore's `appendConfirmInTx` (authority journal C).
+      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#writeHeadRow'],
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
-      overlord_designation: [...['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
+      // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the
+      // row's writers.
+      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
         .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
       // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
       // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.
