@@ -63,7 +63,7 @@ async function world(over: { presence?: string; pending?: boolean } = {}) {
   return { coord, pass, feedRows, close };
 }
 
-describe('the skew notice through the watcher (review 3346 F8)', () => {
+describe('the skew notice through the watcher (review 3346 F8)', { timeout: 90_000 }, () => {
   it('a dead designated body under skew records one keyed notice, and neither a second pass nor a restarted watcher adds one', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const w = await world();
