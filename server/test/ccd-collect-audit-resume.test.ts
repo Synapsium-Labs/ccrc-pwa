@@ -82,9 +82,12 @@ describe.skipIf(!LINUX)('the phases, read off the disk', () => {
     expect(verdictOf(a)).toBe('unmeasured');
     expect(collectOf(a)['unmeasured']).toBe('device');
     const root = fs.realpathSync(path.join(h.home, '.cc-tmp'));
+    // The sentence is today's, whole; since D-8948 the reason the device is not released
+    // follows it: a device of major 0 is never proven gone from a box (`ccd-collect-device-gone.test.ts`).
     expect(String(a.doc!['detail'])).toBe(`${root} is on device ${ident.dev}, not on device 1 that the quarantine record`
       + ` ${recName()} carries — a mount point on another device is never read as the leaf's absence: nothing is`
-      + ' dropped, and the next pass asks again');
+      + ' dropped, and the next pass asks again (device 1 is of major 0, which no mount table and no block listing has'
+      + ' to show, so it is never proven gone from this box)');
     expect(a.doc!['token']).toBeUndefined();
     expect(a.doc!['resume'], 'no phase is answered over an absence not believed').toBeUndefined();
     expect(readJournal(h.home)).toEqual([]);

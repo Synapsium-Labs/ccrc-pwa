@@ -2162,13 +2162,21 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   `dev=` the record or the witness carries; a mismatch, a device that cannot be read, or a `~/.cc-tmp` that cannot be
   resolved answers unmeasured `device`, retried and unjournaled, and nothing is dropped. An empty mount point is thus
   never read as the leaf's absence; the `moved` and `unmoved` phases never ask the device.
+  Amended by D-8948: a mismatch whose recorded device is PROVEN gone from the box (no
+  mount-table line, no block-device entry, and a block listing that shows the device `~/.cc-tmp` stands on now) is
+  released. A witness whose leaf is absent is compared and dropped; a record whose slot stands empty is `restart`
+  (the empty slot and the record cleared, the witness kept, `state-changed`). Tokens bind the current device
+  (`on=`). A device still on the box, of major 0, or beside a listing that fails its control keeps `device`; an
+  unreadable mount table answers `identity`.
 - `tail-drop-believes-an-absent-leaf`: a stated residual, carried to wave 9's pre-flight list. The reclaim tail's own
   drop of a witness whose leaf is absent is unchanged and asks no device. Beside it, two more: the device test cannot
   tell an empty bind-mount point from the leaf's absence when the bind source and the mount point share a file system
   (`device-test-cannot-see-a-same-device-bind-mount`), and a PERMANENT change of the physical `~/.cc-tmp`'s device
   holds every witness without a leaf and every `removed` record at unmeasured `device` on every pass, with no terminal
   word and no journal row (`permanent-device-change-holds-every-absence`), fail-closed and never self-healing, so a lane
-  must not read a standing `device` answer as transient.
+  must not read a standing `device` answer as transient. Narrowed, not closed, by D-8948: a
+  recorded device proven gone from the box now heals; one of major 0, a number another device took, a record whose
+  slot does not stand and a box whose block listing fails its control still hold.
 - `tail-drop-ignores-a-recordless-slot`: a stated residual, carried to wave 9's pre-flight list. The reclaim tail's
   witness drop (`_ws_tmproot_remove`) still drops the witness of an id whose recordless slot stands.
 - `verb-population-refuses-linked-tmproots`: the verb refuses a `tmproots/` that is itself a link as
@@ -3209,7 +3217,8 @@ composes when a gate forbids it, and 9 more items (three silent-wedge paths amon
     `tail-drop-believes-an-absent-leaf`, the item ends while the leaf still stands under a mount. Wave 9 is the first
     wave that makes such a done happen automatically. Filtering the end on a removal needs a `meas` key from ccd (a
     detail parse is fragile), so it goes to the path-identity follow-up.
-  - **Stated residuals, read as standing, never transient:** `permanent-device-change-holds-every-absence`, a
+  - **Stated residuals, read as standing, never transient:** `permanent-device-change-holds-every-absence` (narrowed by
+    D-8948 to the devices that are never proven gone), a
     `~/.cc-tmp` deleted whole, and `source-parent-without-owner-write-loops`. The lane paces each (R87), and the cure of
     each is ccd's. `device-test-cannot-see-a-same-device-bind-mount` loses only a witness, never data; R85's two
     observations are the lane's only mitigation.
