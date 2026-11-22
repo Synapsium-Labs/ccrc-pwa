@@ -116,6 +116,6 @@ describe('ready and close invalidate before any listener runs (§5.2)', () => {
     await vi.waitFor(() => expect(c.state.connected).toBe(true), { timeout: 3000 });
     // The epoch is the cell's, never a FleetState field: remote-connect.test.ts pins that object whole.
     expect(Object.keys(c.state).sort())
-      .toEqual(['agentOps', 'build', 'ccdVerbs', 'connected', 'downSince', 'observedEpoch', 'rosterFp']);
+      .toEqual(['agentOps', 'build', 'ccdVerbs', 'connected', 'downSince', 'hostReport', 'observedEpoch', 'peer', 'readySerial', 'rosterFp']);
   });
 });

@@ -3968,6 +3968,11 @@ general remote-shell:
   `127.0.0.1`), never `0.0.0.0`. Every connection must send a valid `hello`
   frame with the bearer token within 3 s, or the socket is closed; a wrong
   token closes with code `4401`.
+- **Host report** (Overlord W1, the isolation word, spec 2026-11-09 §7.4): every `ready` frame carries the agent's
+  uid and two digests of its host ids, HMAC-SHA-256 under the bearer of the machine id and of the kernel's boot id,
+  never the ids themselves. The server reads it beside its own measurement of the link (whether the peer is on this
+  host, and the kernel's uid for the peer's socket) to decide the `server-isolation` word: either side narrows it, and
+  only the two together widen it. An older agent sends no report, which reads `unmeasured`, never isolated.
 - **Exec whitelist**: only `tmux` (`has-session`, `list-panes`,
   `capture-pane`, `send-keys`, `resize-window`) and `ccd`, matched against the
   exact bare command name (no path components) and an argv **prefix** — a

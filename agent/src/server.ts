@@ -60,6 +60,8 @@ import {
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { boundedSpawn } from '../../shared/spawn.mjs';
+import { hostReportOf, readHostIds, type HostRoots } from '../../shared/host-identity.mjs';
+import type { HostReport } from '../../shared/isolation.js';
 import {
   readB64Measured,
   readFromMeasured,
@@ -116,6 +118,7 @@ export interface AgentOpts {
   backupSeams?: Partial<BackupSeams>; // default: this process's environment — tests inject CCRC_BACKUP_STATE_DIR (D-7858)
   testboxSeams?: Partial<TestboxOpSeams & TestboxCaptureSeams>; // default realTestboxSeams() — tests inject the agent's PATH and the clock (D-7411)
   historySeams?: Partial<HistoryOpSeams>; // default realHistoryOpSeams() — tests inject the worker resolver, the deadline and the platform (Overlord W1)
+  hostRoots?: Partial<HostRoots>; // default the real /proc, /etc and platform — tests inject synthetic trees; the host report's ONLY id reads (Overlord W1, the isolation word)
 }
 
 export interface RunningAgent {
@@ -224,10 +227,13 @@ export function resolveProjectsRoot(
  *  `update` op, and this build is never that agent. It answers the op, so its
  *  own frame type says so, and the send site cannot compile while silently
  *  omitting the one word the server's dispatcher looks for before it sends it. */
-type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch' | 'ops'> & {
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch' | 'ops' | 'host'> & {
   ccdVerbs: string[];
   observedEpoch: number | null;
   ops: string[];
+  /** Required for the same reason (Overlord W1, the isolation word): this build always measures its host, and an id it
+   *  cannot read is sent as `'unmeasured'`, never omitted. */
+  host: HostReport;
 };
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
@@ -1499,6 +1505,9 @@ function handleConnection(
       // build). It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
         t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP, TESTBOX_CAPTURE_OP],
+        // `host` (Overlord W1, the isolation word, §7.4): this process's uid and its host ids digested under the bearer this
+        // connection just proved, measured on every ready; the raw ids never leave this process.
+        host: hostReportOf(readHostIds(opts.hostRoots), process.getuid?.(), opts.token),
       };
       // `overlord-history` (Overlord W1, Task 4) goes last, and only where this agent can serve the history store
       // (historyOp.ts#servable: the worker's entry found, not macOS), so a server never counts an agent that cannot.
@@ -1625,6 +1634,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     backupSeams: rawOpts.backupSeams ?? {},
     testboxSeams: rawOpts.testboxSeams ?? {},
     historySeams: rawOpts.historySeams ?? {},
+    hostRoots: rawOpts.hostRoots ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
