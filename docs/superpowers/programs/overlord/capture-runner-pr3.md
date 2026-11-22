@@ -1,4 +1,4 @@
-# Capture runner PR 3: the wiring (run 3291)
+# Capture runner PR 3a: review 3226's carried findings (run 3291)
 
 The task note of run 3291, wave 202 of the overlord programme (issue #2491). The spec is
 `docs/superpowers/specs/2026-11-22-build-capture-runner-design.md` (§2.4 to §2.6, §5 Table 7's PR 3 row); the first two
@@ -7,7 +7,9 @@ folds it into the ledger on its own pull request.
 
 ## What this pull request delivers
 
-Review run 3226's findings carried to PR 3, then the runner wired to the desk.
+PR 3 lands in two parts by the coordinator's ruling (mail 30773): this pull request, PR 3a, carries review run 3226's
+findings that are independent of PR 2, and PR 3b wires the runner to the desk once PR 2 (run 3237) lands. The runner is
+still not wired here, so the desk still answers `no-runner` and no verdict changes.
 
 - **F5, the `cwd` proof.** The replay (`shared/claudeBuildCapture.ts#replayCapture`) proves `cwd` only by the
   PermissionRequest whose Bash command is the drive's write, `CAPTURE_WRITE_COMMAND`, which moved from
@@ -23,19 +25,19 @@ Review run 3226's findings carried to PR 3, then the runner wired to the desk.
   answer nobody hears (`captureStartsLate`).
 - **F8, the takeover.** The test service's `idle()`, which a tool sync's takeover waits on, waits for the capture desk too,
   so the release the recorder runs from is never replaced under a running capture.
-- **F8, the socket path.** The capture's private tmux server's socket lives in a directory of its own under the service's
+- **F8, the socket path (decided here, wired in PR 3b).** The capture's private tmux server's socket lives in a directory of its own under the service's
   temporary directory (`captureTmuxDir`, `/tmp`, private to the unit), not under `<CCRC_TESTBOX_ROOT>/captures/<id>`, so no
   root is too long for a unix socket path. `captureSocketFits` tells a base that cannot fit.
-- **F8, the builds store.** `buildsToPrune` keeps the newest builds and every build a capture still needs.
+- **F8, the builds store (decided here, wired in PR 3b).** `buildsToPrune` keeps the newest builds and every build a capture still needs.
 - **The compiled recorder.** `agent/test/testbox-capture-compiled.test.ts` emits the agent package with its own `tsc` into
   a release-shaped tree and runs the emitted recorder under plain `node`.
 
 ## Departures, by slug
 
-- **pr3-waits-for-pr2-files** (coordinator's brief: start now, wire last). PR 2 (run 3237) edits the runner, the desk's
-  refusal order, the service's start sweep, the transport and the capture paths. This pull request left those hunks to PR 2
-  and does the parts of F8 and F9 that sit in them after PR 2 lands: the socket directory and the prune wired in, the full
-  desk order pinned, the transport's dropped detail logged.
+- **pr3-split-around-pr2** (coordinator's brief, then mail 30773). PR 2 (run 3237) edits the runner, the desk's refusal
+  order, the service's start sweep, the transport and the capture paths. PR 3a leaves those hunks to PR 2; PR 3b does the
+  parts of F8 and F9 that sit in them once PR 2 lands: the socket directory and the prune wired in, the full desk order
+  pinned (F9), the transport's dropped detail logged (F9), then the runner wiring and the end-to-end fixtures.
 - **late-capture-ends-with-a-word** (F8: "a capture that always outruns the deadline ends as a no-verdict word"). The
   runner's timings make it end within the deadline by construction (the pin), so the case left is a capture that waited in
   the box's queue behind another. The desk ends it with no verdict and `CAPTURE_LATE_DETAIL`, an `ended` state the frame
