@@ -85,10 +85,12 @@ export const PICKER_WORDS = {
 } as const;
 
 /** D-8808 (review 2997 A3): the key write's own sentence for `unavailable`. The write reads the Linear keys to decide the key's
- *  workspace, and a store it cannot read refuses before anything is written (a 503 the card reads as a refusal, never unconfirmed).
- *  The hierarchy writes keep their own sentence for the same word (`hierarchyWriteText`). */
+ *  workspace, and a store it cannot read, or a workspace the answer depends on that it cannot read, refuses before anything is
+ *  written (a 503 the card reads as a refusal, never unconfirmed). An unread workspace stays unread until its key is checked, so
+ *  the sentence says to try later, not in a minute (review 3286 F4). The hierarchy writes keep their own sentence for the same
+ *  word (`hierarchyWriteText`). */
 export const KEY_WRITE_WORDS = {
-  unavailable: 'The Linear keys ccrc holds could not be read, so nothing was changed. Try again in a minute.',
+  unavailable: 'The Linear keys, or a Linear workspace, could not be read, so nothing was changed. Try again later.',
 } as const;
 
 /** D-8808 (review 2971 F4): what a refused key write says. The server stores a key's workspace in the same write, so a key two

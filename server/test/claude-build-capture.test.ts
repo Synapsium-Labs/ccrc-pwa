@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  CAPTURE_EVENTS, HOOK_COMMON_RULES, HOOK_EVENT_RULES, STATUSLINE_RULES, STATUS_FILE_RULES, readCaptureRecords, replayCapture,
+  CAPTURE_EVENTS, CAPTURE_WRITE_COMMAND, HOOK_COMMON_RULES, HOOK_EVENT_RULES, STATUSLINE_RULES, STATUS_FILE_RULES, readCaptureRecords, replayCapture,
   type CaptureFieldRule, type CaptureRecord, type CaptureRecording,
 } from '../../shared/claudeBuildCapture.js';
 import { BUILD_CAPTURE_OUTPUT_MAX } from '../../shared/claudeBuildTrust.js';
@@ -32,7 +32,21 @@ const hook = (event: string, over: Record<string, unknown> = {}): CaptureRecord 
   kind: 'hook', event, payload: { ...built([...HOOK_COMMON_RULES, ...(isHookEvent(event) ? HOOK_EVENT_RULES[event] : [])]), hook_event_name: event, ...over }, status: status(),
 });
 const statusline = (): CaptureRecord => ({ kind: 'statusline', payload: built(STATUSLINE_RULES), status: status() });
-const goodRecords = (): CaptureRecord[] => [...CAPTURE_EVENTS.map((e) => hook(e, e === 'PermissionRequest' ? { cwd: CD } : {})), statusline()];
+/** The drive's write, as the build's tool call carries it (spec Table 1, step 2). */
+const WRITE = { tool_name: 'Bash', tool_input: { command: CAPTURE_WRITE_COMMAND } };
+/** The write's permission prompt, as the recorder records it: raised in the `cd` directory, answered `allow`. */
+const writeAsked = (over: Record<string, unknown> = {}, answer: string | null = 'allow'): CaptureRecord =>
+  ({ ...hook('PermissionRequest', { ...WRITE, cwd: CD, ...over }), ...(answer === null ? {} : { answer }) });
+/** The write's tool call id, which its PreToolUse and PostToolUse carry (its permission prompt carries none). */
+const WRITE_ID = 'toolu_capture_write';
+const writeCalled = (over: Record<string, unknown> = {}): CaptureRecord => hook('PreToolUse', { ...WRITE, tool_use_id: WRITE_ID, ...over });
+const writeRan = (over: Record<string, unknown> = {}): CaptureRecord => hook('PostToolUse', { ...WRITE, tool_use_id: WRITE_ID, ...over });
+/** Every event once, in the drive's order (the write's PreToolUse, its prompt, then its PostToolUse), and one statusline. */
+const goodRecords = (): CaptureRecord[] => [
+  ...CAPTURE_EVENTS.filter((e) => e !== 'PostToolUse').flatMap((e) => (
+    e === 'PreToolUse' ? [writeCalled()] : e === 'PermissionRequest' ? [writeAsked(), writeRan()] : [hook(e)])),
+  statusline(),
+];
 const rec = (records: readonly CaptureRecord[], over: Partial<CaptureRecording> = {}): CaptureRecording => ({ records, unreadable: 0, cdDir: CD, finished: true, ...over });
 const outputOf = (r: ReturnType<typeof replayCapture>): string[] => r.output.split('\n');
 
@@ -43,7 +57,7 @@ describe('replayCapture: a full recording', () => {
     expect(outputOf(r).at(-1)).toBe(`verdict: pass (${goodRecords().length} records)`);
   });
   it('a PermissionRequest cwd that is not the drive\'s cd directory: still a pass, the cwd not proved', () => {
-    const records = goodRecords().map((r) => (r.kind === 'hook' && r.event === 'PermissionRequest' ? hook('PermissionRequest', { cwd: '/elsewhere' }) : r));
+    const records = goodRecords().map((r) => (r.kind === 'hook' && r.event === 'PermissionRequest' ? writeAsked({ cwd: '/elsewhere' }) : r));
     const r = replayCapture(rec(records), BUILD);
     expect(r).toMatchObject({ pass: true, cwd: false });
     expect(r.output).toContain('cwd: not proved');
@@ -55,6 +69,118 @@ describe('replayCapture: a full recording', () => {
     const r = replayCapture(rec(bad), BUILD);
     expect(r.pass).toBe(false);
     expect(r.output).toContain('SessionEnd: reason: not a string');
+  });
+});
+
+describe('replayCapture: the cwd fact is the write\'s own prompt (review 3226 F5)', () => {
+  const withPrompts = (...prompts: CaptureRecord[]): CaptureRecord[] =>
+    goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === 'PermissionRequest' ? prompts : [r]));
+  it('the cd\'s prompt naming the cd directory does not prove it when the write\'s prompt names another', () => {
+    const cdAsked = hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'cd sub' }, cwd: CD });
+    const r = replayCapture(rec(withPrompts(cdAsked, writeAsked({ cwd: '/scratch/capture/work' }))), BUILD);
+    expect(r).toMatchObject({ pass: true, cwd: false });
+  });
+  it('a prompt of another tool naming the cd directory does not prove it', () => {
+    const r = replayCapture(rec(withPrompts(writeAsked({ cwd: '/elsewhere' }), hook('PermissionRequest', { tool_name: 'Write', tool_input: { command: CAPTURE_WRITE_COMMAND }, cwd: CD }))), BUILD);
+    expect(r).toMatchObject({ pass: true, cwd: false });
+  });
+  it('the write\'s prompt naming the cd directory proves it, whatever other prompts say', () => {
+    const cdAsked = hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'cd sub' }, cwd: '/scratch/capture/work' });
+    expect(replayCapture(rec(withPrompts(cdAsked, writeAsked())), BUILD)).toMatchObject({ pass: true, cwd: true });
+  });
+});
+
+describe('replayCapture: the build ran the write after the hook answered allow (spec §2.6, review 3226 F7)', () => {
+  const swap = (event: string, to: CaptureRecord | null): CaptureRecord[] =>
+    goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === event ? (to === null ? [] : [to]) : [r]));
+  it('the write raised no permission prompt (only another command did): fail naming it', () => {
+    const r = replayCapture(rec(swap('PermissionRequest', hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'cd sub' }, cwd: CD }))), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain('approval: the write raised no permission prompt');
+  });
+  it('the write\'s prompt carries no recorded answer: fail naming it', () => {
+    const r = replayCapture(rec(swap('PermissionRequest', writeAsked({}, null))), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain('approval: the hook\'s allow answer to the write\'s prompt was not recorded');
+  });
+  it('an answer other than allow: fail', () => {
+    const r = replayCapture(rec(swap('PermissionRequest', writeAsked({}, 'deny'))), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain('approval: the hook\'s allow answer to the write\'s prompt was not recorded');
+  });
+  it('the only PostToolUse is of another command: fail, the write never ran', () => {
+    const r = replayCapture(rec(swap('PostToolUse', hook('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'cd sub' } }))), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain('approval: the write never ran after the hook answered allow');
+  });
+  it('the write\'s PostToolUse recorded BEFORE its prompt does not count: fail', () => {
+    const good = goodRecords();
+    const asked = good.findIndex((r) => r.kind === 'hook' && r.event === 'PermissionRequest');
+    const ran = good.findIndex((r) => r.kind === 'hook' && r.event === 'PostToolUse');
+    const records = [...good];
+    [records[asked], records[ran]] = [good[ran]!, good[asked]!];
+    expect(ran).toBeGreaterThan(asked);
+    const r = replayCapture(rec(records), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain('approval: the write never ran after the hook answered allow');
+  });
+});
+
+describe('replayCapture: ONE write carries its cwd, its allow and its completion (review 3316 A1, A2)', () => {
+  /** The good recording with the write's prompt replaced by `prompts`, and `extra` records after it. */
+  const withPrompts = (prompts: readonly CaptureRecord[], extra: readonly CaptureRecord[] = []): CaptureRecord[] =>
+    goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === 'PermissionRequest' ? [...prompts, ...extra] : [r]));
+  const replace = (event: string, to: readonly CaptureRecord[]): CaptureRecord[] =>
+    goodRecords().flatMap((r) => (r.kind === 'hook' && r.event === event ? to : [r]));
+  /** A prompt for another Bash command, raised in the `cd` directory and answered `allow`. */
+  const CD_ALLOWED = writeAsked({ tool_input: { command: 'cd sub' } });
+  const TIED = 'approval: the write that ran cannot be tied to its prompt\'s tool call (tool_use_id)';
+
+  it('an allow on an unrelated prompt does not stand for the write\'s missing answer', () => {
+    const r = replayCapture(rec(withPrompts([CD_ALLOWED, writeAsked({}, null)])), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain('approval: the hook\'s allow answer to the write\'s prompt was not recorded');
+  });
+  it('two prompts for the write (one naming the cd directory with no answer, one allowed elsewhere): no one write, fail', () => {
+    const r = replayCapture(rec(withPrompts([writeAsked({}, null), writeAsked({ cwd: '/elsewhere' })])), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain('approval: 2 permission prompts for the write, so no one write carries the evidence');
+  });
+  it('two prompts for the write, both allowed in the cd directory: still no one write, fail', () => {
+    const r = replayCapture(rec(withPrompts([writeAsked(), writeAsked()])), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain('approval: 2 permission prompts for the write, so no one write carries the evidence');
+  });
+  it('a completion whose tool_use_id is another call\'s: fail', () => {
+    const r = replayCapture(rec(replace('PostToolUse', [writeRan({ tool_use_id: 'toolu_other' })])), BUILD);
+    expect(r).toMatchObject({ pass: false, cwd: false });
+    expect(r.output).toContain(TIED);
+  });
+  it('no tool_use_id on the write\'s PreToolUse nor its PostToolUse: missing evidence fails closed', () => {
+    const noId = (h: CaptureRecord): CaptureRecord => {
+      const payload = { ...(h.payload as Record<string, unknown>) };
+      delete payload['tool_use_id'];
+      return { ...h, payload };
+    };
+    const r = replayCapture(rec(replace('PostToolUse', [noId(writeRan())]).map((x) => (x.kind === 'hook' && x.event === 'PreToolUse' ? noId(x) : x))), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
+  });
+  it('two completions of the write after its prompt, both naming its call: fail', () => {
+    const r = replayCapture(rec(replace('PostToolUse', [writeRan(), writeRan()])), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
+  });
+  it('the write\'s PreToolUse only AFTER its prompt (none before it names the call): fail', () => {
+    const records = replace('PreToolUse', []).flatMap((x) => (x.kind === 'hook' && x.event === 'PermissionRequest' ? [x, writeCalled()] : [x]));
+    const r = replayCapture(rec(records), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
+  });
+  it('a second write call (another PreToolUse of the write) makes the call ambiguous: fail', () => {
+    const r = replayCapture(rec(replace('PreToolUse', [writeCalled(), writeCalled({ tool_use_id: 'toolu_second' })])), BUILD);
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain(TIED);
   });
 });
 
@@ -160,6 +286,11 @@ describe('readCaptureRecords: the recording file\'s one reader', () => {
       JSON.stringify({ kind: 'other', payload: {}, status: null }), JSON.stringify(S), JSON.stringify({ kind: 'hook', event: 4, payload: {}, status: null }),
     ].join('\n');
     expect(readCaptureRecords(text)).toEqual({ records: [H, S], unreadable: 7 });
+  });
+  it('a hook line may carry the recorder\'s answer (a string); any other answer, or one on a statusline, is not a record', () => {
+    const A = { ...H, event: 'PermissionRequest', answer: 'allow' };
+    const text = [JSON.stringify(A), JSON.stringify({ ...A, answer: 1 }), JSON.stringify({ ...S, answer: 'allow' })].join('\n');
+    expect(readCaptureRecords(text)).toEqual({ records: [A], unreadable: 2 });
   });
   it('a line with no status key is not a record', () => {
     expect(readCaptureRecords(JSON.stringify({ kind: 'statusline', payload: {} }))).toEqual({ records: [], unreadable: 1 });

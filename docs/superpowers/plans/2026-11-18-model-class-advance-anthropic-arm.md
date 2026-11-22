@@ -553,15 +553,15 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
 - **Scope:** the launch marker and the tick's observe step that fills it, the effort-level rule from data, a held id
   at launch, an orphaned effort carried at launch, the routing record with the model id, the readback by id, and an id change moving a running session after
   the canary by use.
-- **Files:** `ccd/lib/model-aliases.sh` (new, pinned: the sixth library), `ccd/ccd` (the library's stamp line, the
-  loader, `cmd_caps`, the supervise tick's one new call, and call sites), and every site that names the fifth library,
+- **Files:** `ccd/lib/model-aliases.sh` (new, pinned: the seventh library; `ccd/lib/door.sh` landed as the sixth after this list was measured, so every count below is one higher at dispatch), `ccd/ccd` (the library's stamp line, the
+  loader, `cmd_caps`, the supervise tick's one new call, and call sites), and every site that names the fifth (and since then the sixth) library,
   re-measured on 2026-11-18 from #2898's diff (`git show --stat f1df4a47a`), which introduced `ccd/lib/long-lived.sh`;
   no library was added on `origin/main` since. Each site below names `long-lived.sh` or counts the libraries, and each
-  reds or misses the sixth without its edit. The brief re-measures with `git grep -n 'long-lived' origin/main` before
+  reds or misses the seventh without its edit. The brief re-measures with `git grep -n 'long-lived' origin/main` before
   dispatch.
   - The body and its installers: `ccd/ccd` (`__CCD_LIB_LONGLIVED_SHA256`'s twin, `_ccd_lib_load`'s file list and its
     all-placeholders test, the `@ccd-lib:` region comment); `ccd/ccd-entry-install.py` (a `*_LIB_PIN`,
-    `*_LIB_PIN_PLACEHOLDER`, `*_LIB_SOURCE` and `*_LIB_DEST` quartet, `render_lib_pin`, the publish after the fifth
+    `*_LIB_PIN_PLACEHOLDER`, `*_LIB_SOURCE` and `*_LIB_DEST` quartet, `render_lib_pin`, the publish after the sixth
     library, its postcondition and its say line, the backup names); `ccd/ccd-entry.py` (THE BODY'S LIBRARIES' list);
     `ccd/ccrc` (`_upd_backup_copy` and the uninstall's file list and its echo); `deploy/deploy.sh` (the backup copy);
     `README.md` (the libraries' paragraph, the restore line and the pins' list).
@@ -569,11 +569,11 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
     `ccd/contexts-edges.tsv`.
   - The server tests: `server/test/ccdWsHelpers.ts` (`CCD_LIBS` and a new `installedCcdBody` parameter);
     `server/test/ccd-lib-load.test.ts`; `server/test/ccd-entry-install.test.ts` (the library constant import, the
-    tree fixture, and a describe for the sixth library as the fifth's); `server/test/ccd-install-stamp.test.ts`;
+    tree fixture, and a describe for the seventh library as the sixth's); `server/test/ccd-install-stamp.test.ts`;
     `server/test/build-release.test.ts` (the `pair` lists and the pin expectation); `server/test/install-census.test.ts`;
     `server/test/installTreeFixture.ts`; `server/test/ccrc-uninstall.test.ts`; `server/test/consolidationCensus.ts`
     (`CCD_LIB_FILES`); `server/test/ownership.test.ts` (the library files it copies into its tree);
-    `server/test/ccd-docs-helper-redactor.test.ts` (the loader's hash count, quoted text `-le 5`, becomes 6);
+    `server/test/ccd-docs-helper-redactor.test.ts` (the loader's hash count, quoted text `-le 6` at dispatch, becomes 7, and the hash count it asserts becomes 8);
     `server/test/session-hook.test.ts` (`SCANNED`); `server/test/tmux-socket-census.test.ts` (`SOURCED_BY`, the
     library mapped to `ccd/ccd`); `server/test/ccd-id-cap.test.ts` (only if the library writes a
     `$REG/<id>.<field>` temp file, as `long-lived.sh`'s keep-awake does; the marker below is written in place, so it
@@ -645,7 +645,7 @@ tests pin both), and the note records each session id.
 
 - [ ] **Step 1: Write the failing tests** in a fixture HOME, with fixture files named by those two functions: each
   answer shape; `an unchanged file forks no jq` (a counting `jq` shim on PATH: two reads, one fork); `a changed file is
-  re-read`; `a FIFO answers unreadable without blocking`; `a Codex empty list is unknown, never none`; `seen only when
+  re-read`; `a FIFO answers unreadable without blocking`; `a Codex empty list is -, never none`; `seen only when
   the kept reading is the current id` (`cacheTarget` X2 is the id, `seenId` X1: `-`; `seenId` X2: `seen`); `a held
   class's efforts come from the held id's row`; `an unlaunchable id reads as no id` (`facts - - … -`); `the bare id
   matches the JS reader`, reading every row of `server/test/fixtures/model-id-bare.json` (Task A2.2); the library's
@@ -676,7 +676,9 @@ tests pin both), and the note records each session id.
   `-e`, `_reg_read_to`, `[[ -nt ]]` and `read -r -d ''`, never `stat` and never a `$( )`. It calls the forking
   `_usage_sidecar_read` only when a marker of this session is unfilled, `$REG/usage/<id>.json` is a regular file newer
   than the marker (`[[ -nt ]]`), and the sidecar's bytes differ from the ones this supervisor last judged for this
-  session (a memo in a supervisor variable). So an idle pane whose sidecar never changes costs one read at most.
+  session (a memo in a supervisor variable). So an idle pane whose sidecar never changes costs one read at most, and a
+  pane whose transcript does not exist yet costs one fill, then the idle figure, until the transcript appears (D-8858;
+  the tick-budget fixture measures that case).
 - Produces: `_alias_launch_fill <id>`: when the marker's id is `-`, and `_usage_sidecar_read` gives a reading whose
   `ts` is strictly later than the born epoch (as `main` holds the readback: a reading in the epoch's own second cannot
   be told from the previous process's) and whose `uuid` is the session's current uuid, it writes that reading's model,
@@ -727,7 +729,8 @@ tests pin both), and the note records each session id.
   lists levels, rc 2 the files cannot say (`-`, `unknown`, or no lane). Each site replaces its `haiku` test with it,
   and on rc 2 applies the haiku rule as today. On a Codex lane rc 0 never arises, so data only ever relaxes the rule
   there. `_route_argv_check` receives the lane from its two callers when they have chosen one (an optional first pair
-  `lane=<wrapper>`, not a route field); without it, rc 2.
+  `lane=<wrapper>`, not a route field; D-8855 replaced the pair: the lane rides in `ROUTE_ARGV_LANE`, set for that
+  one call); without it, rc 2.
 
 - [ ] **Step 1: Write the failing tests:** `an Anthropic class that takes none refuses a level`; `an Anthropic class
   listing levels takes one`; `a Codex haiku class with levels takes one`; `a Codex empty list keeps the haiku rule`;
@@ -1229,8 +1232,9 @@ Ruled by the programme's coordinator on 2026-11-20 (slug `sheet-words-anthropic-
 (`server/test/models-verb-codes.test.ts`) reds on any code `hold`, `release` or `revert` can print without a sentence,
 so the four an Anthropic hold prints (`alias-source-absent`, `aliases-file-unreadable`, `aliases-file-invalid`,
 `settings-overrides-hold`), and D-8820's `alias-hold-not-applied`, got one each; the three codes only
-`aliases-refresh` prints are listed in the guard as another op's. Cost if wrong: Task A4.3, which rewrites the sheet
-for Anthropic lanes, may reword five sentences.
+`aliases-refresh` prints are listed in the guard as another op's. Wave A3 lifted D-8820's gate, which removed
+`alias-hold-not-applied` and its sentence (the models op's tests pin that the word is gone), so four sentences remain.
+Cost if wrong: Task A4.3, which rewrites the sheet for Anthropic lanes, may reword those four sentences.
 
 ### D-8820 — `hold` and `revert` on an Anthropic lane refuse until Task A3.4
 
@@ -1243,6 +1247,20 @@ hold path stays whole behind it, its tests run through a copy with the gate open
 Task A3.4 opens or removes the gate in the release that makes ccd apply holds; ccd and the op always ship in one
 build. Cost if wrong: an operator cannot hold or revert an Anthropic class until A3.4 lands, and doctor's
 `model-held-behind` remedy, written for after A3.4, names a release of a hold that cannot be made meanwhile.
+
+Lifted as planned, in wave A3 (Task A3.4's build, run 2910). Removed together:
+- the gate constant and its refusal word `alias-hold-not-applied`;
+- the Models sheet's sentence for that word;
+- `server/test/modelsOpCopy.ts`, so the hold, release and revert tests run the shipped op.
+
+No gate replaces it. The op and the ccd that launches are one tree on one box, so a newer op over an older ccd cannot
+happen.
+
+One residual stays: a supervisor still running the previous ccd body. Such a supervisor is kept until it is restarted,
+when the update's supervisor sweep is refused by its preflight and says so in a degraded line. It respawns or swaps its
+session without the held id, while the op answers ok and the sheet shows the class held. The sweep's degraded line is
+the signal, and the remedy is restarting that supervisor, not relaunching the session. Doctor's `model-sessions-behind`
+names such a session only after a day. Wave A4 carries the user-facing note.
 
 ### D-8821 — two unmeasured-session words for an Anthropic lane's advance file
 
@@ -1263,3 +1281,227 @@ evidence older than the standing hold, is unobserved, asked by the resolver and 
 class reverted right after a move is named by nothing until a refresh reads newer evidence) in
 `shared/model-aliases.mjs`; `SIDECAR_TS_MAX_S`, `AT_RE` and `isAt` in `shared/model-advance.mjs`. Cost if wrong: a
 wider API surface on two shared modules, each member with one owner.
+
+### D-8832 — wave A3's library grows past the growth limit: a waiver for `ccd/lib/model-aliases.sh`
+
+Where: wave A3 (Tasks A3.1 to A3.6), the growth check's rows for `ccd/lib/model-aliases.sh` and `ccd (program)`;
+granted by the programme's coordinator on 2026-11-20. The plan puts the whole wave in a new pinned library, so that
+`ccd/ccd` grows only by its call sites. The library is new, so it is over the per-PR limit (+302 net code lines at the first
+close, and the program row +313), and nothing pays for it: no shrink, and no same-home file. The waiver
+(`server/test/growth-waivers/D-8832-ccd-lib-model-aliases.json`) raises the program row's limit by the same figure. At
+the first close the library was +302 (maxDelta 302) and `ccd/ccd` +11. Fix round 1 (review 2964), ruled on 2026-11-20,
+raised maxDelta to 321 in place: its 19 lines are the F3 (D-8856), F8 (D-8858), F9 (D-8859), F13a and F13c fixes. The
+program row is +335 against a limit of 40 + 321 = 361, and `ccd/ccd` is +14. Any further library growth is a new
+question to the coordinator. Cost if wrong: a 321-line library lands in one PR, read by one review rather than
+split across several.
+
+### D-8833 — Task A3.6 is built on Task A3.0's Step 3 fallback, with Step 2 unmeasured
+
+Where: wave A3, Task A3.6, against Task A3.0 Step 2 (the re-pick); ruled by the programme's coordinator on
+2026-11-20 (slug `repick-unmeasured-fallback`). Step 2 needed the owner to type a `/model` in a throwaway session, and
+that typing was not scheduled, so the step is unmeasured, not failed. A3.6 builds what both outcomes need:
+- `routeapplied`'s `model=` key, written with `keep` so the stamp does not move;
+- the observe step's recording of it, and the readback's record of the id it confirmed;
+- the drop of `model=` and `picked=` on a class change, and the tick-budget case.
+
+It builds no typed move: no `picked=` writer, no `_route_id_pending` and no id arm in `_route_apply_now`. An id change
+is recorded, never typed, and doctor's `model-sessions-behind` names a session left behind with the relaunch remedy.
+The typed arm, its hand-pick read and the plan's re-pick tests become the follow-up ticket `typed-repick`, gated on
+the owner's typing. Cost if wrong: after an alias move, a running session is relaunched by hand until `typed-repick`
+lands.
+
+### D-8846 — wave A3's context-map edges
+
+Where: wave A3, `ccd/contexts-edges.tsv`; numbered by the programme's coordinator on 2026-11-20 (slug
+`contexts-edges-a3`). The plan names no context-map edges for the wave. The context guard requires every cross-context
+call a task adds to be listed, so the wave adds one edge per new call:
+- `_spawn_start -> _alias_launch_mark` and `cmd_supervise -> _alias_observe`;
+- the readers' registry edges;
+- `_route_applied_put -> _reg_set`.
+
+It also removes `_route_applied_set -> _reg_set`, because that write moved to `_route_applied_put`. Cost if wrong: none
+beyond the map's own review; each edge is a real call.
+
+### D-8847 — the observe step's bounded read of the sidecar's bytes
+
+Where: wave A3, Task A3.2, `_alias_launch_observe` and `_alias_model_observe` in `ccd/lib/model-aliases.sh`; numbered on
+2026-11-20 (slug `observe-memo-read`). The plan says `read -r -d ''`. The steady-state read of the usage sidecar is
+`read -r -N 4096` instead, a builtin that also bounds the bytes a tick reads. Cost if wrong: a sidecar over 4 KiB is
+judged on its first 4 KiB, so a change past that offset is noticed at the next change inside it.
+
+### D-8848 — one helper decides whether a class takes an effort level, for all five sites
+
+Where: wave A3, Task A3.3; numbered on 2026-11-20 (slug `effort-barred-helper`). Besides `_class_takes_no_effort`, the
+library adds `_class_effort_barred_to <var> <wrapper> <class>`. It applies the haiku rule on rc 2 and names the
+refusal's subject, so each of the five sites is one line. The refusal says `model <id> takes no effort level …` when the
+lane's data decided, and `class haiku …` when the standing rule did. Under a hold, the id it names is the held id,
+because the held row decided (review 2964 F13a). Without a known lane, the haiku rule decides (the unknown-lane
+fallback). Cost if wrong: one more library function, and three test pins moved with the wording.
+
+### D-8849 — the steady reader answers without jq when the aliases file cannot be read; a launch reads the advance file alone
+
+Where: wave A3, `_ma_answer_to` in `ccd/lib/model-aliases.sh`; numbered on 2026-11-20 (slug `reader-no-file-no-fork`).
+
+The steady reader is asked on every supervise tick, through `_route_effort_for_to`. When the aliases file is not a
+readable regular file, it answers with no jq fork (`absent`, `unreadable aliases`, or `unknown` on a Codex lane), in the
+words the jq program gives. So no tick figure moves on a box with no model files.
+
+The launch-only advance read is separate (D-8856). A launch alone sets `ALIAS_FACTS_MODE=held`, and with no aliases file
+the same jq program then answers each class's hold from the advance file. The tick never takes that mode.
+
+Cost if wrong: none for the tick. A launch with no aliases file pays one jq fork when an advance file stands.
+
+### D-8850 — `held-unread` is said for every answer ccd cannot use
+
+Where: wave A3, Task A3.4, `_held_model_env_to`; numbered on 2026-11-20 (slug `held-unread-wider`). The plan names the
+floored `held-unread` line for an unreadable advance file. It is written, once per floor period per session, for any
+answer other than `facts` or `absent`: an unreadable or invalid aliases file, an unreadable or invalid advance file, and
+a refused `hold.model`. A hold ccd cannot read should never be silent. Since D-8856, an absent aliases file beside a
+readable advance file is read rather than left silent. Cost if wrong: one floored swap.log line more in cases the plan
+did not list.
+
+### D-8851 — one `held=` word lists every held class
+
+Where: wave A3, Task A3.4, `routeapplied`; numbered on 2026-11-20 (slug `held-word-one-pair-list`). The record carries
+one word, `held=<class>:<id>[,<class>:<id>…]`, in `ROUTE_CLASSES` order, because every held class rides the launch
+environment, not only the session's own. It is written only for a session with a routing record. The applier's
+pending check compares `class` and `effort` by name, so the word is never pending. Cost if wrong: a longer word when
+several classes are held.
+
+### D-8852 — an orphaned level is carried only when the current row lists it
+
+Where: wave A3, Task A3.5, `_orphaned_effort_to`; numbered on 2026-11-20 (slug `orphan-level-listed-only`). The level is
+carried only when the current row lists it, or the row has no effort field. So a level Claude Code would refuse never
+rides a launch, and a model that takes none takes no carried level. D-8859 narrows it further. Cost if wrong: a home's
+saved level for a level the new model dropped is not carried; the session runs at the model's default.
+
+### D-8853 — the class readback records the id it confirmed
+
+Where: wave A3, Task A3.6 (on the D-8833 fallback), `_route_readback`; numbered on 2026-11-20 (slug
+`readback-records-id`). When the readback confirms a class from a fresh sidecar reading, it writes `class=` first, which
+drops `model=` and `picked=` and moves the stamp. It then records that reading's bare id as `model=` with `keep`, so the
+stamp does not move again. A class confirmed by the transcript's acknowledgement alone records no id. Four expectations
+in the route-apply tests now read `class=… model=…`. Cost if wrong: none to the stamp; the record carries the id one
+tick earlier than the observe step would.
+
+### D-8854 — two single-definition guards admit the library as a reader of the model files
+
+Where: wave A3, `server/test/single-definition/advance-switches.test.ts` and `roster-bash.test.ts`; numbered on
+2026-11-20 (slug `model-files-guards-admit-reader`).
+
+Task A3.1 makes `ccd/lib/model-aliases.sh` read the advance file, the registry, the catalogue and the aliases file, so
+both guards' exact holder lists now name it. Each list stays exact, so an unlisted reader still fails. The library is
+pinned to:
+- spell `.advance.json` on one line, and `.classes.json` on one line;
+- never write the registry.
+
+The op stays each file's one writer. Cost if wrong: one more bash reader of the model files, pinned read-only.
+
+### D-8855 — the trusted lane rides apart from the user's route pairs, and a pair is judged only when the call sets one
+
+Where: wave A3, Task A3.3, `_route_argv_check`, its callers in `cmd_ws_add` and `cmd_start`, and `cmd_route`; review
+2964 F1 and F2, ruled by the programme's coordinator on 2026-11-20 (slug `route-effort-intent`).
+
+The plan passes the caller's lane as an optional first pair, `lane=<wrapper>`. That let a user's own first
+`--route lane=x` slip past the field check and reach the writer. The lane now travels as `ROUTE_ARGV_LANE`, set in the
+environment of that one call by the two callers that know it, and set empty by them otherwise. `$@` holds only the
+user's pairs, so a user's `lane=x` dies with `unknown routing field 'lane'` before any state or audit write, with a
+known lane and without one.
+
+`cmd_route` judges the class and effort pair only when the call's own sets name `class` or `effort`, and then judges the
+resulting pair. An unrelated `--set` succeeds and leaves both fields alone, even when the lane's data now bars the
+standing pair. That pair is filtered at spawn with its floored note, as before.
+
+On a Codex lane the data can only relax the haiku rule (D-8750). Without a known lane, the haiku rule decides.
+
+Cost if wrong: a standing pair the lane now bars stays stored until a class or effort change; it is never applied.
+
+### D-8856 — a stored hold survives the aliases file's absence at launch
+
+Where: wave A3, Task A3.4, `_held_model_env_to` and `_alias_launch_mark` through `_ma_answer_to`; review 2964 F3,
+ruled on 2026-11-20 (slug `hold-survives-alias-absence`).
+
+The plan's reader answers `absent` from the aliases file before it reads the advance file. So a hold standing while the
+aliases file was moved aside (the doctor's and the op's own remedy for a bad aliases file) reached no launch until the
+next refresh.
+
+A launch now sets `ALIAS_FACTS_MODE=held`. With the aliases file absent, the same jq program and the same id check answer
+each class's hold from the advance file:
+- a valid hold is spliced, and that launch writes no marker;
+- a refused id answers `invalid hold.model` and is never spliced;
+- an unreadable or invalid advance file says `held-unread` once.
+
+Both files absent, or an advance file with no hold, gives no key and no line. The tick's reader never takes this mode,
+so every tick budget is unchanged (D-8849).
+
+Cost if wrong: one jq fork at a launch on a lane with an advance file and no aliases file.
+
+### D-8857 — a hold's alias move is recorded once, at the first trustworthy refresh after the release
+
+Where: wave A2/A3, `deploy/models-anthropic.mjs` (hold, release, revert, `aliasesRefreshOp`) and
+`shared/model-advance.mjs`; review 2886 F4 and review 2964 F4, ruled on 2026-11-20 (slug `held-release-reconcile`).
+
+While a class is held, an alias move writes no history and leaves `previous`, as the Codex arm abandons a held class's
+advance. Release writes no history either. It keeps one additive, optional per-class field, `releasedHold: {model, at}`,
+with `at` equal to `releasedAt`, whose meaning is unchanged. An older reader ignores the field, a file without it parses
+as before, and evidence whose `at` is not the current `releasedAt` is never read.
+
+The first refresh after the release, under the existing writer and lock, settles the evidence:
+- **Trustworthy, launchable reading on another id:** records one move from the held-at id to the new one, with
+  `previous` set to the held-at id. The refresh's existing `moved` answer carries it to the existing push.
+- **Reading on the held-at id:** records nothing.
+- **A renewed hold:** drops the evidence, and records nothing.
+- **A first baseline or an untrustworthy reading:** records nothing and keeps the evidence.
+
+The same advance write clears the evidence, so repeated refreshes add nothing. A refresh whose second write fails
+answers the move again on the next pass, so it is pushed once.
+
+A revert while the evidence stands reads the class's alias (review 3006 F1 settled the second revert):
+- **The alias is still at the held-at id:** the revert holds at `previous` and drops the evidence in the same write.
+  There is no move to settle, because the alias had not moved when the hold was placed.
+- **The alias has moved off it:** the revert holds at the held-at id and keeps the evidence.
+- **A revert over that revert's hold at the held-at id:** it holds there again, without reading the aliases file.
+
+So a second revert holds where the first did, whether the alias moved before the first revert, only after it, or moved
+and came back. An unreadable aliases file refuses with its own word, and one with no launchable id refuses
+`alias-source-absent`; both write nothing. A revert never lands on the older id in stale history.
+
+A release after a revert keeps the revert's id as its evidence. So the settle records that id to the alias's id, with
+`previous` at that id: the id the class actually ran at under the hold the release lifted.
+
+The two arms do not behave alike: the Codex arm defers its advance and records it after the release, while this arm
+records the move made under the hold as one move from the held-at id.
+
+Cost if wrong: two residuals.
+- **A lost notification.** If a settle's second write is cut short and the alias moves again before the next refresh,
+  the history stays right, but the X2-to-X3 notification is lost and only X3-to-X4 is pushed.
+- **A rollback (review 3006 F6 b).** After a box is rolled back to an older build, that build's revert ignores
+  `releasedHold` and can hold at a stale `previous`. Its `parseAdvance` keeps the field as an unknown key, so a later
+  roll forward still reads it.
+
+### D-8858 — an observe step whose fill is undecided retries cheaply
+
+Where: wave A3, Task A3.2, `_alias_launch_observe` and `_alias_fill_overruled`; review 2964 F8, ruled on 2026-11-20
+(slug `observe-transcript-retry`).
+
+The plan keeps the marker unfilled while the transcript cannot be read (rc 2), because no transcript is no proof that no
+`/model` was typed. Without a memo for that case, a pane with a fresh sidecar and no transcript yet re-ran the forking
+fill every tick.
+
+The undecided verdict is now memoed on the sidecar's bytes. The step remembers the transcript's path, and tests it with a
+builtin on later ticks. The fill runs again only when the sidecar's bytes change or the transcript appears, so a later
+transcript is read, and a `/model` in it still drops the marker. A transcript that exists but cannot be read is retried
+when the sidecar changes. The recording's own memo stays separate. The tick-budget fixture measures this case: an
+unfilled marker, a newer sidecar and no transcript cost one fill, then the idle figure.
+
+Cost if wrong: two cases get no tick-by-tick retry. When `_transcript_path` named no path (an empty wrapper, workdir or
+uuid field), or the transcript lands at another path than the one it named, only a change in the sidecar's bytes
+re-opens the question. A prompted pane rewrites its sidecar, so the marker is judged again at its next render.
+
+### D-8859 — an orphaned level is carried only to a usable, unheld alias id
+
+Where: wave A3, Task A3.5, `_orphaned_effort_to`; review 2964 F9, ruled on 2026-11-20 (slug `orphan-only-usable-alias`).
+The orphan is chosen against the alias's current id. So it is not carried when the class is held, since the session runs
+the held id and its own saved level applies. It is not carried when the alias's id is unlaunchable (`-`) either. A
+record level and `SPAWN_EFFORT` still win as before. Cost if wrong: a held class's session runs at the held id's own
+saved level, never the orphan's.

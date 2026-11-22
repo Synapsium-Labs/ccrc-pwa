@@ -380,13 +380,13 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
 
   it('names the suggest door\'s own refusal words, team-ambiguous and write-failed with their remedies (review 3242 F1, 3245 F1)', () => {
     const section = suggestSection();
-    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'write-failed',
+    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'not-configured', 'write-failed',
       'no-project', 'linear-text-public', 'bad-request']) {
       expect(section, `the section does not name ${word}`).toContain(`\`${word}\``);
     }
     expect(section).toContain('`team-ambiguous` (no workspace named and the key is in more than one connected workspace: send it again with `workspace`)');
     expect(section).toContain('`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions)');
-    expect(section).toContain('`unavailable` (the Linear store could not be read: try again later)');
+    expect(section).toContain('`unavailable` (the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the operator)');
     expect(section).toContain('`write-failed` (the store write failed: try once more; if it is refused again, stop and tell the operator)');
   });
 });
