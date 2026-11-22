@@ -110,7 +110,7 @@ import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
-import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { NO_OVERLORD_STORE, drainOwedStops, registerOverlordRoutes } from './coord/overlordRoutes.js';
 import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
 import { overlordGateRun } from './coord/overlordGateRun.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/overlordGateStore.js';
@@ -2253,8 +2253,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
     privateTrackerKeys: deps.cfg.privateTrackerKeys, gate, notice, bus, build: deps.build?.version ?? null,
   });
+  // The Overlord's designation store and body (designation A), built once: the designation doors below and the continuity routes'
+  // settle step (W1 sandbox B) share one body, with the stop route's own path as `stopCreated`, and so one owed-stop drain.
+  const designationStore = deps.coord !== undefined && deps.overlordAuthority !== undefined ? { coord: deps.coord, journal: deps.overlordAuthority } : undefined;
+  const overlordStore = designationStore ?? NO_OVERLORD_STORE;
+  if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
+  const overlordBody = ccdOverlordBody({
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
+    generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
+    // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
+    stop: stopCreatedOf({
+      read: (id) => readSessionRecord(deps.io, deps.cfg, id), runCcd: deps.runCcd,
+      identityOf: measuredIdentity, pairRefused: stopPairRefused, argvFor: stopArgvFor,
+    }),
+    projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
+    projectsChanged: () => projectWalk.drop(),
+  });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
+    // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
+    settle: designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
+      goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
+      failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
+      drain: async (id) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id]); },
+      workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } },
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
     pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
@@ -2362,25 +2384,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerFaceRoutes(app, { coord: deps.coord });
   // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
-  const overlordStore = deps.coord !== undefined && deps.overlordAuthority !== undefined
-    ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
-  if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     ladder: ladderDeps,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
-    body: ccdOverlordBody({
-      runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
-      generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
-      // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
-      stop: stopCreatedOf({
-        read: (id) => readSessionRecord(deps.io, deps.cfg, id), runCcd: deps.runCcd,
-        identityOf: measuredIdentity, pairRefused: stopPairRefused, argvFor: stopArgvFor,
-      }),
-      projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
-      projectsChanged: () => projectWalk.drop(),
-    }),
+    body: overlordBody,
     facts: {
       ccdWords: () => deps.fleetState?.ccdVerbs ?? null, serverWords: SERVER_CAPS, builds: () => inventoryBuildAgreement(deps.coord ?? { nodes: () => [] }),
       roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
