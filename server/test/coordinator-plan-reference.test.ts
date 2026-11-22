@@ -326,7 +326,8 @@ describe('the plan reference after wave 6 (D-8185)', () => {
 
 // Linear hierarchy wave 8's carried `w8-skill-section` (D-8808, D-8809; run 3238): the coordinator's team suggestion, the
 // `linking suggest` section of `references/plan.md`. Its load-bearing sentences are pinned inside the section: who may suggest,
-// one suggestion each, the identity the client fills, and every refusal word the suggest door answers a well-formed call with.
+// one suggestion each, the identity the client fills, and the suggest door's own refusal words (the attribution and token words
+// are in api.md, for every door; the list below is kept by hand and reads the section, never the route: review 3242 F1).
 describe('the linking suggest section (D-8808, D-8809)', () => {
   /** The section, from its heading to the next one, whitespace flattened (raw when `raw`). */
   const suggestSection = (raw = false): string => {
@@ -340,20 +341,20 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
 
   it('comes after plan take, and its one example is the client verb with a body that names no identity', () => {
     const text = plan();
+    expect(text.indexOf('\n## plan take\n'), 'no "plan take" section').toBeGreaterThanOrEqual(0);
     expect(text.indexOf('\n## linking suggest\n')).toBeGreaterThan(text.indexOf('\n## plan take\n'));
     const bodies = [...suggestSection(true).matchAll(/"\$API" linking suggest --json - <<JSON\n(\{[^\n]+\})\nJSON/g)].map((m) => m[1]!);
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).not.toMatch(/"byId"|"byUuid"/);
   });
 
-  it('its example parses as the route parses it once the client adds the pane\'s pair, with a workspace and without one', () => {
+  it('its example, as written, parses as the route parses it once the client adds the pane\'s pair, and with a workspace added (review 3242 A3)', () => {
     const body = JSON.parse(/--json - <<JSON\n(\{[^\n]+\})\nJSON/.exec(suggestSection(true))![1]!.replace('<reason>', 'the team that owns this work')) as Record<string, unknown>;
     const pair = { byId: 'lane-a-project-a', byUuid: '00000000-0000-4000-8000-000000000001' };
+    const asWritten = { ...body, ...pair };
+    expect(parseTeamSuggestion(asWritten).ok, JSON.stringify(asWritten)).toBe(true);
     const named = { ...body, ...pair, workspace: '00000000-0000-4000-8000-000000000002' };
     expect(parseTeamSuggestion(named).ok, JSON.stringify(named)).toBe(true);
-    const unnamed: Record<string, unknown> = { ...body, ...pair };
-    delete unnamed['workspace'];
-    expect(parseTeamSuggestion(unnamed).ok, JSON.stringify(unnamed)).toBe(true);
   });
 
   it('says who may suggest: a session that claims an open run, a programme\'s coordinator', () => {
@@ -375,15 +376,16 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
     expect(section).toContain('The reason is shown in the console only, never written to Linear');
   });
 
-  it('names every refusal word the suggest door answers, team-ambiguous with its remedy', () => {
+  it('names the suggest door\'s own refusal words (the attribution and token words are in api.md), team-ambiguous and write-failed with their remedies (review 3242 F1)', () => {
     const section = suggestSection();
-    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'no-project',
-      'linear-text-public', 'bad-request']) {
+    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'write-failed',
+      'no-project', 'linear-text-public', 'bad-request']) {
       expect(section, `the section does not name ${word}`).toContain(`\`${word}\``);
     }
     expect(section).toContain('`team-ambiguous` (no workspace named and the key is in more than one connected workspace: send it again with `workspace`)');
     expect(section).toContain('`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions)');
     expect(section).toContain('`unavailable` (the Linear store could not be read: try again later)');
+    expect(section).toContain('`write-failed` (the store write failed: try once more; if it is refused again, stop and tell the operator)');
   });
 });
 

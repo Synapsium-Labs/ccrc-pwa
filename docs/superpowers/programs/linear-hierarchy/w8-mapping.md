@@ -233,17 +233,26 @@ on the committed code. A test only; no code and no ledger entry change (D-8809).
 Task 8.6 and the final fixes, checked sentence by sentence against the suggest door (`POST /api/linking/suggest` in
 `server/src/linking/routes.ts`, its deciders `parseTeamSuggestion`, `suggesterVerdict`, `teamPairVerdict` and
 `suggestionReasonVerdict` in `linking/policy.ts`, the store's `recordTeamSuggestion`) and the client's `linking.suggest` row.
-Three changes, each where the code says more than the carried text did:
+The changes, each where the code says more than the carried text did (round 1 and its fix round, review 3242):
 
 | Change | The code it follows |
 |---|---|
 | Added: "Each session keeps one suggestion per project: sending again replaces your earlier one." | `recordTeamSuggestion` keeps one element per suggesting session (a resend replaces it) |
+| Added: a project keeps at most eight suggestions, so one can drop off when other sessions suggest, and setting the key clears them all (review 3242 A1) | `TEAM_SUGGESTIONS_MAX` and its eviction of the oldest of the other sessions' suggestions in `recordTeamSuggestion`; a key write clears the cell (`setLinking`, and the automatic and Overlord links) |
 | Added the refusal `unavailable` (the Linear store could not be read: try again later) | the route refuses `unavailable` when the Linear store is not listed, before the pair is checked |
-| `bad-request`: "a reason over its length" became "a reason that is empty, over its length or not one line" | `parseTeamSuggestion` refuses `why` when empty, over `TEAM_SUGGESTION_WHY_MAX` or holding a control or line-separator character |
+| Added the refusal `write-failed` (the store write failed: try once more, then tell the operator; review 3242 F1) | the route refuses `write-failed` when the store write throws |
+| `bad-request`: "a body that is not exactly these keys, or a reason over its length" became a body with another key, or a field missing or malformed (the project, the team key, a `workspace` present but not a Linear id, a reason that is empty, over 280 characters or not one plain line; the detail names the field), and `workspace` is said to be optional (review 3242 A2) | `parseTeamSuggestion` checks each field in turn and names the one it refuses; `TEAM_SUGGESTION_WHY_MAX` is 280 |
+| The example drops its `"workspace":"<id, optional>"` placeholder, which copied as written is refused, so it can be sent as it stands (review 3242 A3) | `parseTeamSuggestion` refuses a `workspace` that is present but not a Linear id |
 
-`'linking.suggest'` joined the executable-corpus list of `server/test/ccrc-api-closed.test.ts`, so the section's example maps
-to the client's route table. `server/test/coordinator-plan-reference.test.ts` pins, inside the section, who may suggest, one
-suggestion each, the identity the client fills, the candidate rule and every refusal word, and parses the example as the route
-parses it with the client's pair added, with a workspace and without one. Measured: against `plan.md` without the section
-all seven new cases and the corpus list are red; with it they pass. A rules file and the tests that pin it, landed as one PR,
-as ruled for #3151, #3155 and #3163. No code change and no new deviation number (D-8808, D-8809).
+The section names the suggest door's own refusal words, as `## plan take` does for its door; the attribution and token words
+(`stale-uuid`, `unknown-sender`, `registry-unmeasurable`, `unauthenticated`) and the client's `no-body` and `bad-body` are in
+`references/api.md` for every door (the coordinator's ruling on review 3242 F1).
+
+`'linking.suggest'` joined the executable-corpus list of `server/test/ccrc-api-closed.test.ts`, a census that maps the
+section's client command to a row of the client's route table (it does not run the example). `server/test/coordinator-plan-reference.test.ts`
+pins, inside the section, who may suggest, one suggestion each, the identity the client fills, the candidate rule and the
+suggest door's own refusal words, from a list kept by hand (it reads the section, never the route, so it cannot see a word the
+door gains). It parses the example as written, with the client's pair added, and with a workspace added. Measured: against
+`plan.md` without the section all seven new cases and the corpus list are red; with it they pass; the word pin is red against
+the section without `write-failed`. A rules file and the tests that pin it, landed as one PR, as ruled for #3151, #3155 and
+#3163. No code change and no new deviation number (D-8808, D-8809).
