@@ -157,8 +157,8 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
    * registry's attribution, then the caller's standing (review 2971 F7: it claims an open run, so it coordinates a programme,
    * decided by the role's own `claimsOpenRunOf` over the open claimants, review 2997 A4; `not-a-coordinator` otherwise, and
    * claimants that cannot be read are `run-unreadable`, never a pass), then the store, then
-   * the row (`team-set` when it has a key), then the pair (a Linear store that
-   * cannot be read is `unavailable`, never `team-unknown`; with no workspace named, the one workspace that holds the key is stored,
+   * the row (`team-set` when it has a key), then the pair, measured (a Linear store, or a workspace the pair depends on, that
+   * cannot be read is `unavailable`, never `team-unknown`; no workspace connected is `not-configured`; with no workspace named, the one workspace that holds the key is stored,
    * and a key two connected workspaces hold is `team-ambiguous`), then the reason as PUBLIC text (the console may be mirrored), then
    * the write, which itself refuses a row that got a key in the meantime. The 200 is the caller's own stored suggestion only,
    * never the project's row (`GET /api/linking` lets a session read only its own project's).
@@ -191,8 +191,9 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     if (store === null || store.kind !== 'listed') return refuseRoute(reply, 'unavailable');
     // The pair through the live store (`teamPairVerdict`, final review I2): a named workspace must hold the key; with none named,
     // the one workspace that holds it is stored, and a key two connected workspaces hold is `team-ambiguous` (never stored with none).
-    const pair = teamPairVerdict(routeProjectTeam(routableSlots(store), { teamKey: s.team, workspaceId: s.workspace ?? null }));
-    if (!pair.ok) return refuseRoute(reply, pair.error);
+    // Measured: a workspace the pair depends on that cannot be read is `unavailable`, no workspace connected `not-configured`.
+    const pair = teamPairVerdict(measuredProjectTeam(measuredTeamRoutes(store), { teamKey: s.team, workspaceId: s.workspace ?? null }));
+    if (!pair.ok) return refuseRoute(reply, pair.error, { detail: pair.detail });
     const team = routableTeams(store).find((t) => t.key === s.team && t.workspaceId === pair.workspaceId);
     if (team === undefined) return refuseRoute(reply, 'team-unknown');
     const text = suggestionReasonVerdict(s.why, routableTeams(store).map((t) => t.key), opts.privateTrackerKeys ?? []);
