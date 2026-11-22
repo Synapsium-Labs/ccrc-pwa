@@ -37,12 +37,28 @@ typed-model arms. Each departure is named by a plain-words slug; no number is ta
 - **`typed-model-exits-before-every-writer`**: the plan says the prompt is blocked and reported. A blocked prompt opens no
   turn and gets no Stop, so the arm also exits before the hook state, the turn marker and the spools. Otherwise the session
   would read `working` until its next event.
+- **`model-events-skip-the-hookcap-arm-and-the-start-resend`** (review 3317 F1 and F4, the coordinator's ruling: both are
+  writers F11 and F14 meant the model events and a refused prompt to skip). They exit before the `-hookcap` capture arm, so a
+  measuring session copies no model-event payload and no refused prompt to `~/.ccrc/hook-capture/<id>/`; the arm's comment
+  now names them. A refused typed `/model` also skips that prompt's start-report resend pass; the next prompt or event retries
+  it, so nothing is lost. The real payloads stay unmeasured here.
+- **`model-report-covers-the-start-reports-ids`** (review 3317 F3): the model report applies the start report's own id test
+  (`^[A-Za-z0-9_-]+$`, `_hook_start_report`) beside its generation-marker and child tests, so it admits no id the start report
+  refuses (the hook itself admits a dot). Its trigger (PostModelSwitch, any session with a row, door or not) and its
+  no-child policy are unchanged, and the start report's arm is not widened. A fixture case pins the two to the same answer for
+  a dotted id and a plain one.
+- **`prompt-block-has-a-builder`** (review 3317 F6; the plan's "the hook's builders gain" a UserPromptSubmit envelope): the
+  block answer is built by `_hook_prompt_block_json`, beside the PreToolUse builders. It is printed from the typed `/model`
+  arm itself, which then exits, not from the PreToolUse print site at the file's end, because a refused prompt reaches no
+  later line.
 - **`reader-scope-keys-on-the-tool-not-the-door`**: the scope arm keys on the tool name (`mcp__door__*`) and the reader facts,
   not on `CCRC_DOOR_NONCE_SHA256`, since only a session with a door serves those tools. The three-reader arm and the typed
   `/model` arm do key on the door hash, as the plan says.
 - **`reader-arms-before-the-fan-out-arm`**: the arms sit just before the D-6798 fan-out arm. Sandbox PR B's surface arm sits
   after the role-skill deny (D-4934) block instead (agreed with run 3294, mails 30780 and 30787), so the two hunks stay apart.
-  A later deny from another arm replaces this arm's reason, and the call is denied either way.
+  Deny precedence (review 3317 F7): the reader arms run only when no earlier arm has denied, and the later arms (the D-6798
+  fan-out arm, the mail hold) also run only when no deny stands. So the first deny wins: the reader arm's reason is the one
+  printed unless an earlier arm denied the call. The call is denied either way.
 - **`model-names-printable-ascii`**: the hook sends a model name as printable ASCII only, cut to `REPORT_MODEL_MAX`, and an
   empty result as null. The report door's narrowing counts UTF-16 units, so ASCII keeps the two counts equal. Model ids are
   ASCII.
@@ -68,7 +84,10 @@ typed-model arms. Each departure is named by a plain-words slug; no number is ta
   - One message with four `Agent` calls passes, because every PreToolUse runs before any SubagentStart.
   - "In the background" is not enforced.
 - **Reader model:** under the pin, Claude Code drops the `model` field (W0-11), so the arm acts only where the pin did not
-  engage (slug `reader-model-arm-kept-as-a-belt`).
+  engage (slug `reader-model-arm-kept-as-a-belt`). It compares names as text, so an equivalent spelling is denied: the alias
+  `sonnet` pinned and a call naming the full model id (review 3317 F5, a known limit).
+- **Reader scope, `agent_type` alone:** a main-thread payload that carried an `agent_type` would have every door write but
+  `read` denied. No build is known to send one, and no test covers it (review 3317's whole-branch pass).
 - **Typed `/model`:** if the pinned build does not pass a built-in command through UserPromptSubmit, nothing is refused there.
   The switch is still reported by `PostModelSwitch`, and drift is a hard renewal trigger.
 - **ccd's own `/model`:** the route apply's `/model` keystroke in a session with a door would be refused the same way, if it
@@ -92,9 +111,13 @@ fleet (the pull request says so).
 
 ## Measurements
 
-- **Growth**, armed (`growth-check.test.ts`, 97/97): `ccd/session-hook.sh` +27 net code lines (the plan's figure was +32);
+- **Growth**, armed (`growth-check.test.ts`, 97/97): `ccd/session-hook.sh` measures +32 by the check's own `codeLines`
+  (3264 to 3296), under the cap of 40. The first build measured +37 (review 3317 F8; this note said +27, a hand count of
+  non-comment lines). The measurer reads a `<<_` inside a jq string near the deny arms as an unclosed heredoc, so every line
+  after it counts, comments included; fix round 1 shortened the reader arms' comment there and moved its residuals here.
   `ccd/install-session-hooks.sh` and the capture files are not growth-checked. `shared/api.ts` is untouched.
-- **Hand mutations**, each red, each restored from a saved copy, sha-checked equal (16 of 17 killed):
+- **Hand mutations**, each red, each restored from a saved copy, sha-checked equal: 20 in all, 19 killed (review 3317 F8
+  corrected the first count, 18 with 17 killed, which this note had given as 16 of 17).
   - In the hook, all killed:
     - `PostModelSwitch`'s exit dropped;
     - `PreModelSwitch` made to report;
@@ -103,7 +126,8 @@ fleet (the pull request says so).
     - the reader model's compare dropped, and its pin check dropped;
     - the typed `/model`'s door check dropped, its word boundary dropped, and its exit dropped;
     - the model report's main-thread and child gate dropped;
-    - the model name's control-character strip dropped.
+    - the model name's control-character strip dropped;
+    - fix round 1: the model report's start-report id test dropped, and the prompt builder's `block` word changed.
   - In the installer: the two events dropped from `EVENTS_JSON`. Killed.
   - In `HOOK_EVENTS`: `PostModelSwitch` dropped. Killed.
   - In the capture drive: the step removed. Killed.
@@ -111,7 +135,8 @@ fleet (the pull request says so).
     build that never records `PostModelSwitch` and names it. Waiting for both only keeps a late `PostModelSwitch` from landing
     after the next step began, where it would still be recorded.
 - **Suites**, one file at a time through `ccrc test`, all green:
-  - the new `session-hook-model-events` (17) and `session-hook-reader-arms` (12);
+  - the new `session-hook-model-events` (19 cases at the first build, 21 after fix round 1) and `session-hook-reader-arms`
+    (10);
   - `session-hook-door-reports`, `session-hook-steer`, `install-session-hooks`, `launch-profiles-file`,
     `continuity-launch-profile`, `ccd-launch-surface`, `ccd-launch-surface-moves`, `ccd-launch-profile`, `ccd-door-spawn`,
     `ccd-long-lived`, `ccd-auto-compact`;
@@ -125,3 +150,25 @@ fleet (the pull request says so).
     any other door tool.
   - `install-session-hooks`' registered-events case lists fourteen events.
   - `sim/launchProfileSets.ts`' pinned hook list gains the two events.
+
+## The review judge's `rules-mixed` (review 3317 F2)
+
+The judge blocks on `rules-mixed` for `ccd/session-hook.sh` and `ccd/install-session-hooks.sh`. The coupling is held by tests
+in both directions:
+- `install-session-hooks.test.ts` derives the hook's handled set from its case arms and holds the installer's list and
+  `HOOK_EVENTS` to it (D-306, D-8613).
+- `launch-profiles-file.test.ts` holds the Overlord's row to `HOOK_EVENTS`.
+- `CAPTURE_EVENTS = HOOK_EVENTS`, so the capture rules and drive step must land with the events (the coordinator's ruling,
+  mail 30766, call 250).
+
+A rules-only pull request would still change `shared/hook-events.ts`, and a split in either order turns a required check
+red. This PR is not split, and no gate setting changes. The documented resolutions on `main` that keep a coupled change
+whole are:
+- `docs/superpowers/programs/linear-hierarchy.md`, 2026-11-19: #3088 was not split because the judge is not a required
+  check, and #3151 "stayed whole although the review judge flags rules-mixed, because a pin test cannot leave the rules
+  file it pins without turning a required check red".
+- `docs/superpowers/programs/model-class-advance.md`, item 522: a coupled installer change the owner was asked to accept.
+- Door A2 and mid-turn mail PR 6 carried the same code on the same hook.
+
+The other two blocking codes (`code-owner-approval-needed`, `proof-not-built`) are covered by standing rulings.
+

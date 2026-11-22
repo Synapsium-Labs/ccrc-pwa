@@ -32,9 +32,11 @@ beforeEach(() => {
   fs.writeFileSync(reg(`${ID}.generation`), GENERATION);
   fs.mkdirSync(path.join(home, 'bin'), { recursive: true });
   fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
-  fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(home, 'tmux-name'), `cc-${ID}\n`);
+  fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\ncat "$HOME/tmux-name"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'), [
     '#!/bin/sh',
+    'printf "%s %s\\n" "$1" "$2" >> "$HOME/verbs.log"',
     '[ "$1 $2" = "sessions report" ] || exit 0',
     'cat >> "$HOME/reports.log"',
     'exit 0',
@@ -109,6 +111,22 @@ describe('PostModelSwitch: one report, for every session the start report covers
     fs.rmSync(reg(`${ID}.generation`));
     run(switchEvent('PostModelSwitch'));
     expect(reports()).toEqual([]);
+  });
+});
+
+describe('the model report covers exactly the ids the start report covers (review 3317 F3)', () => {
+  const verbs = (): string[] => {
+    const f = path.join(home, 'verbs.log');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
+  };
+  it.each([['lane-a.project-a', false], ['lane_a-project-a', true]] as const)('id %s: start report %s, and the model report the same', (sid, sent) => {
+    // The hook itself admits a dot in an id; the start report does not (`_hook_start_report`'s id test).
+    fs.writeFileSync(path.join(home, 'tmux-name'), `cc-${sid}\n`);
+    fs.writeFileSync(reg(`${sid}.generation`), GENERATION);
+    run({ ...common, hook_event_name: 'SessionStart', source: 'startup' });
+    expect(verbs().includes('sessions start'), 'the start report').toBe(sent);
+    run(switchEvent('PostModelSwitch'));
+    expect(reports().length, 'the model report').toBe(sent ? 1 : 0);
   });
 });
 
