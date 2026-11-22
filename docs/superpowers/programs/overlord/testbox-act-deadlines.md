@@ -24,13 +24,14 @@ runs in a detached unit that holds the admin lock for its whole life. For those 
    - `--leg-deadline <seconds>` bounds each step: a lockfile install, or one leg (one run of one snapshot on one
      side). A step that does not end is stopped, said to have not ended and counted as a leg that could not run,
      and the tool goes on.
-   - `--leg-kill <seconds>` is the time between a stopped step's TERM and its KILL. The tool holds no default for
-     it: a bound with no kill behind it is refused.
+   - `--leg-kill <seconds>` is the time between a stopped step's TERM and its KILL, 2 to 8 (the platform timeout
+     shim's range). The tool holds no default for it: a bound with no kill behind it is refused, and so is a box
+     whose `timeout` cannot send the KILL.
    - `--until <epoch seconds>` is the time after which the tool starts nothing more. A step that begins near it
      gets only what is left. The verb passes the act's recorded start, plus the `parity` row, less `parity/tail`.
 
    So a parity run that is only slow ends by itself, with a record and the reason in the log, and the act ends
-   `parity-differs`. The unit's ceiling is left for a real hang. The verb also runs the tool under `timeout`, half
+   `parity-differs`. The unit's ceiling is left for a real hang. The verb also runs the tool under the shim, half
    the tail after that time, for a tool that does not end by itself. Run by hand without the flags, the tool has
    no bound, as before.
 3. **`busy` names the holder, and the status says the same.** The `busy` answer gains
@@ -72,9 +73,9 @@ Smaller changes that came with these:
 | `settings-box` | 1800 (30 min) | A box settings edit that does not wait | `RuntimeMaxSec` |
 | `settings-box/idle` | 23520 (6 h 32 min) | An Apply when idle, wait and edit | `RuntimeMaxSec` |
 | `parity` | 3600 (60 min) | The parity unit | `RuntimeMaxSec` |
-| `parity/leg` | 900 (15 min) | One step of the parity tool | `timeout` in the tool |
-| `parity/kill` | 30 | From a stopped step's TERM to its KILL | `timeout -k` |
-| `parity/tail` | 300 (5 min) | The end of a parity act kept back from its legs | `--until`, `timeout` |
+| `parity/leg` | 900 (15 min) | One step of the parity tool | `_plat_timeout` in the tool |
+| `parity/kill` | 8 | From a stopped step's TERM to its KILL | `_plat_timeout`'s grace |
+| `parity/tail` | 300 (5 min) | The end of a parity act kept back from its legs | `--until`, `_plat_timeout` |
 | `unit/stop` | 90 | From the unit's TERM at its ceiling to its KILL | `TimeoutStopSec` |
 
 Why each number:
@@ -90,7 +91,8 @@ Why each number:
   `settings-box` row, then two minutes for the wait's last look. A test holds the sum.
 - `parity`: the design's bound (Table 12).
 - `parity/leg`: the design's bound, and the test box's default run budget (`CCRC_TESTBOX_BUDGET`).
-- `parity/kill`: long enough for a local leg to stop its scope, short against a leg.
+- `parity/kill`: the most the platform timeout shim's grace allows (it holds the grace between 2 and 8 seconds).
+  It was 30 until the bounds moved onto the shim, which the platform guard requires of every `timeout` in `ccd/`.
 - `parity/tail`: half for the tool to stop its last step and remove its worktrees, half for the record. The tool
   is told to start nothing after start + 55 minutes, is itself stopped at start + 57.5 minutes, and the unit's
   ceiling is at 60.
@@ -113,7 +115,7 @@ same limit until it reloads. The three earlier fields of the status were added t
 Fixed:
 
 - A slow parity run could only end `interrupted`: the tool's bound equalled the unit's ceiling. See item 2.
-- `--foreground` on a step's `timeout` had no test. A test now runs the real tool under an outer `timeout`,
+- A stop of the tool reaching its running leg had no test. A test now runs the real tool under an outer `timeout`,
   sends it TERM and checks that the leg's process is gone.
 - A step was said to have run out of time on its exit status alone (124 or 137). It is now said only when the
   step also ran for its whole bound.
@@ -126,7 +128,7 @@ Fixed:
   a second and different answer, are gone.
 - The holder's sentence was built in `shared/` from the raw sub. It is now `busyHolderSentence` in
   `pwa/src/fleet/testboxAdminWords.ts`, from `actWord` and the card's own minute formatter.
-- The 30-second kill grace was written in three places outside the table. It is the `parity/kill` row.
+- The kill grace was written in three places outside the table. It is the `parity/kill` row.
 - This note's long lines.
 - The verb's packed lines: three added code lines are over 140 characters, down from eight. The room came from
   moving the merge out of the file.
@@ -163,10 +165,11 @@ Everything was run on fixtures: a fake `systemd-run`, a fake `ssh`, a fake parit
   `parity-differs` with a fail record; fewer pull requests can be named (`--pr`), and each number is one row.
 - **The real parity legs under `timeout`.** The local leg is `ccrc test --local`, which runs the command in a scope
   of the tests slice and stops that scope when it is sent TERM. That was read in `ccd/ccrc-test`, not run: the
-  tests use a stand-in that sleeps. With `--foreground`, a step's `timeout` signals the step's own process only,
-  so a local leg that had to be KILLed leaves its scope running until the scope's own end.
-- **A real cancel.** The stop reaches the tool and its legs through `timeout`'s process group. A leg whose
-  processes left that group and ignore the scope's stop would run on until their own bound.
+  tests use a stand-in that sleeps. The grace before the KILL is 8 seconds at most (the shim's range), so a local
+  leg that needs longer to stop its scope is KILLed and leaves its scope running until the scope's own end.
+- **A real cancel.** The verb signals the tool's `timeout`, which signals the tool, and the tool signals its
+  running step's `timeout`, which signals the step and its process group. A leg whose processes left that group
+  and ignore the scope's stop would run on until their own bound.
 - **The latest end is the parent's clock.** `act_deadline` is stamped before `systemd-run` is called, and the
   unit's ceiling counts from the unit's start, a moment later. The reap waits one more `unit/stop`.
 - **The read of a growing file.** The unit reads the tool's output through an open descriptor, which was run on

@@ -19,6 +19,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { TESTBOX_ADMIN_DEADLINE_S, parityArmable, readTestboxAdminStatus, readTestboxParityRecord } from '../../shared/testbox-admin.js';
 
 removeTmpFixturesEachTest();
@@ -31,7 +32,7 @@ const SCANFAKE = join(REPO, 'server', 'test', 'fixtures', 'testbox-admin-ssh.sh'
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 const has = (c: string): boolean => spawnSync('bash', ['-c', `command -v ${c}`], { encoding: 'utf8' }).status === 0;
 const HAS_ALL = has('ssh-keygen') && has('flock') && has('node') && has('git');
-/** GNU `timeout`: the bound of a parity leg and the process group of the tool (D-8899). */
+/** GNU `timeout`: what the platform shim bounds a parity leg and the tool with, KILL included (D-8899). */
 const HAS_TIMEOUT = has('timeout');
 const ADDR = '203.0.113.9';
 const SRC_ADDR = '192.0.2.5';
@@ -70,6 +71,8 @@ function toolFixture(extra: NodeJS.ProcessEnv = {}): ToolFix {
   mkdirSync(join(tdir, 'agent', 'dist', 'agent', 'src', 'testbox'), { recursive: true });
   const tool = join(tdir, 'ccd', 'testbox-parity');
   copyFileSync(TOOL, tool);
+  // the tool sources ccd/ccrc beside itself, for the platform timeout shim
+  copyFileSync(join(REPO, 'ccd', 'ccrc'), join(tdir, 'ccd', 'ccrc'));
   chmodSync(tool, 0o755);
   const fxLines = (side: string): string => `m=$(printf '%s' "$*" | sed -n 's/.*testbox-parity-fixture-\\([a-z-]*\\)\\.test\\.mjs.*/\\1/p')
 if [ -n "$m" ]; then
@@ -250,7 +253,7 @@ describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('testbox-parity: a step has a bound (D
   const KILL = ['--leg-kill', '2'];
   const runBounded = (t: ToolFix, args: string[]): { out: string; err: string; rc: number; ms: number } => {
     const t0 = Date.now();
-    const r = spawnSync(BASH, [t.tool, '--repo', t.repo, '--package', 'server', ...args, '--', 'vitest', 'run'], { env: t.env, encoding: 'utf8', cwd: t.dir, timeout: 60_000 });
+    const r = spawnSyncGroup(BASH, [t.tool, '--repo', t.repo, '--package', 'server', ...args, '--', 'vitest', 'run'], { env: t.env, encoding: 'utf8', cwd: t.dir, timeout: 60_000 });
     return { out: r.stdout ?? '', err: r.stderr ?? '', rc: r.status ?? -1, ms: Date.now() - t0 };
   };
 
@@ -277,7 +280,8 @@ describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('testbox-parity: a step has a bound (D
     expect(r.rc, r.out + r.err).toBe(0);
     expect(r.err).not.toContain('did not end');
     for (const bad of ['0', '15m', '-1', '']) expect(runTool(t, ['--recent', '1', '--leg-deadline', bad, ...KILL]).rc, bad).toBe(2);
-    for (const bad of ['0', '30s', '']) expect(runTool(t, ['--recent', '1', '--leg-deadline', '900', '--leg-kill', bad]).rc, bad).toBe(2);
+    // the kill grace is the platform shim's, which holds it between 2 and 8 seconds: the tool takes no value the shim would change
+    for (const bad of ['0', '1', '9', '30', '30s', '']) expect(runTool(t, ['--recent', '1', '--leg-deadline', '900', '--leg-kill', bad]).rc, bad).toBe(2);
     for (const bad of ['0', 'soon', '17', '']) expect(runTool(t, ['--recent', '1', '--until', bad, ...KILL]).rc, bad).toBe(2);
     // no default hides in the tool: a bound with no kill behind it is refused, and names why
     const bare = runTool(t, ['--recent', '1', '--leg-deadline', '900']);
@@ -329,12 +333,13 @@ describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('testbox-parity: a step has a bound (D
     expect(read.ok && read.value.result).toBe('fail');
   });
 
-  it('a signal to the tool\'s process group reaches a running leg: the leg\'s bound keeps it in that group (--foreground)', () => {
+  it('a TERM to the tool\'s `timeout` reaches a running leg: the tool passes it on to the leg\'s own `timeout`', () => {
     // `ccrc testbox-admin parity` runs the tool under a `timeout` of its own and cancels by a TERM to that `timeout`, which
-    // signals its process group. A leg's `timeout` without --foreground would move the leg to a group of its own, out of reach.
+    // signals the tool. A bounded leg is under the platform shim's `timeout`, in a process group of its own, so the tool's
+    // TERM trap is what reaches it.
     const t = toolFixture({ FAKE_LOCAL_HANG: '120' });
     const legPid = join(t.env['HOME']!, 'leg-pid');
-    const r = spawnSync(BASH, ['-c', `timeout -k 5 100 "$BASH" "$1" --repo "$2" --package server --recent 1 --leg-deadline 900 --leg-kill 2 -- vitest run >/dev/null 2>&1 & o=$!
+    const r = spawnSyncGroup(BASH, ['-c', `timeout -k 5 100 "$BASH" "$1" --repo "$2" --package server --recent 1 --leg-deadline 900 --leg-kill 2 -- vitest run >/dev/null 2>&1 & o=$!
       for i in $(seq 1 400); do [ -s "$3" ] && break; sleep 0.05; done
       [ -s "$3" ] || { echo no-leg; kill "$o"; exit 1; }
       leg=$(cat "$3"); kill -0 "$leg" || { echo leg-not-running; exit 1; }
@@ -688,7 +693,7 @@ describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('ccrc testbox-admin parity (D-8166, TC
   /** The unit with the table's parity rows set for this run: `parity` and `parity/tail` equal, so the legs' time is already over. */
   const unitOutOfTime = (h: Home, id: string, tail: number): { rc: number; ms: number } => {
     const t0 = Date.now();
-    const r = spawnSync(BASH, ['-c', SRC + `TBA_DEADLINE_S[parity]=${tail}; TBA_DEADLINE_S[parity/tail]=${tail}; TBA_DEADLINE_S[parity/kill]=1; CCRC_TBA_ACT=${id} _tba_main parity >"$HOME/unit-out" 2>"$HOME/unit-err"`, '_', VERB],
+    const r = spawnSyncGroup(BASH, ['-c', SRC + `TBA_DEADLINE_S[parity]=${tail}; TBA_DEADLINE_S[parity/tail]=${tail}; TBA_DEADLINE_S[parity/kill]=2; CCRC_TBA_ACT=${id} _tba_main parity >"$HOME/unit-out" 2>"$HOME/unit-err"`, '_', VERB],
       { env: h.env, encoding: 'utf8', cwd: h.home, timeout: 60_000 });
     return { rc: r.status ?? -1, ms: Date.now() - t0 };
   };
@@ -747,7 +752,7 @@ describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('ccrc testbox-admin parity (D-8166, TC
     const d = detach(h, []);
     expect(d.id, d.out).not.toBeNull();
     const t0 = Date.now();
-    const r = spawnSync(BASH, ['-c', SRC + `CCRC_TBA_ACT=${d.id} _tba_main parity >"$HOME/unit-out" 2>"$HOME/unit-err" & u=$!
+    const r = spawnSyncGroup(BASH, ['-c', SRC + `CCRC_TBA_ACT=${d.id} _tba_main parity >"$HOME/unit-out" 2>"$HOME/unit-err" & u=$!
       for i in $(seq 1 400); do [ -s "$HOME/tool-pid" ] && break; sleep 0.05; done
       ( _tba_main status ) >"$HOME/status-mid"
       ( _tba_main cancel --from pwa )
@@ -792,7 +797,7 @@ describe.skipIf(!HAS_ALL || !HAS_TIMEOUT)('ccrc testbox-admin parity (D-8166, TC
     // The unit's own output goes to files, as a unit's goes nowhere: the log reader of a row lives while a left-behind process
     // keeps its pipe open, and a pipe to this process would make the test wait for it.
     const out = openSync(join(h.home, 'unit-std'), 'w');
-    const r = spawnSync(BASH, ['-c', SRC + `CCRC_TBA_ACT=${d.id} _tba_main parity`, '_', VERB], { env: h.env, cwd: h.home, stdio: ['ignore', out, out], timeout: 60_000 });
+    const r = spawnSyncGroup(BASH, ['-c', SRC + `CCRC_TBA_ACT=${d.id} _tba_main parity`, '_', VERB], { env: h.env, encoding: 'utf8', cwd: h.home, stdio: ['ignore', out, out], timeout: 60_000 });
     closeSync(out);
     expect(r.status).toBe(0);
     const left = readFileSync(join(h.home, 'left-pid'), 'utf8').trim().split('\n');

@@ -33,16 +33,17 @@
 #
 # A STEP'S BOUND (D-8899). A step is one lockfile install, or one leg: one run of one snapshot on one side.
 # `--leg-deadline <seconds>` bounds each step, and `--until <epoch seconds>` is the time after which the tool starts nothing
-# more: a step that begins near it gets only what is left. A step that has not ended at its bound is stopped (`timeout`: TERM,
-# and KILL `--leg-kill` seconds later), said to have not ended, and counted as a leg that could not run; a step that never
+# more: a step that begins near it gets only what is left. A step that has not ended at its bound is stopped (the platform
+# timeout shim, `_plat_timeout` of ccd/ccrc: TERM, and KILL `--leg-kill` seconds later, 2 to 8, the shim's range), said to
+# have not ended, and counted as a leg that could not run; a step that never
 # began is said so and counted the same way. The tool goes on, and still writes its record. `ccrc testbox-admin parity`
 # passes all three from its one deadline table (`parity/leg`, `parity/kill`, and the act's start plus `parity` less
 # `parity/tail`), because a local leg that never ended once kept that act, and its lock, for 23 hours, and so that a run
 # which is only slow ends with a record and a reason before the system manager stops its unit. A step is said to be stopped
-# at its bound only when it ran for the whole bound AND left `timeout`'s own status: a test process the slice's memory cap
+# at its bound only when it ran for the whole bound AND left the shim's own status: a test process the slice's memory cap
 # killed leaves 137 too. Without the flags a step has no bound, as before: an operator who runs the tool by hand can stop it
-# by hand. `--foreground` keeps the step in the tool's own process group, so a signal to that group (the admin verb's
-# cancel) still reaches it.
+# by hand. The shim's `timeout` puts a bounded step in a process group of its own, so a TERM to the tool (the admin verb's
+# cancel) is passed on by the tool itself: it signals the running step's `timeout`, which signals the step, and then exits.
 #
 # `--merge` is the other use: the one record of several rows' records, on stdout. `ccrc testbox-admin parity` runs the tool
 # once per repository row and merges here, so both writers of the record's shape are in this file. Its result is `fail`
@@ -58,6 +59,9 @@ TP_HERE="${BASH_SOURCE[0]}"
 [[ "$TP_HERE" == */* ]] || TP_HERE="./$TP_HERE"
 TP_HERE="$(cd "${TP_HERE%/*}" && pwd)"
 TP_CLIENT="${TP_HERE%/*}/agent/dist/agent/src/testbox/client.js"
+# ccd/ccrc, for the platform block's `_plat_timeout`: sourced, it defines its functions and runs nothing.
+# shellcheck source=ccrc
+. "$TP_HERE/ccrc" || { echo "testbox-parity: cannot load $TP_HERE/ccrc, so no step can be bounded" >&2; exit 1; }
 PROG="testbox-parity"
 
 _tp_usage() {
@@ -98,7 +102,7 @@ while [ $# -gt 0 ]; do
     --workers) [[ "${2:-}" =~ ^[1-9][0-9]?$ ]] || _tp_usage "--workers takes 1 to 99"; workers="$2"; shift 2 ;;
     --flaky) [ $# -ge 2 ] || _tp_usage "--flaky takes a file"; flaky+=("$2"); shift 2 ;;
     --leg-deadline) [[ "${2:-}" =~ ^[1-9][0-9]{0,5}$ ]] || _tp_usage "--leg-deadline takes a whole number of seconds"; leg_s="$2"; shift 2 ;;
-    --leg-kill) [[ "${2:-}" =~ ^[1-9][0-9]{0,3}$ ]] || _tp_usage "--leg-kill takes a whole number of seconds"; leg_kill="$2"; shift 2 ;;
+    --leg-kill) [[ "${2:-}" =~ ^[2-8]$ ]] || _tp_usage "--leg-kill takes 2 to 8 seconds"; leg_kill="$2"; shift 2 ;;
     --until) [[ "${2:-}" =~ ^[1-9][0-9]{9,10}$ ]] || _tp_usage "--until takes a time in epoch seconds"; until="$2"; shift 2 ;;
     --pr) [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || _tp_usage "--pr takes a number"; revs+=("pr:$2"); shift 2 ;;
     --rev) [ $# -ge 2 ] || _tp_usage "--rev takes a commit"; revs+=("rev:$2"); shift 2 ;;
@@ -118,6 +122,12 @@ done
 [ ${#revs[@]} -gt 0 ] || [ "$recent" -gt 0 ] || _tp_usage "name at least one --pr or --rev, or --recent"
 # A bound with no KILL behind it is no bound for a step that ignores TERM, and this file holds no default: the caller's table does.
 { [ "$leg_s" -eq 0 ] && [ "$until" -eq 0 ]; } || [ "$leg_kill" -gt 0 ] || _tp_usage "--leg-deadline and --until need --leg-kill"
+# The same rule, asked of this box: the shim sends the KILL only where the selected `timeout` is proved to take `-k`. Asked
+# here, in this shell, so every step's shell inherits the answer and asks nothing itself.
+if [ "$leg_kill" -gt 0 ]; then
+  _plat_timeout_capability >/dev/null
+  [ "$CCD_TIMEOUT_CAPABILITY" = strong ] || { echo "$PROG: this box has no timeout that can KILL a step at its bound (GNU coreutils' timeout)" >&2; exit 1; }
+fi
 if [ -n "$record" ]; then
   [ -n "$repo_name" ] && [ -n "$rec_release" ] && [ -n "$rec_tools" ] && [ -n "$rec_fp" ] && [ -n "$rec_sha" ] \
     || _tp_usage "--record needs --repo-name, --release, --tools-key, --fingerprint and --box-sha256"
@@ -178,10 +188,22 @@ _tp_bound() {
   [ "$left" -gt 0 ] || return 1
   if [ "$leg_s" -eq 0 ] || [ "$left" -lt "$leg_s" ]; then TP_BOUND="$left"; fi
 }
-# One step's command, under TP_BOUND when there is one.
-_tp_leg() { if [ "$TP_BOUND" -gt 0 ]; then timeout --foreground -k "$leg_kill" "$TP_BOUND" "$@"; else "$@"; fi; }
-# rc 0 iff the step's bound stopped it: it ran for the whole of TP_BOUND and its status is `timeout`'s own (124, or 137 when
-# the KILL was needed). The status alone does not say so.
+# One step's command in <directory>, under TP_BOUND when there is one: the platform shim, with `--leg-kill` as its grace.
+# The step runs in a shell of its own beside the tool, which waits for it, so a TERM to the tool is acted on at once (the
+# trap below; bash runs no trap while it waits for a foreground command). `trap : TERM` keeps that shell through a TERM to
+# the tool's process group, so the shim's `timeout` is still its child when the trap signals its children; a command it
+# starts takes TERM as usual. `<&0`: a step keeps the tool's stdin, as a foreground one did.
+TP_STEP=""
+_tp_leg() {   # <directory> <command>...
+  local st=0
+  ( trap : TERM; cd "$1" || exit 1; shift
+    if [ "$TP_BOUND" -gt 0 ]; then CCD_TIMEOUT_KILL_AFTER="$leg_kill" _plat_timeout "$TP_BOUND" "$@"; else "$@"; fi ) <&0 & TP_STEP=$!
+  wait "$TP_STEP" || st=$?
+  TP_STEP=""; return "$st"
+}
+trap '[ -z "$TP_STEP" ] || pkill -P "$TP_STEP" 2>/dev/null; exit 143' TERM
+# rc 0 iff the step's bound stopped it: it ran for the whole of TP_BOUND and its status is the shim's own (124; 137 when a
+# KILL from outside landed first). The status alone does not say so.
 _tp_overran() {   # <the step's exit status> <the seconds it ran>
   [ "$TP_BOUND" -gt 0 ] && [ "$2" -ge "$TP_BOUND" ] && { [ "$1" = 124 ] || [ "$1" = 137 ]; }
 }
@@ -194,9 +216,9 @@ _tp_legs() {   # <worktree> <tag> <command>... -> $TP_TMP/<tag>.local.xml and .b
     _tp_bound || { echo "$PROG: $tag: the $side leg did not run: the time given to this run is over (--until)" >&2; rc=1; continue; }
     st=0 t0=$SECONDS
     if [ "$side" = local ]; then
-      ( cd "$wt/$pkg" && _tp_leg bash "$TP_HERE/ccrc-test" --local -- "$@" ) > "$TP_TMP/$tag.local.out" 2> "$TP_TMP/$tag.local.err" || st=$?
+      _tp_leg "$wt/$pkg" bash "$TP_HERE/ccrc-test" --local -- "$@" > "$TP_TMP/$tag.local.out" 2> "$TP_TMP/$tag.local.err" || st=$?
     else
-      ( cd "$wt/$pkg" && _tp_leg node "$TP_CLIENT" run --verdict "$TP_TMP/$tag.verdict" -- "$@" ) > "$TP_TMP/$tag.box.out" 2> "$TP_TMP/$tag.box.err" || st=$?
+      _tp_leg "$wt/$pkg" node "$TP_CLIENT" run --verdict "$TP_TMP/$tag.verdict" -- "$@" > "$TP_TMP/$tag.box.out" 2> "$TP_TMP/$tag.box.err" || st=$?
     fi
     if _tp_overran "$st" $(( SECONDS - t0 )); then echo "$PROG: $tag: the $side leg did not end within ${TP_BOUND}s and was stopped" >&2; rc=1; fi
   done
@@ -335,7 +357,7 @@ for r in ${revs[@]+"${revs[@]}"}; do
   # The lockfile install, per package (spec §2.4's parity reference; spec §6).
   for lock in "$wt"/*/package-lock.json; do
     [ -f "$lock" ] || continue
-    ( cd "${lock%/*}" && _tp_bound && _tp_leg npm ci --no-audit --no-fund ) > "$TP_TMP/$tag.install" 2>&1 \
+    { _tp_bound && _tp_leg "${lock%/*}" npm ci --no-audit --no-fund; } > "$TP_TMP/$tag.install" 2>&1 \
       || { echo "$PROG: $rev: npm ci in ${lock%/*} failed, or did not end within its bound" >&2; total=$((total + 1)); continue 2; }
   done
   echo "== $rev"

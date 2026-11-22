@@ -86,10 +86,10 @@ TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
 # unit's RuntimeMaxSec, so an act that outlives it is stopped there and its lock is freed. A SUB IS LONG BECAUSE IT HAS A ROW
 # (`_tba_is_long`), so no sub can detach without a ceiling. A row that holds a `/` is a part, never a sub: `settings-box/idle` is the
 # ceiling of an Apply when idle (the six-hour wait, then the act), `parity/leg` bounds one step of the parity tool (an install, or
-# one leg), `parity/kill` is the time between a stopped step's TERM and its KILL, `parity/tail` is the end of a parity act kept
+# one leg), `parity/kill` is the time between a stopped step's TERM and its KILL (the shim's range is 2 to 8), `parity/tail` is the end of a parity act kept
 # back from its legs (half for the tool to stop and clean up, half for the record), and `unit/stop` is the time between the
 # unit's TERM at its ceiling and its KILL.
-declare -gA TBA_DEADLINE_S=([connect]=3480 [repair]=1800 [apply-release]=1800 [settings-box]=1800 [settings-box/idle]=23520 [parity]=3600 [parity/leg]=900 [parity/kill]=30 [parity/tail]=300 [unit/stop]=90)
+declare -gA TBA_DEADLINE_S=([connect]=3480 [repair]=1800 [apply-release]=1800 [settings-box]=1800 [settings-box/idle]=23520 [parity]=3600 [parity/leg]=900 [parity/kill]=8 [parity/tail]=300 [unit/stop]=90)
 # The twelve fleet-host keys the card may edit (the sixteen less the four pairing keys) and the thirty-one box keys (D-8290
 # adds the three live probe keys).
 TBA_FLEET_KEYS=(CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE
@@ -2087,8 +2087,8 @@ _tba_run_tools-home() {
 #
 # THE ACT'S TIME (D-8899). The legs must end by the act's recorded start plus its ceiling less `parity/tail`: the
 # tool is told that time (`--until`) and starts nothing after it, so a run that is only slow ends `parity-differs` with a record
-# and the log's reason, and the unit's ceiling is left for a real hang. `timeout` on the tool is the backstop for a tool that
-# does not end by itself: half the tail after that time. The other half is the record's.
+# and the log's reason, and the unit's ceiling is left for a real hang. the platform timeout shim on the tool is the backstop for a tool
+# that does not end by itself: half the tail after that time. The other half is the record's.
 TBA_PARITY_RECENT=5
 TBA_PARITY_SLICE=ccrctests.slice
 _tba_gh() { if [ -n "${TBA_GH:-}" ]; then "$TBA_GH" "$@"; else gh "$@"; fi; }
@@ -2170,16 +2170,16 @@ _tba_run_parity() {
     fxpending=0
     read -r -a cmd <<<"$head"
     # The tool runs beside the unit's shell, which looks for a cancel while it waits (`cancel` could never end a parity act before
-    # this: nothing looked). `timeout` is the tool's process group: a TERM to it reaches the tool and every leg it started. The tool
-    # bounds each step itself and ends by `--until`, so a leg that hangs fails there and the act goes on. `9>&-`, so no leg carries
-    # the act's lock: a process a leg leaves behind cannot hold it.
+    # this: nothing looked). `$pid` is the shell the platform shim runs in, so a cancel signals that shell's children: the shim's
+    # `timeout` passes a TERM on to the tool, and the tool stops its running step. The tool bounds each step itself and ends by
+    # `--until`, so a leg that hangs fails there and the act goes on. `9>&-`, so no leg carries the act's lock.
     left=$(( end - $(date +%s) ))
     : >"$rec.out"; exec {fd}<"$rec.out"; TBA_PR_PART=""
-    timeout -k "${TBA_DEADLINE_S[parity/kill]}" "$(( (left > 0 ? left : 0) + ${TBA_DEADLINE_S[parity/tail]} / 2 ))" \
-      "${tool[@]}" "${args[@]}" -- "${cmd[@]}" run >>"$rec.out" 2>&1 9>&- & pid=$!
-    while [ "$stop" = 0 ] && kill -0 "$pid" 2>/dev/null; do
+    CCD_TIMEOUT_KILL_AFTER="${TBA_DEADLINE_S[parity/kill]}" _plat_timeout \
+      "$(( (left > 0 ? left : 0) + ${TBA_DEADLINE_S[parity/tail]} / 2 ))" "${tool[@]}" "${args[@]}" -- "${cmd[@]}" run >>"$rec.out" 2>&1 9>&- & pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
       _tba_pr_say "$fd" "$name"
-      if _tba_cancel_asked; then kill "$pid" 2>/dev/null; stop=1; else sleep "${TBA_CANCEL_POLL:-1}"; fi
+      if [ "$stop" = 1 ] || _tba_cancel_asked; then pkill -P "$pid" 2>/dev/null; stop=1; fi; sleep "${TBA_CANCEL_POLL:-1}"
     done
     wait "$pid" 2>/dev/null || [ $? != 124 ] || _tba_log "parity: $name: the tool did not end by the act's time and was stopped"
     _tba_pr_say "$fd" "$name"; exec {fd}<&-

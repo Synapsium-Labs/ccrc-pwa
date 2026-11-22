@@ -373,15 +373,15 @@ export type TestboxAdminDeadlineRow =
  *   - `settings-box/idle`: an Apply when idle: the six-hour wait for no run in progress (`TBA_IDLE_DEADLINE_DEFAULT`), then
  *     the `settings-box` row, then two minutes for the wait's last look. One ceiling for the wait and the act together.
  *   - `parity`: 60 minutes in all. `parity/leg`: 15 minutes for one step of the parity tool, a lockfile install or one run of
- *     one snapshot on one side (the test box's default run budget), enforced by `timeout` in `ccd/testbox-parity`; a step
- *     stopped there fails and the act goes on. `parity/kill`: 30 seconds between a stopped step's TERM and its KILL, and
- *     between the tool's own. `parity/tail`: the last five minutes of the act, kept back from its legs: the tool starts
+ *     one snapshot on one side (the test box's default run budget), enforced by the platform timeout shim (`_plat_timeout`) in `ccd/testbox-parity`; a step
+ *     stopped there fails and the act goes on. `parity/kill`: 8 seconds between a stopped step's TERM and its KILL, and
+ *     between the tool's own: the most the shim's grace allows (2 to 8). `parity/tail`: the last five minutes of the act, kept back from its legs: the tool starts
  *     nothing after the act's start plus `parity` less this, is itself stopped half of it later, and the other half is the
  *     record's. So a run that is only slow ends with a record and a reason, and the ceiling is left for a real hang.
  *   - `unit/stop`: 90 seconds between the unit's TERM at its ceiling and its KILL (`TimeoutStopSec`). */
 export const TESTBOX_ADMIN_DEADLINE_S: Readonly<Record<TestboxAdminDeadlineRow, number>> = Object.freeze({
   'connect': 3480, 'repair': 1800, 'apply-release': 1800, 'settings-box': 1800, 'settings-box/idle': 23520,
-  'parity': 3600, 'parity/leg': 900, 'parity/kill': 30, 'parity/tail': 300, 'unit/stop': 90,
+  'parity': 3600, 'parity/leg': 900, 'parity/kill': 8, 'parity/tail': 300, 'unit/stop': 90,
 });
 
 /** The largest time, in epoch milliseconds, the verb prints and a reader takes for an act: fifteen digits, which a `Date`
