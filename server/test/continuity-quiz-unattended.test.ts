@@ -162,7 +162,7 @@ describe('POST /api/continuity/quiz-runs/:id/confirm (the unattended confirmatio
 const live = (r: Rig, payload: unknown, headers?: Record<string, string>) => r.post('/api/continuity/quiz-baseline/live', payload, headers);
 const LANE = W1A_ARM_ROWS[0];
 const as = (id: string, lane: unknown = LANE) => ({ fromId: id, fromUuid: `u-${id}`, lane });
-const stored = (r: Rig, lane: typeof LANE = LANE) => laneArmRowViewOf(lane, r.coord.laneArmSetting(lane)).stored;
+const stored = (r: Rig, lane: (typeof W1A_ARM_ROWS)[number] = LANE) => laneArmRowViewOf(lane, r.coord.laneArmSetting(lane)).stored;
 async function withBaseline(r: Rig): Promise<void> {
   const run = await recorded(r);
   expect(json(await confirm(r, run.id, { sha256: run.sha, by: TRACE }))).toMatchObject({ baseline: true });

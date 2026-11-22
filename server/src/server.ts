@@ -162,7 +162,7 @@ import {
   type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, ASK_OPERATOR_PRINCIPAL, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import { noticeBanner, noticeSink, notifyPushOnly, questionOutboxOf } from './notice.js';
@@ -2283,7 +2283,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // notices do) and the coordinator's Live door (attributed on `fromUuid`, with a record-only feed row).
   registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate,
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'), notice,
-    mail: (m) => (deps.coord === undefined ? false : queueSystemMail(deps.coord, null, { fromId: 'operator', runId: null, kind: 'status', ...m }).queued) });
+    mail: (m) => (deps.coord === undefined ? false : queueSystemMail(deps.coord, null, { fromId: ASK_OPERATOR_PRINCIPAL, runId: null, kind: 'status', ...m }).queued) });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a

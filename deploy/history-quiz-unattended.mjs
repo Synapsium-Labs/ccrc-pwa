@@ -56,7 +56,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { HEADLESS_LIST_MAX_BYTES, parseHeadlessList } from '../ccd/history/lib.mjs';
+import { EXIT, HEADLESS_LIST_MAX_BYTES, parseHeadlessList } from '../ccd/history/lib.mjs';
 import { LIMITS_DEFAULTS, decideLimits, readLimitsRow } from './history-replay.mjs';
 import { JUDGED_FILE, OUT_MARKER, REPORT_FILE, SETUP_FILE, SUMMARY_FILE } from './history-quiz-single.mjs';
 
@@ -98,7 +98,6 @@ export const EXCLUDED_TELEMETRY = Object.freeze(['openrouter', 'codex']);
 /** The status client's detail bound, and how long a post may take. */
 export const STATUS_DETAIL_MAX = 200;
 const POST_TIMEOUT_MS = 30_000;
-const EXIT = Object.freeze({ OK: 0, INTERNAL: 1, REFUSED: 2 });
 const WEEK_KEY_RE = /^[0-9]{4}-W[0-9]{2}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const DAY_MS = 86_400_000;
