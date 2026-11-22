@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { ROUTE_WRITABLE_FIELDS } from '../../shared/api';
-import type { LaneModelsRead } from '../../shared/models';
+import type { LaneClassModel, LaneModelsRead, ModelClass } from '../../shared/models';
 import { EFFORT_LADDER } from '../../shared/routing-ladder';
 import { CANARY_RESULTS, HOLD_BY, HOWS } from '../../shared/model-advance.mjs';
 import {
-  LANE_UNREADABLE_CODE_WORDS, asLaneModelsRead, classWord, effortOptions, laneClassLabel, lanePickerNote, laneReadWords, liveModelNames,
-  modelOptions, modelReadbackFor, type PickOption,
+  LANE_UNREADABLE_CODE_WORDS, asLaneModelsRead, classWord, effortOptions, laneClassLabel,
+  lanePickerNote, laneReadWords, liveModelNames, modelOptions, modelReadbackFor, type LaneKindFacts, type PickOption,
 } from '../src/lib/models';
 
 /**
@@ -460,5 +460,139 @@ describe('asLaneModelsRead: the advance key', () => {
     for (const how of HOWS) expect(state(withHaiku({ lastMove: move({ how }) })), how).toBe('ok');
     for (const canary of CANARY_RESULTS) expect(state(withHaiku({ lastMove: move({ canary }) })), canary).toBe('ok');
     expect(state(withHaiku({ hold: { at: 'x', by: 'later' } }))).toBe('invalid');
+  });
+});
+
+// ── Anthropic lane's labels and effort levels from the lane's own aliases (model-class Anthropic arm, Task A4.1/A4.2) ──
+const ANTHROPIC_LANE: LaneKindFacts = { kind: 'sign-in', telemetry: 'anthropic' };
+/** One Anthropic lane's read: the aliases file's row per class, `over` overriding single classes. */
+const anthropicRead = (over: Partial<Record<ModelClass, Partial<LaneClassModel>>> = {}): LaneModelsRead => {
+  const base: Record<ModelClass, LaneClassModel> = {
+    fable: { model: 'claude-fable-9-1', label: 'Fable 9.1', efforts: null },
+    opus: { model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: null },
+    sonnet: { model: 'claude-sonnet-9-1', label: 'Sonnet 9.1', efforts: null },
+    haiku: { model: 'claude-haiku-9-1', label: 'Haiku 9.1', efforts: null },
+  };
+  return { kind: 'read', classes: Object.fromEntries((Object.keys(base) as ModelClass[]).map((c) => [c, { ...base[c], ...over[c] }])) as Record<ModelClass, LaneClassModel> };
+};
+const anthropicRows = (lane: LaneModelsRead | null, current: string | null = null) =>
+  modelOptions('lane-a', ANTHROPIC_LANE, lane, current);
+
+describe('modelOptions on an Anthropic lane reads the aliases file (A4.2)', () => {
+  it('an Anthropic class row shows its label with the class word as sublabel', () => {
+    const rows = anthropicRows(anthropicRead());
+    expect(rows.map((o) => o.label)).toEqual(['Opus 9.1', 'Sonnet 9.1', 'Fable 9.1', 'Haiku 9.1', 'Default']);
+    expect(rows.map((o) => o.sublabel)).toEqual(['Opus class', 'Sonnet class', 'Fable class', 'Haiku class', undefined]);
+  });
+
+  it('a label follows a moved id', () => {
+    const before = anthropicRows(anthropicRead());
+    const after = anthropicRows(anthropicRead({ opus: { model: 'claude-opus-9-2', label: 'Opus 9.2' } }));
+    expect(before[0]!.label).toBe('Opus 9.1');
+    expect(after[0]!.label).toBe('Opus 9.2');
+    // The route and the readback do not move with the id: the alias is the class, and the pane prints a family name.
+    expect(after[0]!.route).toEqual(before[0]!.route);
+    expect(after[0]!.readback).toBe(before[0]!.readback);
+  });
+
+  it('a class with no id keeps its row', () => {
+    const rows = anthropicRows(anthropicRead({ fable: { model: null, label: null, efforts: null } }));
+    expect(rows.map((o) => o.route.value)).toEqual(['opus', 'sonnet', 'fable', 'haiku', 'default']);
+    const fable = rows.find((o) => o.route.value === 'fable')!;
+    expect(fable).toMatchObject({ label: 'Fable class', readback: 'fable' });
+    expect(fable.sublabel).toBeUndefined();
+  });
+
+  it('the active row still lights from a family name', () => {
+    const lane = anthropicRead({ opus: { model: 'claude-opus-9-2', label: 'Opus 9.2' } });
+    expect(anthropicRows(lane, 'Opus 9.2 (1M context)').filter((o) => o.active).map((o) => o.label)).toEqual(['Opus 9.2']);
+    // A pane that still prints the older family version lights the same row: the key is the class word, not the id.
+    expect(anthropicRows(lane, 'Opus 9.1').filter((o) => o.active).map((o) => o.label)).toEqual(['Opus 9.2']);
+    // A class with no id lights from the family name too.
+    const noId = anthropicRead({ sonnet: { model: null, label: null, efforts: null } });
+    expect(anthropicRows(noId, 'Sonnet 9.1').filter((o) => o.active).map((o) => o.label)).toEqual(['Sonnet class']);
+    expect(modelReadbackFor('lane-a', ANTHROPIC_LANE, noId, 'sonnet')).toBe('sonnet');
+  });
+
+  it('a registry lane on the Anthropic list keeps its id readback', () => {
+    // An external or OpenRouter lane carries a class registry and still gets the Anthropic list (`modelListProvider`): its
+    // pane prints a model id, so its rows key on the registry's id and a class the registry leaves empty has no row.
+    const registryLane: LaneKindFacts = { kind: 'key', telemetry: 'openrouter' };
+    const lane = anthropicRead({ fable: { model: null, label: null, efforts: null } });
+    const rows = modelOptions('lane-b', registryLane, lane, null);
+    expect(rows.map((o) => o.route.value)).toEqual(['opus', 'sonnet', 'haiku', 'default']);
+    expect(rows.map((o) => o.readback)).toEqual(['claude-opus-9-1', 'claude-sonnet-9-1', 'claude-haiku-9-1', '']);
+  });
+
+  it('an unread lane offers today\'s rows', () => {
+    for (const lane of [null, { kind: 'absent' }, { kind: 'unreadable' }] as const) {
+      const rows = anthropicRows(lane);
+      expect(rows.map((o) => o.label)).toEqual(['Opus class', 'Sonnet class', 'Fable class', 'Haiku class', 'Default']);
+      expect(rows.map((o) => o.readback)).toEqual(['opus', 'sonnet', 'fable', 'haiku', '']);
+    }
+  });
+});
+
+describe('asLaneModelsRead: the Anthropic lane\'s optional fields (A4.1)', () => {
+  const classRow = (extra: Record<string, unknown>) => ({ model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: ['low'], ...extra });
+  const body = (opus: Record<string, unknown>) => ({
+    ok: true, lane: 'lane-a',
+    models: { kind: 'read', classes: {
+      fable: { model: null, label: null, efforts: null }, opus, sonnet: { model: null, label: null, efforts: null },
+      haiku: { model: null, label: null, efforts: null },
+    } },
+  });
+  const opusOf = (extra: Record<string, unknown>): LaneClassModel | 'not a read' => {
+    const r = asLaneModelsRead(body(classRow(extra)));
+    return r?.kind === 'read' ? r.classes.opus : 'not a read';
+  };
+
+  it('an older server\'s answer reads as today', () => {
+    const r = asLaneModelsRead(body(classRow({})));
+    expect(r).toEqual({ kind: 'read', classes: {
+      fable: { model: null, label: null, efforts: null }, opus: { model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: ['low'] },
+      sonnet: { model: null, label: null, efforts: null }, haiku: { model: null, label: null, efforts: null },
+    } });
+    // toEqual ignores an undefined-valued key, so pin the keys themselves.
+    for (const c of Object.values((r as Extract<LaneModelsRead, { kind: 'read' }>).classes)) {
+      expect(Object.keys(c).sort()).toEqual(['efforts', 'label', 'model']);
+    }
+  });
+
+  it('asLaneModelsRead keeps the new fields', () => {
+    const full = {
+      takesNoEffort: true, source: 'use', cacheTarget: 'claude-opus-9-2', seenId: 'claude-opus-9-1', unobserved: true,
+      unlaunchable: { needs: '9.9.9', laneVersion: '9.0.0' }, aliasId: 'claude-opus-9-2', orphanedEffort: { id: 'claude-opus-9-0', level: 'high' },
+    };
+    expect(opusOf(full)).toEqual({ model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: ['low'], ...full });
+    expect(opusOf({ source: 'cache' })).toMatchObject({ source: 'cache' });
+    expect(opusOf({ source: null, cacheTarget: null, seenId: null, orphanedEffort: null })).toMatchObject({
+      source: null, cacheTarget: null, seenId: null, orphanedEffort: null,
+    });
+    expect(opusOf({ unlaunchable: { needs: '9.9.9', laneVersion: null } })).toMatchObject({ unlaunchable: { needs: '9.9.9', laneVersion: null } });
+  });
+
+  it('asLaneModelsRead drops a malformed field to absent, one at a time, and keeps the class and the read', () => {
+    const malformed: Record<string, unknown>[] = [
+      { takesNoEffort: false }, { takesNoEffort: 'yes' },
+      { source: 'cached' }, { source: 3 },
+      { cacheTarget: 7 }, { seenId: {} },
+      { unobserved: false }, { unobserved: 1 },
+      { unlaunchable: { needs: 9, laneVersion: null } }, { unlaunchable: { needs: '9.9.9' } }, { unlaunchable: { needs: '9.9.9', laneVersion: 4 } },
+      { unlaunchable: 'x' }, { unlaunchable: null },
+      { aliasId: 5 }, { aliasId: null },
+      { orphanedEffort: { id: 'x' } }, { orphanedEffort: { id: 'x', level: 3 } }, { orphanedEffort: 'x' },
+    ];
+    for (const bad of malformed) {
+      const key = Object.keys(bad)[0]!;
+      const row = opusOf(bad);
+      expect(row, JSON.stringify(bad)).not.toBe('not a read');
+      expect(row, JSON.stringify(bad)).toEqual({ model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: ['low'] });
+      expect(Object.hasOwn(row as object, key), JSON.stringify(bad)).toBe(false);
+    }
+    // One malformed field costs only itself: a well-formed neighbour is kept.
+    expect(opusOf({ source: 'cached', seenId: 'claude-opus-9-1' })).toEqual({
+      model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: ['low'], seenId: 'claude-opus-9-1',
+    });
   });
 });
