@@ -132,6 +132,18 @@ export function clearedCallPlace(trail: readonly ClearedEntry[], id: number): { 
   return found === undefined ? null : { beyond: at >= CLEARED_SHOWN, program: found.program };
 }
 
+/** What the FOLDED trail draws (D-8808, review 3222 A-i): the newest `CLEARED_SHOWN` entries, and, when the call a link names lies
+ *  beyond them, that call's entry after them, so a notice saying the row is marked below never outlives the row. */
+export function clearedFolded(trail: readonly ClearedEntry[], place: { beyond: boolean } | null, id: number | null): ClearedEntry[] {
+  const shown = trail.slice(0, CLEARED_SHOWN);
+  const extra = place !== null && place.beyond && id !== null ? trail.find((e) => e.kind === 'call' && e.call.id === id) : undefined;
+  return extra === undefined ? shown : [...shown, extra];
+}
+
+/** The programme groups Show all opens (D-8808, review 3222 A-i): the named call's own, so the row stays drawn; none otherwise. */
+export const clearedOpenOnShowAll = (place: { program: string | null } | null): ReadonlySet<string | null> =>
+  new Set(place === null ? [] : [place.program]);
+
 /** A key that changes when the target's place in the trail does (D-8808), so the trail can tell a new place and expand to it,
  *  keeping the operator's own Show all and open groups (review 3217 A2). */
 export const clearedCallPlaceKey = (place: { beyond: boolean; program: string | null } | null): string =>

@@ -258,6 +258,17 @@ describe('a call named in the URL (D-8808, D-8809)', () => {
     expect(document.querySelector('[data-call-target="unheard"]')).toBeNull();
   });
 
+  it('the device\'s saved list says "not in the list saved on this device" for a call it holds in neither list, never gone (review 3222 F1)', () => {
+    history.replaceState(null, '', callPath(99));
+    vi.spyOn(api, 'waiting').mockReturnValue(new Promise(() => {}));
+    const store = mk();
+    // No live view heard; the device's saved copy of the list and its rows (`saved-list`).
+    act(() => store.setState({ waiting: null, waitingSaved: { savedAt: NOW - MIN, view: view() }, sessions: [fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question' })] }));
+    render(<WaitingRoute store={store} />);
+    expect(document.querySelector('[data-call-target="unheard"]')).not.toBeNull();
+    expect(document.querySelector('[data-call-target="gone"]')).toBeNull();
+  });
+
   it('a view that arrives after the mount still opens and marks the call', () => {
     history.replaceState(null, '', callPath(7));
     const store = mk();

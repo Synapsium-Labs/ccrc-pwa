@@ -1257,6 +1257,57 @@ describe('calls made for you (D-8126)', () => {
       expect(document.querySelector('.wl-cg-head[data-program="prog-b"]')!.getAttribute('aria-expanded')).toBe('true');
       expect(document.querySelector('.wl-cleared-row[data-call="50"]')).not.toBeNull();
     });
+    describe('the notice never outlives the row (review 3222 A-i, A-ii, A-iii)', () => {
+      // Three newer prog-a, the target (prog-b, 4th), four older prog-a: eight entries, the target among the newest five.
+      const prog = (ids: number[], at: number) => ids.map((id, i) => call({ id, program: 'prog-a', seenAt: NOW - (at + i) * MIN }));
+      const target = call({ id: 50, program: 'prog-b', seenAt: NOW - 10 * MIN });
+      const view = (extra: number[] = []) => withItem({ callsCleared: [...prog([...extra, 101, 102, 103], 1), target, ...prog([104, 105, 106, 107], 11)] });
+      const props = { sessions: [], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+      const row = () => document.querySelector('.wl-cleared-row[data-call="50"]');
+      it('Show all with a shown target keeps its row drawn and marked (A-i)', () => {
+        render(<WaitingScreen view={view()} call={50} {...props} />);
+        expect(row()!.getAttribute('aria-current')).toBe('true');
+        fireEvent.click(screen.getByRole('button', { name: /Show all/ }));
+        expect(row()!.getAttribute('aria-current')).toBe('true');
+        expect(document.querySelector('.wl-cg-head[data-program="prog-b"]')!.getAttribute('aria-expanded')).toBe('true');
+        expect(document.querySelector('.wl-cg-head[data-program="prog-a"]')!.getAttribute('aria-expanded')).toBe('false');
+      });
+      it('Show fewer with the target past the shown rows keeps its row drawn and marked, after them (A-i)', () => {
+        render(<WaitingScreen view={view([201, 202, 203])} call={50} {...props} />);
+        expect(row()).not.toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: /Show fewer/ }));
+        expect(row()!.getAttribute('aria-current')).toBe('true');
+        const rows = [...document.querySelectorAll('.wl-cleared-row')];
+        expect(rows.length).toBe(6);
+        expect(rows[rows.length - 1]).toBe(row());
+      });
+      it('a target moving from beyond the shown rows back among them keeps Show all and the open groups (A-ii)', () => {
+        const { rerender } = render(<WaitingScreen view={view([201, 202, 203])} call={50} {...props} />);
+        fireEvent.click(document.querySelector('.wl-cg-head[data-program="prog-a"]')!);
+        expect(document.querySelector('.wl-cg-head[data-program="prog-a"]')!.getAttribute('aria-expanded')).toBe('true');
+        rerender(<WaitingScreen view={view()} call={50} {...props} />);
+        expect(screen.getByRole('button', { name: /Show fewer/ })).toBeTruthy();
+        expect(document.querySelector('.wl-cg-head[data-program="prog-a"]')!.getAttribute('aria-expanded')).toBe('true');
+        expect(document.querySelector('.wl-cg-head[data-program="prog-b"]')!.getAttribute('aria-expanded')).toBe('true');
+      });
+      it('a calls-only programme that gains a row builds a new group, which opens and marks the call and scrolls nothing more (A-iii)', () => {
+        const scroll = vi.fn();
+        const was = HTMLElement.prototype.scrollIntoView;
+        HTMLElement.prototype.scrollIntoView = scroll;
+        try {
+          const calls = [call({ id: 4, program: 'prog-b' })];
+          const { rerender } = render(<WaitingScreen view={waitingView({ calls })} call={4} {...props} />);
+          expect(document.querySelector('[data-calls-only="true"]')).not.toBeNull();
+          expect(scroll).toHaveBeenCalledTimes(1);
+          rerender(<WaitingScreen view={waitingView({ items: [itemView({ id: 9, program: 'prog-b', title: 'A thing' })], calls })} call={4} {...props} />);
+          expect(document.querySelector('[data-calls-only="true"]')).toBeNull();
+          const li = document.querySelector('li.wl-call[data-call="4"]')!;
+          expect(li.closest('details')!.hasAttribute('open')).toBe(true);
+          expect(li.getAttribute('aria-current')).toBe('true');
+          expect(scroll).toHaveBeenCalledTimes(1);
+        } finally { HTMLElement.prototype.scrollIntoView = was; }
+      });
+    });
     it('no call named draws no notice and marks nothing', () => {
       open({ view: withItem({ calls: [call({ id: 1 })] }) });
       expect(document.querySelector('[data-call-target]')).toBeNull();

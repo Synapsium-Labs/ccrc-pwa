@@ -13,7 +13,7 @@ import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
-  CLEARED_HEADING, CLEARED_SHOWN, MENTIONS_WORD, SHOW_FEWER_WORD, clearedCountWord, clearedCallPlace, clearedCallPlaceKey, clearedGroups, clearedTrail, itemNumber, itemRefWord, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
+  CLEARED_HEADING, CLEARED_SHOWN, MENTIONS_WORD, SHOW_FEWER_WORD, clearedCountWord, clearedCallPlace, clearedCallPlaceKey, clearedFolded, clearedGroups, clearedOpenOnShowAll, clearedTrail, itemNumber, itemRefWord, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, REVIEW_CAP_WORD, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups,
   openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ClearedEntry, type ItemList, type ProgrammeGroup,
   type QuestionRow, type Row, CALL_CLEARED_WORD, callClearedHow, callClearedOn,
@@ -486,10 +486,10 @@ export function ClearedTrail({ items, asks = [], calls = NO_CALLS, where, now, g
             })}
           </div>
         )
-        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={entryKey(c)} entry={c} where={where} now={now} current={current} targetCall={targetCallId} scrolled={scrolled} />)}</ul>}
+        : <ul>{(whole ? trail : clearedFolded(trail, place, targetCallId)).map((c) => <ClearedRow key={entryKey(c)} entry={c} where={where} now={now} current={current} targetCall={targetCallId} scrolled={scrolled} />)}</ul>}
       {more && (
         <Button variant="ghost" size="fit" className="wl-cleared-more" aria-expanded={all}
-                onClick={() => { setAll((v) => !v); setOpen(new Set()); }}>
+                onClick={() => { setAll((v) => !v); setOpen(all ? new Set() : clearedOpenOnShowAll(place)); }}>
           {all ? SHOW_FEWER_WORD : showAllWord(trail.length)}
         </Button>
       )}
