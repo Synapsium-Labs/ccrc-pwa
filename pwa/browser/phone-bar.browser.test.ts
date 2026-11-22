@@ -173,10 +173,13 @@ const measureBar = (page: Page) => page.evaluate(() => {
 });
 
 // Overlord W1 home, Task 3 (plan question 13, slug `phone-bar-sheds-doors-to-search`): with the Overlord's door the bar has
-// eight doors. At 360 and 390 all eight fit at 44 px or more; at 320 the bar keeps seven, Docs reached through Search.
+// eight doors. A door keeps the width its word needs (48 px, `PHONE_DOOR_FIT_PX`, measured here: "Accounts" was cut at 45.7 px),
+// so from 384 px all eight fit, at 360 Docs is reached through Search, and at 320 Accounts too.
 describe.each(SKINS)('the phone bar with the Overlord in %s', (skin) => {
   const EIGHT = ['go-overlord', ...PHONE_DOORS];
-  const cases = [[320, EIGHT.filter((d) => d !== 'go-docs')], [360, EIGHT], [390, EIGHT]] as const;
+  const cases = [
+    [320, EIGHT.filter((d) => d !== 'go-docs' && d !== 'go-accounts')], [360, EIGHT.filter((d) => d !== 'go-docs')], [384, EIGHT], [390, EIGHT],
+  ] as const;
   for (const [width, doors] of cases) {
     it(`at ${width}: the Overlord's door is first, ${doors.length} doors, each at least 44 x 44 inside the viewport, words whole`, async () => {
       const { ctx, page, errors } = await open(skin, width, '/fleet', '[data-command="go-overlord"]', undefined, FIXTURE_OVERLORD);
@@ -423,12 +426,14 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
         const { ctx, page, errors } = await open(skin, width, path, ready);
         try {
           expect(await page.locator('nav.shell-phone-nav').count(), path).toBe(0);
-          // No fleet place at a desk: the one go-fleet there is Instrument's wordmark door, the way home (desk-nav Task A,
-          // D-8100, `phone-bar-browser-allows-the-home-door`), as the jsdom twin of this case reads; Refined draws none.
-          const home = page.locator('[data-command="go-fleet"]');
-          expect(await home.count(), `${path}: no fleet place at a desk`).toBe(skin === INSTRUMENT ? 1 : 0);
+          // No fleet place at a desk (D25): no go-fleet at all. The way home is Instrument's wordmark door, which runs go-home
+          // since Overlord W1 home (desk-nav Task A, D-8100, `phone-bar-browser-allows-the-home-door`), as the jsdom twin of
+          // this case reads; Refined draws none.
+          expect(await page.locator('[data-command="go-fleet"]').count(), `${path}: no fleet place at a desk`).toBe(0);
+          const home = page.locator('[data-command="go-home"]');
+          expect(await home.count(), `${path}: the one way home`).toBe(skin === INSTRUMENT ? 1 : 0);
           if (skin === INSTRUMENT) {
-            expect(await page.locator('header nav[aria-label="Primary"] > [data-command="go-fleet"] [data-wordmark]').count(),
+            expect(await page.locator('header nav[aria-label="Primary"] > [data-command="go-home"] [data-wordmark]').count(),
               `${path}: it is the wordmark door, in the header's Primary nav`).toBe(1);
           }
           expect(errors).toEqual([]);

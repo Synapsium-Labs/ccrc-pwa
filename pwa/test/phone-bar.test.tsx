@@ -154,12 +154,12 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
     });
 
     // Overlord W1 home, Task 3 (plan question 13): the Overlord's door is first while one is designated, under its word only;
-    // at 320 px eight doors are under the tap minimum, so the bar keeps seven and Docs is reached through Search.
-    it('with overlord-v1 and an Overlord the Overlord door is first; at 320 px Docs drops to Search', () => {
+    // a door keeps the width its word needs (`PHONE_DOOR_FIT_PX`), so the bar sheds places from the end, reached through Search.
+    it('with overlord-v1 and an Overlord the Overlord door is first; narrower bars shed Docs, then Accounts, to Search', () => {
       const cases: ReadonlyArray<readonly [number, readonly string[]]> = [
         [390, ['go-overlord', ...PHONE_DOORS]],
-        [360, ['go-overlord', ...PHONE_DOORS]],
-        [320, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs')]],
+        [360, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs')]],
+        [320, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs' && d !== 'go-accounts')]],
       ];
       for (const [width, doors] of cases) {
         atWidth(width);
@@ -171,9 +171,9 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       }
     });
 
-    it('without overlord-v1 no Overlord door is drawn, whatever the designation reads; today\'s seven fit at 320 px', () => {
-      atWidth(320);
-      vi.stubGlobal('innerWidth', 320);
+    it('without overlord-v1 no Overlord door is drawn, whatever the designation reads; today\'s seven at 360 px', () => {
+      atWidth(360);
+      vi.stubGlobal('innerWidth', 360);
       withOverlord(['continuity-v1']);
       mount('/fleet');
       expect(doorsOf(phoneBar()!)).toEqual(PHONE_DOORS);

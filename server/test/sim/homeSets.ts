@@ -145,9 +145,12 @@ export function deskCases(m: PlacesModule): Record<string, SuiteCase> {
 export function phoneCases(m: PlacesModule): Record<string, SuiteCase> {
   const eight = (): readonly Place[] => m.placesFor(true, S.bound!);
   return {
-    'seven doors at 320 px, Docs dropped': () => { expect(ids(m.phoneDoorsFit(320, eight()))).toEqual(['overlord', ...TODAY.slice(0, -1)]); },
-    'all eight at 360 and 390 px': () => {
-      expect(ids(m.phoneDoorsFit(360, eight()))).toEqual(['overlord', ...TODAY]);
+    'six doors at 320 px and seven at 360, dropped from the end': () => {
+      expect(ids(m.phoneDoorsFit(320, eight()))).toEqual(['overlord', ...TODAY.slice(0, -2)]);
+      expect(ids(m.phoneDoorsFit(360, eight()))).toEqual(['overlord', ...TODAY.slice(0, -1)]);
+    },
+    'all eight from 384 px': () => {
+      expect(ids(m.phoneDoorsFit(384, eight()))).toEqual(['overlord', ...TODAY]);
       expect(ids(m.phoneDoorsFit(390, eight()))).toEqual(['overlord', ...TODAY]);
     },
     'the Overlord and the Fleet are never dropped': () => {
@@ -190,7 +193,7 @@ const DESK_SET: MutantSet<PlacesModule> = {
 const PHONE_SET: MutantSet<PlacesModule> = {
   modulePath: PLACES,
   mutants: [
-    { id: 'H7', old: 'Math.floor(widthPx / PHONE_DOOR_MIN_PX)', new: 'Math.ceil(widthPx / PHONE_DOOR_MIN_PX)' },
+    { id: 'H7', old: 'Math.floor(widthPx / PHONE_DOOR_FIT_PX)', new: 'Math.ceil(widthPx / PHONE_DOOR_FIT_PX)' },
     { id: 'H8', old: 'if (PHONE_KEEPS.has(kept[i]!.id)) continue;', new: 'if (kept[i]!.id === FLEET_PLACE) continue;' },
   ],
   suite: phoneCases,

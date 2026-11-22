@@ -17,22 +17,33 @@ import { FaceMark } from '../../face/FaceMark';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
-import { deskPlacesFor } from '../../lib/places';
+import { deskPlacesFor, type Place } from '../../lib/places';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES } from '../../lib/routes';
+import { useMediaQuery } from '../../lib/useMediaQuery';
 import { useDesignationState, useHome, useOverlordShown } from '../../stores/overlord';
 
-function Tab({ id, here, count, word }: { id: string; here: boolean; count: number; word: string }): ReactNode {
-  const route = ROUTES.find((r) => r.id === id)!;
+/** Below this width the bar is crowded once the Overlord's and the Fleet's tabs are drawn (Overlord W1 home, measured in
+ *  refined-bar.browser.test.ts: at 900 the line ran 105 px past its frame, New session cut). A crowded bar names each tab
+ *  by its place's short word where it has one ("Waiting", the phone bar's word) and draws New session as its "+" alone,
+ *  named "New session", as Instrument's is (slug `refined-crowded-bar-sheds-words`). Five tabs are never crowded. */
+export const REF_ROOMY_QUERY = '(min-width: 1100px)';
+const ROOMY_TABS = 5;
+
+function Tab({ place, here, count, word, crowded }: { place: Place; here: boolean; count: number; word: string; crowded: boolean }): ReactNode {
+  const route = ROUTES.find((r) => r.id === place.id)!;
+  // The shown word starts the name, so label in name holds in both forms ("Waiting 3" in "Waiting, 3 waiting on you").
+  const shown = crowded ? place.short ?? route.title : route.title;
+  const id = place.id;
   return (
     <Door
       {...commandDoor(`go-${id}`)}
       glyph={null}
-      aria-label={count > 0 ? `${route.title}, ${count} ${word}` : route.title}
+      aria-label={count > 0 ? `${shown}, ${count} ${word}` : shown}
       aria-current={here ? 'page' : undefined}
       className="ref-tab font-ui text-ui font-medium aria-[current=page]:text-ink-primary"
     >
-      {route.title}
+      {shown}
       {count > 0 && ' '}
       {count > 0 && <CountBadge>{badgePrint(count)}</CountBadge>}
     </Door>
@@ -44,14 +55,16 @@ export function AppBar(): ReactNode {
   const here = matchRoute(path)?.route.id ?? null;
   const badges = useNavBadges();
   const places = deskPlacesFor(useOverlordShown(), useDesignationState(), useHome());
+  const roomy = useMediaQuery(REF_ROOMY_QUERY);
+  const crowded = places.length > ROOMY_TABS && !roomy;
   return (
     <>
       <div className="ref-bar">
         <Wordmark className="ref-bar-mark" />
         <FaceMark />
         <nav aria-label="Primary" className="ref-tabs">
-          {places.map(({ id }) => (
-            <Tab key={id} id={id} here={here === id} {...placeBadge(id, badges)} />
+          {places.map((place) => (
+            <Tab key={place.id} place={place} here={here === place.id} crowded={crowded} {...placeBadge(place.id, badges)} />
           ))}
         </nav>
         <div className="ref-bar-doors">
@@ -62,9 +75,15 @@ export function AppBar(): ReactNode {
           <Door {...commandDoor('go-settings')} glyph={<Icon name="settings" />} aria-label="Settings" className="ref-bar-door">
             <span className="sr-only">Settings</span>
           </Door>
-          <Button {...commandDoor('new-session')} variant="primary" size="fit" className="ref-bar-new gap-1">
-            <span aria-hidden="true">+</span>New session
-          </Button>
+          {crowded ? (
+            <Button {...commandDoor('new-session')} variant="primary" size="fit" aria-label="New session" className="ref-bar-new min-w-tap justify-center">
+              <span aria-hidden="true">+</span>
+            </Button>
+          ) : (
+            <Button {...commandDoor('new-session')} variant="primary" size="fit" className="ref-bar-new gap-1">
+              <span aria-hidden="true">+</span>New session
+            </Button>
+          )}
         </div>
       </div>
       <AccountsStrip />

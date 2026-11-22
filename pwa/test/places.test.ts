@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DesignationState, HomeAnswer } from '../src/overlord/homePlace';
 import {
-  deskPlacesFor, FLEET_PLACE, OVERLORD_PLACE, PHONE_DOOR_MIN_PX, phoneDoorsFit, placesFor, type Place,
+  deskPlacesFor, FLEET_PLACE, OVERLORD_PLACE, PHONE_DOOR_FIT_PX, PHONE_DOOR_MIN_PX, phoneDoorsFit, placesFor, type Place,
 } from '../src/lib/places';
 import { ROUTES } from '../src/lib/routes';
 
@@ -65,13 +65,16 @@ describe('deskPlacesFor (ruled F5, plan question 14)', () => {
 describe('phoneDoorsFit (plan question 13)', () => {
   const eight = placesFor(true, STATES.bound);
   const seven = placesFor(false, STATES.none);
-  it('at 320 px with eight doors, seven fit and Docs drops', () => {
-    expect(ids(phoneDoorsFit(320, eight))).toEqual(['overlord', ...TODAY.slice(0, -1)]);
-  });
-  it('at 360 and 390 px all eight fit, and today\'s seven fit at 320', () => {
-    expect(ids(phoneDoorsFit(360, eight))).toEqual(ids(eight));
+  it('with the Overlord: six doors at 320 px (Accounts and Docs drop), seven at 360 (Docs drops), all eight from 384', () => {
+    expect(ids(phoneDoorsFit(320, eight))).toEqual(['overlord', ...TODAY.slice(0, -2)]);
+    expect(ids(phoneDoorsFit(360, eight))).toEqual(['overlord', ...TODAY.slice(0, -1)]);
+    expect(ids(phoneDoorsFit(384, eight))).toEqual(ids(eight));
     expect(ids(phoneDoorsFit(390, eight))).toEqual(ids(eight));
-    expect(ids(phoneDoorsFit(320, seven))).toEqual(TODAY);
+  });
+  it("without it: today's seven doors from 336 px, and Docs drops at 320, where Accounts' word was cut", () => {
+    expect(ids(phoneDoorsFit(360, seven))).toEqual(TODAY);
+    expect(ids(phoneDoorsFit(336, seven))).toEqual(TODAY);
+    expect(ids(phoneDoorsFit(320, seven))).toEqual(TODAY.slice(0, -1));
   });
   it('every kept door, Search beside them, is at least the tap minimum wide', () => {
     for (const w of [240, 280, 300, 320, 352, 360, 390, 899]) {
@@ -80,16 +83,17 @@ describe('phoneDoorsFit (plan question 13)', () => {
         const doors = kept.length + 1;
         // The Overlord and the Fleet are kept even past the minimum; any other kept door means the minimum held.
         const droppable = kept.filter((p) => p.id !== 'overlord' && p.id !== FLEET_PLACE).length;
-        if (droppable > 0) expect(w / doors, `${w}px, ${doors} doors`).toBeGreaterThanOrEqual(PHONE_DOOR_MIN_PX);
+        if (droppable > 0) expect(w / doors, `${w}px, ${doors} doors`).toBeGreaterThanOrEqual(PHONE_DOOR_FIT_PX);
       }
     }
     expect(PHONE_DOOR_MIN_PX).toBe(44);
+    expect(PHONE_DOOR_FIT_PX).toBeGreaterThanOrEqual(PHONE_DOOR_MIN_PX);
   });
   it('drops from the end, and never drops the Overlord or the Fleet', () => {
     expect(ids(phoneDoorsFit(132, eight))).toEqual(['overlord', 'fleet']);
     expect(ids(phoneDoorsFit(88, eight))).toEqual(['overlord', 'fleet']);
-    expect(ids(phoneDoorsFit(176, eight))).toEqual(['overlord', 'fleet', 'waiting']);
-    expect(ids(phoneDoorsFit(220, eight))).toEqual(['overlord', 'fleet', 'waiting', 'inbox']);
+    expect(ids(phoneDoorsFit(192, eight))).toEqual(['overlord', 'fleet', 'waiting']);
+    expect(ids(phoneDoorsFit(240, eight))).toEqual(['overlord', 'fleet', 'waiting', 'inbox']);
     expect(ids(phoneDoorsFit(88, seven))).toEqual(['fleet']);
   });
 });

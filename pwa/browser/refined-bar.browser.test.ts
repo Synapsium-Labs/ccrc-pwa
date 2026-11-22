@@ -177,7 +177,7 @@ const FIXTURE_OVERLORD: AppFixture = {
 };
 
 describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
-  for (const width of [900, 1280, 1920]) {
+  for (const width of [900, 1000, 1099, 1100, 1280, 1920]) {
     it(`light, ${width}px: the tabs, nothing cut, no sideways scroll, and /fleet marks the Fleet tab alone`, async () => {
       const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme: 'light', width }, FIXTURE_OVERLORD);
       try {
@@ -196,12 +196,17 @@ describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
             tabs: tabs.map((t) => t.getAttribute('data-command')),
             current: [...document.querySelectorAll('header.shell-accounts [aria-current="page"]')].map((c) => c.getAttribute('data-command')),
             cut, sideways: document.documentElement.scrollWidth - window.innerWidth,
+            newName: document.querySelector('.ref-bar-new')!.getAttribute('aria-label') ?? document.querySelector('.ref-bar-new')!.textContent,
+            waiting: document.querySelector('.ref-tabs [data-command="go-waiting"]')!.textContent,
           };
         });
         expect(m.tabs).toEqual(['go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs']);
         expect(m.current, '/fleet marks exactly one tab').toEqual(['go-fleet']);
         expect(m.cut, 'nothing in the bar is cut').toEqual([]);
         expect(m.sideways, 'the page does not scroll sideways').toBeLessThanOrEqual(0);
+        // Under 1100 the crowded bar sheds words (`REF_ROOMY_QUERY`): New session is its "+", named, and Waiting its short word.
+        expect(m.newName).toMatch(/New session/);
+        expect(m.waiting!.startsWith(width < 1100 ? 'Waiting ' : 'Waiting on you'), m.waiting!).toBe(true);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

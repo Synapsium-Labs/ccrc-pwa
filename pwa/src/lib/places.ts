@@ -65,14 +65,18 @@ export function deskPlacesFor(shown: boolean, d: DesignationState, home: HomeAns
 
 /** The tap minimum, in CSS pixels, of a phone bar door (WCAG 2.5.8's enhanced target, the console's `--tap-min`). */
 export const PHONE_DOOR_MIN_PX = 44;
+/** The width a phone bar door keeps when places are fitted: the tap minimum, raised to the measured width at which every
+ *  place's word shows whole. The bar shares its width evenly, and "Accounts" was cut at 45.7 px (a 320 px bar of seven doors)
+ *  and whole at 48.75 px (390 px, eight doors) in the browser leg (slug `phone-door-floor-is-the-word`). */
+export const PHONE_DOOR_FIT_PX = 48;
 /** The places `phoneDoorsFit` never drops: the way to the Overlord and the way back to the sessions. */
 const PHONE_KEEPS: ReadonlySet<string> = new Set([OVERLORD_PLACE.id, FLEET_PLACE]);
 
-/** The places a phone bar `widthPx` wide draws beside its Search door, each at least `PHONE_DOOR_MIN_PX` wide (plan question
+/** The places a phone bar `widthPx` wide draws beside its Search door, each at least `PHONE_DOOR_FIT_PX` wide (plan question
  *  13, slug `phone-bar-sheds-doors-to-search`): as many as fit, dropped from the end of the list, never the Overlord or the
  *  Fleet. A dropped place stays reachable through Search, whose palette lists every "Go to" command. */
 export function phoneDoorsFit(widthPx: number, places: readonly Place[]): readonly Place[] {
-  const room = Math.max(0, Math.floor(widthPx / PHONE_DOOR_MIN_PX) - 1);
+  const room = Math.max(0, Math.floor(widthPx / PHONE_DOOR_FIT_PX) - 1);
   let over = places.length - room;
   if (over <= 0) return places;
   const kept = [...places];
