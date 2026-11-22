@@ -107,7 +107,10 @@ function noModelWhy(aliases, k) {
  *  sheet can show both. Otherwise the class's `id` and `row`. A class with no id, or one whose kept id the lane's build
  *  cannot launch (`unlaunchable`), is a row of nulls, never a bare null (the reader would read the whole lane
  *  `unreadable`). The aliases file's own readings (`source`, `cacheTarget`, `seenId`, `unobserved`, `unlaunchable`, the
- *  home's `orphaned` level) ride along as the optional fields of `LaneClassModel`, each only when it says something.
+ *  home's `orphaned` level) ride along as the optional fields of `LaneClassModel`: `source`, `cacheTarget`, `seenId`
+ *  and `orphanedEffort` always (null when none), `unobserved` only when true, and `unlaunchable` only when set on a class
+ *  that is not held (a held class launches on its held id, so the alias's build need says nothing about it; `aliasId` names
+ *  the alias's id there).
  *  `takesNoEffort` is the row saying the model takes no level (`efforts: []`, D-8750); `efforts` stays the row's own list.
  *  Null when the aliases report is not a parsed file (`absent`, `unreadable`, `invalid`): those are `show`'s `aliases`
  *  states, which the server reads as three answers, so `labels` carries none of them. */
@@ -137,7 +140,7 @@ export function anthropicLabels(aliases, advance) {
       cacheTarget: k.cacheTarget,
       seenId: k.seenId,
       ...(k.unobserved === true ? { unobserved: true } : {}),
-      ...(k.unlaunchable !== null ? { unlaunchable: { needs: k.unlaunchable.needs, laneVersion: k.unlaunchable.laneVersion } } : {}),
+      ...(!held && k.unlaunchable !== null ? { unlaunchable: { needs: k.unlaunchable.needs, laneVersion: k.unlaunchable.laneVersion } } : {}),
       ...(held && k.id !== null && k.id !== hold.model ? { aliasId: k.id } : {}),
       orphanedEffort: k.orphaned === null ? null : { id: k.orphaned.id, level: k.orphaned.level },
     };

@@ -98,12 +98,43 @@ At each width nothing scrolls sideways, nothing a card holds leaves it, and the 
   aliases state words keep three answers" in `server/test/lane-models-op.test.ts`.
 - **New PWA, older server.** The class rows come without the new fields and read exactly as today. This pair is tested:
   "an older server's answer reads as today" in `pwa/test/models.test.ts`.
-- **Older PWA, new server.** The older PWA ignores the new fields. Its sheet opens on Codex lanes only, and its picker
-  keys Anthropic rows on ids, which no row lit before either.
+- **New server, op older than this wave.** An older op prints the parsed aliases file beside `labels: null`; the server
+  reads that lane `absent` as before, never `unreadable`, so a server rolled out first changes nothing ("an older op
+  that sends the aliases file but no labels reads the lane absent, as before").
+- **Older PWA, new server, until the page reloads.** The older PWA ignores the new fields and its sheet opens on Codex
+  lanes only. Its picker now gets an Anthropic lane as `read`, keys those rows on ids and drops a class with no id, so
+  the active row is not lit until the console reloads the PWA the server now serves. This pair is untested.
 - **Older server, new fleet box (F15).** A line naming several lanes is read as not a model line, so that move gets its
   banner and one log line but no phone push until the server box is updated. A single-lane move is unchanged.
 
+## What the review pass changed
+
+Three per-task reviewers read the build before the push. Nothing was blocking. These were fixed in the same push, each
+test red first or proved by a mutation that turned it red:
+
+- **Older op, newer server.** A parsed aliases file beside `labels: null` reads `absent`, not `unreadable`.
+- **Unlaunchable alias on a held class.** A held class no longer carries its alias id's build need (`unlaunchable`). It
+  launches on the held id, and `aliasId` names the alias's id.
+- **No Hold or Release, decided in L1.** `classActs` decides it from the lane kind, so a missing flag can no longer
+  draw them.
+- **Revert's confirm.** On an Anthropic lane it names no Release.
+- **The four Anthropic hold refusals** (D-8819's sentences) now state facts and ask no hand act.
+- **The supervisor sentence** is conditional ("If a session supervisor … still runs the previous ccd build …").
+
 ## Residuals (no ask; the coordinator's to place)
+
+- **No screen-level test of the Models act on an Anthropic lane.** The Accounts screen's test file is under another
+  worker's claim. What covers the gate instead:
+  - the L1 predicate's tests (`modelsActOffered`, `modelsSheetAnthropic`);
+  - the new browser test, which opens the sheet from an Anthropic lane's fold. It runs in the merge queue, not on a
+    pull request.
+- **The server's over-cap log detail.** It still names a failure line with long ids as the one shape over the cap, and a
+  moved line naming many lanes can pass the cap now too. `server/src/server.ts` was edited under another worker's
+  consent for the two F10 hunks only, so that third wording waits.
+- **Push budget.** The grouped push runs after the last Anthropic lane, on that lane's tail reserve: about 44 s, and 13 s
+  per push. A refresh with four or more different moves can skip the later pushes, though their banners still go out.
+- **Stale plan prose.** D-8751 and Task A2.4 in the plan still describe one push line per lane per move. F15 changes
+  that, and the plan is the coordinator's to edit.
 
 - **Revert's confirm and the absent Release.** Revert's confirm still says the class is held "until you release it",
   and an Anthropic lane's sheet has no Release. The ticket `revert-holds-until-newer` changes Revert's hold for both

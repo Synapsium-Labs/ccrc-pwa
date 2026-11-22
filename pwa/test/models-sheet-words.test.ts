@@ -321,8 +321,8 @@ describe('anthropicFacts: the lines an Anthropic class card carries', () => {
     const held = adv({ hold: { at: '2026-11-18T08:00:00Z', by: 'hand', model: 'claude-opus-9-1' } });
     expect(textOf(cls(), 'supervisor', held)).toBe(SUPERVISOR_RESIDUAL_WORDS);
     expect(kinds(cls(), adv())).not.toContain('supervisor');
-    expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/supervisor still running the previous ccd body/i);
-    expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/without the held model until that supervisor restarts/i);
+    expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/supervisor on the fleet box still runs the previous ccd build/i);
+    expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/without the held model until it restarts/i);
     expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/degraded/i);
     expect(SUPERVISOR_RESIDUAL_WORDS).not.toMatch(/\b(run|restart|move|remove|start)\b[^.]*\b(it|them|the)\b[^.]*\.$/i);
     expect(SUPERVISOR_RESIDUAL_WORDS.match(/\./g)).toHaveLength(1);
@@ -339,5 +339,32 @@ describe('the Models act is offered by the lane kind (wave 9, Task A4.3)', () =>
     expect(modelsSheetAnthropic({ telemetry: 'codex' })).toBe(false);
     expect(modelsActOffered({ kind: 'key', telemetry: 'openrouter' })).toBe(false);
     expect(modelsActOffered(undefined)).toBe(false);
+  });
+});
+
+describe('an Anthropic lane: no Hold, a Revert that names no Release, refusals that state facts (wave 9 review)', () => {
+  const ok = (opus: Partial<LaneClassAdvance>): Parameters<typeof classActs>[0] => ({
+    state: 'ok', detail: null, pending: null,
+    classes: Object.fromEntries((['fable', 'opus', 'sonnet', 'haiku'] as const).map((c) => [c, {
+      family: c, hold: null, previous: null, revertable: false, lastMove: null, ...(c === 'opus' ? opus : {}),
+    }])) as never,
+  });
+  it('classActs offers no Hold or Release on an Anthropic lane, and keeps Revert', () => {
+    expect(classActs(ok({}), 'opus', true)).toMatchObject({ hold: null, held: false, revert: false });
+    expect(classActs(ok({ hold: { at: 'x', by: 'hand' } }), 'opus', true)).toMatchObject({ hold: null, held: true });
+    expect(classActs(ok({ revertable: true, previous: { model: 'm-before', effort: null } }), 'opus', true)).toMatchObject({ hold: null, revert: true });
+    expect(classActs({ state: 'absent', detail: null, pending: null, classes: null }, 'opus', true)).toMatchObject({ hold: null });
+    expect(classActs(ok({}), 'opus')).toMatchObject({ hold: 'hold' });
+  });
+  it('an Anthropic Revert names no Release', () => {
+    const prev = { model: 'm-before', effort: null };
+    expect(revertConsequence('lane-a', 'opus', 'm-now', prev, true)[0]).not.toMatch(/release/i);
+    expect(revertConsequence('lane-a', 'opus', 'm-now', prev)[0]).toMatch(/until you release it/);
+  });
+  it('the Anthropic hold refusals ask no hand act', () => {
+    for (const code of ['alias-source-absent', 'aliases-file-unreadable', 'aliases-file-invalid', 'settings-overrides-hold'] as const) {
+      const text = VERB_CODE_WORDS[code];
+      expect(text, code).not.toMatch(/\b(Move|Remove|Start|Run|Restart)\b|then hold again|try again/);
+    }
   });
 });

@@ -83,10 +83,10 @@ export const VERB_CODE_WORDS: Readonly<Record<string, string>> = {
   'unroutable-lane': 'The lane\'s files cannot be rendered for routing, so the model was not moved. A hold may already be in place: the row shows what the lane holds now.',
   'no-such-account': 'The fleet box has no account by this name.',
   'anthropic-lane': 'This is an Anthropic lane: its classes are the client\'s own and carry no registry, so there is nothing to hold or revert.',
-  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias yet, or only one this lane\'s Claude Code cannot launch, so there is no model to hold. Start one session on this lane, then try again.',
-  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so the class\'s current model is unknown and was not held. Move that file aside on the fleet box.',
-  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so the class\'s current model is unknown and was not held. Move that file aside on the fleet box.',
-  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over a hold, so the hold could not reach a launch. Remove that setting on the fleet box, then hold again.',
+  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias yet, or only one this lane\'s Claude Code cannot launch, so there is no model to hold. The next session started on this lane, or the next hourly refresh, records one.',
+  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so the class\'s current model is unknown and was not held. Doctor names the file.',
+  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so the class\'s current model is unknown and was not held. Doctor names the file.',
+  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over a hold, so the hold could not reach a launch and was not made.',
   'registry-unwritable': 'The lane\'s class registry could not be written on the fleet box. A revert\'s hold may already be in place: the row shows what the lane holds now.',
   'advance-unwritable': 'The lane\'s advance file could not be written on the fleet box. The row shows what the lane holds now.',
   'settings-unwritable': 'The lane\'s settings could not be rendered or written on the fleet box. A revert\'s hold, and its move of the model, may already be in place: the row shows what the lane holds now.',
@@ -247,7 +247,7 @@ export const anthropicModelLine = (cls: ModelClass, model: string | null, label:
 /** D-8820's residual, said once on a held Anthropic class: a supervisor kept on the previous ccd body is the one place a
  *  hold does not reach a launch. A fact, not an instruction. */
 export const SUPERVISOR_RESIDUAL_WORDS =
-  'A supervisor still running the previous ccd body launches this class\'s sessions without the held model until that supervisor restarts, and the update\'s degraded sweep line names it.';
+  'If a session supervisor on the fleet box still runs the previous ccd build, it launches this class\'s sessions without the held model until it restarts; the update\'s degraded sweep line names such a supervisor.';
 
 export type AnthropicFactKind =
   | 'source' | 'disagree' | 'held' | 'alias' | 'orphaned' | 'no-id' | 'unlaunchable' | 'unobserved' | 'supervisor';
@@ -333,10 +333,12 @@ export interface ClassActs {
   readonly hold: 'hold' | 'release' | null;
   readonly revert: boolean;
 }
-export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass): ClassActs {
+export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass, anthropic = false): ClassActs {
   const adv: LaneClassAdvance | null = advance?.state === 'ok' ? advance.classes?.[cls] ?? null : null;
   const held = adv?.hold != null;
-  const holdKnown = adv !== null || advance?.state === 'absent';
+  // An Anthropic lane offers no Hold or Release (the coordinator's ruling of 2026-11-22, slug no-hold-release-controls): its
+  // classes always advance, and a Revert is the one act that holds one.
+  const holdKnown = !anthropic && (adv !== null || advance?.state === 'absent');
   return { adv, held, hold: !holdKnown ? null : held ? 'release' : 'hold', revert: adv?.revertable === true && adv.previous !== null };
 }
 /** Whether a Revert of `cls` is still on offer on the CURRENT read: the confirm asks it when it opens, while it stands and
@@ -354,9 +356,13 @@ export const holdAriaLabel = (action: 'hold' | 'release', cls: ModelClass): stri
 export const revertAriaLabel = (cls: ModelClass): string => `Revert the ${cls} class`;
 export const revertTitle = (cls: ModelClass): string => `Revert the ${cls} class?`;
 /** `previous` is the one on record: a revert whose class has none is not offered, so there is no sentence for it (F13). */
-export function revertConsequence(lane: string, cls: ModelClass, current: string | null, previous: Previous): string[] {
+export function revertConsequence(
+  lane: string, cls: ModelClass, current: string | null, previous: Previous, anthropic = false,
+): string[] {
+  // An Anthropic lane's sheet has no Release, so its sentence names none.
+  const until = anthropic ? '' : ' until you release it';
   return [
-    `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}, so no automatic advance moves it until you release it.`,
+    `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}, so no automatic advance moves it${until}.`,
     `As last read, that replaces ${current ?? 'an empty class'}.`,
     MODELS_CONFIRM_SESSIONS,
   ];

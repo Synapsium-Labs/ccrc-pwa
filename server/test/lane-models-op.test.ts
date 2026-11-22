@@ -632,6 +632,17 @@ describe('an Anthropic lane through the real show (model-class Anthropic arm A4.
     expect(got.classes[C3]).toMatchObject({ model: null });
   });
 
+  it('a held class does not carry its alias id\'s build need', async () => {
+    // The alias moved to an id this lane's build cannot launch, while the class is held on a launchable one: the class's
+    // sessions launch on the held id, so the wire says nothing of the alias's build need, and the alias's id rides `aliasId`.
+    const got = await readOf(plant(aliasesJson({
+      [C0]: kept(X2, { unobserved: true, unlaunchable: { needs: '9.9.9', laneVersion: '2.0.0' }, row: catRow(X2, { minVersion: '9.9.9' }),
+        heldRow: catRow(X1, { label: 'Held' }) }),
+    }), { [C0]: X1 }));
+    expect(got.classes[C0]).toMatchObject({ model: X1, label: 'Held', aliasId: X2 });
+    expect(got.classes[C0]).not.toHaveProperty('unlaunchable');
+  });
+
   it('an unobserved class carries unobserved', async () => {
     const got = await readOf(plant(aliasesJson({ [C0]: kept(X1, { unobserved: true }), [C1]: kept(S1) })));
     expect(got.classes[C0].unobserved).toBe(true);
@@ -678,8 +689,15 @@ describe('readLaneModels over an Anthropic lane\'s show body (model-class Anthro
     expect((await read({})).kind).toBe('read');
   });
 
-  it('a parsed aliases file with no labels, a bad class row or an unreadable advance reads unreadable', async () => {
-    expect(await read({ labels: null })).toEqual({ kind: 'unreadable' });
+  it('an older op that sends the aliases file but no labels reads the lane absent, as before', async () => {
+    // An op from before Task A4.1 prints a parsed aliases file beside `labels: null` once the hourly refresh has written
+    // one; a server rolled out first reads that lane as it always did, never as unreadable.
+    expect(await read({ labels: null })).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+    expect(await read({ labels: undefined })).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+  });
+
+  it('a parsed aliases file with off-grammar labels, a bad class row or an unreadable advance reads unreadable', async () => {
+    expect(await read({ labels: 'x' })).toEqual({ kind: 'unreadable' });
     expect(await read({ labels: { ...ROWS, [C3]: { model: 7 } } })).toEqual({ kind: 'unreadable' });
     expect(await read({ labels: { ...ROWS, [C3]: undefined } })).toEqual({ kind: 'unreadable' });
     expect(await read({ aliases: 'x' })).toEqual({ kind: 'unreadable' });

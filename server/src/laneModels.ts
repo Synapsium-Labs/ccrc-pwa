@@ -129,7 +129,8 @@ function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsR
 }
 
 /** An Anthropic lane's `show` (no registry; model-class Anthropic arm A4.1): three answers for its aliases file, never one.
- *  No `aliases` key (an older op) or `{state: 'absent'}` is `absent`, as before; `unreadable` and `invalid` are the lane's
+ *  No `aliases` key (an older op), `{state: 'absent'}`, or a parsed file beside no labels (an op older than A4.1) is
+ *  `absent`, as before; `unreadable` and `invalid` are the lane's
  *  `unreadable`, the existing arm; and a parsed aliases file (no `state` key) is a lane READ, whose classes are the op's
  *  `labels` (built from that file) beside the advance report. A parsed file whose labels or advance are off the grammar is
  *  `unreadable` too: a half view is never returned. */
@@ -140,6 +141,9 @@ function readAnthropicShow(raw: Record<string, unknown>): LaneModelsRead {
   if (aliases.state !== undefined) {
     return aliases.state === 'absent' ? { kind: 'absent', laneKind: 'anthropic' } : { kind: 'unreadable' };
   }
+  // An op from before Task A4.1 prints the parsed aliases file the hourly refresh wrote, but `labels: null` for a lane with no
+  // registry: that lane reads as it always did, so a server rolled out before the fleet box never turns it unreadable.
+  if (raw.labels === null || raw.labels === undefined) return { kind: 'absent', laneKind: 'anthropic' };
   if (!isObj(raw.labels)) return { kind: 'unreadable' };
   const classes = {} as Record<ModelClass, LaneClassModel>;
   for (const c of CLASSES) {

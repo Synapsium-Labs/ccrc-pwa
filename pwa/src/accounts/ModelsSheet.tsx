@@ -221,7 +221,7 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
           <div className="acct-models-list">
             {CLASSES.map((cls) => {
               const c = shown.classes[cls];
-              const { adv, held, hold, revert } = classActs(advance, cls);
+              const { adv, held, hold, revert } = classActs(advance, cls, anthropic);
               const mine = busy === cls;
               const n = notes[cls];
               return (
@@ -244,9 +244,9 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
                       {previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
                     </div>
                   )}
-                  {((hold !== null && !anthropic) || revert) && (
+                  {(hold !== null || revert) && (
                     <div className="acct-models-acts">
-                      {hold !== null && !anthropic && (
+                      {hold !== null && (
                         <ModelsAct
                           label={hold === 'release' ? 'Release' : 'Hold'} name={holdAriaLabel(hold, cls)} disabled={!mayChange} busy={mine}
                           onTap={() => { void run(hold, cls); }}
@@ -272,7 +272,7 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
           open
           onClose={() => setConfirming(null)}
           title={revertTitle(confirming)}
-          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious)}
+          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious, anthropic)}
           confirmLabel={MODELS_REVERT_CONFIRM}
           onConfirm={() => confirmRevert(confirming)}
         />
