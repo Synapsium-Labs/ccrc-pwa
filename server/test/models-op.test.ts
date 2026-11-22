@@ -6928,7 +6928,8 @@ describe('programme wave 3 through the ops', () => {
   const NAMED = `${ORDINARY}; the lane's effort file already carries the fallback's levels, not the stored registry's`;
   const renderings = (reg: typeof STEP_REGISTRY): { fallback: string; stored: string } => {
     const cat = parseCatalogue(DROPPED_CAT);
-    const text = (r: typeof STEP_REGISTRY): string => `${JSON.stringify(effortFile(r, cat))}\n`;
+    // Parsed with no catalogue, so the stored level the dropped catalogue refuses still reads.
+    const text = (r: typeof STEP_REGISTRY): string => `${JSON.stringify(effortFile(parseRegistry(r), cat))}\n`;
     return { fallback: text({ ...reg, effort: { ...reg.effort, opus: 'xhigh' } }), stored: text(reg) };
   };
   /** advance-health's opus detail, with the nth read of the lane's effort file failing (an EIO) when `failRead` names
