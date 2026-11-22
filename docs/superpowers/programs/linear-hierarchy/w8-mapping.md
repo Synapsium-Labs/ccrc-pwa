@@ -74,8 +74,8 @@ The plan's "Deviations found" carries both entries in full. In short:
   evidence kind and suggester too, so one pair offered twice is two rows (fix round 1, A2).
   The picker offers the legacy key's workspace too while it routes like a slot (learned, not superseded): the workspaces
   answer's legacy row carries `workspace.workspaceId`, additive (an older server omits it and the picker leaves it out), read
-  once in `wireReaders.ts` and merged by `pickerWorkspacesOf` (fix round 1, A1). The Overlord link's line links to the
-  Waiting on you screen, because a call cannot be addressed by id.
+  once in `wireReaders.ts` and merged by `pickerWorkspacesOf` (fix round 1, A1). The Overlord link's line opens its own
+  call on the Waiting on you screen (run 3209, below); before that run it linked to the screen, because a call had no address.
 
 ## Carried (follow-up tickets in the `mapping` epic)
 
@@ -85,7 +85,7 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
   by the packet the README's holding run approved; the ticket can close with the PR.
 - `w8-overlord-skill`: the Overlord skill's door table gains `link_team`, and says when it suggests instead (below `full`).
-- `w8-call-anchor`: address one call by id on the Waiting on you screen, so the Overlord link's line links to its call.
+- `w8-call-anchor`: built by run 3209 (below).
 - `w8-triage-l1`: built by run 3155 (below). It moved the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`)
   into `planPolicy.ts` beside `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It had stayed in the route because
   `planPolicy.ts` was held by another wave; D-8808 stated it as a bend.
@@ -232,3 +232,15 @@ copy, measured by restoring the console's old one, reds it. D-8808 says the item
 coordinator's call.
 
 The test typecheck (`test/tsconfig.tests.json`) was killed by the test slice's memory cap here; CI's run on the tip checks it.
+
+## Run 3209 (`w8-call-anchor`): what was built
+
+A call made for the operator has an address on the Waiting on you screen, and the project card's line for an Overlord link
+opens that call, open and marked, ready for Seen or Overturn…. No wire change: the card already received the link's call id
+(`TeamLinkWire`'s `overlord` arm, D-8809).
+
+| Step | Built | Test |
+|---|---|---|
+| The address | `/waiting?call=<id>`, built by `callPath` and read by `callParamOf` beside `waitingPath` in `pwa/src/lib/routes.ts`. An item's address is a route of its own (`/waiting/<id>`) because an item has a page; a call has none, only a place in the list, so its address is a query on the list's route, as the side rail's filter is (`?programme=`). It is in the URL, so a reload and a cold start keep it; changing the filter drops it. The id takes a run id's grammar (`isRunId`) | `waiting-routes.test.tsx`: the path is the list's route and reads back; `0`, a leading zero, a sign, letters, an absent query and one past the safe integers name no call |
+| Where it lands | `callTargetOf` (`callWords.ts`, L1) answers from the list the screen draws: the waiting view, the page clock and the side rail's filter. `open`: the call is still to see and the filter shows its programme; that programme's "Calls made for you" opens once per address (a ref and an effect, so a Seen that takes the call away does not fold the group), and the call is marked (`aria-current`) and scrolled to. `cleared`: the call is in the Recently cleared trail's own window (`clearedTrail` decides it, the one 48-hour rule) and the filter shows its programme; a one-line notice, and the trail's entry marked and scrolled to. When the entry lies past the newest rows shown, the trail expands and opens its programme's group (`clearedCallPlace`, L1), adjusting its state during render and only ever expanding, so the operator's Show all and open groups survive the target's place changing. The notice never outlives the row (review 3222's ruling): Show all opens the target's programme group (`clearedOpenOnShowAll`), and the folded trail draws the target's row after the shown rows when it lies past them (`clearedFolded`), both L1 in `ledgerWords.ts`; an operator who collapses the target's group by hand closes the row themselves. `hidden`: the filter in the same URL hides the call's programme, open or cleared; one line says so and nothing is marked (`callFilterShows` is the one predicate the target, `callsApartOf` and `clearedCallsOf` all ask). `gone`: the call cleared outside the window, or, on a live list, is on neither list; one line says it has cleared and is no longer on this list. `unheard`: the VIEW is the device's saved list (`listSaved`, set by the route from the `saved-list` source only; `saved-rows` draws the live view) and holds no such call; one line says it shows once the list is current, never that it cleared. The page scrolls once per address, across the group and the trail (a ref on the screen), so a Seen on the call, re-opening its trail group, or its programme gaining rows (a calls-only section redrawn as a group with rows, a new `CallsGroup`) never scrolls the operator away (review 3217's rulings). A malformed `?call=` names no call: the plain list, with no notice. The notice is the screen's status line (`wl-note`, `role="status"`) and the mark is the console's existing marked-row ring (one rule in `ledgers.css`) | `call-words.test.ts`: every answer, a clear outside the window, the filter; `waiting-screen.test.tsx`, describe `calls made for you (D-8126)`: open, apart, cleared, cleared past the shown rows in a grouped trail, outside the window, hidden open and hidden cleared, gone, unheard on a saved list, the trail following a call that arrives later and keeping the operator's choices when the target moves past the shown rows and back, Show all and Show fewer keeping the target's row drawn, one scroll per address through a Seen, a re-opened group and a calls-only programme gaining a row; and a pin, which also passes on round 1's code because `CallsGroup`'s effect already depended on the target, that a mounted group gaining the call opens and marks it (review 3222 A-iv); `waiting-routes.test.tsx`: the URL alone opens and marks it, also when the list arrives after the page, a live view with the device's rows says gone, not unheard, and a saved list says unheard (the route's `listSaved` arm, review 3222 F1) |
+| The card | `overlordCallLink` (`linkingWords.ts`, L1): with a readable call id the line reads "Open this call in Calls made for you" and links to `callPath`; without one (absence permits) it keeps "See it in Calls made for you" and the screen | `linking-words.test.ts`; `project-linking-card.test.tsx`: the id present and absent |

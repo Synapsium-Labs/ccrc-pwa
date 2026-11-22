@@ -541,10 +541,10 @@ number from `POST /api/ledger/deviations`.
   programme whose membership cannot be measured. Ambiguous inbound with no owner waits, counts in the console and, since run
   3187, raises the shared-key item above. Follow-ups this wave leaves:
   `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
-  review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor` and `w8-overlord-skill`;
+  review judge's rules-mixed rule moved to a PR of its own) and `w8-overlord-skill`;
   `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
-  `w8-triage-l1` by run 3155, and `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
-  coordinator's call, since it only adds an item. Record: the
+  `w8-triage-l1` by run 3155, `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
+  coordinator's call, since it only adds an item, and `w8-call-anchor` by run 3209. Record: the
   wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
@@ -555,7 +555,14 @@ number from `POST /api/ledger/deviations`.
   link's own statement, after the chosen candidate's pair is re-checked against the live Linear store (`team-unknown`,
   `team-ambiguous`, or `unavailable` when the store cannot be read). The call is filed under `linear-sync` (design call 19 as amended), names the project, the team and
   the workspace by display name and the evidence, and shows in "calls made for you"; the operator overturns it by a key
-  write on the card, which makes the key `manual`. The door process gains a `link_team` tool row. Record: the wave 8 note.
+  write on the card, which makes the key `manual`. The door process gains a `link_team` tool row. A call has an address on the
+  Waiting on you screen since run 3209: `/waiting?call=<id>`, a query on the list's route as its filter is (`callPath`,
+  `callParamOf`), because a call has no page of its own, as an item does, only a place in the list. The card's line for the
+  link opens its call there; a link the wire carries without a readable call id opens the screen, as before. The landing
+  says only what the list draws (review 3217): `callTargetOf` answers open, cleared (inside the trail's own 48-hour window),
+  hidden (the side rail's filter hides it), gone, or not yet heard (only on the device's saved list), and the page scrolls
+  once per address. A cleared call's notice never outlives its row (review 3222): Show all opens its group and the folded
+  trail keeps its row. Record: the wave 8 note.
 
 ## Global Constraints
 

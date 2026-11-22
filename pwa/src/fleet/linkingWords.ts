@@ -2,7 +2,8 @@
 // store, no `lib/api.ts`, no component; `ProjectLinkingCard.tsx` renders what these answer.
 import type { ProjectRow } from '../../../shared/api';
 import type { LinearLegacyRow, LinearWorkspaceShown } from '../../../shared/linear';
-import type { ProjectLinkingWire, TeamCandidateWire, TeamEvidence } from '../../../shared/linking';
+import type { ProjectLinkingWire, TeamCandidateWire, TeamEvidence, TeamLinkWire } from '../../../shared/linking';
+import { callPath, waitingPath } from '../lib/routes';
 import { refusalText } from '../lib/refusalWords';
 import { hierarchyWriteText } from './hierarchyWords';
 
@@ -53,12 +54,24 @@ export const candidateLabel = (c: TeamCandidateWire): string => `Link ${c.key}`;
 /** The line under a candidate's button: the team's name, which may be long and wraps, and why it is offered. */
 export const candidateWhy = (c: TeamCandidateWire): string => `${c.name}: ${evidenceWords(c.evidence, c.key)}`;
 
-/** D-8808: an Overlord link is a call made for the operator; the card links to "Calls made for you" (a call has no address of
- *  its own on the Waiting on you screen, so the link is to the screen) and says how to overturn it. */
+/** D-8808, D-8809: an Overlord link is a call made for the operator; the card opens that call in "Calls made for you" (a call
+ *  has an address on the Waiting on you screen, `callPath`) and says how to overturn it. `call` is the link for a team link with
+ *  no readable call id (an older or odd peer), which can only open the screen. */
 export const OVERLORD_LINK_WORDS = {
+  openCall: 'Open this call in Calls made for you',
   call: 'See it in Calls made for you',
   overturn: 'Change the key to overturn it.',
 } as const;
+
+/** The card's link for an Overlord link (D-8808, D-8809): the call's own address, or the list when the wire carries no readable
+ *  call id (absence permits); `null` for any other link. */
+export function overlordCallLink(t: TeamLinkWire | null | undefined): { href: string; words: string } | null {
+  if (t?.source !== 'overlord') return null;
+  const id = t.callId as unknown;
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+    ? { href: callPath(id), words: OVERLORD_LINK_WORDS.openCall }
+    : { href: waitingPath(), words: OVERLORD_LINK_WORDS.call };
+}
 
 /** D-8808: the workspace picker's words. */
 export const PICKER_WORDS = {
