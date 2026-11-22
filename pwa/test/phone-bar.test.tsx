@@ -157,7 +157,8 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
     // a door keeps the width its word needs (`PHONE_DOOR_FIT_PX`), so the bar sheds places from the end, reached through Search.
     it('with overlord-v1 and an Overlord the Overlord door is first; narrower bars shed Docs, then Accounts, to Search', () => {
       const cases: ReadonlyArray<readonly [number, readonly string[]]> = [
-        [390, ['go-overlord', ...PHONE_DOORS]],
+        [412, ['go-overlord', ...PHONE_DOORS]],
+        [390, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs')]],
         [360, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs')]],
         [320, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs' && d !== 'go-accounts')]],
       ];

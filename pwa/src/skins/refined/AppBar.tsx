@@ -24,10 +24,10 @@ import { useMediaQuery } from '../../lib/useMediaQuery';
 import { useDesignationState, useHome, useOverlordShown } from '../../stores/overlord';
 
 /** Below this width the bar is crowded once the Overlord's and the Fleet's tabs are drawn (Overlord W1 home, measured in
- *  refined-bar.browser.test.ts: at 900 the line ran 105 px past its frame, New session cut). A crowded bar names each tab
+ *  refined-bar.browser.test.ts: at 900 the line ran 105 px past its frame and at 1100 1 px, New session cut). A crowded bar names each tab
  *  by its place's short word where it has one ("Waiting", the phone bar's word) and draws New session as its "+" alone,
  *  named "New session", as Instrument's is (slug `refined-crowded-bar-sheds-words`). Five tabs are never crowded. */
-export const REF_ROOMY_QUERY = '(min-width: 1100px)';
+export const REF_ROOMY_QUERY = '(min-width: 1200px)';
 const ROOMY_TABS = 5;
 
 function Tab({ place, here, count, word, crowded }: { place: Place; here: boolean; count: number; word: string; crowded: boolean }): ReactNode {

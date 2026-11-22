@@ -173,12 +173,12 @@ const measureBar = (page: Page) => page.evaluate(() => {
 });
 
 // Overlord W1 home, Task 3 (plan question 13, slug `phone-bar-sheds-doors-to-search`): with the Overlord's door the bar has
-// eight doors. A door keeps the width its word needs (48 px, `PHONE_DOOR_FIT_PX`, measured here: "Accounts" was cut at 45.7 px),
-// so from 384 px all eight fit, at 360 Docs is reached through Search, and at 320 Accounts too.
+// eight doors. A door keeps the width its word needs (50 px, `PHONE_DOOR_FIT_PX`, measured here: "Accounts" needs 49 px), so
+// from 400 px all eight fit, at 360 to 399 Docs is reached through Search, and at 320 Accounts too.
 describe.each(SKINS)('the phone bar with the Overlord in %s', (skin) => {
   const EIGHT = ['go-overlord', ...PHONE_DOORS];
   const cases = [
-    [320, EIGHT.filter((d) => d !== 'go-docs' && d !== 'go-accounts')], [360, EIGHT.filter((d) => d !== 'go-docs')], [384, EIGHT], [390, EIGHT],
+    [320, EIGHT.filter((d) => d !== 'go-docs' && d !== 'go-accounts')], [360, EIGHT.filter((d) => d !== 'go-docs')], [390, EIGHT.filter((d) => d !== 'go-docs')], [412, EIGHT],
   ] as const;
   for (const [width, doors] of cases) {
     it(`at ${width}: the Overlord's door is first, ${doors.length} doors, each at least 44 x 44 inside the viewport, words whole`, async () => {

@@ -66,9 +66,9 @@ export function deskPlacesFor(shown: boolean, d: DesignationState, home: HomeAns
 /** The tap minimum, in CSS pixels, of a phone bar door (WCAG 2.5.8's enhanced target, the console's `--tap-min`). */
 export const PHONE_DOOR_MIN_PX = 44;
 /** The width a phone bar door keeps when places are fitted: the tap minimum, raised to the measured width at which every
- *  place's word shows whole. The bar shares its width evenly, and "Accounts" was cut at 45.7 px (a 320 px bar of seven doors)
- *  and whole at 48.75 px (390 px, eight doors) in the browser leg (slug `phone-door-floor-is-the-word`). */
-export const PHONE_DOOR_FIT_PX = 48;
+ *  place's word shows whole. The bar shares its width evenly, and "Accounts" needs 49 px in the browser leg (its word was cut
+ *  at 45.7 px and at 48 px), so a door keeps 50 (slug `phone-door-floor-is-the-word`). */
+export const PHONE_DOOR_FIT_PX = 50;
 /** The places `phoneDoorsFit` never drops: the way to the Overlord and the way back to the sessions. */
 const PHONE_KEEPS: ReadonlySet<string> = new Set([OVERLORD_PLACE.id, FLEET_PLACE]);
 

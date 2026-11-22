@@ -65,15 +65,17 @@ describe('deskPlacesFor (ruled F5, plan question 14)', () => {
 describe('phoneDoorsFit (plan question 13)', () => {
   const eight = placesFor(true, STATES.bound);
   const seven = placesFor(false, STATES.none);
-  it('with the Overlord: six doors at 320 px (Accounts and Docs drop), seven at 360 (Docs drops), all eight from 384', () => {
+  it('with the Overlord: six doors at 320 px (Accounts and Docs drop), seven at 360 (Docs drops), all eight from 400', () => {
     expect(ids(phoneDoorsFit(320, eight))).toEqual(['overlord', ...TODAY.slice(0, -2)]);
     expect(ids(phoneDoorsFit(360, eight))).toEqual(['overlord', ...TODAY.slice(0, -1)]);
-    expect(ids(phoneDoorsFit(384, eight))).toEqual(ids(eight));
-    expect(ids(phoneDoorsFit(390, eight))).toEqual(ids(eight));
+    expect(ids(phoneDoorsFit(390, eight))).toEqual(['overlord', ...TODAY.slice(0, -1)]);
+    expect(ids(phoneDoorsFit(400, eight))).toEqual(ids(eight));
+    expect(ids(phoneDoorsFit(412, eight))).toEqual(ids(eight));
   });
-  it("without it: today's seven doors from 336 px, and Docs drops at 320, where Accounts' word was cut", () => {
+  it("without it: today's seven doors from 350 px, and Docs drops at 320, where Accounts' word was cut", () => {
     expect(ids(phoneDoorsFit(360, seven))).toEqual(TODAY);
-    expect(ids(phoneDoorsFit(336, seven))).toEqual(TODAY);
+    expect(ids(phoneDoorsFit(350, seven))).toEqual(TODAY);
+    expect(ids(phoneDoorsFit(349, seven))).toEqual(TODAY.slice(0, -1));
     expect(ids(phoneDoorsFit(320, seven))).toEqual(TODAY.slice(0, -1));
   });
   it('every kept door, Search beside them, is at least the tap minimum wide', () => {
@@ -92,8 +94,8 @@ describe('phoneDoorsFit (plan question 13)', () => {
   it('drops from the end, and never drops the Overlord or the Fleet', () => {
     expect(ids(phoneDoorsFit(132, eight))).toEqual(['overlord', 'fleet']);
     expect(ids(phoneDoorsFit(88, eight))).toEqual(['overlord', 'fleet']);
-    expect(ids(phoneDoorsFit(192, eight))).toEqual(['overlord', 'fleet', 'waiting']);
-    expect(ids(phoneDoorsFit(240, eight))).toEqual(['overlord', 'fleet', 'waiting', 'inbox']);
+    expect(ids(phoneDoorsFit(200, eight))).toEqual(['overlord', 'fleet', 'waiting']);
+    expect(ids(phoneDoorsFit(250, eight))).toEqual(['overlord', 'fleet', 'waiting', 'inbox']);
     expect(ids(phoneDoorsFit(88, seven))).toEqual(['fleet']);
   });
 });

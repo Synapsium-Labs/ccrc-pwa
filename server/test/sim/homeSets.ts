@@ -145,13 +145,14 @@ export function deskCases(m: PlacesModule): Record<string, SuiteCase> {
 export function phoneCases(m: PlacesModule): Record<string, SuiteCase> {
   const eight = (): readonly Place[] => m.placesFor(true, S.bound!);
   return {
-    'six doors at 320 px and seven at 360, dropped from the end': () => {
+    'six doors at 320 px and seven at 360 and 390, dropped from the end': () => {
       expect(ids(m.phoneDoorsFit(320, eight()))).toEqual(['overlord', ...TODAY.slice(0, -2)]);
       expect(ids(m.phoneDoorsFit(360, eight()))).toEqual(['overlord', ...TODAY.slice(0, -1)]);
+      expect(ids(m.phoneDoorsFit(390, eight()))).toEqual(['overlord', ...TODAY.slice(0, -1)]);
     },
-    'all eight from 384 px': () => {
-      expect(ids(m.phoneDoorsFit(384, eight()))).toEqual(['overlord', ...TODAY]);
-      expect(ids(m.phoneDoorsFit(390, eight()))).toEqual(['overlord', ...TODAY]);
+    'all eight from 400 px': () => {
+      expect(ids(m.phoneDoorsFit(400, eight()))).toEqual(['overlord', ...TODAY]);
+      expect(ids(m.phoneDoorsFit(412, eight()))).toEqual(['overlord', ...TODAY]);
     },
     'the Overlord and the Fleet are never dropped': () => {
       expect(ids(m.phoneDoorsFit(132, eight()))).toEqual(['overlord', 'fleet']);

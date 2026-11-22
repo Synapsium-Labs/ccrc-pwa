@@ -51,5 +51,14 @@ coordinator mints its number when it folds this note into the ledger. PR B and P
   words, not as a failure.
 - **`unreadable-body-is-a-failure`.** A 2xx body without the read's own field (`designation` or `operatorRung`) is a
   failure (`unreadable answer`), never a row read as nothing.
+- **`phone-door-floor-is-the-word`.** The plan fitted phone doors at the 44 px tap minimum. In the browser leg, "Accounts"
+  was cut at 45.7 px and at 48 px, and needs 49. So `phoneDoorsFit` keeps each door at `PHONE_DOOR_FIT_PX` (50 px), which
+  is never less than the tap minimum. With the Overlord's door, all eight doors fit from 400 px, Docs goes to Search from
+  360 to 399 px (390 included), and Accounts goes to Search too at 320. Without the Overlord, today's seven fit from
+  350 px. At 320 Docs goes to Search, because seven doors there are 45.7 px each, and "Accounts" was already cut on `main`.
+- **`refined-crowded-bar-sheds-words`.** With the Overlord's and the Fleet's tabs, Refined's bar has seven tabs, and at
+  900 px the line ran 105 px past its frame, cutting New session (1 px past at 1100). Below 1200 px (`REF_ROOMY_QUERY`), a
+  bar of more than five tabs names each tab by its place's short word where it has one ("Waiting") and draws New session
+  as its "+" alone, still named "New session", as Instrument's is. A bar of five tabs is unchanged at every width.
 - **`health-routed-in-the-browser-harness`.** `pwa/browser/app.ts` routes `GET /health` by its exact path. Unnamed, it
   answers a server with no words, so the existing browser cases see no Overlord with no edit.
