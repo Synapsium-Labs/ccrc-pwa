@@ -25,9 +25,9 @@ function body(src: string, name: string): string | null {
 }
 /** ccd's own typing helpers: each sends keys to a pane (review 3006 F2), so calling one is sending a key. */
 const TYPERS = ['_route_type_model', '_route_type_effort', '_route_escape', '_answer_two_option_dialog'];
-/** A raw tmux key sender: the pattern `ccd-typing-check.test.ts` refuses, plus `send`, tmux's alias for send-keys, where it is the
- *  subcommand of tmux or of ccd's tmux wrapper (options may sit between), so `mail send` never matches. */
-const RAW_SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix|(?<![\w$-])(?:tmux|_tmx|"\$\{_TMX_ARGV\[@\]\}")(?:\s+-[A-Za-z]+(?:\s+[^\s-]\S*)?)*\s+send\b/;
+/** A raw tmux key sender: the pattern `ccd-typing-check.test.ts` refuses, plus the aliases `send`, `pasteb` and `loadb` where one is
+ *  the subcommand (quoted or not) of tmux or of ccd's tmux wrapper (quoted or not; options may sit between), so `mail send` never matches. */
+const RAW_SENDS = /send-keys|_send_keys|paste-buffer|load-buffer|send-prefix|(?<![\w$-])(?:tmux|_tmx|"?\$\{_TMX_ARGV\[@\]\}"?)(?:\s+-[A-Za-z]+(?:\s+[^\s-]\S*)?)*\s+['"]?(?:send|pasteb|loadb)\b/;
 const SENDS = new RegExp(`${RAW_SENDS.source}|\\b(?:${TYPERS.join('|')})\\b`);
 
 describe('the limit-rescue code sends no key', () => {
@@ -80,25 +80,31 @@ describe('the model-aliases library sends no key', () => {
 // body's code lines (strings kept, so `bash -c "source … && fn"` counts), or ccd run by its installed path with a verb, which calls
 // `cmd_<verb>`. A key sender is any function holding a raw sender, closed over its callers; no list of callers is kept by hand.
 type Fn = { file: string; line: number; code: string };
-const HEADER = /^([A-Za-z_][A-Za-z0-9_-]*)\(\)\s*\{(.*)$/;
+const HEADER = /^(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\))?|([A-Za-z_][\w-]*)\s*\(\))\s*(\{.*)?$/;
+const LOOSE = /^\s*(?:function\s+[A-Za-z_][\w-]*\s*(?:\(\s*\))?|[A-Za-z_][\w-]*\s*\(\s*\))\s*(\{.*)?$/;
 const CODE = (l: string): string => l.replace(/\s#\s.*$/, '');
 const NAMES = (code: string): string[] => [...code.matchAll(/(?<![A-Za-z0-9_$-])[A-Za-z_][A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g)].map((m) => m[0]);
-const SELF_VERB = /(?<![A-Za-z0-9_$./-])(?:\$HOME|~)\/\.local\/bin\/ccd['"]?\s+([a-z][a-z0-9-]*)/g;
+const SELF_VERB = /(?<![A-Za-z0-9_$./-])(?:\$HOME|\$\{HOME\}|~)\/\.local\/bin\/ccd['"]?\s+([a-z][a-z0-9-]*)/g;
 
-/** Every function of one file: a header at column 0; a one-line body ends on its line, any other at the first line opening with `}`
- *  or just before the next header (a few bodies close with `…; }` at the end of a code line). */
-function cutFunctions(text: string, file: string, into: Map<string, Fn[]>): void {
-  const lines = text.split('\n');
+/** Every function of one file: a header at column 0, in either shell spelling, with its brace on its line or the next (so a Python
+ *  `main()` in a heredoc is none). A one-line body ends on its line, any other at the first line opening with `}` or before the next
+ *  header. A header-shaped definition anywhere else lands in `unseen`, so no function can hide from the graph. */
+function cutFunctions(text: string, file: string, into: Map<string, Fn[]>, unseen: string[]): void {
+  const lines = text.split('\n').map((l) => (/^\s*#/.test(l) ? '' : CODE(l)));
+  const header = (i: number) => {
+    const loose = LOOSE.exec(lines[i]!);
+    if (!loose || (!loose[1] && !lines[i + 1]?.trim().startsWith('{'))) return null;
+    return HEADER.exec(lines[i]!) ?? (unseen.push(`${file}:${i + 1}`), null);
+  };
   for (let i = 0; i < lines.length; i++) {
-    const m = HEADER.exec(lines[i]!);
+    const m = header(i);
     if (!m) continue;
     let end = i;
-    if (!/\}\s*$/.test(CODE(m[2]!).trim())) {
+    if (!/\}\s*$/.test((m[3] ?? '').slice(1).trim())) {
       for (end = i + 1; end < lines.length && !lines[end]!.startsWith('}') && !HEADER.test(lines[end]!); end++);
-      if (end < lines.length && HEADER.test(lines[end]!)) end--;
+      if (end < lines.length && !lines[end]!.startsWith('}')) end--;
     }
-    const code = [CODE(m[2]!), ...lines.slice(i + 1, end + 1).filter((l) => !/^\s*#/.test(l)).map(CODE)].join('\n');
-    into.set(m[1]!, [...(into.get(m[1]!) ?? []), { file, line: i + 1, code }]);
+    into.set(m[1] ?? m[2]!, [...(into.get(m[1] ?? m[2]!) ?? []), { file, line: i + 1, code: [m[3] ?? '', ...lines.slice(i + 1, end + 1)].join('\n') }]);
   }
 }
 
@@ -115,7 +121,10 @@ const ALLOW: ReadonlyArray<{ from: string; to: string; why: string; arms: boolea
   { from: '_dispatch_swap', to: 'cmd_swap', arms: true, why: `the swap ends the session and resumes it on another account; ${FRESH}`, holds: () => true },
   { from: '_wake_ceiling_move', to: 'cmd_swap', arms: true, why: `the swap ends the session and resumes it on another account; ${FRESH}`, holds: () => true },
   { from: '_wake_ceiling_move', to: 'cmd_ensure', arms: true, why: `its fallback ensures a session that is not alive; ${FRESH}`,
-    holds: (src) => src('cmd_ensure').search(/_alive "\$id"/) >= 0 && src('cmd_ensure').search(/_alive "\$id"/) < src('cmd_ensure').search(/_spawn_start/) },
+    holds: (src) => {   // `if _alive "$id"; then` alone, returning before the wake move and both spawns
+      const l = src('cmd_ensure').split('\n').map((x) => x.trim()), at = l.indexOf('if _alive "$id"; then'), fi = l.indexOf('fi', at);
+      return at > 0 && l.slice(at, fi).some((x) => /\breturn 0\b/.test(x)) && ['_wake_ceiling_move', '_supervised_start', '_spawn_start'].every((n) => l.findIndex((x) => x.includes(n)) > fi);
+    } },
   { from: '_operator_choice_promote', to: 'cmd_route', arms: false, why: 'it calls `cmd_route` without `--apply`, so nothing is typed',
     holds: (src) => !/--apply\b/.test(src('_operator_choice_promote')) },
 ];
@@ -132,9 +141,9 @@ const GATES = [
 describe('no key sender is reachable from the protected code (transitive, review 3040 F1)', () => {
   const libDir = path.dirname(CCD_ALIASES_LIB);
   const libs = fs.readdirSync(libDir).filter((f) => f.endsWith('.sh')).sort();
-  const fns = new Map<string, Fn[]>();
-  cutFunctions(ccdSource(), 'ccd/ccd', fns);
-  for (const f of libs) cutFunctions(fs.readFileSync(path.join(libDir, f), 'utf8'), `ccd/lib/${f}`, fns);
+  const fns = new Map<string, Fn[]>(), unseen: string[] = [];
+  cutFunctions(ccdSource(), 'ccd/ccd', fns, unseen);
+  for (const f of libs) cutFunctions(fs.readFileSync(path.join(libDir, f), 'utf8'), `ccd/lib/${f}`, fns, unseen);
   const src: Src = (n) => (fns.get(n) ?? []).map((d) => d.code).join('\n');
   const calls = new Map([...fns.keys()].map((n) => {
     const code = src(n);
@@ -172,6 +181,7 @@ describe('no key sender is reachable from the protected code (transitive, review
     expect(raw).not.toContain('_route_apply_now');
     expect(pathTo('_route_apply_now'), '_route_apply_now is not derived as a key sender').toContain(' -> ');
     expect(calls.get('_dispatch_swap')?.has('cmd_swap'), 'the self-call `ccd swap` is not an edge').toBe(true);
+    expect(unseen, 'a function header the cutter does not parse').toEqual([]);
   });
 
   it.each(ALLOW)('$from -> $to is an edge, meets its condition, and (a spawn) reaches only the two arms', (a) => {
