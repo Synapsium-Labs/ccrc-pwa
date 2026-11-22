@@ -474,7 +474,7 @@ describe('the model term (typed-repick)', () => {
   });
 
   it('while a hold stands its id is the target, seen or not; a session at the held id is current', () => {
-    const held = read({ model: X0, aliasId: X2, seenId: X2 }, { hold: { at: '2026-11-20T00:00:00Z', by: 'operator', model: X0 } });
+    const held = read({ model: X0, aliasId: X2, seenId: X2 }, { hold: { at: '2026-11-20T00:00:00Z', by: 'hand', model: X0 } });
     expect(modelFactOf(cand, held)).toEqual({ kind: 'behind', class: 'opus', from: X1, to: X0 });
     expect(modelFactOf({ cls: 'opus', model: X0 }, held)).toEqual({ kind: 'current' });
     // The alias's own id is no hand pick of another class: a session on X2 under the hold is behind the held id.

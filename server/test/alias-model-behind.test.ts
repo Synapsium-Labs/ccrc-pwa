@@ -90,7 +90,7 @@ describe('aliasSessionBehind, as doctor reads it today', () => {
   });
 
   it('while a hold stands the target is the held id, whatever the alias says', () => {
-    const held = adv({ hold: { at: MOVED, by: 'operator', model: X0 } });
+    const held = adv({ hold: { at: MOVED, by: 'hand', model: X0 } });
     expect(ask(session(), L, held)).toEqual({
       class: 'opus', from: X1, to: X0, movedAt: MOVED, turnAt: iso(TURN), renderAt: iso(TURN + 60_000),
     });
@@ -101,7 +101,7 @@ describe('aliasSessionBehind, as doctor reads it today', () => {
   });
 
   it('a hold that names no model is no target', () => {
-    expect(ask(session(), L, adv({ hold: { at: MOVED, by: 'operator' } }))).toBeNull();
+    expect(ask(session(), L, adv({ hold: { at: MOVED, by: 'hand' } }))).toBeNull();
   });
 
   it('a render not after its turn marker is not a reading of that turn', () => {
