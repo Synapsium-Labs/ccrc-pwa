@@ -94,9 +94,13 @@ export type AutoRollSkip = keyof typeof AUTO_ROLL_SKIP_MAP;
 export const AUTO_ROLL_SKIPS: readonly AutoRollSkip[] = Object.keys(AUTO_ROLL_SKIP_MAP) as AutoRollSkip[];
 export function autoRollSkipText(s: AutoRollSkip): string { return AUTO_ROLL_SKIP_MAP[s]; }
 
-/** Every kebab word this file spells as a literal (its skips, the opt-out suffix, the actor), for `mail-routes.test.ts`'s
- *  census of `server/src/coord`: none is a mail rejection or a route refusal. Derived, never re-spelled. */
-const AUTO_ROLL_KEBABS: ReadonlySet<string> = new Set<string>([...AUTO_ROLL_SKIPS, NO_ROLL_SUFFIX, ROLL_SWEEP_ACTOR]);
+/** Typed-repick: the verdict's act that asks the pass to read a lane's models, then ask again. */
+const READ_MODELS = 'read-models';
+
+/** Every kebab word this file spells as a literal (its skips, the opt-out suffix, the actor, the read-models act), for
+ *  `mail-routes.test.ts`'s census of `server/src/coord`: none is a mail rejection or a route refusal. Derived, never
+ *  re-spelled. */
+const AUTO_ROLL_KEBABS: ReadonlySet<string> = new Set<string>([...AUTO_ROLL_SKIPS, NO_ROLL_SUFFIX, ROLL_SWEEP_ACTOR, READ_MODELS]);
 export function isAutoRollKebab(token: string): boolean { return AUTO_ROLL_KEBABS.has(token); }
 
 /** The setting and the role, the filter every automatic roll applies before it measures anything. */
@@ -253,7 +257,7 @@ export type AutoRollVerdict =
   | { readonly act: 'roll'; readonly idleMs: number; readonly model?: { readonly class: ModelClass; readonly from: string; readonly to: string } }
   | { readonly act: 'measure' }
   /** Behind on nothing it has read, every other gate passed, and its lane's models not read yet: read them, then ask again. */
-  | { readonly act: 'read-models' }
+  | { readonly act: typeof READ_MODELS }
   | { readonly act: 'current' }
   | { readonly act: 'skip'; readonly reason: Exclude<AutoRollSkip, 'idle-gate'> }
   | { readonly act: 'skip'; readonly reason: 'idle-gate'; readonly hold: HibernateHold };
@@ -294,7 +298,7 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
     return skip({ act: 'skip', reason: 'hibernation-due' });
   }
   if (i.statusUpdatedAt === null || i.now - i.statusUpdatedAt < ROLL_COMPACT_QUIET_MS) return skip({ act: 'skip', reason: 'compacting' });
-  if (maybe) return { act: 'read-models' };
+  if (maybe) return { act: READ_MODELS };
   if (modelBehind && i.model.kind === 'behind') {
     return { act: 'roll', idleMs: gate.idleMs, model: { class: i.model.class, from: i.model.from, to: i.model.to } };
   }
