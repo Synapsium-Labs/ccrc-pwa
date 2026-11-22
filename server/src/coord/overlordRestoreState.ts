@@ -6,8 +6,8 @@
 // `restoreGeneration()`, and the renewal readings read `termRaised()`.
 //
 // THE TRANSACTION (Task 8), on the coordination serialiser (the door's):
-//   0. before it, an `unmeasured` guard is measured again (`remeasure`, its contract), and the torn-tail heal runs through its
-//      owner (`healTornTail`, the kernel's rule), so a tail the boot would have healed is healed, never read as a cut;
+//   0. before it, refuse an unmeasured privacy head. A journal/rows `unmeasured` guard is measured again (`remeasure`), and the
+//      torn-tail heal runs through its owner (`healTornTail`), so a tail the boot would have healed is healed, never read as a cut;
 //   1. inside one `tx()`, gather the facts (the guard, the verified file, the head row, the designation and ladder rows, and the
 //      witness facts) and ask `confirmRestorePlan`; a refusal or "nothing waits" writes nothing;
 //   2-3. `appendConfirmInTx`: a torn tail the heal refused, after records that reach the head row, is set aside first; then the
@@ -25,7 +25,7 @@ import { authorityCoherence, type AuthorityState } from './overlordAuthorityCohe
 import type { OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './overlordAuthorityGuard.js';
 import {
-  confirmRestorePlan, NARROWEST_RESTORE_SIDE,
+  CONFIRM_REFUSED, confirmRestorePlan, NARROWEST_RESTORE_SIDE,
   type ConfirmEpochRead, type ConfirmPrivacyRead, type ConfirmToldRead, type ConfirmWitnessRead, type RestoreSide, type TermRaised,
 } from './overlordRestore.js';
 import { applyDesignationRestoreInTx, designationRead } from './overlordDesignationStore.js';
@@ -123,6 +123,9 @@ export class OverlordRestoreState {
   confirm(actor: RecordedActor, opKey: string, at: number): ConfirmAnswer {
     const { db, journal, guard, witness } = this.deps;
     try {
+      if (this.privacyHeadFence() !== null) {
+        return { ok: false, refusal: 'journal-unreadable', detail: CONFIRM_REFUSED.privacy };
+      }
       guard.remeasure();
       journal.healTornTail(db);
     } catch { /* the plan reads the file and the guard as they now stand */ }
@@ -199,10 +202,19 @@ export class OverlordRestoreState {
     return d.term > gen.term ? 'raised' : 'not-raised';
   }
 
-  /** The guard's state, for the door's answer and the banner's read: an `unmeasured` guard is measured again first (its
-   *  `remeasure` contract), so a transient read error at boot clears without a restart. */
+  /** The authority journal can remeasure itself and its rows, not the witness exchange's privacy head. */
+  private privacyHeadFence() {
+    const state = this.deps.guard.state();
+    return state.kind === 'unmeasured' && state.why === 'privacy-head' ? state : null;
+  }
+
+  /** The door and banner see the privacy fence as-is; a transient journal/rows error can clear without restarting. */
   authority(): AuthorityState {
-    try { this.deps.guard.remeasure(); } catch { /* the state stands as it was */ }
+    try {
+      const fence = this.privacyHeadFence();
+      if (fence !== null) return fence;
+      this.deps.guard.remeasure();
+    } catch { /* the state stands as it was */ }
     return this.deps.guard.state();
   }
 }

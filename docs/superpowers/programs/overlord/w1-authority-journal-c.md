@@ -2,8 +2,8 @@
 
 The task note of authority journal PR C (plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-authority-journal.md`, Tasks 8
 and 9). The coordinator folds it into the programme ledger. Departures are named by slug; the coordinator mints their numbers.
-The fix round after review 3334 changed what Confirm does when the journal is damaged. The sections below describe the PR after
-that round.
+Review 3334 changed what Confirm does when the journal is damaged. Review 3373 narrowed what the restore doors can remeasure:
+a privacy-head fence is not a journal verdict.
 
 ## What shipped
 
@@ -47,8 +47,8 @@ and 0 least of all. So `confirmRestorePlan` now:
 
 - **refuses** over a `malformed` file, and over records that do not reach the head row (`missing` with a head row, `behind`,
   `diverged`). It writes nothing, cuts nothing and keeps every byte. A higher witness does not change the answer;
-- **heals first**: the door runs the torn-tail heal through its owner (`healTornTail`, the kernel's rule) before it reads the
-  facts. It also measures an `unmeasured` guard again first, under the guard's `remeasure` contract;
+- **heals first when allowed**: unless the guard holds an unmeasured privacy head, Confirm remeasures an unmeasured authority
+  journal or rows, and runs the torn-tail heal through its existing owner before it reads the facts;
 - **cuts only a torn tail** that the heal refused, and only after records that reach the head row. It uses the kernel's tail cut,
   then appends after the last verified record, and the journal side is the records' fold.
 
@@ -102,8 +102,8 @@ restore is still bounded only by the witnesses that answered since boot. No new 
 - **`confirm-inserts-an-absent-designation-row`**: with no designation row, Confirm inserts one holding the raised term, so a
   later designate raises the term above the journal's.
 - **`restore-read-door`**: the banner reads the guard through a second door, `GET /api/overlord/restore` (the gate with no
-  step-up). It measures an `unmeasured` guard again first (review 3334 A3). The plan named only the Confirm door; question 14's
-  banner needs the state to show and hide.
+  step-up). A transient journal or rows read error is remeasured (review 3334 A3). The plan named only the Confirm door;
+  question 14's banner needs the state to show and hide.
 - **`confirm-file-moved-refuses-conflict`**: `appendConfirmInTx` re-checks that the file's head is still the one the plan read,
   and refuses `changed` (the door's 409 `conflict`) otherwise, writing nothing.
 - **`new-chain-is-record-one`**: the record's `newChain` is true exactly when it is record 1, over an empty or absent file.
@@ -114,8 +114,13 @@ restore is still bounded only by the witnesses that answered since boot. No new 
   with the kernel's tail cut. The heal refused it because the head row was older than the last record. The plan's whole-file cut
   would have dropped the verified records' fold from the stricter-of (review 3334 F3). After a failed append the evidence is kept,
   so the retry confirms above the journal's last generation.
-- **`confirm-heals-and-remeasures-first`**: before its transaction, Confirm measures an `unmeasured` guard again and runs the
-  torn-tail heal through its owner. Over a coherent guard, a healable tail is healed and nothing waits.
+- **`confirm-heals-and-remeasures-first`**: unless the privacy-head fence stands, Confirm remeasures an unmeasured journal or
+  rows and runs the torn-tail heal through its owner before the transaction. Over a coherent guard, a healable tail is healed
+  and nothing waits.
+- **`restore-preserves-the-privacy-head-fence`** (review 3373 F1): journal and row evidence cannot clear `unmeasured: privacy-head`.
+  `authority()` returns the fence without remeasurement; `confirm()` refuses before remeasurement, healing or a transaction.
+  Both fixture controls failed before the fix: the read reported `coherent`, and Confirm healed a tail and answered unchanged.
+  They now hold the fence; Confirm keeps the bytes and rows intact and offers nothing. Existing journal recovery cases still pass.
 - **`restore-generation-read-fresh`**: `restoreGeneration()` reads and verifies the file on every call, with no cache. It answers
   `unmeasured` unless both the guard and the file against its head row read coherent, and also when the read throws. The plan's
   cache refreshed after each append is left for the verified-head cache of the plan's Later list. Its per-insert cost is
@@ -135,31 +140,32 @@ restore is still bounded only by the witnesses that answered since boot. No new 
 - **Swap the stand-in.** Build the exchange before `OverlordRestoreState`, or bind its witness late, and replace
   `preWitnessFacts` with it.
   - Adapt B's `PrivacyJournalHead` to `ConfirmPrivacyRead`.
-  - B's `epoch()` must not count a torn tail, as the stand-in does not.
-  - Pin that B's epoch and the stand-in's agree while the privacy head is absent.
+  - Pin that B's epoch and the stand-in's agree while the privacy head is absent: carry the last verified Confirm epoch plus
+    the verified records after it, not the raw sequence or a torn tail.
+  - Through the real exchange, pin that an unmeasured privacy head sets the fence and neither restore door clears it using only
+    authority journal evidence. An absent privacy head is not an unmeasured one.
 - **Higher tuple.** B's `highest()` is every witness that answered since boot. Pin through the real exchange that a console with
   a higher epoch and generation raises both on the next Confirm.
 - **Exactly one notification after commit.** Keep B's `appended?.()` out of `writeHeadRow`: Confirm already calls `offerNow()`
-  once after commit. Pin that a Confirm triggers one exchange and `appendInTx` still triggers one.
+  once after commit. Prove through the real exchange that Confirm offers once after commit and ordinary `appendInTx` still offers once.
 - **The two cases that need B's exchange.** After an in-boot Confirm, the console's next exchange reads `stale` and takes the new
   tuple. `no-witness-since-boot` stays until the next boot.
-- **Pass seq-a's argument.** Seq-a's `endOverlordGeneration` gains an `at` argument; pass it in `applyDesignationRestoreInTx`.
+- **Pass Sequence A's argument and re-pin the census.** Whichever lands second passes `at` to `endOverlordGeneration` in
+  `applyDesignationRestoreInTx` and re-pins the affected census expectations against the combined tree.
 
 ## Residuals
 
-- **A malformed journal, or one missing records its head row attests, cannot be confirmed.** Its doors stay refused
-  (`authority-rolled-back`) until a bound can be measured. Nothing in W1 measures one there:
-  - the line count bounds sequences only;
-  - a witness only raises;
-  - carrying the counters beside the head row would need a migration, which this round rules out.
-
-  This is fail-closed, as the fix round directs. It needs a ruling on how such a journal is recovered without hand work.
+- **Recovery without a verified journal bound is unresolved.** Confirm cannot complete in four cases: a malformed journal,
+  a missing journal with a standing head row, a journal behind that row, or a diverged chain. The doors stay refused
+  (`authority-rolled-back`); Confirm retains the existing evidence. Line counts bound sequences only, and a higher witness
+  cannot replace the missing verified history. W1 adds no recovery path for these cases and requires no operator action.
+  The coordinator owns the reconciliation of plan Q7, Q17 and Task 8 with spec §7.6 in the separate ledger fold.
 - **A tail cut can fail after it began** (its bytes are already kept aside). Confirm then answers `journal-unwritable`, saying
   nothing was appended, and the retry confirms. This is pinned with a failed truncation.
 - **The banner is not mounted yet.** `RestoreBanner` is mounted nowhere until home B adds its one line, so the Confirm control is
   unreachable from the console until then (the plan's question 14).
-- **Tests were written after the code.** The server tests, both the first build's and this fix round's, came after the code, not
-  red first. Every guard was then mutation-measured, as above. The banner's test was red first.
+- **Test chronology.** The first build's and review 3334 round's server tests came after the code, with mutation evidence
+  recorded above. The banner test and review 3373's two privacy-fence controls were red first.
 - **The rules-mixed judge reason cannot be split out.** `box-token-census.test.ts` ("CLAUDE.md's box-token bullet is TRUE, not
   merely present") holds `CLAUDE.md`'s box-token bullet to name every session-only door. So the sentence for the two doors lands
   with them. Measured: with `CLAUDE.md` left at the merge base, that case is red.

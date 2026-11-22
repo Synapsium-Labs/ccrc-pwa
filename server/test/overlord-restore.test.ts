@@ -32,6 +32,24 @@ function mintBody(r: ReturnType<typeof rig>, sessionId: string): void {
 const liveOverlordGenerations = (r: ReturnType<typeof rig>) =>
   r.db.prepare("SELECT sessionId FROM continuity_generations WHERE identity = 'overlord' AND state <> 'ended'").all();
 
+function withPrivacyHeadFence(r: ReturnType<typeof rig>) {
+  // Stand in for B's witness input, which C cannot set yet. If asked to remeasure, the real guard still
+  // performs its journal-only heal and measurement; this port exposes that result in place of the fence.
+  r.guard.writerFailed('journal-unreadable');
+  let fenced = true;
+  const guard = {
+    state: () => fenced ? { kind: 'unmeasured', why: 'privacy-head' } as const : r.guard.state(),
+    remeasure: () => { r.guard.remeasure(); fenced = false; },
+    confirmed: () => { r.guard.confirmed(); fenced = false; },
+    writerFailed: r.guard.writerFailed.bind(r.guard),
+  };
+  const state = new OverlordRestoreState({
+    db: r.db, journal: r.journal, guard,
+    witness: { ...preWitnessFacts(r.journal), offerNow: () => { r.offers += 1; } },
+  });
+  return { guard, state };
+}
+
 describe('restoreStricter (Task 8\'s table)', () => {
   for (const [title, run] of Object.entries(restoreStricterCases(restoreModule))) it(title, run);
 });
@@ -39,6 +57,40 @@ describe('confirmRestorePlan (Task 8\'s transaction, step 1)', () => {
   for (const [title, run] of Object.entries(confirmRestorePlanCases(restoreModule))) it(title, run);
 });
 
+
+describe('Restore paths keep an unmeasured privacy head fenced (review 3373 F1)', () => {
+  it('the authority read preserves the privacy fence even when the authority journal is coherent', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    expect(r.journal.measure(r.db)).toEqual({ kind: 'coherent' });
+    const { guard, state } = withPrivacyHeadFence(r);
+
+    expect(state.authority()).toEqual({ kind: 'unmeasured', why: 'privacy-head' });
+    expect(guard.state()).toEqual({ kind: 'unmeasured', why: 'privacy-head' });
+  });
+
+  it('Confirm keeps the privacy fence and leaves a healable authority tail untouched', () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const { guard, state } = withPrivacyHeadFence(r);
+    const leaf = path.join(r.dir, OVERLORD_AUTHORITY_BASENAME);
+    appendFileSync(leaf, '{"partial');
+    const bytes = readFileSync(leaf);
+    const head = headRow(r);
+    const designation = designationRead(r.db);
+    const ladder = ladderRows(r.db);
+
+    const answer = state.confirm(OPERATOR, 'privacy-fenced', NOW);
+    expect(answer).toMatchObject({ ok: false, refusal: 'journal-unreadable' });
+    expect(guard.state()).toEqual({ kind: 'unmeasured', why: 'privacy-head' });
+    expect(readFileSync(leaf)).toEqual(bytes);
+    expect(existsSync(path.join(r.dir, OVERLORD_AUTHORITY_TORN_DIR))).toBe(false);
+    expect(headRow(r)).toEqual(head);
+    expect(designationRead(r.db)).toEqual(designation);
+    expect(ladderRows(r.db)).toEqual(ladder);
+    expect(r.offers).toBe(0);
+  });
+});
 
 describe('Confirm the restore: the transaction', () => {
   it('a coherent guard over a coherent file answers changed: false and writes nothing', () => {
