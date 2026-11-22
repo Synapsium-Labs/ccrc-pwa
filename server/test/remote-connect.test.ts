@@ -1155,7 +1155,7 @@ describe('FleetClient.onReady — the host report and the peer (Overlord W1, the
     let live: WebSocket | null = null;
     let clientPort = 0;
     const ready = (): void => { live?.send(JSON.stringify({ t: 'ready', v: 1, ...extra() })); };
-    wss = await new Promise<WebSocketServer>((resolve) => { const s = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => resolve(s)); });
+    wss = await new Promise<WebSocketServer>((resolve) => { const s: WebSocketServer = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => { resolve(s); }); });
     wss.on('connection', (ws, req) => {
       live = ws;
       clientPort = req.socket.remotePort ?? 0;

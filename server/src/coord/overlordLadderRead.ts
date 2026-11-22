@@ -12,7 +12,7 @@ import type { LadderCauseRow, LadderLatchCause, Rung } from '../../../shared/ove
 import type { AuthorityAppender, BrakeActor, LadderWrite } from './overlordLadderStore.js';
 import type { Clock, Entropy } from '../time/ports.js';
 import type { IsolationRead } from '../../../shared/isolation.js';
-import { isolationCondition } from '../isolationWord.js';
+import { ISOLATION_NOT_WIRED, isolationCondition } from '../isolationWord.js';
 
 type LatchTable = Readonly<Record<string, LadderCauseRow & { readonly kind: 'latch'; readonly effect: { readonly kind: 'cap'; readonly cap: Rung } }>>;
 /** The only delivery-facing latch raise: cap and notice belong to the cause row, not the caller. */
@@ -83,7 +83,7 @@ export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<C
     },
     // The isolation word (Overlord W1, §7.4, Table 7.5a): `shared-user` stands, a separate word lifts, and `unmeasured`
     // (an older agent, a down link, no reader wired) is unmeasured, which caps as `shared-user` does.
-    'shared-user': () => isolationCondition(deps.isolation?.read() ?? { kind: 'unmeasured', why: 'not-wired' }),
+    'shared-user': () => isolationCondition(deps.isolation?.read() ?? ISOLATION_NOT_WIRED),
   };
 }
 

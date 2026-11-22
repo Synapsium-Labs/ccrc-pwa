@@ -141,6 +141,9 @@ export function hostRelation(link: LinkFacts): AgentHostRelation {
   return link.link === 'ready' && linkKernel(link) === 'same' ? 'same-host' : 'unmeasured';
 }
 
+/** What a consumer reads when no reader is wired (a test's deps, a script): unmeasured, which acts as `shared-user`. */
+export const ISOLATION_NOT_WIRED: IsolationRead = { kind: 'unmeasured', why: 'not-wired' };
+
 /** The ladder's input: `shared-user` stands, a separate word lifts, and `unmeasured` is unmeasured, which caps as
  *  `shared-user` does (the ladder's question 17). */
 export function isolationCondition(read: IsolationRead): ConditionReading {
