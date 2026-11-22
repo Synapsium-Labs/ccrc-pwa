@@ -103,12 +103,12 @@ describe('the sub table', () => {
     expect(testboxAdminIsLong('settings-box', { settings: {}, whenIdle: true })).toBe(true);
     expect(testboxAdminIsLong('status', { whenIdle: true })).toBe(false);
   });
-  it('a read has no act and every other sub names an act the ledger knows', () => {
+  it('reads and the capture copy have no act; every other sub names an act the ledger knows', () => {
     for (const s of SUBS) {
       const act = TESTBOX_ADMIN_SUBS[s].act;
       if (act !== null) expect(TESTBOX_ACTS, s).toContain(act);
     }
-    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].act === null).sort()).toEqual(['preflight', 'probe', 'read', 'status']);
+    expect(SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].act === null).sort()).toEqual(['build-copy', 'preflight', 'probe', 'read', 'status']);
   });
   it('the acts and outcomes are the ledger\'s closed vocabularies', () => {
     expect([...TESTBOX_ACTS]).toEqual([

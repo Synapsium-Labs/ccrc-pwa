@@ -69,6 +69,7 @@ import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
 import { testboxCaptureTransport } from './testboxCapture.js';
+import { testboxBuildCopy } from './testboxBuildCopy.js';
 import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
@@ -381,6 +382,8 @@ deps.testboxAudit = testboxAudit;
 deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
 // D-8289: the capture queue's transport, over the fleet connection's `testbox-capture` op (build capture runner spec §2.5).
 deps.buildCapture = testboxCaptureTransport(() => deps.io);
+// Spec §2.2: the copy the lane asks for after a `build-absent`, over the same one admin lane arm.
+deps.buildCopy = testboxBuildCopy(() => deps.testboxAdmin);
 // The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);

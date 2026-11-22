@@ -8,7 +8,7 @@ import path from 'node:path';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
-import { buildTrustOf } from '../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_NOT_SENT_MAP, buildTrustOf } from '../../shared/claudeBuildTrust.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -129,12 +129,13 @@ describe('the record\'s writers (D-8289)', () => {
   });
 });
 
+const ADD_FAILS = /ALTER TABLE claude_builds ADD COLUMN fails(?![A-Za-z0-9_])/;
+const FAILS_SLOT = MIGRATIONS.findIndex((m) => ADD_FAILS.test(m)) + 1;
+
 describe('claude_builds.fails is one more entry: one column and its backfill (slug capture-retry-ceiling)', () => {
-  const ADD = /ALTER TABLE claude_builds ADD COLUMN fails(?![A-Za-z0-9_])/;
-  const FAILS_SLOT = MIGRATIONS.findIndex((m) => ADD.test(m)) + 1;
   it('the slot is found by its DDL, after the table, once', () => {
     expect(FAILS_SLOT).toBeGreaterThan(SLOT);
-    expect(MIGRATIONS.filter((m) => ADD.test(m)).length).toBe(1);
+    expect(MIGRATIONS.filter((m) => ADD_FAILS.test(m)).length).toBe(1);
   });
   it('a failed row from before the entry counts its one failure; every other row counts none; no table or index is added', () => {
     const p = path.join(mkTmp('ccrc-mig-claude-fails-'), '.ccrc', 'coord.db');
@@ -152,5 +153,47 @@ describe('claude_builds.fails is one more entry: one column and its backfill (sl
     ]);
     expect(raw.prepare("SELECT DISTINCT fails FROM claude_builds WHERE source = 'rig'").all()).toEqual([{ fails: 0 }]);
     raw.close();
+  });
+});
+
+// Capture runner spec 2026-11-22 §2.2, §2.5 Table 6: the not-sent words widen, so `notSent`'s CHECK is rebuilt (SQLite cannot
+// alter one). The entry is found by its DDL, never by number, so a branch that lands after another moves up untouched.
+describe('the not-sent words widen by a table rebuild (capture runner PR 2)', () => {
+  const REBUILD = /CREATE TABLE claude_builds_\d+ \(/;
+  const AT = MIGRATIONS.findIndex((m) => REBUILD.test(m)) + 1;
+  const COLUMNS = 'build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails';
+
+  it('rebuilds the table once, after the failed-verdict counter is added', () => {
+    expect(AT, 'no entry rebuilds claude_builds').toBeGreaterThan(FAILS_SLOT);
+    expect(MIGRATIONS.filter((m) => REBUILD.test(m))).toHaveLength(1);
+  });
+
+  it('every row survives as it stood, the rig seed included, and the table is claude_builds again with nothing left beside it', () => {
+    const p = path.join(mkTmp('ccrc-mig-claude-builds-rebuild-'), '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => { for (let v = 0; v < AT - 1; v++) raw.exec(MIGRATIONS[v]!); raw.exec(`PRAGMA user_version = ${AT - 1}`); });
+    raw.prepare(`INSERT INTO claude_builds (${COLUMNS}) VALUES ('2.1.320', 'fleet', 'queued', 0, 100, 2, 150, 'no-runner', NULL, NULL, 1)`).run();
+    raw.prepare(`INSERT INTO claude_builds (${COLUMNS}) VALUES ('2.1.318', 'fleet', 'fail', 0, 90, 3, 140, NULL, 145, 'replay: 1 failed', 2)`).run();
+    const before = raw.prepare(`SELECT ${COLUMNS} FROM claude_builds ORDER BY build`).all();
+    const names = (): string[] => (raw.prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all() as unknown as { name: string }[]).map((r) => r.name);
+    const had = names();
+    raw.exec(MIGRATIONS[AT - 1]!);
+    expect(raw.prepare(`SELECT ${COLUMNS} FROM claude_builds ORDER BY build`).all()).toEqual(before);
+    expect(names()).toEqual(had);
+    expect(before).toHaveLength(6);
+    raw.close();
+  });
+
+  it('the CHECK takes each of the nine words and still refuses any other', () => {
+    const c = store();
+    c.noteClaudeBuildsSeen(['2.1.320'], 100);
+    for (const w of Object.keys(BUILD_CAPTURE_NOT_SENT_MAP) as (keyof typeof BUILD_CAPTURE_NOT_SENT_MAP)[]) {
+      expect(c.markClaudeBuildAttempt('2.1.320', 200, w), w).toBe(true);
+      expect(c.claudeBuilds().find((r) => r.build === '2.1.320'), w).toMatchObject({ attempts: 0, notSent: w, lastAttemptAt: 200 });
+    }
+    for (const bad of ['unanswered', 'sent', 'copied', 'No-Runner']) {
+      expect(() => c.db.prepare(`INSERT INTO claude_builds (build, source, capture, seenAt, notSent) VALUES ('2.1.400', 'fleet', 'queued', 1, '${bad}')`).run(), bad).toThrow();
+    }
   });
 });

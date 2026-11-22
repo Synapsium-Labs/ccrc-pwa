@@ -126,23 +126,8 @@ _tba_phases() {   # <sub> -> its phases in order, one per line; nothing for a su
   esac
 }
 
-# The sub table: one row per field, `flag grammar required repeatable`. Nothing for a sub that takes no field; rc 1 for
-# a word that is no sub. `required` is 1, 0, or `+`: one of the sub's `+` fields must be given (D-8336: a settings call changes a
-# value, resets one to its default, or both).
-_tba_fields() {   # <sub>
-  case "${1-}" in
-    status|read|probe|preflight|cancel|repair|apply-release|key-rotate|key-revoke|tools-home) ;;
-    key) printf '%s\n' '--address address 1 0' '--port port 0 0' '--login user 0 0' '--source address 0 0' ;;
-    pin) printf '%s\n' '--fingerprint fingerprint 1 0' ;;
-    connect) printf '%s\n' '--set setting-box 1 1' '--repo repo 1 1' ;;
-    settings-fleet) printf '%s\n' '--set setting-fleet + 1' '--unset unset-fleet + 1' ;;
-    settings-box) printf '%s\n' '--set setting-box + 1' '--unset unset-box + 1' '--when-idle true 0 0' ;;
-    parity) printf '%s\n' '--pr pr 0 1' ;;
-    disconnect) printf '%s\n' '--replace true 0 0' ;;
-    build-copy) printf '%s\n' '--version version 1 0' ;;
-    *) return 1 ;;
-  esac
-}
+# shellcheck source=testbox-admin-fields
+. "$TBA_HERE/testbox-admin-fields" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/testbox-admin-fields, so no argument can be checked" >&2; exit 1; }
 
 # ── the grammars: the bash twin of shared/testbox-admin.ts's ─────────────────────────────────────────────────
 _tba_word_ok() {   # <v> -> 0 iff it can ride one word: non-empty, no control byte, not `-`-led, no `..` segment

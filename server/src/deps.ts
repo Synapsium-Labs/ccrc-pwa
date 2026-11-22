@@ -43,7 +43,7 @@ import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { TestboxAudit } from './testboxAudit.js';
 import type { TestboxAdminOps } from './testboxAdmin.js';
-import type { BuildCaptureTransport } from './buildCaptureLane.js';
+import type { BuildCaptureTransport, BuildCopyTransport } from './buildCaptureLane.js';
 import type { AccountOps } from './accounts/ops.js';
 import type { AuthAttempts } from './accounts/attempts.js';
 import type { FetchLike } from './linear/client.js';
@@ -256,6 +256,9 @@ export interface Deps {
   /** D-8289: the capture queue's transport to the test box, built in `index.ts`. Absent (a test, a script): builds are
    *  recorded and no job is sent. */
   buildCapture?: BuildCaptureTransport;
+  /** Build capture runner spec 2026-11-22 §2.2: the copy of a build the test box refused `build-absent`, over the admin lane,
+   *  built in `index.ts`. Absent (a test, a script): such a refusal is recorded `no-admin-lane`, and nothing is copied. */
+  buildCopy?: BuildCopyTransport;
   /** Mid-turn mail (plan Task 4.4): called by `POST /api/mail/:id/ack` after an ack lands, never awaited; `index.ts`
    *  composes it as the watcher's kick of the mailhold row, so a released hold's marker clears at the next tick. Absent
    *  (a test, a script): nothing is kicked, and the projection's own beat clears it. */

@@ -779,9 +779,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[117] (delegation_activities.endBasis, what a broker activity's end rests on, session helpers S1, D-8830),
     // and MIGRATIONS[118] (claude_builds.fails, a build's failed captures, so ccrc retries up to a ceiling),
     // and MIGRATIONS[119] (continuity_quiz_status, the weekly unattended replay quiz's last word, run 3212),
-    // and MIGRATIONS[120] (coordinator_state.capMode, the run cap derived from the machine, D-8920).
-    expect(COORD_SCHEMA_VERSION).toBe(121);
-    expect(MIGRATIONS.length).toBe(121);
+    // and MIGRATIONS[120] (coordinator_state.capMode, the run cap derived from the machine, D-8920),
+    // and MIGRATIONS[121] (the claude_builds rebuild for the capture refusal words).
+    expect(COORD_SCHEMA_VERSION).toBe(122);
+    expect(MIGRATIONS.length).toBe(122);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -928,8 +929,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[117] (delegation_activities.endBasis, D-8830),
     // and MIGRATIONS[118] (claude_builds.fails),
     // and MIGRATIONS[119] (continuity_quiz_status, run 3212),
-    // and MIGRATIONS[120] (coordinator_state.capMode, D-8920); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(121);
+    // and MIGRATIONS[120] (coordinator_state.capMode, D-8920),
+    // and MIGRATIONS[121] (the claude_builds rebuild); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(122);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
