@@ -3,11 +3,11 @@
 // run under Node's type-stripping flag (no compile step). The tests' launcher pipes the build's stdin; the tmux launcher
 // is run once, on a test-only socket, when a `tmux` binary is on PATH.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CAPTURE_TOKEN, capturePaths, captureBuildsDir, captureEnv } from '../src/testbox/capture.js';
+import { CAPTURE_TOKEN, capturePaths, captureBuildsDir, captureEnv, captureWrites, staleCaptureDirs } from '../src/testbox/capture.js';
 import { recorderPath } from '../src/testbox/captureRecord.js';
 import { CaptureRunner, tmuxLauncher, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
@@ -138,6 +138,24 @@ describe('the capture environment (spec Table 3): no credential, no updater, no 
     expect([...env.keys()].filter((k) => /KEY|SECRET|OAUTH|CREDENTIAL/.test(k))).toEqual([]);
   });
 
+  it('TMPDIR is the capture\'s own tmp directory, inside its scratch directory and in the write guard\'s list', () => {
+    const p = capturePaths('/srv/box', 'ab'.repeat(16), GOOD);
+    expect(p.tmp).toBe(`${p.dir}/tmp`);
+    expect(new Map(captureEnv(p, 4321, null)).get('TMPDIR')).toBe(p.tmp);
+    expect(captureWrites(p)).toContain(p.tmp);
+  });
+
+  it('the runner makes that directory, mode 0700, before the build starts', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    let mode: number | null = null;
+    const watching: CaptureLauncher = {
+      start: async (spec) => { mode = statSync(new Map(spec.env).get('TMPDIR')!).mode & 0o777; return pipeLauncher.start(spec); },
+    };
+    await runner(root, { launcher: watching }).run('tmpd', GOOD);
+    expect(mode).toBe(0o700);
+  }, 120_000);
+
   it('the runner hands the launcher exactly that environment, as the whole of it', async () => {
     const root = freshRoot();
     place(root, GOOD);
@@ -206,4 +224,141 @@ describe('the tmux launcher', () => {
       spawnSync(REAL_TMUX!, ['-L', 'ccrc-capture', 'kill-server'], { timeout: 10_000, env: { TMUX_TMPDIR: sockDir } });
     }
   }, 120_000);
+});
+
+/** A launcher whose build is a stand-in: nothing is run, the answers are the test's. */
+const inert = (o: { typeThrows?: boolean; alive: boolean }): CaptureLauncher => ({
+  start: async () => ({
+    type: async () => { if (o.typeThrows === true) throw new Error('tmux send-keys exited 1'); },
+    alive: async () => o.alive,
+    stop: async () => undefined,
+  }),
+});
+
+describe('the verdict cut: a box fault is no verdict, a fault of the build is a fail (review 3226 F1, F2)', () => {
+  it('a type that throws while the build is gone: the build exited mid-drive, a fail naming the events never recorded', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    let typed = 0;
+    const exits: CaptureLauncher = {
+      start: async (spec) => {
+        const b = await pipeLauncher.start(spec);
+        return { ...b, type: async (t) => { typed++; throw new Error(`gone: ${t}`); }, alive: async () => false };
+      },
+    };
+    const r = await runner(root, { launcher: exits, stepTimeoutMs: 8000 }).run('typegone', GOOD);
+    expect(typed).toBe(1);
+    expect(r.detail).toBeNull();
+    expect(r.result?.pass).toBe(false);
+    expect(r.result?.output).toContain('UserPromptSubmit');
+    expect(r.result?.output).toContain('drive: did not finish every step');
+    expect(gone(root, 'typegone', GOOD)).toBe(true);
+  }, 120_000);
+
+  it('a type that throws while the build is alive: the launcher could not type, no verdict', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const broken: CaptureLauncher = {
+      start: async (spec) => {
+        const b = await pipeLauncher.start(spec);
+        return { ...b, type: async () => { throw new Error('tmux send-keys exited 1'); }, alive: async () => true };
+      },
+    };
+    const r = await runner(root, { launcher: broken, stepTimeoutMs: 8000 }).run('typelive', GOOD);
+    expect(r.result).toBeNull();
+    expect(r.detail).toContain('launcher could not type into the build');
+    expect(gone(root, 'typelive', GOOD)).toBe(true);
+  }, 120_000);
+
+  it('an alive() that throws reads as not alive', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const l: CaptureLauncher = {
+      start: async (spec) => {
+        const b = await pipeLauncher.start(spec);
+        return { ...b, type: async () => { throw new Error('x'); }, alive: async () => { throw new Error('tmux timed out'); } };
+      },
+    };
+    const r = await runner(root, { launcher: l, stepTimeoutMs: 8000 }).run('alivethrows', GOOD);
+    expect(r.result?.pass).toBe(false);
+  }, 120_000);
+
+  it('a build that is never alive and records nothing by the SessionStart deadline: no verdict, a box fault', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const r = await runner(root, { launcher: inert({ alive: false }), stepTimeoutMs: 300 }).run('deadnothing', GOOD);
+    expect(r.result).toBeNull();
+    expect(r.detail).toContain('exited before it recorded anything');
+    expect(gone(root, 'deadnothing', GOOD)).toBe(true);
+  });
+
+  it('a build that is alive and records nothing by the deadline: a fail, a live build with its events missing', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const r = await runner(root, { launcher: inert({ alive: true }), stepTimeoutMs: 300, stopWaitMs: 200 }).run('livenothing', GOOD);
+    expect(r.detail).toBeNull();
+    expect(r.result?.pass).toBe(false);
+    expect(r.result?.output).toContain('SessionStart');
+  });
+});
+
+describe('the cleanup never replaces the answer and never races the build (review 3226 F10)', () => {
+  it('a removal that throws still returns the verdict', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const r = await runner(root, { remove: () => { throw new Error('EBUSY'); } }).run('rmthrows', GOOD);
+    expect(r.detail).toBeNull();
+    expect(r.result?.pass).toBe(true);
+  }, 120_000);
+
+  it('the directory is removed only after the build is gone, once stop has been asked', async () => {
+    const root = freshRoot();
+    place(root, NEVER_EXITS);
+    let stopAt = 0;
+    let aliveAtRemove: boolean | null = null;
+    const slow: CaptureLauncher = {
+      start: async (spec) => {
+        const b = await pipeLauncher.start(spec);
+        return {
+          ...b,
+          // Gone only 400 ms after stop is asked, and always alive before.
+          alive: async () => (stopAt === 0 ? await b.alive() : Date.now() - stopAt < 400),
+          stop: async () => { stopAt = Date.now(); await b.stop(); },
+        };
+      },
+    };
+    const r = await runner(root, {
+      launcher: slow, exitTimeoutMs: 800,
+      // The never-exiting stand-in: the drive ends by its exit deadline, so stop is asked with the build still running.
+      remove: () => { aliveAtRemove = Date.now() - stopAt < 400; },
+    }).run('stopwait', NEVER_EXITS);
+    expect(r.result?.pass).toBe(false);
+    expect(stopAt).toBeGreaterThan(0);
+    expect(aliveAtRemove).toBe(false);
+  }, 120_000);
+
+  it('a failed new-session leaves no tmux server: kill-server follows it on the same socket', () => {
+    const dir = mkTmp('ccrc-faketmux-');
+    const log = path.join(dir, 'argv.log');
+    const bin = path.join(dir, 'tmux');
+    writeFileSync(bin, `#!/bin/sh\necho "$*" >> '${log}'\ncase "$*" in *new-session*) echo boom >&2; exit 1;; esac\nexit 0\n`, { mode: 0o755 });
+    return tmuxLauncher(bin).start({ binary: '/b', cwd: dir, env: [['PATH', '/usr/bin:/bin']], socket: 'ccrc-capture', session: 'capture' }).then(
+      () => { throw new Error('start should have failed'); },
+      (e: unknown) => {
+        expect(String(e)).toContain('new-session exited 1');
+        const lines = readFileSync(log, 'utf8').trim().split('\n');
+        expect(lines).toHaveLength(2);
+        expect(lines[0]).toContain('new-session');
+        expect(lines[1]).toBe('-L ccrc-capture kill-server');
+      },
+    );
+  });
+});
+
+describe('the sweep of stale capture directories (review 3226 F10)', () => {
+  const id = (n: number): string => n.toString(16).padStart(32, '0');
+  it('lists capture ids, never the builds store or any other name', () => {
+    expect(staleCaptureDirs(['builds', id(1), 'notes.txt', id(2), 'ABCDEF'.padEnd(32, 'A'), `${id(3)}x`, id(4).slice(1)])).toEqual([id(1), id(2)]);
+  });
+  it('an empty directory has nothing to sweep', () => { expect(staleCaptureDirs([])).toEqual([]); });
 });
