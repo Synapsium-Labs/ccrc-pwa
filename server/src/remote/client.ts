@@ -49,8 +49,9 @@ export interface RemoteFleetConfig {
    *  clock over TCP connect, the upgrade and the hello (wave 27, D-6514; #1160's name, D-6724). Default 15000. A test
    *  seam like the fields around it; the composition root passes only `url` and `token`. */
   connectTimeoutMs?: number;
-  /** The peer measurement's two host reads (Overlord W1, the isolation word): a test seam like `connectTimeoutMs`; the
-   *  composition root passes none, which reads the real interfaces and TCP tables. */
+  /** The peer measurement's two host reads (Overlord W1, the isolation word). The composition root passes the real ones
+   *  (`realPeerSeams`) and a test passes synthetic ones; without them no peer is measured and it reads `unmeasured`, so
+   *  a client a test builds never reads the live host. */
   peerSeams?: PeerSeams;
   /** initial reconnect delay. Default 1000. */
   reconnectMinMs?: number;
@@ -547,7 +548,7 @@ export class FleetClient {
       console.warn("ccrc-server: agent link: the agent's host report is malformed");
     }
     this.state.hostReport = report;
-    this.state.peer = measurePeer(sock ?? {}, this.cfg.peerSeams);
+    this.state.peer = this.cfg.peerSeams === undefined ? { locality: 'unmeasured', uid: 'unmeasured' } : measurePeer(sock ?? {}, this.cfg.peerSeams);
     this.state.readySerial = (this.state.readySerial ?? 0) + 1;
     // THE SINGLE READER of `frame.build` — the fleet host's own stamp, which
     // `buildAgreement` compares against this box's. Reset on every ready for

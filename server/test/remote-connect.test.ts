@@ -1178,6 +1178,15 @@ describe('FleetClient.onReady — the host report and the peer (Overlord W1, the
     expect(fleet.state.readySerial).toBe(1);
   });
 
+  it('a client given no peer seams measures no peer: it reads unmeasured and never reads the live host', async () => {
+    spyConsole();
+    const f = await fake(() => ({}));
+    // Over loopback, any measurement would read `local`: `unmeasured` here means nothing was measured (review F7).
+    fleet = connectFleet({ url: `ws://127.0.0.1:${f.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 30, reconnectMaxMs: 100 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.peer).toEqual({ locality: 'unmeasured', uid: 'unmeasured' });
+  });
+
   it("stores a malformed host as 'malformed' and logs one line with no digest in it, once per change", async () => {
     spyConsole();
     let host: unknown = { uid: 1, machine: DIGEST.slice(1), boot: DIGEST };

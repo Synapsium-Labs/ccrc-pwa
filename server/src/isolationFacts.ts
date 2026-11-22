@@ -108,7 +108,7 @@ function uidOfRow(tables: readonly string[], localPort: number, remotePort: numb
  *  stored, returned or logged. */
 export function measurePeer(
   sock: { remoteAddress?: string | undefined; remotePort?: number | undefined; localPort?: number | undefined },
-  seams: PeerSeams = realPeerSeams(),
+  seams: PeerSeams,
 ): PeerFacts {
   const { remoteAddress, remotePort, localPort } = sock;
   if (remoteAddress === undefined || remotePort === undefined || localPort === undefined) return { locality: 'unmeasured', uid: 'unmeasured' };
