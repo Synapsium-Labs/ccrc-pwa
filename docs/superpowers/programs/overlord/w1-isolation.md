@@ -15,6 +15,9 @@ below are this build's, from the plan or from main as it stood at `b33a9ae137` o
 | `operator-model-db-is-held` | The held secrets list ends at `accountsPath` | `operatorModelDbPath` (the Overlord's private store) is held as a secret too. It landed after the plan was written. `buildInfoPath` and `installedCcrcPath` are in the named exception list: the server reports them, and they hold no secret and choose no code. |
 | `unmeasured-locality-reads-host-unmeasured` | `linkIsolation` step 5: "the kernel is `same` and the peer is not `local`" reads `other-namespace` | A peer whose locality could not be measured (no remote address on the socket) reads `host-unmeasured`, not `other-namespace`, which would name a namespace nobody measured. Only a measured `not-local` peer reads `other-namespace`. |
 | `darwin-unit-is-the-launch-agents-directory` | The unit is `ccrc.service` in the user unit directory | On macOS `ccd/ccrc` installs a launchd job under `~/Library/LaunchAgents` with a generated label, so the held control path there is that directory. The parity test pins both directory spellings to `ccd/ccrc`. |
+| `held-chain-resolved-link-by-link` | A held path's chain is "its leaf and its directories, and for a path that is a symbolic link, the link's own location and its chain too" | The review (F1) found the first build measured one hop only: a link met while resolving a link's target, its holding directory and its owner, were never seen. The chain is now resolved one component at a time from `/`, through a `readlink` seam, recording every directory and every link (by its owner only; a link's mode grants nothing and never guards a secret). An unreadable element or target, a component below a non-directory, or more than `CHAIN_STEPS_MAX` (256) steps reads `unmeasured`, never a partial chain. |
+| `no-peer-seams-reads-unmeasured` | The peer is measured over the real interfaces and TCP tables, through a seam tests replace | A `FleetClient` given no peer seams measures no peer and reads `unmeasured`; only the composition root passes `realPeerSeams()`, pinned by a call-site guard (review F7). So no link test, older ones included, reads the live host, whatever it passes. |
+| `isolation-wiring-is-one-seam` | The composition root builds the reader and the log, notes once at boot, and subscribes the log to the link | The wiring is one function, `wireIsolation` (isolationLog.ts, L4), which index.ts calls once, so its test pins the live state object and both listeners (review F5). It adds no writer. |
 
 ## Measured, not assumed
 
@@ -28,11 +31,16 @@ below are this build's, from the plan or from main as it stood at `b33a9ae137` o
   each add rows to the same table, in any order.
 - **Every `LadderConditionInputs` literal in the tests gains `'shared-user'`.** That includes eleven in the ladder actor
   and route test files, which run 3296 holds; they were edited under the coordinator's ruling of mail 30748.
-- **README.md's hunk** (the agent security model's "Host report" bullet) was applied exactly as packeted, with run
-  1850's coordinator's yes (mail 30888).
-- **Live host reads in older link tests.** `connectToAgent` and `bootAgent` now pass synthetic peer seams and host
-  roots. Tests in other files that build a `FleetClient` directly, against a fake agent, still read the live TCP
-  socket tables to measure their peer. The answer stays in memory: it is never printed or asserted.
-- **Mutation floors.** Eight sets in `server/test/sim/isolationSets.ts`, 67 mutants, every one killed (floor 1). The
+- **README.md's hunk** (the agent security model's "Host report" bullet) was applied exactly as approved. The
+  corrected wording says that no report cannot prove isolation, but a separate measured fact can still establish
+  `shared-user`; it changes only the last line of the original addition.
+- **No live host reads in link tests.** The shared harness supplies synthetic peer seams and host roots. Existing
+  direct link tests also inject the shared peer fixture wherever they can receive a ready. The deliberate no-seam
+  control verifies that the client measures nothing in its absence.
+- **Call-site pins** (the plan's Global Constraints, added in the review's fix round, F2): `readHostReport` and
+  `measurePeer` only in the client's ready handler, `measureServerFacts` once at boot, `isolationWord` only in the reader,
+  `IsolationWordLog` made only by `wireIsolation`, which index.ts calls once, and `realPeerSeams` only in the composition
+  root. Each was proved by a stray second caller added from a saved copy.
+- **Mutation floors.** Eight sets in `server/test/sim/isolationSets.ts`, 70 mutants (67, plus H13 to H15 on the link rule in the fix round), every one killed (floor 1). The
   hand mutants the plan names for the agent seam, the client's ready stanza and the ladder input were each run from a
   saved copy and each reds its case.

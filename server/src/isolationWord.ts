@@ -34,9 +34,10 @@ const STICKY = 0o1000;
  *  or root. Owners: every uid owning an element, other than root and the server. */
 export function holdingExposure(chain: HoldingChain, serverUid: Measured<number>): Holding {
   const { name, elements } = chain;
-  if (elements === 'unmeasured' || elements.length === 0) return { name, owners: 'unmeasured', exposure: 'unmeasured' };
+  if (elements === 'unmeasured') return { name, owners: 'unmeasured', exposure: 'unmeasured' };
   const owners = [...new Set(elements.map((e) => e.uid).filter((u) => u !== 0 && u !== serverUid))];
-  // A link's mode is no permission: the modes read are those of the leaf and the directories.
+  // A link's mode is no permission: the modes read are those of the leaf and the directories. A chain with none (empty, or
+  // links only) establishes nothing.
   const dirs = elements.filter((e) => e.link !== true);
   if (dirs.length === 0) return { name, owners: 'unmeasured', exposure: 'unmeasured' };
   const writable = dirs.some((e, i) => (e.mode & GROUP_OTHER_WRITE) !== 0 && (i === 0 || (e.mode & STICKY) === 0));

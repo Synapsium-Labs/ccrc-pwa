@@ -3972,7 +3972,8 @@ general remote-shell:
   uid and two digests of its host ids, HMAC-SHA-256 under the bearer of the machine id and of the kernel's boot id,
   never the ids themselves. The server reads it beside its own measurement of the link (whether the peer is on this
   host, and the kernel's uid for the peer's socket) to decide the `server-isolation` word: either side narrows it, and
-  only the two together widen it. An older agent sends no report, which reads `unmeasured`, never isolated.
+  only the two together widen it. An older agent sends no report, so it cannot prove isolation: its link reads
+  `unmeasured`, or `shared-user` when another measured fact already shows it.
 - **Exec whitelist**: only `tmux` (`has-session`, `list-panes`,
   `capture-pane`, `send-keys`, `resize-window`) and `ccd`, matched against the
   exact bare command name (no path components) and an argv **prefix** — a

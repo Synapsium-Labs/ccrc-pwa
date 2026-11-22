@@ -378,7 +378,7 @@ export const ISOLATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'R8 boot unchecked', old: '|| !measuredDigest(boot)', new: '' },
   ], readHostReportSuite),
   'server/src/isolationWord.ts#holdingExposure': set<WordModule>(WORD_TS, [
-    { id: 'H1 unmeasured chain kept', old: "if (elements === 'unmeasured' || elements.length === 0) return", new: "if (elements === 'unmeasured') return" },
+    { id: 'H1 unmeasured chain reads owner-only', old: "if (elements === 'unmeasured') return { name, owners: 'unmeasured', exposure: 'unmeasured' };", new: "if (elements === 'unmeasured') return { name, owners: [], exposure: 'owner-only' };" },
     { id: 'H2 root counted as owner', old: 'u !== 0 && u !== serverUid', new: 'u !== serverUid' },
     { id: 'H3 server counted as owner', old: 'u !== 0 && u !== serverUid', new: 'u !== 0' },
     { id: 'H4 sticky excuses the leaf', old: '(i === 0 || (e.mode & STICKY) === 0)', new: '(e.mode & STICKY) === 0' },

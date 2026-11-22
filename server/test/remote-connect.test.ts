@@ -224,7 +224,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -273,7 +273,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const canary = ['CANARY', 'client', String(process.pid)].join('-');
@@ -320,7 +320,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -353,7 +353,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -388,6 +388,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${port}`,
       token: TOKEN,
       heartbeatMs: 60_000,
@@ -424,7 +425,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -465,14 +466,14 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
 
   it('an absent ccdVerbs field (older agent) is recorded as null, never []', async () => {
     server = await fakeReadyAgent({});
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toBeNull();
   });
 
   it('a malformed ccdVerbs (non-string elements) is discarded as null, never trusted partially', async () => {
     server = await fakeReadyAgent({ ccdVerbs: [1, 2, 3] });
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toBeNull();
   });
@@ -482,7 +483,7 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
   it('a ready frame with no ccdVerbs resets: null after a list stood', async () => {
     let readies = 0;
     server = await fakeReadyAgent(() => (++readies === 1 ? { ccdVerbs: ['start', 'ws-audit'] } : {}));
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.ccdVerbs).toEqual(['start', 'ws-audit']), { timeout: 3000 });
     fleet.client.ws?.close();
     await vi.waitFor(() => expect(readies).toBe(2), { timeout: 5000 });
@@ -492,7 +493,7 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
 
   it('a real empty array is recorded as [], distinct from the null "no evidence" case', async () => {
     server = await fakeReadyAgent({ ccdVerbs: [] });
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toEqual([]);
   });
@@ -511,7 +512,7 @@ describe('FleetClient.onReady — rosterFp keeps "no evidence" apart from a real
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -560,7 +561,7 @@ describe('FleetClient.onReady — build is re-validated at the wire, never trust
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -616,6 +617,7 @@ describe('FleetClient.onReady — build is re-validated at the wire, never trust
     let extra: Record<string, unknown> = { build: { ...STAMP } };
     server = await fakeReadyAgent(() => extra);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
       reconnectMinMs: 30, reconnectMaxMs: 100,
     });
@@ -644,7 +646,7 @@ describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -708,6 +710,7 @@ describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never
     let extra: Record<string, unknown> = { observedEpoch: 43 };
     server = await fakeReadyAgent(() => extra);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
       reconnectMinMs: 30, reconnectMaxMs: 100,
     });
@@ -759,7 +762,7 @@ describe('FleetClient.onReady — ops is read through readReadyOps, on every rea
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -786,6 +789,7 @@ describe('FleetClient.onReady — ops is read through readReadyOps, on every rea
     let extra: Record<string, unknown> = { ops: ['update'] };
     server = await fakeReadyAgent(() => extra);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
       reconnectMinMs: 30, reconnectMaxMs: 100,
     });
@@ -912,6 +916,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
 
   it('no ready link at the call: LinkNotSentError(disconnected), nothing left pending', async () => {
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
     });
     const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
@@ -924,7 +929,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
   it('a signal already aborted: LinkNotSentError(aborted), no frame ever reaches the server', async () => {
     const l = await listen();
     wss = l.server;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -938,7 +943,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
   it('a synchronous send throw: LinkNotSentError(the thrown message), and the registration above is undone', async () => {
     const l = await listen();
     wss = l.server;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const socket = (fleet.client as unknown as { socket: WebSocket }).socket;
@@ -1034,6 +1039,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
       const l = await listen();
       wss = l.server;
       fleet = connectFleet({
+        peerSeams: TEST_PEER_SEAMS,
         url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
       });
       await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
@@ -1090,7 +1096,7 @@ describe('FleetClient — the connect deadline bounds socket creation → ready'
 
   it('abandons an upgrade the peer never answers and dials again', async () => {
     const peer = await silentTcp();
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
     expect(fleet.state.connected).toBe(false);
     expect(fleet.state.downSince).not.toBeNull();
@@ -1098,14 +1104,14 @@ describe('FleetClient — the connect deadline bounds socket creation → ready'
 
   it('abandons an open socket whose hello never gets a ready and dials again', async () => {
     const peer = await wsAgent(false);
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
     expect(fleet.state.connected).toBe(false);
   });
 
   it('never fires once ready arrived in time: no terminate, no second connection', async () => {
     const peer = await wsAgent(true);
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
     expect(fleet.state.connected).toBe(true);
@@ -1114,7 +1120,7 @@ describe('FleetClient — the connect deadline bounds socket creation → ready'
 
   it('close() during a pending connect leaves no timer to dial again', async () => {
     const peer = await silentTcp();
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(peer.accepted()).toBe(1), { timeout: 3000 });
     await fleet.close();
     await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
