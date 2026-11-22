@@ -58,6 +58,7 @@ They decide every question the plan leaves open.
 | 6 last words | the plan reference's last `unreachable` words, two settle comments, a test title, and the settings-path guard counting occurrences (`w6-plan-ref-words`) | D-8185, D-8808 | #3163 | **merged** 2026-11-21 as `77a1fefe4` (head `45c25190a`, by the merge queue; run 3202 closed done): two review rounds (3205, 3208) |
 | 8 call address | a call has an address on the Waiting on you screen, and the Overlord link's line on the project card opens its own call (`w8-call-anchor`) | D-8808, D-8809 | #3165 | **merged** 2026-11-22 as `8367a6f61` (head `00d1bc2e1`, by the merge queue; run 3209 closed done): three review rounds (3217, 3222, 3225); accepted at the cap, one pin carried to `w8-folded-pin` |
 | 8 call pin | the folded trail draws an addressed call once, pinned (`w8-folded-pin`) | D-8809 | #3172 | **merged** 2026-11-22 as `592f6bb23` (head `dbe2b86ab`, by the merge queue; run 3230 closed done): one review round (3235) |
+| 8 skill section | the coordinator plan reference gains its `linking suggest` section, checked against today's code (`w8-skill-section`) | D-8808, D-8809 | #3174 | **merged** 2026-11-22 as `83457077f` (head `6ae8c761c`, by the merge queue; run 3238 closed done): three review rounds (3242, 3245, 3248); accepted at the cap, two wording gaps carried to `w8-suggest-workspace-id` |
 | 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence (built, off), a coordinator's suggestion, the Overlord's link as a call made for the operator, the console | D-8808, D-8809 | #3123 | **merged** 2026-11-21 as `6c3ea2c55` (head `dbc6483eb`, by the merge queue; run 2862 closed done): three review rounds (2971, 2997, 3020); accepted at the cap, migration **116**; six follow-up tickets, one dropped as built |
 
 ## Decisions & deviations
@@ -417,8 +418,10 @@ Every planned wave and every fix before the pilot has landed (#3145, #3150). The
 to the operator before any other team is started. After that rollout the coordinator makes item 498's one read-only
 capture, records it as a scrubbed fixture, and only then may `w8-attached-wire` switch the evidence on.
 
-In flight: run 3238, ticket `w8-skill-section` (the coordinator plan reference's `linking suggest` section, the
-text reviewed in the wave 8 note, checked against today's code).
+In flight: run 3251, ticket `w8-overlord-skill` (the Overlord skill's door table gains `link_team`, and says when the
+Overlord leaves a team candidate for the operator).
 
-Open follow-up tickets: `w8-attached-wire` (after the capture) and `w8-overlord-skill` (the Overlord skill's door table
-gains `link_team`). Each is a rules or small code change of its own.
+Open follow-up tickets: `w8-attached-wire` (after the capture), `w8-suggest-pair-last` (the client puts the pane's pair
+last on the linking suggest and confirm calls, review 3245 A2) and `w8-suggest-workspace-id` (a coordinator can learn
+the workspace id the `team-ambiguous` remedy asks for, review 3248 F1 and F2). Each is a rules or small code change of
+its own.
