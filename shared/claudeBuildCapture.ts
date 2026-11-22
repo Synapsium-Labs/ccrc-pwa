@@ -8,8 +8,9 @@
 // ONE GRAMMAR. The tables below state what ccrc's readers rely on, per source: the hook payloads `ccd/session-hook.sh`
 // reads, the live status file `server/src/livestate.ts` reads and the statusline JSON `ccd/statusline-command.sh` and
 // `server/src/pane/statusline.ts` read. `replayCapture` is the replay suite: it checks a recording against them and answers
-// the `BuildCaptureResult` the record stores. A capture that cannot be judged (it did not finish) is no verdict here: the
-// runner answers none, and the lane keeps the build queued.
+// the `BuildCaptureResult` the record stores. A build that started and did not finish the drive FAILS here
+// (`finished: false`, departure `stalled-build-fails`); only a capture that could not start is no verdict, and the lane keeps
+// that build queued.
 import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';
 import { HOOK_EVENTS, hookEventIs, isHookEvent, type HookEvent } from './hook-events.js';
 
@@ -36,7 +37,8 @@ export const CAPTURE_REFUSAL_SENTENCE: Readonly<Record<CaptureRefusal, string>> 
 });
 
 /** Where a capture is: refused (never queued), waiting, running, or ended. An ended capture carries its verdict, or none
- *  when the runner could not finish (a deadline, a crash), which the lane reads as no verdict. */
+ *  when the capture could not start or the runner failed, which the lane reads as no verdict (a build that started and
+ *  stalled carries a failing verdict). */
 export type CaptureStateWord = 'refused' | 'queued' | 'running' | 'ended';
 export const CAPTURE_STATE_WORD_MAP: Record<CaptureStateWord, true> = { refused: true, queued: true, running: true, ended: true };
 

@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { testboxCaptureTransport } from '../src/testboxCapture.js';
 import type { CaptureAsked } from '../src/io.js';
 import { createIo } from '../src/remote/io.js';
+import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
+import { localIOFor } from '../src/io.js';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
 import {
   TESTBOX_CAPTURE_OP, TESTBOX_CAPTURE_REQUEST_MS, type TestboxCaptureOutcome, type TestboxCaptureReply,
 } from '../../shared/agent-protocol.js';
@@ -29,6 +34,16 @@ afterEach(() => { vi.restoreAllMocks(); });
 describe('testboxCaptureTransport: spec Table 6, one case per row', () => {
   it('the seam says the agent has no op: no-runner', async () => { expect(await run({ ok: false, reason: 'no-op' })).toEqual(un('no-runner')); });
   it('the seam says the job went unanswered: unanswered', async () => { expect(await run({ ok: false, reason: 'unanswered' })).toEqual(un('unanswered')); });
+  it.each([['not-started', 'no-test-box'], ['busy', 'no-runner']] as const)(
+    'the seam says %s (no job went out): %s, so no attempt counts, plus one warning naming the seam\'s word', async (reason, why) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect(await run({ ok: false, reason })).toEqual(un(why));
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]![0]);
+      expect(line).toContain('ccrc-server: build capture:');
+      expect(line).toContain(reason);
+      expect(line).toContain(BUILD);
+    });
   it.each(['unconfigured', 'unreachable', 'bad-answer'] as const)('%s: no-test-box', async (o) => {
     expect(await run(reply(o, { detail: 'why' }))).toEqual(un('no-test-box'));
   });
@@ -89,4 +104,44 @@ describe('the remote arm of FleetIO.testboxCapture', () => {
     const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw new Error('disconnected'); } } as never);
     expect(await io.testboxCapture(BUILD)).toEqual({ ok: false, reason: 'unanswered' });
   });
+  // Fix round 1, F3: a job never sent is told from one that went out, as the admin and models ops tell it.
+  it('a frame that never left (the link was down) is not-started, never unanswered', async () => {
+    const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw new LinkNotSentError('disconnected'); } } as never);
+    expect(await io.testboxCapture(BUILD)).toEqual({ ok: false, reason: 'not-started' });
+  });
+  it('the agent\'s busy refusal (its capture gate is held) is busy, never unanswered', async () => {
+    const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw new AgentOpError('busy', 'a testbox-capture op is already waiting on the box'); } } as never);
+    expect(await io.testboxCapture(BUILD)).toEqual({ ok: false, reason: 'busy' });
+  });
+  it('any other refusal of the agent stays unanswered', async () => {
+    const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => { throw new AgentOpError('error', null); } } as never);
+    expect(await io.testboxCapture(BUILD)).toEqual({ ok: false, reason: 'unanswered' });
+  });
+});
+
+// Fix round 1, F6: the local arm reads the host's settings through the CONFIGURED home's launcher, never the process home.
+describe('the local arm of FleetIO.testboxCapture, through localIOFor(home)', () => {
+  /** A fixture home whose launcher marks that it ran and prints no settings, so no box is named and nothing is ever sent. */
+  function home(prefix: string): string {
+    const h = mkTmp(prefix);
+    mkdirSync(path.join(h, '.local', 'bin'), { recursive: true });
+    const launcher = path.join(h, '.local', 'bin', 'ccrc');
+    writeFileSync(launcher, `#!/bin/sh\n: > "${path.join(h, 'ran')}"\n`);
+    chmodSync(launcher, 0o755);
+    return h;
+  }
+  it('runs the configured home\'s launcher and not the process home\'s', async () => {
+    const configured = home('ccrc-capcfg-');
+    const decoy = home('ccrc-capdecoy-');
+    vi.stubEnv('HOME', decoy);
+    try {
+      const asked = await localIOFor(configured).testboxCapture(BUILD);
+      // The launcher prints no settings, so no box is named and nothing is sent.
+      expect(asked.ok && ['unconfigured', 'unreachable'].includes(asked.reply.outcome), JSON.stringify(asked)).toBe(true);
+      expect(existsSync(path.join(configured, 'ran'))).toBe(true);
+      expect(existsSync(path.join(decoy, 'ran'))).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 30_000);
 });

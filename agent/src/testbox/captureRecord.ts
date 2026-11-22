@@ -1,6 +1,6 @@
 // The build capture runner (spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.1, the recorder). L3:
 // the one script every hook and the statusline of a captured build run (`capture.ts#captureSettings`), compiled to
-// `dist/testbox/captureRecord.js` and run as `node <path> <event|statusline>`. It appends what it was given on stdin, with
+// `agent/dist/agent/src/testbox/captureRecord.js` and run as `node <path> <event|statusline>`. It appends what it was given on stdin, with
 // a copy of the live status file taken at that moment, as ONE line of the recording in the shape
 // `shared/claudeBuildCapture.ts#readCaptureRecords` reads; as the PermissionRequest hook it answers `allow`, so no human
 // and no dialog is needed. It always exits 0: a recorder that could not write breaks nothing in the drive, and the replay
@@ -20,7 +20,7 @@ function startedAsProgram(argv1: string | undefined, moduleUrl: string): boolean
   try { return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl)); } catch { return false; }
 }
 
-/** This script's own path, for the runner to put in the seeded config (compiled, it is `dist/testbox/captureRecord.js`). */
+/** This script's own path, for the runner to put in the seeded config (compiled, it is `agent/dist/agent/src/testbox/captureRecord.js`, beside the service's `main.js`). */
 export const recorderPath = (): string => fileURLToPath(import.meta.url);
 
 /** What the recorder prints to answer a PermissionRequest. */

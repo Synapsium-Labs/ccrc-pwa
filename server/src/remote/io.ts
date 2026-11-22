@@ -336,14 +336,17 @@ export function createIo(client: FleetClient): FleetIO {
     },
 
     /** The agent's `testbox-capture` op (build capture runner spec §2.5): an agent whose `ready.ops` does not name it is never
-     *  sent it: `no-op`. A fault on the wire, the deadline or a reply `readTestboxCaptureReply` refuses for this build is
-     *  `unanswered`: a job may have gone out. */
+     *  sent it: `no-op`. A frame that never left is `not-started` and the agent's held capture gate is `busy`, as the admin
+     *  and models ops keep them: no job went out (fix round 1, F3). Any other fault after the send, the deadline or a reply
+     *  `readTestboxCaptureReply` refuses for this build is `unanswered`: a job may have gone out. */
     async testboxCapture(build) {
       if (!(client.state.agentOps ?? []).includes(TESTBOX_CAPTURE_OP)) return { ok: false, reason: 'no-op' };
       try {
         const reply = readTestboxCaptureReply(await client.request({ t: 'req', op: TESTBOX_CAPTURE_OP, build }, TESTBOX_CAPTURE_REQUEST_MS), build);
         return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
-      } catch {
+      } catch (e) {
+        if (e instanceof LinkNotSentError) return { ok: false, reason: 'not-started' };
+        if (e instanceof AgentOpError && e.code === 'busy') return { ok: false, reason: 'busy' };
         return { ok: false, reason: 'unanswered' };
       }
     },

@@ -113,7 +113,7 @@ get wrong when editing `src/whitelist.ts`.
   `npm --version`, `"$CCRC_CHROME" --version`, `python3 --version`, `git --version` and `tmux -V` on the user
   manager's PATH. It reads `~/.ccrc/build.json` and the token file `CCRC_TESTBOX_TOKEN_FILE` names, nothing else, and
   calls the box over one WebSocket within `CCRC_TESTBOX_STATUS_DEADLINE`. The sync's `tools.sync` frame carries the
-  release in `build.json` and the versions just measured, never a field of the request. The third op, **`testbox-capture`**
+  release in `build.json` and the versions just measured, never a field of the request. The class's third op, **`testbox-capture`**
   (build capture runner, spec 2026-11-22 §2.5), takes one field, `build`, which `validateReq` checks with `isClaudeVersion`
   before any case body (`bad-build`; any other field is `bad-request`). It spawns only the same fixed settings printer (no
   user manager environment, no probe), reads only the token file, and sends one `capture.submit` carrying the build

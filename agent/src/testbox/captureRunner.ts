@@ -136,7 +136,7 @@ export function tmuxLauncher(tmux: string, boundMs = 15_000): CaptureLauncher {
       if (made.status !== 0) throw new Error(`tmux new-session exited ${made.status}: ${made.stderr.trim()}`);
       return {
         async type(text) {
-          const t = await call(['send-keys', '-t', tmuxTarget(spec.session), '-l', text]);
+          const t = await call(['send-keys', '-t', tmuxTarget(spec.session), '-l', '--', text]);
           if (t.status !== 0) throw new Error(`tmux send-keys exited ${t.status}`);
           const e = await call(['send-keys', '-t', tmuxTarget(spec.session), 'Enter']);
           if (e.status !== 0) throw new Error(`tmux send-keys exited ${e.status}`);

@@ -284,9 +284,10 @@ export interface FleetIO {
   /** The `testbox-capture` op (build capture runner spec 2026-11-22 §2.5): one capture job for `build`, a Claude Code
    *  version the caller has already read, sent to the test box, answered with the op's outcome. The adapter does not read
    *  the outcome: `server/src/testboxCapture.ts` maps it onto the capture lane's port.
-   *  Failure contract: never rejects. `no-op` is an agent too old to list the op (never sent it, so no job went out);
-   *  `unanswered` is an ask the link or the agent failed, or a reply in no shape `readTestboxCaptureReply` knows (a job
-   *  may have gone out). Neither is ever `ok`. */
+   *  Failure contract: never rejects. Three answers say no job went out: `no-op` is an agent too old to list the op (never
+   *  sent it), `not-started` a frame that never left (the link was down), and `busy` the agent's one capture gate held by
+   *  another capture. `unanswered` is an ask that failed after the send, the deadline, or a reply in no shape
+   *  `readTestboxCaptureReply` knows (a job may have gone out). None is ever `ok`. */
   testboxCapture(build: string): Promise<CaptureAsked>;
   /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
    *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
@@ -317,7 +318,7 @@ export type TestboxSyncAsked =
 /** The `testbox-capture` op as a seam answers it, or why there is none (build capture runner spec §2.5). */
 export type CaptureAsked =
   | { readonly ok: true; readonly reply: TestboxCaptureReply }
-  | { readonly ok: false; readonly reason: 'no-op' | 'unanswered' };
+  | { readonly ok: false; readonly reason: 'no-op' | 'not-started' | 'busy' | 'unanswered' };
 
 /** The `backup` read as a seam answers it (D-7858), or why there is none. */
 export type MeasuredBackup =
@@ -565,7 +566,7 @@ export const localIO: FleetIO = {
   // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
   testboxMeasured: () => localTestbox(os.homedir()),
   testboxToolsSync: () => localTestboxSync(os.homedir()),
-  testboxCapture: (build) => localTestboxCapture(build),
+  testboxCapture: (build) => localTestboxCapture(build, os.homedir()),
   // The server's local arm spawns the verb itself (`testboxAdmin.ts#localTestboxAdminOps`); this seam is the agent arm's.
   testboxAdmin: async () => ({ kind: 'unsupported' }),
   // The bare localIO has no configured home: `localIOFor(home)` runs the local arm, so nothing here ever spawns against
@@ -582,11 +583,11 @@ export async function localTestboxSync(home: string): Promise<TestboxSyncAsked> 
   try { return { ok: true, reply: await syncTestboxTools(home) }; } catch { return { ok: false, reason: 'unanswered' }; }
 }
 
-/** The `testbox-capture` op's body (build capture runner spec §2.5): the agent's own `captureTestbox` with the real
- *  seams, as `localTestbox` runs the `testbox` op's. The op reads the host's settings from the process home, as the
- *  agent does. */
-export async function localTestboxCapture(build: string): Promise<CaptureAsked> {
-  try { return { ok: true, reply: await captureTestbox(build, realTestboxSeams()) }; } catch { return { ok: false, reason: 'unanswered' }; }
+/** The `testbox-capture` op's body on `home` (build capture runner spec §2.5): the agent's own `captureTestbox` with the
+ *  real seams, as `localTestbox` runs the `testbox` op's; it reads the host's settings through `home`'s launcher. No gate
+ *  here: the capture lane sends one job at a time. */
+export async function localTestboxCapture(build: string, home: string): Promise<CaptureAsked> {
+  try { return { ok: true, reply: await captureTestbox(build, realTestboxSeams(), home) }; } catch { return { ok: false, reason: 'unanswered' }; }
 }
 
 /** The `models` op's local arm on `home` (D-8687, D-8693): the agent's own body (`runModelsOp`, the builder again, the
@@ -611,6 +612,7 @@ export function localIOFor(home: string): FleetIO {
   return {
     ...localIO, statfsMeasured: () => measureLocalDisk(home),
     testboxMeasured: () => localTestbox(home), testboxToolsSync: () => localTestboxSync(home),
+    testboxCapture: (build) => localTestboxCapture(build, home),
     models: (lane, action, cls) => localModels(home, lane, action, cls),
   };
 }

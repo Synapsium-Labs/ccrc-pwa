@@ -219,6 +219,12 @@ describe('captureTestbox (build capture runner §2.5)', () => {
     expect(await run(world({ url: b.url }))).toMatchObject({ outcome: 'unanswered', result: null });
   });
 
+  it('unanswered: a state for this capture id that names another build is refused, even one carrying no result', async () => {
+    // A refusal carries no result, so only the op's own build check stands between it and the server (fix round 1, F12).
+    const b = await box((ws) => send(ws, state({ build: '2.1.151', state: 'refused', refusal: 'no-runner', detail: 'x', position: null })));
+    expect(await run(world({ url: b.url }))).toEqual({ outcome: 'unanswered', refusal: null, result: null, detail: 'a state for another build' });
+  });
+
   it('always closes the socket', async () => {
     const b = await box((ws) => send(ws, state({ state: 'ended', position: null, result: PASS })));
     await run(world({ url: b.url }));

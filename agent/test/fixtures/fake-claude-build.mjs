@@ -6,7 +6,8 @@
 // payload JSON on stdin, and talks to the stand-in model at ANTHROPIC_BASE_URL with the Messages API.
 // It reads its VERSION from its own file name. Broken variants are chosen by that name (the environment is built from
 // empty, so no switch can ride in it): a patch of 999 never raises SubagentStop; a patch of 998 hangs at step two, never
-// answering that prompt; a patch of 997 raises everything but never exits on `/exit`.
+// answering that prompt; a patch of 997 raises everything but never exits on `/exit`; a patch of 996 ends step two's turn
+// with no Stop (its subagent runs, so only a Stop counted from step one could make that step look done).
 // It is written as CommonJS on purpose: the copy has no extension (its name is the version), and Node reads such a file as
 // CommonJS; it is only ever run from that copy.
 const { spawnSync } = require('node:child_process');
@@ -66,7 +67,7 @@ async function turn(prompt) {
     if (r.status !== 200) { hook('StopFailure', { error: 'invalid_request' }); break; }
     messages.push({ role: 'assistant', content: r.body.content });
     const calls = r.body.content.filter((b) => b.type === 'tool_use');
-    if (calls.length === 0) { hook('Stop'); break; }
+    if (calls.length === 0) { if (!(patch === '996' && prompt.includes('step two'))) hook('Stop'); break; }
     const results = [];
     for (const c of calls) {
       if (c.name === 'Agent') {

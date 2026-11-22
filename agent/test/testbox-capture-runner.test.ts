@@ -7,7 +7,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, s
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { capturePaths, captureBuildsDir } from '../src/testbox/capture.js';
+import { CAPTURE_TOKEN, capturePaths, captureBuildsDir, captureEnv } from '../src/testbox/capture.js';
 import { recorderPath } from '../src/testbox/captureRecord.js';
 import { CaptureRunner, tmuxLauncher, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
@@ -20,6 +20,7 @@ const GOOD = '2.1.100';
 const NO_SUBAGENT_STOP = '2.1.999';
 const HANGS = '2.1.998';
 const NEVER_EXITS = '2.1.997';
+const NO_SECOND_STOP = '2.1.996';
 
 /** The test launcher: the build as a child with the spec's env as its WHOLE environment, stdin piped. */
 const pipeLauncher: CaptureLauncher = {
@@ -104,6 +105,18 @@ describe('a build that started but stalled FAILS, naming what was never recorded
     expect(gone(root, 'hang', HANGS)).toBe(true);
   }, 120_000);
 
+  it('one whose subagent turn ends with no Stop fails: a step counts only the events recorded after the step before it', async () => {
+    // Step two's Stop is on record from step one; were each step to count from the start, step two would look done and
+    // the capture would pass (fix round 1, F12).
+    const root = freshRoot();
+    place(root, NO_SECOND_STOP);
+    const r = await runner(root, { stepTimeoutMs: 8000 }).run('nostop', NO_SECOND_STOP);
+    expect(r.detail).toBeNull();
+    expect(r.result?.pass).toBe(false);
+    expect(r.result?.output).toContain('drive: did not finish every step');
+    expect(gone(root, 'nostop', NO_SECOND_STOP)).toBe(true);
+  }, 120_000);
+
   it('one that never exits fails, the drive not finished', async () => {
     const root = freshRoot();
     place(root, NEVER_EXITS);
@@ -111,6 +124,30 @@ describe('a build that started but stalled FAILS, naming what was never recorded
     expect(r.result?.pass).toBe(false);
     expect(r.result?.output).toContain('drive: did not finish every step');
     expect(gone(root, 'noexit', NEVER_EXITS)).toBe(true);
+  }, 120_000);
+});
+
+describe('the capture environment (spec Table 3): no credential, no updater, no traffic beyond the stand-in', () => {
+  it('captureEnv turns the updater and nonessential traffic off and gives the stand-in only the placeholder token', () => {
+    const env = new Map(captureEnv(capturePaths('/srv/box', 'ab'.repeat(16), GOOD), 4321, null));
+    expect(env.get('DISABLE_AUTOUPDATER')).toBe('1');
+    expect(env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')).toBe('1');
+    expect(CAPTURE_TOKEN).toBe('ccrc-capture-stand-in');
+    expect(env.get('ANTHROPIC_AUTH_TOKEN')).toBe(CAPTURE_TOKEN);
+    expect(env.get('ANTHROPIC_BASE_URL')).toBe('http://127.0.0.1:4321');
+    expect([...env.keys()].filter((k) => /KEY|SECRET|OAUTH|CREDENTIAL/.test(k))).toEqual([]);
+  });
+
+  it('the runner hands the launcher exactly that environment, as the whole of it', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    let seen: ReadonlyMap<string, string> | null = null;
+    const watching: CaptureLauncher = { start: async (spec) => { seen = new Map(spec.env); return pipeLauncher.start(spec); } };
+    await runner(root, { launcher: watching }).run('env', GOOD);
+    const got = seen as ReadonlyMap<string, string> | null;
+    expect(got?.get('DISABLE_AUTOUPDATER')).toBe('1');
+    expect(got?.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')).toBe('1');
+    expect(got?.get('ANTHROPIC_AUTH_TOKEN')).toBe(CAPTURE_TOKEN);
   }, 120_000);
 });
 

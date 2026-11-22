@@ -1495,7 +1495,8 @@ function handleConnection(
       // (fleet disk retention spec §2.5, D-6614: it takes no field), `pressure`
       // (#1170), `testbox`/`testbox-tools-sync` (test box plan TB9, D-7411,
       // D-7555: no field either), `backup` (D-7858, no field) and `models` (auto-advance W4, D-8688: the server uses it
-      // only when it is listed here). It is required in `ReadyFrame`, so it cannot be dropped silently.
+      // only when it is listed here), and `testbox-capture` (build capture runner spec 2026-11-22 §2.5: one field, the
+      // build). It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
         t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP, TESTBOX_CAPTURE_OP],
       };
