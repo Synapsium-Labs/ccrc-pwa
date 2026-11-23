@@ -698,10 +698,10 @@ export function heldUnobserved(evidenceAt, hold) {
  *      hourly refresh stamps it on a revert hold that has none, `holdEnds`' `stamp`);
  *   2. failing that, a HAND hold waits on the held id itself, so it ends at the next newer model;
  *   3. failing that, a REVERT hold reads the class's history (call 469): on a Codex lane the newest successful `revert`
- *      entry whose `to` is the held id gives its `from`; on an Anthropic lane, which records no revert entry, the newest
- *      successful move whose `from` is the held id gives its `to`, the model the Revert left;
- *   4. failing that, null: unknown. Such a hold never ends on the model it left; it waits for the hourly refresh to stamp
- *      what it left (`holdEnds`' `stamp`). Null also with no hold. */
+ *      to the held id gives its `from`, ignoring same-id effort changes. On an Anthropic lane, which records no revert
+ *      entry, the newest successful move whose `from` is the held id gives its `to`, the model the Revert left;
+ *   4. failing that, null: unknown. The hourly refresh stamps the class's observed id when usable (`holdEnds`' `stamp`).
+ *      Null also with no hold. */
 export function holdFrom(c, heldId, arm = 'codex') {
   const h = isObj(c) ? c.hold : null;
   if (!isObj(h)) return null;
@@ -712,8 +712,8 @@ export function holdFrom(c, heldId, arm = 'codex') {
     const e = history[i];
     if (!isObj(e) || e.ok !== true) continue;
     if (arm !== 'alias' && e.how === 'revert' && e.to === heldId) {
-      if (typeof e.from === 'string') return e.from;
-      break;
+      if (typeof e.from !== 'string') break;
+      if (e.from !== e.to) return e.from;
     }
     if (arm === 'alias' && e.how === 'advance' && e.from === heldId && typeof e.to === 'string') return e.to;
   }
@@ -736,11 +736,11 @@ export function holdFrom(c, heldId, arm = 'codex') {
  *    is one a launch can use (an id, not `unlaunchable`, not `unobserved`), and its evidence came after the hold began
  *    (`heldUnobserved`, asked of the hold standing now) (`why: 'alias-moved'`). This arm assumes, as the resolver does,
  *    that an alias moves only on newer evidence: an alias that moved to an OLDER third id would end the hold on it.
- * A REVERT hold whose `from` nothing derives (`holdFrom` null: an older build's, or one written while the aliases row
- * could not be read) never ends on that pass: the answer carries `stamp`, the class's current id (the Codex candidate,
- * the newest model newer than the pin; the alias's id when a launch can use it), or null with none, and the hourly
- * refresh records it as the hold's `from` in its own locked write (`refreshRecord`, `aliases-refresh`; call 469). From
- * then on the hold ends only on a model newer than that (Codex) or a third id seen after it (Anthropic).
+ * Apart from the Codex retirement exception, a REVERT hold whose `from` nothing derives waits. The answer carries
+ * `stamp`: the class's current id (the Codex candidate, or a launchable alias id distinct from the held id), or null
+ * with none. The hourly refresh records it as `from` without ending the hold on that pass, in its existing locked
+ * write (`refreshRecord`, `aliases-refresh`; call 469). Later, the hold can end on a model newer than that (Codex)
+ * or a third id seen after it (Anthropic).
  */
 export function holdEnds(input) {
   const c = isObj(input) ? input.c : null;

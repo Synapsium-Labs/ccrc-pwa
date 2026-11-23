@@ -16,9 +16,9 @@ removes them and brings Revert back on Anthropic lanes.
   out. It is never refused for it. `parseAdvance` checks it as it checks `hold.model`. No new `by` word.
 - **One reader of what a hold waits to be passed** (`holdFrom`, `shared/model-advance.mjs`): the hold's `from`;
   else, for a HAND hold, the held id, so it ends at the next newer model; else, for a REVERT hold, its history (call
-  469): on Codex the newest successful `revert` entry whose `to` is the held id, on an Anthropic lane the newest
-  successful move whose `from` is the held id (its `to` is the model the Revert left); else null, unknown. A revert
-  hold is never read as waiting on the held id, so it never ends on the model it left.
+  469): on Codex the newest successful `revert` to the held id, ignoring effort-only entries; on an Anthropic lane
+  the newest successful move whose `from` is the held id (its `to` is the model the Revert left); else null, unknown.
+  Without the Codex retirement exception below, a Revert hold does not end on the model it left.
 - **One pure decider** (`holdEnds`, beside `chooseCandidate`):
   - Codex: the class's candidate this hour is a model of `from`'s family newer than `from` (`compareVersions`); a
     hand hold on an empty class ends at its first candidate. The retired exception (call 469): once the held pin has
@@ -37,11 +37,10 @@ removes them and brings Revert back on Anthropic lanes.
     file written resolved without that hold. Its crash key now reads for every class: a newest `ok` move to the
     alias's id later than the aliases file it started from is answered and nothing is appended, whatever id that
     older file names (a hold's end may be the first refresh to see the id).
-  - A revert hold whose `from` nothing derives never ends on that pass: `holdEnds` answers a `stamp`, the class's
-    current id (the Codex candidate, the newest model newer than the pin; the alias's id when a launch can use it), and
-    the hourly refresh records it as the hold's `from` in its own locked write (`refreshRecord` on Codex, on a fresh
-    catalogue; `aliases-refresh` on Anthropic). From then on the hold ends only on a model newer than that (Codex) or a
-    third id seen after it (Anthropic).
+  - Apart from Codex retirement, a Revert hold whose `from` nothing derives waits. `holdEnds` answers a `stamp`: the
+    Codex candidate, or a launchable alias id distinct from the held id. The hourly refresh records it as `from`
+    without ending the hold in that pass (`refreshRecord` on Codex, on a fresh catalogue; `aliases-refresh` on
+    Anthropic). Later, the hold can end on a newer model (Codex) or a third id seen after it (Anthropic).
   - ccd's launch fill does not change.
 - **`advance-health` and doctor.** Each lane carries `holdsWaiting` (a hold whose end has not come, with `from`), and
   `heldBehind` now names only a hold whose end has come, with `from`, `since` (the sighting that shows it: the fresh
@@ -50,7 +49,8 @@ removes them and brings Revert back on Anthropic lanes.
   is read as unheld from then on: a failed canary is `heldBack`. `model-held-behind` warns a `due` row only, never a
   class the held-back or blocked line names (a blocked row with no class names the whole lane); every other hold
   rides the verdict line's tail, so a revert hold waiting for its newer model passes and says what it waits for (a
-  revert hold with no `from` yet: that the next hourly refresh records the model its Revert left).
+  Revert hold with no `from` yet: that the hourly refresh can record the observed model from usable evidence,
+  without operator action).
 - **No remedy tells the owner to hold, release or hold again**: held-behind, held-back, and blocked's advance-file
   (both arms), shared-family and missing-pin clauses now name what happens by itself or the line that owns the cause
   (`models` for a Codex refresh not reaching a lane, `services` for an Anthropic refresh timer). No remedy names a
@@ -103,10 +103,25 @@ the behaviour commit flips these, each now pinned:
 - New writer-level case: the commit's intent carries `endsHold`, and the one write that records the move clears the
   hold (no write records the move with the hold standing).
 
-## Mutation rows (a `git archive` copy, each red alone; the unmutated copy green)
+### Fix round 2 (review F1–F3)
 
-M1 to M13 ran on the behaviour commit; M14 to M22 on fix round 1's commit, over the two hold suites (and doctor's
-held-behind and waiting cases for M21 and M22).
+- F1: real locked-writer fixture cases prove both orders. The concurrent case accepts a cleared hold only if the
+  fixture's sole successful move, from the planned pin to the candidate, records that it ended the hold. A normal
+  move followed by Hold must leave a hand hold, regardless of what the POST's re-read saw. In the mutation copy,
+  Hold still answered success but saved no hold after an advance: commit-first failed at the persisted-hold check,
+  hold-first passed, and both passed after restoring the writer.
+- F2: Codex ignores an effort-only Revert as baseline evidence. It still uses an earlier qualifying model Revert;
+  with only the effort change, it waits and offers the guarded stamp instead. Both cases failed on the old reader.
+- F3: the unknown-baseline line says the refresh can record the observed model when it has usable evidence, not
+  that the next refresh knows what the Revert left. No action is needed. The old wording failed the updated doctor
+  cases on both lane kinds.
+- Five focused model, lock and doctor fixture suites: 774 passed. No full local suite. The retirement and atomic
+  pending-write fixes were left untouched, as were the Models sheet and the op's size.
+
+## Mutation and red/green rows
+
+M1 to M13 ran on the behaviour commit; M14 to M22 on fix round 1's commit, in `git archive` copies restored to
+green. M23 ran in an archive copy with the new race test; M24 and M25 ran test-first against the old behaviour.
 
 | Row | Mutation | Result |
 |---|---|---|
@@ -133,6 +148,9 @@ held-behind and waiting cases for M21 and M22).
 | M20 | `aliases-refresh` stamps nothing | red |
 | M21 | a hand hold reads its history | red |
 | M22 | doctor drops the waiting line for a revert hold with no `from` | red |
+| M23 | Hold reports success but does not persist the hand hold after a successful advance | red: commit-first only |
+| M24 | Codex accepts a same-id Revert as the baseline | red: prior real move and stamp fallback |
+| M25 | doctor promises the next refresh records the model the Revert left | red: Codex and Anthropic waiting cases |
 
 ## Known limits, for the ledger
 
@@ -141,7 +159,8 @@ held-behind and waiting cases for M21 and M22).
 - A stamp records the class's current id, which may already be a third one (the alias moved on, or a model newer than
   the one the Revert left came out first): the hold then waits for the next one after it. It fails held, never moving
   back. On Codex nothing is stamped while the class has no candidate (nothing newer than the pin), so such a hold waits
-  until one appears, is stamped with it, and ends on the one after.
+  until one appears, is stamped with it, and ends on the one after. On Anthropic, nothing is stamped while the alias
+  row lacks a launchable id or still names the held id; the hold waits for usable evidence.
 - An older op recovering a pending intent that carries `endsHold` keeps the hold: it fails safe, held, not moving.
 - Doctor's Codex held-behind measures from the newest catalogue observation (a Codex catalogue keeps no first sighting
   of a model), so a hold whose end has come but which the refresh never acts on (a readiness or budget skip, while it

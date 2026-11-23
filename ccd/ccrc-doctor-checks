@@ -12628,8 +12628,9 @@ _check_model-held-behind() {
        | ((.holdsWaiting[]
            | "\($id) \(.class) is held on \(.pin // "none") until "
              + (if .from == null and .hold.by == "revert"
-                then "the next hourly refresh records the model its Revert left and "
+                then "the hourly refresh can record the class'"'"'s observed model from usable evidence and "
                   + (if $alias == true then "its alias names a third model after it" else "a newer model of its family appears" end)
+                  + " (no action is needed)"
                 elif $alias != true and .from == null then "a model of its family appears"
                 elif $alias != true then "a model of its family newer than \(.from) appears"
                 elif .from == .pin then "its alias names another model, on evidence after the hold"

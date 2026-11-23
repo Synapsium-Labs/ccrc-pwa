@@ -319,12 +319,12 @@ describe('model-held-behind', () => {
       + 'empty class, and the hold still stands past the hourly refresh that ends it');
   });
 
-  it('a revert hold nothing names what it left for waits, and says the next refresh records it (call 469)', () => {
+  it('a Codex revert hold with no baseline waits for usable evidence, with no action needed', () => {
     const h = box();
     plantLane(h, { advance: stepAdvance({ fable: { family: 'delta', hold: { at: '2026-10-22T08:00:00Z', by: 'revert' } } }) });
     const r = check(h, 'model-held-behind');
-    expect(r.out).toBe(`${HB_PASS}; lane-a fable is held on none until the next hourly refresh records the model its Revert `
-      + 'left and a newer model of its family appears\n');
+    expect(r.out).toBe(`${HB_PASS}; lane-a fable is held on none until the hourly refresh can record the class's observed `
+      + 'model from usable evidence and a newer model of its family appears (no action is needed)\n');
     expect(r.code).toBe(0);
   });
 
@@ -977,7 +977,7 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
       + `than ${X1} and ${X2}, on evidence after the hold`);
   });
 
-  it('a revert hold nothing names what it left for waits for the next refresh to record it, never held behind (call 469)', () => {
+  it('an Anthropic revert hold with no baseline waits for usable evidence, never held behind', () => {
     const h = box();
     reverted(h);
     const a = JSON.parse(fs.readFileSync(advancePath(h), 'utf8')) as { classes: Record<string, Json> };
@@ -986,8 +986,8 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     fs.writeFileSync(advancePath(h), `${JSON.stringify(a, null, 2)}\n`);
     expect(laneOf(h)['heldBehind']).toEqual([]);
     expect(laneOf(h)['holdsWaiting']).toEqual([{ class: 'opus', pin: X1, hold: { at: R1, by: 'revert' }, from: null }]);
-    expect(check(h, 'model-held-behind').out).toContain(`; lane-c opus is held on ${X1} until the next hourly refresh records `
-      + 'the model its Revert left and its alias names a third model after it');
+    expect(check(h, 'model-held-behind').out).toContain(`; lane-c opus is held on ${X1} until the hourly refresh can record `
+      + "the class's observed model from usable evidence and its alias names a third model after it (no action is needed)");
   });
 
   it('an unobserved class is never held behind', () => {

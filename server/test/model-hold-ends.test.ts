@@ -102,6 +102,15 @@ describe('holdEnds, the Codex arm', () => {
     expect(holdEnds({ arm: 'codex', c, pin: G56, choice: choice(G61) }).ends).toBe(false);
     expect(holdEnds({ arm: 'codex', c, pin: G56, choice: choice(G62) }).ends).toBe(true);
   });
+  const effortOnly = { ...revertEntry(G56, G56), effort: { from: 'high', to: 'low' } };
+  it('an effort-only Codex revert does not hide an earlier model-changing revert', () => {
+    const c = cls({ hold: { at: H_AT, by: 'revert' }, history: [revertEntry(G61, G56), effortOnly] });
+    expect(holdEnds({ arm: 'codex', c, pin: G56, choice: choice(G61) })).toEqual({ ends: false, why: null, from: G61 });
+  });
+  it('an effort-only Codex revert alone waits and carries the candidate as its stamp', () => {
+    const c = cls({ hold: { at: H_AT, by: 'revert' }, history: [effortOnly] });
+    expect(holdEnds({ arm: 'codex', c, pin: G56, choice: choice(G61) })).toEqual({ ends: false, why: null, from: null, stamp: G61 });
+  });
   it('a revert hold nothing derives a from for never ends on a newer model: it carries the candidate as its stamp', () => {
     const bare = cls({ hold: { at: H_AT, by: 'revert' } });
     expect(holdEnds({ arm: 'codex', c: bare, pin: G56, choice: choice(G61) })).toEqual({ ends: false, why: null, from: null, stamp: G61 });
