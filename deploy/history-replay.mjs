@@ -2755,32 +2755,21 @@ const entryKindOf = (st) => (st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'l
  *  `unmeasured` (its errno) beside what was read before it, never a throw: the verdict is decided elsewhere and stays as it is.
  *  @param {string} projects  @param {readonly string[]} roots  */
 export function leftoverShapeOf(projects, roots) {
-  const entries = [];
-  let subagents = false;
-  let transcript = false;
-  let truncated = false;
-  let unmeasured = null;
+  const o = { entries: [], subagents_dir: false, transcript_file: false, truncated: false };
   let seen = 0;
-  const note = (rel, st, depth) => {
-    seen += 1;
-    if (st.isDirectory() && path.basename(rel) === 'subagents') subagents = true;
-    if (st.isFile() && rel.endsWith('.jsonl')) transcript = true;
-    if (depth <= LEFTOVER_SHAPE_NAMED_DEPTH) entries.push({ path: rel, kind: entryKindOf(st), size: st.size });
-  };
+  const read = (fn) => { try { return fn(); } catch (e) { o.unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return null; } };
   const walk = (rel, depth) => {
-    if (seen >= LEFTOVER_SHAPE_MAX_ENTRIES) { truncated = true; return; }
-    let st;
-    try { st = lstatSync(path.join(projects, rel)); } catch (e) { unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return; }
-    note(rel, st, depth);
-    if (!st.isDirectory()) return;
-    let names;
-    try { names = readdirSync(path.join(projects, rel)).sort(); } catch (e) { unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return; }
-    for (const n of names) walk(`${rel}/${n}`, depth + 1);
+    if (seen >= LEFTOVER_SHAPE_MAX_ENTRIES) { o.truncated = true; return; }
+    const st = read(() => lstatSync(path.join(projects, rel)));
+    if (st === null) return;
+    seen += 1;
+    o.subagents_dir ||= st.isDirectory() && path.basename(rel) === 'subagents';
+    o.transcript_file ||= st.isFile() && rel.endsWith('.jsonl');
+    if (depth <= LEFTOVER_SHAPE_NAMED_DEPTH) o.entries.push({ path: rel, kind: entryKindOf(st), size: st.size });
+    if (st.isDirectory()) for (const n of read(() => readdirSync(path.join(projects, rel)).sort()) ?? []) walk(`${rel}/${n}`, depth + 1);
   };
-  const tops = [...new Set(roots)].sort().filter((r, _i, all) => !all.some((o) => o !== r && r.startsWith(`${o}/`)));
-  for (const r of tops) walk(r, 0);
-  const shape = { entries, subagents_dir: subagents, transcript_file: transcript, truncated };
-  return unmeasured === null ? shape : { ...shape, unmeasured };
+  for (const r of [...new Set(roots)].sort().filter((r, _i, all) => !all.some((x) => x !== r && r.startsWith(`${x}/`)))) walk(r, 0);
+  return o;
 }
 
 /** W2-5b2 Task 1: persistenceLeft as step 0b records it, `{left, transcripts, project_dir}`. An lstat or readdir failure
@@ -7959,10 +7948,9 @@ export function pluginClassOf(entry) {
  *  event or no plugins list. Pure.  @param {StreamInit | null} init */
 export function pluginsLoadedOf(init) {
   if (init === null || init.plugins === null) return null;
-  const str = (v) => (typeof v === 'string' ? v : null);
+  const str = (p, k) => (plainObject(p) && typeof p[k] === 'string' ? p[k] : null);
   const refused = init.plugins.filter((p) => pluginClassOf(p) === 'other');
-  return { build: init.plugins.length - refused.length, other: refused.length,
-    refused: refused.map((p) => ({ name: str(plainObject(p) ? p.name : undefined), source: str(plainObject(p) ? p.source : undefined) })) };
+  return { build: init.plugins.length - refused.length, other: refused.length, refused: refused.map((p) => ({ name: str(p, 'name'), source: str(p, 'source') })) };
 }
 /** W2-D57's "the arm's init event" and W2-D58's init assertions, one check each over every arm run's init event: tools
  *  exactly `want` (the arm argv's, armToolsOf) once the reported names pass through WIRE_TOOL_ALIASES, no MCP server, no
