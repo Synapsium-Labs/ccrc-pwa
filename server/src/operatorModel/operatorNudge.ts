@@ -13,7 +13,7 @@ export interface OperatorNudge extends MailNudge {
 
 /** `readBox` is `readBoxText` bound to the lane's tmux and queue; an unreadable box (`null`, or a read that throws) is `null` to the
  *  rule. A generic mail reads no box at all; every fixed line of the table reads it, for its resume rule. `designated` is the
- *  sweep's one designation read and `now` the clock at typing (the wake's time left). */
+ *  sweep's one designation read and `now` the mail pass's clock, read once at its start (the wake's time left, at most one pass before typing). */
 export async function operatorNudgeFor(
   readBox: (sessionId: string) => Promise<string | null>, toId: string,
   origin: { readonly fromId: string; readonly subject: string; readonly body?: string } | null,

@@ -9,7 +9,11 @@ from this pull request. The coordinator folds it into the programme ledger and m
 - **The vocabulary and the deciders** (Task 1): `shared/overlordInbox.ts` (bands, row kinds, each kind's own nudge, the row and
   answer shapes, `READ_CEILINGS`, the path id parser, the wake's subject, body codec and fixed lines) and
   `server/src/coord/overlordInbox.ts` (`composeInbox`, `inboxOrder`, `rowNudgeOf`, `readCeilingVerdict`, `acknowledgeVerdict`,
-  `inboxWakeVerdict`, `inboxProbeSource`). `READ_DOOR_MAP` gains `sequence`. Ten mutant sets join the floors, every mutant killed.
+  `inboxWakeVerdict`, `inboxProbeSource`). `READ_DOOR_MAP` gains `sequence`. Ten mutant sets join the floors here, every mutant
+  killed: three on the L0 vocabulary (`parseMessageId`, `readInboxWakeBody`, `renderInboxWakeLine`) and seven on the L1 deciders.
+  In all the branch adds fourteen floor rows: those ten, `envelope.ts#fixedLineMailOf` and `#sweepDesignationOf` (Task 4),
+  `overlordInbox.ts#inboxProbeSourceOf` (the inbox's probe source through its two steps, which the door and the wake share), and
+  `envelope.ts#fixedLineReplayOf` (fix round 1). Fix round 1 also added mutants to the existing `probeDoor.ts` sets.
 - **The read runner** (Task 2): `server/src/coord/overlordRead.ts#runOverlordRead`, the one "count, then record, then answer" for
   every Overlord read door, and three readers on the private store: `servedReadsSince` (the ceiling's counter), and the
   text-free `unsettledFacts` and `messageFactsById`.
@@ -64,11 +68,16 @@ The plan's own slugs are built as its "Deviations found" section states them: `r
   fact reading is factored into helpers that `overlordReadGate` shares, and one exported `callerGenerationOf` is the only
   reading of a caller's live generation, used by the runner, the read gate, the inbox door and the wake.
 - `mail-origin-carries-the-body`: `CoordStore.mailOrigin` also answers the mail's body, which only the wake's fixed line reads
-  (its keys and counts; the time left is measured at typing). No words: a wake body holds ids and numbers only.
+  (its keys and counts; the time left is read at the mail pass's clock, `wake-time-left-is-the-pass-clock` below). No words: a
+  wake body holds ids and numbers only.
 - `wake-logs-not-designated-once`: a box with no designated session logs `the inbox wake holds: not-designated` once a boot,
   by the plan's rule that a hold is logged when its word changes.
 - `acknowledge-body-is-the-pane-pair`: `ccrc-api overlord acknowledge <id>` takes no body; the client builds
   `{"byId":…,"byUuid":…}` and refuses any `--json`.
+- `non-pass-gate-is-unavailable` (review 3506 A3): the three doors answer a gate result other than `pass` with `unavailable`
+  (503, "the gate did not pass the call"), as the linking confirm does, where the plan names `not-the-overlord`. The branch is
+  unreachable today: each door's row refuses the hook's group (`others: 'refuse'`), so the gate itself refuses first, and
+  `not-the-overlord` may be spelled only in `overlordGate.ts` (the core vocabulary census).
 
 ## Fix round 1 (review 3389)
 
@@ -81,12 +90,46 @@ The plan's own slugs are built as its "Deviations found" section states them: `r
   `open`. It never said that every read leaves evidence. The timer list (`GET /api/sessions/:id/timers`) answers a timer's note
   with no ledger line and no read stamp. `continuity/probeDoor.ts#READ_LEDGER_COMPLETE` (false) keeps the designated session
   uncovered, so a zero count answers `unmeasured`, never `closed`, while a counted read is still `open`. The change that gives the
-  timer list its evidence turns it true. No continuity route changed.
+  timer list its evidence turns it true. No continuity route changed. Downstream: with no `closed` spot probe to fit, the fitted
+  ceiling (`continuity/renewalReadings.ts#fittedCeilingOf`) reads the window's hard cap, so the soft ceiling reads the hard cap
+  until the timer list gets its evidence. That is the plan's cap-as-measured (slug `fitted-ceiling-is-the-producers-answer`).
 - `acknowledge-unknown-is-unsupported` (F4): a message in a state this build does not know is `unknown` to `acknowledgeVerdict`.
   The private store's move refuses it (`messageMove`), so the door answers 501 `unsupported`, writes nothing and is not retried.
   It used to report that the message could be settled and then answer `write-failed`.
 - `inbox-keeps-unknown-rows` (F5): `unsettledFacts` keeps every row not in a settled state, so a row in a state this build does
   not know stays in the inbox as a text-free `unknown` fact.
+
+## Fix round 2 (review 3506)
+
+- F1, the recovery measured end to end: `overlord-prompt-record.test.ts` seeds a wake, and a spot-probe notice, that were
+  delivered once and never acked. It replays each past the replay window through the real `sweepMail` and asserts the row ends
+  `acked`, with no line typed and no key pressed. Measured: with the pass's early exit after `finishFixedLineAck` removed (a bare
+  call), both cases are red: the row is acked, then the line is typed again (one literal send where none is expected). With the exit
+  restored, byte for byte, both are green. No production code changed.
+
+## Residuals accepted by the coordinator (review 3389)
+
+The coordinator accepted these by mail in fix round 1. Each is stated here as the code behaves.
+
+- Third finding, the read ceiling's window. `coord/overlordRead.ts#runOverlordRead` counts a door's served reads
+  (`servedReadsSince`), decides the ceiling, then awaits `compose()`, and only then records the read line (`recordRead`). Nothing
+  serialises the route handlers around that window: no lock, and the runner is not on the coordination serialiser. Two requests
+  admitted and witnessed together could both count the same last slot before either records, and both be served. This is a
+  static trace from the source, not a reproduction. Whether two valid production requests can overlap is unverified: the door
+  process sends its calls one at a time.
+- Sixth finding, the message id vocabulary. `shared/overlordInbox.ts#parseMessageId` accepts any positive safe integer, while
+  `ccd/ccrc-api` refuses an id longer than ten digits (`bad-id`) and the door process does not check safety before the client
+  refuses. A valid id of eleven or more digits cannot be fetched or acknowledged through the client. One shared L0 rule for all
+  three is the fix, for a later piece.
+- Seventh finding, `wake-time-left-is-the-pass-clock`. The wake's time left is rendered from the mail pass's clock
+  (`watch.ts`'s `mailPass` takes `Date.now()` once at its start), not the moment the line is typed. So it is at most one pass
+  earlier than typing. It is latent: no W1 row has a deadline. This pull request's comments now say the pass's clock
+  (`envelope.ts`, `operatorNudge.ts`, `overlordInboxWake.ts` and three test comments); no comment in another piece's file says
+  otherwise.
+- Turn-state lead, unverified: `server.ts#buildServer` passes a null live-process fact to `readTurnMarkMeasured`, which may keep a
+  stale marker from an earlier process of the same session id from reading as stale. Not measured.
+- Conformance leads: the L1 inbox module imports another L1 module at runtime where the plan's text asks for L0 only (the import
+  is pure, so the ring rule holds), and the non-pass gate wording is `non-pass-gate-is-unavailable` above.
 
 ## Absorb of main 5102a69aa3
 

@@ -59,7 +59,7 @@ export function createInboxWakeLane(ports: InboxWakePorts): { pass(input: InboxW
     lastHold = why;
   };
   return {
-    /** `now` is the tick's clock; the lane decides on nothing timed (the line's time left is read by the mail lane at typing). */
+    /** `now` is the tick's clock; the lane decides on nothing timed (the line's time left is read by the mail lane, at its pass's clock). */
     async pass(input, _now) {
       const designation = ports.coord.designationRead();
       const designated = designation.kind === 'designated' ? designation.sessionId : null;

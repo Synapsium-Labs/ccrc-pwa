@@ -242,7 +242,7 @@ export function renderOperatorMessageNudge(id: number): string {
 /** One kind of mail the lane types a fixed line for (Overlord W1, inbox piece, question 8): the ONE table the mail lane reads, so
  *  a further kind is a row, never a parallel mechanism. `matches` names the mail; `designatedOnly` says the row types its line only
  *  to the designated session (any other recipient keeps the generic nudge); `line` is typed with the resume rule of
- *  `resumeRuleOf`, from the mail and the clock at typing; `firstDelivery` is what the first delivery moves besides the delivery's
+ *  `resumeRuleOf`, from the mail and the mail pass's clock (read once at the pass's start, so at most one pass before typing); `firstDelivery` is what the first delivery moves besides the delivery's
  *  ack: the operator message's `delivered`, or nothing. */
 export interface FixedLineMailRow {
   readonly name: 'operator-message' | 'spot-probe' | 'inbox-wake';
@@ -258,7 +258,7 @@ export const FIXED_LINE_MAIL: readonly FixedLineMailRow[] = [
   // The renewal act's spot-probe notice names `ccrc-api probe`, which the Overlord cannot run; a coordinator keeps the notice's own text.
   { name: 'spot-probe', matches: (m) => m.fromId === OPERATOR_MESSAGE_SENDER && m.subject === SPOT_PROBE_SUBJECT, designatedOnly: true, firstDelivery: 'none',
     line: () => renderSpotProbeLine() },
-  // The time left is read at typing, never at queueing.
+  // The time left is read at the mail pass's clock, taken once at the pass's start (at most one pass before typing), never at queueing.
   { name: 'inbox-wake', matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'none',
     line: (m, now) => renderInboxWakeLine(readInboxWakeBody(m.body), now) },
 ];
@@ -293,7 +293,7 @@ export interface MailNudge {
 
 /** The line the mail lane types for one due delivery. A mail the table names types its own fixed line; every other mail types the
  *  id-agnostic `renderMailNudge`. `operatorMessageId` is set exactly for an operator message, for the lane's move on the private
- *  store. `designated` is the sweep's one designation read (default: none designated) and `now` the clock at typing. Pure: it
+ *  store. `designated` is the sweep's one designation read (default: none designated) and `now` the mail pass's clock, read once at its start. Pure: it
  *  decides nothing about delivery. */
 export function mailNudgeOf(
   toId: string, origin: { readonly fromId: string; readonly subject: string; readonly body?: string } | null,
@@ -324,7 +324,7 @@ export function fixedLineReplayOf(nudge: Pick<MailNudge, 'firstDelivery'>, deliv
  *  `nothing-to-submit`), so it is passed only when the box already holds the line, and otherwise no resume is asked: the line
  *  is typed into an empty box, and any other text, another message's line included, is a draft (slug `whole-mode-never-types`).
  *  This holds for every fixed line of the table (a wake's and a spot-probe notice's too), each compared to its OWN line, typed
- *  with the time left at typing. The box is compared up to whitespace (`squash`, as `sendPrompt`'s own wrap-tolerant comparison does), so a pane narrower than the
+ *  with the time left at the mail pass's clock. The box is compared up to whitespace (`squash`, as `sendPrompt`'s own wrap-tolerant comparison does), so a pane narrower than the
  *  line, which wraps it, still reads as the line (review 2550 F4). */
 export function resumeRuleOf(nudge: MailNudge, box: string | null):
   { readonly resumeIfOwn: true } | { readonly resumeIfOwn: 'whole' } | Record<string, never> {

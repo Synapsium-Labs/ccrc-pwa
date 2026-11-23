@@ -81,7 +81,7 @@ describe('mailNudgeOf and resumeRuleOf over the table', () => {
     expect(resumeRuleOf(wake, renderOperatorMessageNudge(7))).toEqual({});
     expect(resumeRuleOf(wake, '')).toEqual({});
     expect(resumeRuleOf(wake, null)).toEqual({});
-    // the time left is typed at typing: a box that holds the line of an earlier clock is a draft, not this delivery's line
+    // the time left is read at the mail pass's clock: a box that holds the line of an earlier clock is a draft, not this delivery's line
     expect(resumeRuleOf(wake, mailNudgeOf(OVERLORD, { fromId: 'operator', subject: INBOX_WAKE_SUBJECT, body: wakeBody }, designated, NOW + 30_000).line)).toEqual({});
     // a generic nudge keeps the prefix mode
     expect(resumeRuleOf({ line: renderMailNudge(OVERLORD), operatorMessageId: null }, null)).toEqual({ resumeIfOwn: true });

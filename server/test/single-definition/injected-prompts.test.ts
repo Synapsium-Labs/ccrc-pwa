@@ -85,7 +85,7 @@ const LIST_REFERENCES: ReadonlyArray<{ re: RegExp; row: (m: RegExpExecArray) => 
   { re: /^renderMailNudge\([\w.]+\)$/, row: () => 'mail-nudge', from: ['server/src/coord/envelope.ts'] },
   // The mail lane's line for one due delivery: the id-agnostic nudge, or an operator message's fixed line (both open with the
   // `mail-nudge` head, so the echo needle is the same).
-  // The sweep passes its one designation read and the clock at typing, which the fixed-line table's wake line reads (W1 inbox, Task 4).
+  // The sweep passes its one designation read and its pass's clock, which the fixed-line table's wake line reads (W1 inbox, Task 4).
   { re: /^mailNudgeOf\([\w.]+, \w+(?:, (?:\w+|\w+\(\w+\)), \w+)?\)\.line$/, row: () => 'mail-nudge', from: ['server/src/coord/envelope.ts'] },
 ];
 
