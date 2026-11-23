@@ -713,8 +713,9 @@ export function AccountsScreen(): ReactNode {
                       {SIGN_IN_AGAIN}
                     </Button>
                   )}
-                  {/* A Codex or an Anthropic lane's Models (model-class-advance R4, Task 20; wave 9, Task A4.3): its classes, and
-                      on a Codex lane its holds and Revert, in one sheet. The roster's lane kind gates it (`modelsActOffered`). */}
+                  {/* A Codex or an Anthropic lane's Models (model-class-advance R4, Task 20; wave 9, Task A4.3): the sheet shows
+                      each lane's classes and holds, and offers Revert on a Codex or an Anthropic lane where the fleet box ends a
+                      revert's hold by itself. The roster's lane kind gates it (`modelsActOffered`). */}
                   {modelsActOffered(entry) && (
                     <Button
                       variant="ghost" size="fit" disabled={!canAct}

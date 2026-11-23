@@ -391,12 +391,16 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
       ...asClassExtras(c as Record<string, unknown>),
     };
   }
+  // revert-holds-until-newer (D-8757): the fleet box's models op ends a revert's hold by itself. The server already decodes
+  // the op's constant (`readLaneModels`); this reads the SERVER's wire, and only the literal `true` counts. Anything else
+  // (absent, `'true'`, `1`, `false`) is left out, reads as "does not", and never costs the read.
+  const endsHold = (models as { revertHoldEnds?: unknown }).revertHoldEnds === true ? { revertHoldEnds: true as const } : {};
   const rawAdvance = (models as { advance?: unknown }).advance;
-  if (rawAdvance === undefined) return { kind: 'read', classes: out };
+  if (rawAdvance === undefined) return { kind: 'read', classes: out, ...endsHold };
   const advance = asLaneAdvance(rawAdvance);
   // An advance off its grammar is not trusted, and costs only itself: the classes the lane's files name still read, and the
   // advance is `invalid` ("not one this build reads"), so the pickers keep their models and a completed POST keeps its answer.
-  return { kind: 'read', classes: out, advance: advance ?? INVALID_ADVANCE };
+  return { kind: 'read', classes: out, advance: advance ?? INVALID_ADVANCE, ...endsHold };
 }
 
 /** The absent read's reasons (`LaneAbsentKind`, deliberately not exported as a value from `shared/models.ts`), pinned to

@@ -42,7 +42,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/face/routes.ts': { reason: "the character choice's two HTTP routes (the face plan, Task 6)", since: '2026-11-13' },
   'server/src/coord/overlordRoutes.ts': { reason: "the Overlord's designation doors (Overlord W1 designation A): the read, Start and retire", since: '2026-11-16' },
   'server/src/coord/overlordGateRun.ts': { reason: "the Overlord gate's runner: every Overlord door's one call, which refuses through the reply (Overlord W1 gates B, §11.2)", since: '2026-11-19' },
-  'server/src/laneModelsRoutes.ts': { reason: "the Models sheet's write door, POST /api/models/:lane (hold, release, revert of a class; model-class-advance R4)", since: '2026-11-18' },
+  'server/src/laneModelsRoutes.ts': { reason: "the Models sheet's write door, POST /api/models/:lane (revert of one class; model-class-advance R4)", since: '2026-11-18' },
   'server/src/coord/approvalCensusRoutes.ts': { reason: "the approval census's read, its one session-gated GET (approvals PR 1, Task 1.4)", since: '2026-11-18' },
   'server/src/coord/approvalParkDoor.ts': { reason: "the operator door's approval arm, its step-up ladder over the request and reply (approvals PR 3)", since: '2026-11-19' },
   'server/src/responses/routes.ts': { reason: 'the receipts door, POST /api/responses/receipts (Overlord W1 responses A)', since: '2026-11-16' },

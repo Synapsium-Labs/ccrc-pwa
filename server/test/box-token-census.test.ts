@@ -204,7 +204,7 @@ const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-n
 const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule', '/api/continuity/quiz-runs/:id/withdraw'];
 
 /** The Models sheet's write door (programme model-class-advance, wave R4), registered from `server/src/laneModelsRoutes.ts`, which no
- *  harvest above can see: `POST /api/models/:lane`, hold, release and revert of one class. Hand-kept for the NAME only, like
+ *  harvest above can see: `POST /api/models/:lane`, revert of one class. Hand-kept for the NAME only, like
  *  `NAME_LIST_DOORS`: the describe below derives the file's registrations and compares in both directions. The operator's, behind the
  *  session gate, no box token, in no EXEMPT table. */
 const MODELS_DOORS = ['/api/models/:lane'];

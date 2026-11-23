@@ -6,7 +6,13 @@
 //
 // AN ANTHROPIC LANE (wave 9, Task A4.3; D-8744, D-8746, D-8820): its classes are the client's aliases, so each card also says
 // where its id came from, the held id beside the alias's own, and the lines that explain a class with no id; `anthropicFacts`
-// decides every one of them, and the sheet draws what it returns. The sheet offers no class actions on that lane.
+// decides every one of them, and the sheet draws what it returns.
+//
+// REVERT ONLY (revert-holds-until-newer, D-8757). The sheet offers Revert and nothing else, on a Codex lane and an Anthropic
+// one by the same rule, and only where the read it shows PROVES the fleet box ends a revert's hold by itself
+// (`revertHoldEndsOn`: the read's own `revertHoldEnds: true`, never inferred from the lane kind, the build or an absence).
+// A hand hold is made and released in the shell (`ccrc models <lane> hold|release`), which stays; the sheet only shows one
+// that stands. No sentence here tells a person to hold or release anything.
 //
 // THE TWO READERS. `asLaneModelsActAnswer` reads `POST /api/models/:lane`'s 200, its `models` through `asLaneModelsRead`
 // (the ONE reader of that wire, `lib/models.ts`); `modelsActFailure` reads a refused POST into a typed failure, whose
@@ -20,8 +26,8 @@ import type { HistoryEntry, Hold, Pending, Previous } from '../../../shared/mode
 import { ApiError, writeOutcomeUnknown } from '../lib/apiError';
 import { asLaneModelsRead, classWord, laneReadWords, type LaneKindFacts, type LaneReadFailure } from '../lib/models';
 
-export type ModelsAction = 'hold' | 'release' | 'revert';
-const ACTIONS: readonly ModelsAction[] = ['hold', 'release', 'revert'];
+export type ModelsAction = 'revert';
+const ACTIONS: readonly ModelsAction[] = ['revert'];
 
 // ── the POST's 200 ──
 
@@ -30,7 +36,7 @@ export interface LaneModelsActAnswer {
   readonly lane: string;
   readonly action: ModelsAction;
   readonly class: ModelClass;
-  /** A hold's or a release's own boolean (`false`: there was nothing to do); `null` for a revert, which always moves. */
+  /** `null` for a revert, which always moves (the op's own boolean belongs to a hold or a release, which the sheet no longer asks). */
   readonly changed: boolean | null;
   /** A revert whose last bookkeeping write failed after the move landed. */
   readonly partial: boolean;
@@ -64,7 +70,7 @@ export interface ModelsActFailure {
 
 const NOTHING_CHANGED = 'Nothing was changed.';
 
-/** The refusal words `ccrc models <lane> hold|release|revert` can print: a HAND-KEPT list of every code `deploy/models-op.mjs`
+/** The refusal words `ccrc models <lane> hold|release|revert` can print (the sheet sends a revert only; the shell sends the rest): a HAND-KEPT list of every code `deploy/models-op.mjs`
  *  (the prelude every op runs, `holdOp`, `revertOp` and what they write through) and the lane-lock layer in `ccd/ccrc`
  *  (`_models_lock`, `_models_answer_locked`, `_models_answer`) print on that path, each a sentence of its own.
  *  `server/test/models-verb-codes.test.ts` scans both files and reds when a printed code is in neither this list nor its
@@ -77,15 +83,15 @@ export const VERB_CODE_WORDS: Readonly<Record<string, string>> = {
   'previous-taken': 'Another class pins the model this one had before, and a revert never empties another class.',
   'lock-busy': 'The lane\'s models are being changed by something else right now. Try again in a moment.',
   'lock-unwritable': 'The lane\'s lock file cannot be written on the fleet box, so no change can be made safely.',
-  'no-registry': 'This lane has no class registry on the fleet box yet, so there is nothing to hold or revert.',
+  'no-registry': 'This lane has no class registry on the fleet box yet, so there is nothing to revert.',
   'registry-invalid': 'The lane\'s class registry is not one this build accepts, so it was left alone.',
   'unroutable-lane': 'The lane\'s files cannot be rendered for routing, so the model was not moved. A hold may already be in place: the row shows what the lane holds now.',
   'no-such-account': 'The fleet box has no account by this name.',
-  'anthropic-lane': 'This is an Anthropic lane: its classes are the client\'s own and carry no registry, so there is nothing to hold or revert.',
-  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias yet, or only one this lane\'s Claude Code cannot launch, so there is no model to hold. The next session started on this lane, or the next hourly refresh, records one.',
-  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so the class\'s current model is unknown and was not held. Doctor names the file.',
-  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so the class\'s current model is unknown and was not held. Doctor names the file.',
-  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over a hold, so the hold could not reach a launch and was not made.',
+  'anthropic-lane': 'This is an Anthropic lane: its classes are the client\'s own and carry no registry, so there is nothing to revert.',
+  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias that this lane\'s Claude Code can launch, so a revert cannot tell which earlier model to put back.',
+  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so a revert cannot tell which earlier model to put back. Doctor names the file.',
+  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so a revert cannot tell which earlier model to put back. Doctor names the file.',
+  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over the model a revert sets, so the revert could not reach a launch.',
   'registry-unwritable': 'The lane\'s class registry could not be written on the fleet box. A revert\'s hold may already be in place: the row shows what the lane holds now.',
   'advance-unwritable': 'The lane\'s advance file could not be written on the fleet box. The row shows what the lane holds now.',
   'settings-unwritable': 'The lane\'s settings could not be rendered or written on the fleet box. A revert\'s hold, and its move of the model, may already be in place: the row shows what the lane holds now.',
@@ -116,7 +122,7 @@ const wordIn = (body: unknown, k: string): string | undefined => {
 const BAD_REQUEST_WHY: Readonly<Record<string, string>> = {
   'bad-body': 'The request was malformed.',
   'bad-lane': 'That is not a lane id the fleet box takes.',
-  'bad-action': 'That action is not hold, release or revert.',
+  'bad-action': 'That action is not revert.',
   'bad-class': 'That is not one of the four classes.',
 };
 
@@ -147,9 +153,16 @@ export function modelsActFailure(err: unknown, lane: string, cls: string): Model
       const why = wordIn(body, 'why');
       return none(error, why !== undefined && Object.hasOwn(BAD_REQUEST_WHY, why) ? BAD_REQUEST_WHY[why]! : 'The request was refused as malformed.');
     }
+    // revert-holds-until-newer (D-8757): the server reads the lane fresh before it acts and refuses, writing nothing, when that
+    // read does not prove the box ends a revert's hold by itself. Each cause has a sentence of its own; any other cause keeps
+    // the words it had.
     case 'unsupported':
+      if (cause === 'revert-hold-ends') return none(error, 'The fleet box\'s ccrc does not end a revert\'s hold by itself, so the revert was not sent. Update the fleet box, then try again.');
       return none(error, 'This server cannot run it: the fleet agent predates this act, or the server has no fleet to run it on. Update the fleet box, then try again.');
-    case 'unavailable': return none(error, 'The act did not start.');
+    case 'unavailable':
+      if (cause === 'lane-unreadable') return none(error, 'The lane could not be read just before the revert, so it was not sent.');
+      if (cause === 'lane-absent') return none(error, 'The fleet box has no model record for this lane, so the revert was not sent.');
+      return none(error, 'The act did not start.');
     // The fleet agent's one gate is shared with reads, so the other holder may be this sheet's own read, not another change.
     case 'busy': return none(error, 'The fleet box is busy with another models request (it may be this sheet\'s own read). Try again in a moment.');
     case 'outcome-unknown':
@@ -181,7 +194,7 @@ export const MODELS_ACT = 'Models';
  *  lane the roster has no row for. */
 export const modelsActOffered = (entry: Pick<LaneKindFacts, 'kind' | 'telemetry'> | undefined): boolean =>
   entry?.kind === 'codex' || entry?.telemetry === 'anthropic';
-/** The sheet's lane-kind prop: an Anthropic lane draws its cards with the Anthropic lines and no Hold or Release. */
+/** The sheet's lane-kind prop: an Anthropic lane draws its cards with the Anthropic lines (the Revert rule is the same). */
 export const modelsSheetAnthropic = (entry: Pick<LaneKindFacts, 'telemetry'> | undefined): boolean => entry?.telemetry === 'anthropic';
 export const MODELS_SHEET_TITLE = 'Model classes';
 export const MODELS_EMPTY_CLASS = 'No model: this class is empty on this lane.';
@@ -225,8 +238,21 @@ export const modelLine = (model: string | null, label: string | null): string =>
 /** `2026-11-17T09:00:00Z` read to the minute, UTC said. */
 export const minuteOf = (at: string): string => `${at.slice(0, 10)} ${at.slice(11, 16)}Z`;
 
-export const holdWords = (h: Hold | null): string =>
-  h === null ? MODELS_NOT_HELD : `Held ${h.by === 'revert' ? 'by a revert' : 'by hand'} since ${minuteOf(h.at)}.`;
+/** One shared sentence for every hold the read proves the box ends: a hand hold's story is never told as a Revert's, and
+ *  nothing says what the Revert left or that the next refresh records anything (revert-holds-until-newer, D-8757). */
+const HOLD_ENDS_WORDS = 'It ends by itself once a newer model appears; nothing needs doing.';
+/** A class's hold, first sentence by who made it. `endsHold` (`revertHoldEndsOn` of the shown read) adds the one ending
+ *  sentence; without it a hold that stands is said as it is, with no ending and no remedy. */
+export const holdWords = (h: Hold | null, endsHold: boolean): string => {
+  if (h === null) return MODELS_NOT_HELD;
+  const held = `Held ${h.by === 'revert' ? 'by a revert' : 'by hand'} since ${minuteOf(h.at)}.`;
+  return endsHold ? `${held} ${HOLD_ENDS_WORDS}` : held;
+};
+
+/** Said on the lane, in place of Revert, when the read is good, the advance record is read and the read does not prove the
+ *  fleet box ends a revert's hold by itself (an older ccrc there). */
+export const MODELS_REVERT_UNOFFERED =
+  'This fleet box\'s ccrc does not end a revert\'s hold by itself, so Revert is not offered. Updating the fleet box brings it back.';
 
 export function lastMoveWords(m: HistoryEntry | null): string {
   if (m === null) return 'No move on record.';
@@ -302,18 +328,16 @@ const reasonOf = (detail: string | null): string => {
 
 /** Each way the advance file can read, and the one where the answer carried no advance key at all (an agent without the
  *  op: the advance file was not read, which is not "unreported"). */
-export function advanceStateWords(a: LaneAdvanceRead | undefined, anthropic = false): { readonly state: LaneAdvanceRead['state'] | 'not-read'; readonly text: string } {
+export function advanceStateWords(a: LaneAdvanceRead | undefined): { readonly state: LaneAdvanceRead['state'] | 'not-read'; readonly text: string } {
   if (a === undefined) {
-    return { state: 'not-read', text: 'The advance record was not read: holds and the last move are not known, so none is offered.' };
+    return { state: 'not-read', text: 'The advance record was not read: holds and the last move are not known, so no revert is offered.' };
   }
   switch (a.state) {
     case 'ok': return { state: 'ok', text: 'The advance record is read.' };
     case 'absent': return { state: 'absent', text: 'No automatic advance is on record for this lane yet.' };
     case 'unreadable': return { state: 'unreadable', text: `The advance record cannot be read${reasonOf(a.detail)}.` };
     case 'invalid': return { state: 'invalid', text: `The advance record is not one this build reads${reasonOf(a.detail)}.` };
-    case 'unreported': return { state: 'unreported', text: anthropic
-      ? 'The fleet box\'s ccrc predates the advance record, so holds are not known.'
-      : 'The fleet box\'s ccrc predates the advance record, so holds are not known. Update it to hold or revert from here.' };
+    case 'unreported': return { state: 'unreported', text: 'The fleet box\'s ccrc predates the advance record, so holds are not known. Update it to revert from here.' };
   }
 }
 
@@ -324,57 +348,68 @@ export function pendingWords(p: Pending): string {
   return `A change to the ${p.class} class is pending (${how}, ${minuteOf(p.at)}): ${target}. It settles on the fleet box by itself.`;
 }
 
+/** Whether the read the sheet shows PROVES the fleet box ends a revert's hold by itself: the `read` arm's own
+ *  `revertHoldEnds: true` (`asLaneModelsRead` carries it from the server's wire, the server from the op's constant) and
+ *  nothing else. Never inferred from the lane kind, the build or an absence: a busy, an absent or an older read answers no. The
+ *  one predicate of the capability, asked by the card, the note, the hold's sentence and the confirm alike (revert-holds-until-newer, D-8757). */
+export const revertHoldEndsOn = (read: LaneModelsRead | null): boolean => read?.kind === 'read' && read.revertHoldEnds === true;
+
 /** What one class card offers, decided once (F13) from the lane's advance read and asked by the card and by the Revert
- *  confirm alike. `hold`: the act the hold control performs (`release` where something is held), or `null` where the hold is not
- *  known (the record is unreadable, invalid, unreported or was not read: never guessed; an ABSENT record is "nothing is held
- *  yet"). `revert`: whether the box says the class can revert AND names what it would put back. */
+ *  confirm alike. `held`: a hold stands on the class (shown whatever the capability, so an existing hold stays visible).
+ *  `revert`: whether the read proves the box ends holds (`endsHold`) AND the box says the class can revert AND names what it
+ *  would put back; the same rule on a Codex and an Anthropic lane. There is no Hold or Release to offer. */
 export interface ClassActs {
   readonly adv: LaneClassAdvance | null;
   readonly held: boolean;
-  readonly hold: 'hold' | 'release' | null;
   readonly revert: boolean;
 }
-export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass, anthropic = false): ClassActs {
+export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass, endsHold: boolean): ClassActs {
   const adv: LaneClassAdvance | null = advance?.state === 'ok' ? advance.classes?.[cls] ?? null : null;
-  const held = adv?.hold != null;
-  const holdKnown = !anthropic && (adv !== null || advance?.state === 'absent');
-  return { adv, held, hold: !holdKnown ? null : held ? 'release' : 'hold', revert: !anthropic && adv?.revertable === true && adv.previous !== null };
+  return { adv, held: adv?.hold != null, revert: endsHold && adv?.revertable === true && adv.previous !== null };
 }
 /** Whether a Revert of `cls` is still on offer on the CURRENT read: the confirm asks it when it opens, while it stands and
  *  again when it is confirmed, and sends nothing when it is no longer so. */
-export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass, anthropic = false): boolean =>
-  read?.kind === 'read' && classActs(read.advance, cls, anthropic).revert;
+export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass): boolean =>
+  read?.kind === 'read' && classActs(read.advance, cls, revertHoldEndsOn(read)).revert;
 /** Said when a Revert that was asked about is withdrawn because the lane's current read no longer offers it: the class
- *  has no earlier model on record now, or the read no longer shows the advance record at all (it is unreadable, invalid,
- *  unreported, absent or was not read, or the lane itself could not be read). */
+ *  has no earlier model on record now, the read no longer shows the advance record at all (it is unreadable, invalid,
+ *  unreported, absent or was not read, or the lane itself could not be read), or the read no longer proves the fleet box
+ *  ends a revert's hold by itself (`revertHoldEnds`). */
 export const revertWithdrawnWords = (cls: ModelClass): string =>
-  `The revert of the ${cls} class was cancelled: the lane's latest read no longer offers it, because the class has no earlier model on record or the lane's advance record could not be read just now. Nothing was sent.`;
+  `The revert of the ${cls} class was cancelled: the lane's latest read no longer offers it, because the class has no earlier model on record, the lane's advance record could not be read just now, or the fleet box no longer shows that it ends a revert's hold by itself. Nothing was sent.`;
 
-export const holdAriaLabel = (action: 'hold' | 'release', cls: ModelClass): string =>
-  `${action === 'hold' ? 'Hold' : 'Release'} the ${cls} class`;
 export const revertAriaLabel = (cls: ModelClass): string => `Revert the ${cls} class`;
 export const revertTitle = (cls: ModelClass): string => `Revert the ${cls} class?`;
 /** `previous` is the one on record: a revert whose class has none is not offered, so there is no sentence for it (F13). */
 export function revertConsequence(
-  lane: string, cls: ModelClass, current: string | null, previous: Previous,
+  lane: string, cls: ModelClass, current: string | null, previous: Previous, anthropic = false,
 ): string[] {
+  // F1 (call 555, D-8857): on an Anthropic lane, after a shell Release and before the next refresh settles the alias's move,
+  // the op puts back the released hold's id rather than `previous`, and the read carries nothing that shows it. So that
+  // confirm names the class, the hold and its ending, and no model; the read after the act shows the model it put back.
+  if (anthropic) {
+    return [
+      `Put the ${cls} class on ${lane} back to an earlier model and hold it there. The fleet box picks that model from its own record, and the sheet shows it once it has read the lane again.`,
+      HOLD_ENDS_CONFIRM,
+      MODELS_CONFIRM_SESSIONS,
+    ];
+  }
   return [
-    `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}, so no automatic advance moves it until you release it.`,
+    `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}.`,
+    HOLD_ENDS_CONFIRM,
     `As last read, that replaces ${current ?? 'an empty class'}.`,
     MODELS_CONFIRM_SESSIONS,
   ];
 }
+const HOLD_ENDS_CONFIRM = 'The hold ends by itself once a newer model appears, so nothing needs doing to lift it.';
 
-/** What was done, said once the box has answered (the live region's status). */
+/** What was done, said once the box has answered (the live region's status). A revert holds the class, and the hold ends by
+ *  itself (the server refused to send it where the read did not prove that). */
 export function actDoneWords(a: LaneModelsActAnswer): string {
   const cls = a.class;
-  if (a.action === 'revert') {
-    return a.partial
-      ? `Reverted the ${cls} class and held it, but a final bookkeeping write failed after the model moved. The sheet shows what the fleet box holds now.`
-      : `Reverted the ${cls} class and held it.`;
-  }
-  if (a.action === 'hold') return a.changed === false ? `The ${cls} class was already held.` : `Held the ${cls} class.`;
-  return a.changed === false ? `The ${cls} class was not held.` : `Released the ${cls} class.`;
+  return a.partial
+    ? `Reverted the ${cls} class and held it, but a final bookkeeping write failed after the model moved. The sheet shows what the fleet box holds now. The hold ends by itself once a newer model appears.`
+    : `Reverted the ${cls} class and held it. The hold ends by itself once a newer model appears.`;
 }
 
 /** The answer came back 200 but could not be read: the act may have happened. */

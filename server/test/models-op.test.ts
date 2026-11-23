@@ -3516,7 +3516,7 @@ describe('show carries labels and the pending intent (R3, D-8686)', () => {
       models: async () => ({ kind: 'exited', code: r.code, stdout: r.stdout }),
       readFileMeasured: async () => { throw new Error('the op path reads no file'); },
     } as unknown as FleetIO;
-    const got = await readLaneModels(io, path.join(home, '.ccrc'), LEGACY_EXTERNAL_ID);
+    const got = await readLaneModels(io, LEGACY_EXTERNAL_ID);
     expect(got.kind).toBe('read');
     if (got.kind !== 'read') return;
     expect(got.classes).toEqual(laneClassModels(parseRegistry(ADV_REGISTRY), parseCatalogue(ADV_CATALOGUE)));

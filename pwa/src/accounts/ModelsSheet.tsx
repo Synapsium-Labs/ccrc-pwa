@@ -1,10 +1,13 @@
 // THE MODELS SHEET (programme model-class-advance, wave R4; plan 2026-10-15-model-class-auto-advance-codex-arm.md, Task 20
 // as re-planned, D-8686, D-8690): one lane's four classes as the lane's own files say them, with the advance record
-// beside them, and Hold, Release and Revert for each class on a Codex lane. An ANTHROPIC lane (wave 9, Task A4.3; the
-// `anthropic` prop, which the screen sets from the roster's telemetry) draws the same cards with the lines
-// `anthropicFacts` returns (where the id came from, the held id, a class with no id, the supervisor note) and offers no class
-// actions. Drawn in `AccountSheet`'s shell, as the re-auth and switch sheets
-// are: its live region announces each answer (ONE announcement per failure: the card's own note is text, not a second alert),
+// beside them, and Revert for a class, on a Codex lane and an Anthropic one by the same rule (revert-holds-until-newer,
+// D-8757): Revert is drawn only where the read the sheet shows proves the fleet box ends a revert's hold by itself
+// (`revertHoldEndsOn`), and where the box says the class can revert. There is no Hold and no Release here: a hold made by
+// hand is made and released in the shell, and the sheet only shows one that stands, whatever the box. Where the box does not
+// end holds, the lane says so in one note (`MODELS_REVERT_UNOFFERED`) and offers no control. An ANTHROPIC lane (wave 9,
+// Task A4.3; the `anthropic` prop, which the screen sets from the roster's telemetry) draws the same cards with the lines
+// `anthropicFacts` returns (where the id came from, the held id, a class with no id, the supervisor note). Drawn in
+// `AccountSheet`'s shell, as the re-auth and switch sheets are: its live region announces each answer (ONE announcement per failure: the card's own note is text, not a second alert),
 // its offline line sits above the body.
 //
 // ONE READ. The sheet reads through `useLaneModels` (`lib/useLaneModels.ts`), the same hook every other surface that names a
@@ -21,8 +24,8 @@
 // unknown (a timeout, a lost answer, a 200 this build cannot read, no answer at all), says what it knows and the row shows what
 // the lane holds now (F1). When the act settles the focus is on the class's card (F11).
 //
-// REVERT ASKS FIRST, and exists only where the box says the class can revert (`classActs`), re-checked on the CURRENT read while
-// the confirm stands and again when it is confirmed (F13). A failed read of the lane is said in words with a Try again (F12).
+// REVERT ASKS FIRST, and exists only where the read proves the box ends holds and says the class can revert (`classActs`),
+// re-checked on the CURRENT read while the confirm stands and again when it is confirmed (F13). A failed read of the lane is said in words with a Try again (F12).
 // L4: it decides nothing about wording or refusals; every sentence, reader and per-class predicate is `modelsSheetWords.ts`.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, QuickConfirm, Skeleton } from '@ccrc/ui';
@@ -33,9 +36,9 @@ import { useLaneModelsView, type LaneModelsControl, type LaneModelsReadOutcome }
 import { laneReadWords, laneTransientBeside, type LaneReadFailure } from '../lib/models';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import {
-  MODELS_READ_FAILED, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords, modelsReadStateWords,
-  actUnreadableWords, advanceStateWords, anthropicFacts, anthropicModelLine, asLaneModelsActAnswer, classActs, classLabel, familyWords, holdAriaLabel, holdWords, lastMoveWords,
-  modelLine, modelsActFailure, pendingWords, previousWords, revertAriaLabel, revertConsequence, revertStillOffered, revertTitle,
+  MODELS_READ_FAILED, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_REVERT_UNOFFERED, MODELS_SHEET_TITLE, actDoneWords, modelsReadStateWords,
+  actUnreadableWords, advanceStateWords, anthropicFacts, anthropicModelLine, asLaneModelsActAnswer, classActs, classLabel, familyWords, holdWords, lastMoveWords,
+  modelLine, modelsActFailure, pendingWords, previousWords, revertAriaLabel, revertConsequence, revertHoldEndsOn, revertStillOffered, revertTitle,
   revertWithdrawnWords, type ModelsAction,
 } from './modelsSheetWords';
 import '../fleet/fleet.css';
@@ -47,7 +50,7 @@ export type ModelsActFn = (lane: string, body: { action: ModelsAction; class: Mo
 export interface ModelsSheetProps {
   /** The lane whose classes the sheet shows (a Codex or an Anthropic lane's roster id). */
   lane: string;
-  /** The lane is an Anthropic one (the roster's `telemetry`), so its cards carry the Anthropic lines and no class actions.
+  /** The lane is an Anthropic one (the roster's `telemetry`), so its cards carry the Anthropic lines (Revert is the same rule).
    *  Told by the screen, never guessed from a read: a Codex read carries none of those fields, and an Anthropic class may
    *  carry none either. */
   anthropic?: boolean;
@@ -65,7 +68,7 @@ export interface ModelsSheetProps {
 type Note = { readonly kind: 'refused' | 'unknown'; readonly text: string };
 
 /** One act of a class card: its visible word, an accessible name that names the class, and the busy mark while its own
- *  act is with the box (`aria-busy`). Written once, so Hold, Release and Revert are one control. */
+ *  act is with the box (`aria-busy`). Revert is the one act a card offers, so this is its one control. */
 function ModelsAct({ label, name, disabled, busy, onTap }: {
   label: string; name: string; disabled: boolean; busy: boolean; onTap: () => void;
 }): ReactNode {
@@ -175,20 +178,22 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
   };
 
   const advance = shown?.kind === 'read' ? shown.advance : undefined;
-  const words = advanceStateWords(advance, anthropic);
+  const words = advanceStateWords(advance);
+  // The ONE capability predicate, on the read the sheet shows: Revert is drawn, and its hold said to end, only where it holds.
+  const endsHold = revertHoldEndsOn(shown);
 
   // The Revert confirm stands only while the CURRENT read still offers the revert: otherwise it closes, and says so (F13).
   useEffect(() => {
-    if (confirming === null || revertStillOffered(shown, confirming, anthropic)) return;
+    if (confirming === null || revertStillOffered(shown, confirming)) return;
     const cls = confirming;
     setConfirming(null);
     setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) });
-  }, [confirming, shown, anthropic]);
-  const confirmRead = confirming !== null && shown?.kind === 'read' && revertStillOffered(shown, confirming, anthropic) ? shown : null;
+  }, [confirming, shown]);
+  const confirmRead = confirming !== null && shown?.kind === 'read' && revertStillOffered(shown, confirming) ? shown : null;
   const confirmPrevious = confirmRead !== null && confirming !== null ? confirmRead.advance?.classes?.[confirming]?.previous ?? null : null;
   /** The confirm's yes: re-checked on the read as it is NOW, and never sent for a class that no longer offers it. */
   const confirmRevert = (cls: ModelClass): void => {
-    if (!revertStillOffered(shownNow.current, cls, anthropic)) { setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) }); return; }
+    if (!revertStillOffered(shownNow.current, cls)) { setSaid({ kind: 'alert', text: revertWithdrawnWords(cls) }); return; }
     void run('revert', cls);
   };
 
@@ -217,11 +222,14 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
       {shown !== null && shown.kind === 'read' && (
         <>
           <p className="acct-models-note" data-testid="models-advance" data-state={words.state}>{words.text}</p>
+          {advance?.state === 'ok' && !endsHold && (
+            <p className="acct-models-note" data-testid="models-revert-unoffered">{MODELS_REVERT_UNOFFERED}</p>
+          )}
           {advance?.pending != null && <p className="acct-models-note" data-testid="models-pending">{pendingWords(advance.pending)}</p>}
           <div className="acct-models-list">
             {CLASSES.map((cls) => {
               const c = shown.classes[cls];
-              const { adv, held, hold, revert } = classActs(advance, cls, anthropic);
+              const { adv, held, revert } = classActs(advance, cls, endsHold);
               const mine = busy === cls;
               const n = notes[cls];
               return (
@@ -239,24 +247,17 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
                   {adv !== null && (
                     <div className="acct-models-facts">
                       <p>{familyWords(adv.family)}</p>
-                      <p>{holdWords(adv.hold)}</p>
+                      <p>{holdWords(adv.hold, endsHold)}</p>
                       <p>{lastMoveWords(adv.lastMove)}</p>
-                      {!anthropic && previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
+                      {/* Codex only: an Anthropic revert may put back another id than `previous` (F1, D-8857), so none is predicted. */}
+                      {revert && !anthropic && previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
                     </div>
                   )}
-                  {(hold !== null || revert) && (
+                  {revert && (
                     <div className="acct-models-acts">
-                      {hold !== null && (
-                        <ModelsAct
-                          label={hold === 'release' ? 'Release' : 'Hold'} name={holdAriaLabel(hold, cls)} disabled={!mayChange} busy={mine}
-                          onTap={() => { void run(hold, cls); }}
-                        />
-                      )}
-                      {revert && (
-                        <ModelsAct
-                          label="Revert" name={revertAriaLabel(cls)} disabled={!mayChange} busy={mine} onTap={() => setConfirming(cls)}
-                        />
-                      )}
+                      <ModelsAct
+                        label="Revert" name={revertAriaLabel(cls)} disabled={!mayChange} busy={mine} onTap={() => setConfirming(cls)}
+                      />
                     </div>
                   )}
                   {/* The note is text; the shell's live region announces it once (F11). */}
@@ -272,7 +273,7 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
           open
           onClose={() => setConfirming(null)}
           title={revertTitle(confirming)}
-          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious)}
+          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious, anthropic)}
           confirmLabel={MODELS_REVERT_CONFIRM}
           onConfirm={() => confirmRevert(confirming)}
         />

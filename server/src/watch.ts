@@ -2525,7 +2525,7 @@ export class FleetWatcher {
           processStartedAt: (rec) => processStartedAtFor(reads, rec),
           readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
           // Typed-repick: an Anthropic lane's models, read only for a session past every other gate (rollLane.ts).
-          laneModels: (lane) => readLaneModels(this.deps.io, this.deps.cfg.ccrcDir, lane),
+          laneModels: (lane) => readLaneModels(this.deps.io, lane),
           anthropicLane: (lane) => this.deps.cfg.roster.byId.get(lane)?.telemetry === 'anthropic',
           log: (line) => console.warn(line),
           startedAt: this.sleepStartedAt, now: Date.now,
