@@ -6,7 +6,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Composer } from '../src/session/Composer';
-import { createSessionStore } from '../src/stores/session';
+import { createSessionStore, type SessionStoreDeps } from '../src/stores/session';
+
+type Prompt = NonNullable<SessionStoreDeps['api']>['prompt'];
 import { ApiError } from '../src/lib/apiError';
 
 afterEach(() => {
@@ -211,7 +213,7 @@ describe('never lose pasted text silently', () => {
 });
 
 describe('the retry and draft-conflict paths send the expanded text', () => {
-  const harness = (prompt: ReturnType<typeof vi.fn>) => {
+  const harness = (prompt: Prompt) => {
     const store = createSessionStore('lane-a-project-a', { api: { prompt } });
     function Harness() {
       const pending = store((s) => s.pending);
@@ -222,9 +224,9 @@ describe('the retry and draft-conflict paths send the expanded text', () => {
   };
 
   it('Retry re-sends the full text, not the token', async () => {
-    const prompt = vi.fn()
+    const prompt = vi.fn<Prompt>()
       .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'agent-down' }))
-      .mockResolvedValue({ ok: true });
+      .mockResolvedValue(undefined);
     const store = harness(prompt);
     const text = lines(20);
     edit('see: ');
@@ -239,9 +241,9 @@ describe('the retry and draft-conflict paths send the expanded text', () => {
   });
 
   it('the draft-conflict sheet’s Replace draft and Append anyway carry the full text', async () => {
-    const prompt = vi.fn()
+    const prompt = vi.fn<Prompt>()
       .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'draft-present', draft: 'left over' }))
-      .mockResolvedValue({ ok: true });
+      .mockResolvedValue(undefined);
     harness(prompt);
     const text = 'w'.repeat(1200);
     pasteText(text);
@@ -251,9 +253,9 @@ describe('the retry and draft-conflict paths send the expanded text', () => {
   });
 
   it('Replace draft carries the full text alone', async () => {
-    const prompt = vi.fn()
+    const prompt = vi.fn<Prompt>()
       .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'draft-present', draft: 'left over' }))
-      .mockResolvedValue({ ok: true });
+      .mockResolvedValue(undefined);
     harness(prompt);
     const text = lines(40);
     pasteText(text);

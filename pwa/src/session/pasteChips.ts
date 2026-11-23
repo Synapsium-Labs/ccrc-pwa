@@ -122,16 +122,18 @@ export const expandDraft = (value: string, chips: PasteChips): string =>
  *  caret goes after the first expansion. */
 export const expandChip = (value: string, n: number, chips: PasteChips): DraftEdit => {
   const spans = findTokens(value, chips).filter((s) => s.n === n);
-  if (spans.length === 0) return { value, caret: value.length };
+  const first = spans[0];
+  if (first === undefined) return { value, caret: value.length };
   const text = textOf(chips, n);
-  return { value: replaceSpans(value, spans, () => text), caret: spans[0].start + text.length };
+  return { value: replaceSpans(value, spans, () => text), caret: first.start + text.length };
 };
 
 /** Remove chip `n`: every copy of its token goes, with its text. The caret goes where the first stood. */
 export const removeChip = (value: string, n: number, chips: PasteChips): DraftEdit => {
   const spans = findTokens(value, chips).filter((s) => s.n === n);
-  if (spans.length === 0) return { value, caret: value.length };
-  return { value: replaceSpans(value, spans, () => ''), caret: spans[0].start };
+  const first = spans[0];
+  if (first === undefined) return { value, caret: value.length };
+  return { value: replaceSpans(value, spans, () => ''), caret: first.start };
 };
 
 /** A live chip, as the composer's chip row lists it. `head` is the first non-blank line, trimmed, for the eye. */
