@@ -184,27 +184,29 @@ export function measuredPairRoute(routes: TeamRoutes | null): PairRoute {
 }
 
 /** D-8808 (review 2971 F5): whether the operator's write must read the Linear store to decide its workspace. Never for a cleared
- *  key, nor for the stored key sent back with no workspace named (it keeps what is stored); every other write with a key does. */
+ *  key, nor for the unchanged key with the workspace omitted (it keeps the stored choice, a stored none included); every other
+ *  write with a key does, an explicit `workspace: null` with the unchanged key included. */
 export function writeReadsStore(before: { teamKey: string | null }, written: { teamKey: string | null; workspace?: string | null }): boolean {
   return written.teamKey !== null && !(written.workspace === undefined && written.teamKey === before.teamKey);
 }
 
-/** D-8808: the workspace a write stores beside the key, from the LIVE Linear store (`route`, asked only when `writeReadsStore`),
- *  asked through the MEASURED route (`measuredPairRoute`): a slot the answer depends on that cannot be read is `unavailable`, never
- *  stored as none; with no connected workspace the answers are today's (named: `team-unknown`; none named: stored with none).
- *  A key's workspace is set in the same write (spec §3.1.1, review 2971 F4):
- *  - a named workspace must hold the key (`team-unknown`);
- *  - with none named (`workspace` omitted or null), an omitted one keeps the stored workspace while it holds the key; otherwise
- *    the one connected workspace that holds the key is stored, a key two hold is `team-ambiguous`, and a key none holds (Linear
- *    not connected yet, or not this team) is stored with none;
- *  - an unreadable store is `unavailable`, never stored as none;
- *  - no key stores none (a named workspace with no key is `team-unknown`).
- *  A row stored with no workspace whose key one connected workspace holds already resolves to it, so the unchanged key sent back
- *  with that workspace (or with none) keeps the stored none (review 2971 F2): the pair is the same, and its source, team name,
- *  evidence and time stay. The keep is decided from what the write measures (review 3286 F1): the key is unchanged and the named
- *  slot holds it; another slot that cannot be read does not undo it, because naming a holder of the stored key changes nothing.
- *  Only two readable holders of the key do (the stored none resolves nowhere, so naming one of them is a real change). The ONE
- *  writer of which workspace a row stores. */
+/** D-8808: the workspace a write stores beside the key (spec §3.1.1, review 2971 F4), the ONE writer of which workspace a row
+ *  stores. It asks the LIVE Linear store (`route`, asked only when `writeReadsStore`) through the MEASURED route
+ *  (`measuredPairRoute`), so a slot the answer depends on that cannot be read is `unavailable` and nothing is written, never
+ *  stored as none. The cases, as the coordinator plan reference's `## linking suggest` states them:
+ *  - a workspace named: it must hold the key, else `team-unknown` (as with no workspace connected); a named slot that cannot be
+ *    read is `unavailable`;
+ *  - the workspace omitted with the unchanged key: the stored choice, a stored none included, with no read;
+ *  - the workspace omitted with a changed key: a stored workspace while it holds the new key (`unavailable` while it cannot be
+ *    read); otherwise as with none named;
+ *  - none named (omitted as above, or an explicit null, which reads with the unchanged key too): the one connected workspace that
+ *    holds the key; two holders `team-ambiguous`; a store that could not be listed, or any slot the answer depends on unread
+ *    while two readable ones do not already hold the key, `unavailable`; a key no connected workspace holds, every one read, or no workspace connected, stored with none;
+ *  - the keep of a stored none (review 2971 F2, review 3286 F1): a row stored with no workspace keeps it, with its source, team
+ *    name, evidence and time, when its unchanged key is sent back and one readable workspace holds it, named (another slot that
+ *    cannot be read does not undo it: naming a holder of the stored key changes nothing) or not (every slot read). Only two
+ *    readable holders undo it: the stored none resolves nowhere, so naming one of them is a real change;
+ *  - a cleared key stores none; a workspace named with no key is `team-unknown`. */
 export function workspaceAfterWrite(a: {
   before: { teamKey: string | null; workspace: string | null };
   written: { teamKey: string | null; workspace?: string | null };
