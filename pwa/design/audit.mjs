@@ -1131,6 +1131,35 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the one-line note under a chat message shown as plain text (lib/markdown.tsx's MsgPlain, a <p> after the <pre className=\"msg-plain\">). It is a child of .msg-assist, which paints no background, inside .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .settings-back reasoning. Its selector names no painted ancestor, so no route could ground it. An opened compaction recap puts the same note on .compaction's --bg-surface, where --ink-secondary measures higher still (tokens.css: 8.67:1 dark, 7.41:1 light); the auditor takes one ground per rule",
   },
+  // ── desktop polish wave 168: the tool-activity row ────────────────────
+  '.tool-activity-row': {
+    under: ['var(--bg-page)'],
+    why: "the row, a button with no background: its default ink. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-title': {
+    under: ['var(--bg-page)'],
+    why: "the title, 'Tool activity'. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-sep': {
+    under: ['var(--bg-page)'],
+    why: "the separator dot between the row's words. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-state': {
+    under: ['var(--bg-page)'],
+    why: "the running state, in the busy status ink. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-latest': {
+    under: ['var(--bg-page)'],
+    why: "the newest call's one-line summary. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-approval': {
+    under: ['var(--bg-page)'],
+    why: "the approval line under a collapsed row, in the attention status ink, beside its control. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-answer': {
+    under: ['var(--bg-page)'],
+    why: "the approval's control, a bordered button with no background. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
   '.build-line': {
     under: ['var(--bg-surface)'],
     why: "release/rollout Task 7, corrected fix round 1 (F15): the foot-of-screen build stamp is rendered as the last child of FleetScreen's own <main class=\"fleet\"> (FleetScreen.tsx), and .fleet (fleet.css:10) sets only sizing/padding — no background of its own. But FleetScreen is always mounted inside app.tsx's <aside className=\"shell-nav\">, and at the desktop breakpoint (min-width: 900px) .shell-nav DOES paint one, --bg-surface (styles/shell.css:131-155) — an ancestor the old claim ('no ancestor … paints a background') denied existed. Registered against that ground because it is the one an ancestor actually paints; at the mobile breakpoint .shell-nav sets no background of its own and falls through to the app shell's --bg-page instead, separately re-measured safe (6.23:1 dark / 5.25:1 light for --ink-tertiary on it — corrected fix round 2, review of d5aefc4a item 8: this entry previously misquoted --status-attention-text's 10.89/5.45 pair here instead of --ink-tertiary's own, both clearing the 4.5 floor) rather than registered, since the auditor takes one ground per rule.",

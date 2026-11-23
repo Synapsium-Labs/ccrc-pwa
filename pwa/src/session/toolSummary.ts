@@ -27,6 +27,7 @@
 // own name, verbatim.
 import type { ToolResultEvent, ToolUseEvent } from '@ccrc/ui';
 import type { ChatItem } from './chatItems';
+import type { ToolActivityItem } from './toolActivity';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
@@ -216,8 +217,12 @@ export interface ToolGroupItem {
   sentence: string;
 }
 
-/** What a transcript renders once runs are folded. */
-export type TranscriptItem = ChatItem | ToolGroupItem;
+/** What `groupToolRun` hands back: plain items, and runs folded into groups. */
+export type RunItem = ChatItem | ToolGroupItem;
+
+/** What a transcript renders: plain items, folded runs, and stretches of a turn's tool activity folded into one row
+ *  (`toolActivity.ts`), whose expansion holds the first two. */
+export type TranscriptItem = RunItem | ToolActivityItem;
 
 /** Never folded: an ask (a question for the reader), a failed entry and a
  *  live one. Each ends the run it would join, and stands alone. */
@@ -260,8 +265,8 @@ function groupSentence(entries: ToolItem[]): string {
 
 /** Fold each run of consecutive foldable tool entries into one group. Every
  *  other item passes through untouched, in order. */
-export function groupToolRun(items: readonly ChatItem[]): TranscriptItem[] {
-  const out: TranscriptItem[] = [];
+export function groupToolRun(items: readonly ChatItem[]): RunItem[] {
+  const out: RunItem[] = [];
   let run: ToolItem[] = [];
   const close = (): void => {
     const first = run[0];

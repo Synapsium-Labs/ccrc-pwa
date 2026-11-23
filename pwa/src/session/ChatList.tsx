@@ -27,8 +27,10 @@ import {
 import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
+import { foldToolActivity } from './toolActivity';
+import { ToolActivityRow } from './ToolActivityRow';
 import { groupToolRun, type TranscriptItem } from './toolSummary';
-import { TranscriptRowContext } from './transcriptRow';
+import { TranscriptRowContext, expansionMemo, type ExpansionMemo } from './transcriptRow';
 import './chat.css';
 
 /** Animated "Claude is working this turn" pulse — mirrors the terminal's
@@ -119,36 +121,55 @@ function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
   );
 }
 
-/** THE LIST THE TRANSCRIPT SHOWS (D-5475, W2 Task S13b). The set's declarative `transcriptGrouping` says whether
- *  runs of tool entries fold into one row; this applies the one shared `groupToolRun` when it does, BEFORE the list
- *  is handed to Virtuoso, because a fold changes the count, the indices and the seeded heights, which no per-item row
- *  can. Data, not logic: nothing here compares a skin id (D-5469), and outside a frame (most suites) nothing folds. */
-function transcriptOf(grouping: SkinSet['transcriptGrouping'] | undefined, items: ChatItem[]): TranscriptItem[] {
-  return grouping === 'tool-runs' ? groupToolRun(items) : items;
+/** THE LIST THE TRANSCRIPT SHOWS (D-5475, W2 Task S13b; desktop polish wave 168). The set's declarative fields say
+ *  how it folds: `toolActivity` folds each stretch of a turn's tool activity into one row (`foldToolActivity`), and
+ *  `transcriptGrouping` folds runs of tool entries (`groupToolRun`) — at the top level, or inside each activity row when
+ *  both are on. Applied BEFORE the list is handed to Virtuoso, because a fold changes the count, the indices and the
+ *  seeded heights, which no per-item row can. Data, not logic: nothing here compares a skin id (D-5469), and outside a
+ *  frame (most suites) nothing folds. */
+function transcriptOf(set: SkinSet | null, items: ChatItem[], askPending: boolean): TranscriptItem[] {
+  const runs = set?.transcriptGrouping ?? 'none';
+  if (set?.toolActivity === 'stretches') return foldToolActivity(items, { runs, askPending });
+  return runs === 'tool-runs' ? groupToolRun(items) : items;
 }
 
-/** What one transcript row is drawn from: the set, the row, and every prop a plain item's body reads. */
-type RowViewProps = Omit<Parameters<typeof ChatItemBody>[0], 'item'> & { set: SkinSet | null; item: TranscriptItem };
+/** What one transcript row is drawn from: the set, the row, the list's expansion memo, and every prop a plain item's
+ *  body reads. */
+type RowViewProps = Omit<Parameters<typeof ChatItemBody>[0], 'item'> & {
+  set: SkinSet | null;
+  item: TranscriptItem;
+  expansion: ExpansionMemo;
+};
+
+/** The fallback of a row that threw while rendering. */
+const rowFallback = (): ReactNode => <p className="msg-plain-note">This item could not be shown.</p>;
 
 /** One transcript row, drawn through the set's `TranscriptRow` part when it has one. The part takes no props
- *  (D-5678): it reads its row from `TranscriptRowContext`, with the shared renderer for a plain item. With no part,
- *  a plain item renders as it always has, and a group (which only a set with a row part asks for) as its entries. */
+ *  (D-5678): it reads its row from `TranscriptRowContext`, with the shared renderer for a plain item and for a row
+ *  inside a tool-activity row. With no part, a plain item renders as it always has, a tool-activity row as the shared
+ *  `ToolActivityRow`, and a group (which only a set with a row part asks for) as its entries. */
 function TranscriptRowView({
   set,
   item,
+  expansion,
   ...rest
 }: RowViewProps): ReactNode {
   const renderItem = (it: ChatItem): ReactNode => <ChatItemView {...rest} item={it} />;
+  const renderRow = (it: TranscriptItem): ReactNode => (
+    <TranscriptRowView {...rest} set={set} item={it} expansion={expansion} />
+  );
   const Row = set?.TranscriptRow ?? null;
-  if (Row === null) return item.kind === 'tool-group' ? item.entries.map((e) => <div key={e.key}>{renderItem(e)}</div>) : renderItem(item);
+  let body: ReactNode;
+  if (Row !== null) body = <Row />;
+  else if (item.kind === 'tool-activity') body = <ToolActivityRow item={item} />;
+  else if (item.kind === 'tool-group') return item.entries.map((e) => <div key={e.key}>{renderItem(e)}</div>);
+  else return renderItem(item);
   return (
-    <TranscriptRowContext.Provider value={{ item, renderItem }}>
-      <RenderBoundary
-        where="chat item"
-        resetKey={item.key}
-        fallback={() => <p className="msg-plain-note">This item could not be shown.</p>}
-      >
-        <Row />
+    <TranscriptRowContext.Provider
+      value={{ item, renderItem, renderRow, expansion, answer: { onAnswer: rest.onAnswer, answerLabel: rest.answerLabel, askBelow: rest.askBelow } }}
+    >
+      <RenderBoundary where="chat item" resetKey={item.key} fallback={rowFallback}>
+        {body}
       </RenderBoundary>
     </TranscriptRowContext.Provider>
   );
@@ -197,7 +218,9 @@ export function ChatListInner({
   day,
 }: ChatListProps): ReactNode {
   const set = useFrameSet();
-  const items = transcriptOf(set?.transcriptGrouping, buildChatItems(events, pending, busy));
+  const items = transcriptOf(set, buildChatItems(events, pending, busy), askPending === true);
+  // The reader's open rows, for as long as this session's view is open.
+  const expansion = useMemo(() => expansionMemo(), [id]);
   return (
     <div className="chat-inner">
       {items.map((item) => (
@@ -205,6 +228,7 @@ export function ChatListInner({
           <TranscriptRowView
             set={set}
             item={item}
+            expansion={expansion}
             id={id}
             onRetry={onRetry}
             onDiscard={onDiscard}
@@ -275,6 +299,12 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
     case 'divider': return { bucket: 'divider', lines: 1 };
     // One collapsed line, however many calls it folds (D-5475); open, it is never sampled (`inOpeningForm`).
     case 'tool-group': return { bucket: 'group', lines: 1 };
+    // One collapsed line, and the first entry that wants the reader drawn under it as its own card (desktop polish
+    // wave 168); open, it is never sampled (`inOpeningForm`).
+    case 'tool-activity': {
+      const first = item.attention[0];
+      return { bucket: 'activity', lines: 1 + (first === undefined ? 0 : shapeOf(first.entry, m).lines) };
+    }
     case 'message': return messageShape(item.event, m);
     case 'tool': {
       const ask = askCardLines(item.use, item.result);
@@ -709,14 +739,17 @@ function ChatScroller({
   day,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
-  // The GROUPED list when the set folds tool runs (D-5475): every index below — the count, the keys, the seeded
-  // sizes and Jump to latest's last item — is this list's, never the ungrouped one's.
+  // The FOLDED list when the set folds tool activity or tool runs (D-5475, desktop polish wave 168): every index below —
+  // the count, the keys, the seeded sizes and Jump to latest's last item — is this list's, never the unfolded one's.
   const set = useFrameSet();
-  const grouping = set?.transcriptGrouping;
+  const waiting = askPending === true;
   const items = useMemo(
-    () => transcriptOf(grouping, buildChatItems(events, pending, busy)),
-    [events, pending, busy, grouping],
+    () => transcriptOf(set, buildChatItems(events, pending, busy), waiting),
+    [events, pending, busy, set, waiting],
   );
+  // The reader's open tool-activity rows, for as long as this session's view is open: the list's, not a row's, because
+  // virtuoso unmounts a row scrolled out of reach.
+  const expansion = useMemo(() => expansionMemo(), [id]);
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
 
@@ -795,6 +828,7 @@ function ChatScroller({
         meter={meter}
         set={set}
         item={item}
+        expansion={expansion}
         id={id}
         onRetry={onRetry}
         onDiscard={onDiscard}
@@ -803,7 +837,7 @@ function ChatScroller({
         day={day}
       />
     );
-  }, [items, meter, set, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
+  }, [items, meter, set, expansion, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
 
   return (
     <>

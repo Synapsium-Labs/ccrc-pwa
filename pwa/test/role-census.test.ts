@@ -310,6 +310,10 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.history-corr': META,
     '.history-refusal': META,
     '.history-row--gap, .history-gap': META,
+    // The tool-activity row (desktop polish wave 168): a one-line summary of a stretch of tool calls, the same role as
+    // the tool card's row it folds; and the approval's word and control under it, the ask card's `.ask-answer` role.
+    '.tool-activity-row': META,
+    '.tool-activity-approval': META,
   },
   // The transcript's tool rows live in @ccrc/ui's sheet, not chat.css (D-5463).
   'models-sheet.css': {
