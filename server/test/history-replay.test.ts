@@ -3079,7 +3079,8 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     expect(code.filter((l) => /\bshell\s*:|\b(?:exec|execSync|execFile|execFileSync)\s*\(/.test(l))).toEqual([]);
   });
 
-  // D-5814, widened by W2-5a Task 1: the import block is exactly the fourteen modules W2-5a's driver loads, every one
+  // D-5814, widened by W2-5a Task 1: the import block is exactly the modules W2-5a's driver loads (fourteen, and run 3538's
+  // deploy/history-limits.mjs, the fifteenth, which imports nothing), every one
   // added here once (R3). node:child_process brings in `spawn` only, and node:crypto and each ccd/history module beyond
   // lib.mjs bring in exactly the names the plan's tasks use (W2-D33, W2-D74). A later W2-5a task that adds a name to a
   // module's braces updates that module's entry here in the same commit. So no edit adds a second reader unseen: keptOf
@@ -3090,8 +3091,10 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
   // the gate's names are not pinned here, and W2-5b1 Task 1's own case holds the names that PR consumes from them.
   const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', 'node:crypto',
     '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
-    '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs'];
+    '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs', './history-limits.mjs'];
   const EXACT_NAMES: Record<string, string> = {
+    // run 3538: the limits reading's pure rules, moved out whole; history-limits.test.ts pins that module imports nothing
+    './history-limits.mjs': '{ decideLimits, parseLimitsRow }',
     'node:child_process': '{ spawn }',
     'node:crypto': '{ randomBytes }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, readBounded, userVersion }',
@@ -3132,7 +3135,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
       expect(importViolations(text), label).not.toEqual([]);
     }
   });
-  it('deploy/history-replay.mjs imports exactly its fourteen modules, and node:child_process, node:crypto and each ccd/history module beyond lib.mjs bring in exactly their pinned names', () => {
+  it('deploy/history-replay.mjs imports exactly its fifteen modules, and node:child_process, node:crypto and each ccd/history module beyond lib.mjs bring in exactly their pinned names', () => {
     expect(importViolations(t5fs.readFileSync(SRC, 'utf8'))).toEqual([]);
   });
 });
@@ -4009,6 +4012,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
     mkdirSync(path.join(tree, 'deploy'));
     copyFileSync(SCRIPT, path.join(tree, 'deploy', 'history-replay.mjs'));
     writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
+    symlinkSync(path.join(repo, 'deploy', 'history-limits.mjs'), path.join(tree, 'deploy', 'history-limits.mjs'));   // run 3538: the driver imports it
     if (opts.measure !== false) writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
     mkdirSync(path.join(tree, 'ccd', 'history'), { recursive: true });
     for (const n of readdirSync(path.join(repo, 'ccd', 'history'))) {
@@ -9056,6 +9060,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7fs.mkdirSync(r7path.join(tree, r7path.dirname(rel)), { recursive: true });
       r7fs.copyFileSync(r7path.join(R7_REPO, rel), r7path.join(tree, rel));
     }
+    r7fs.symlinkSync(r7path.join(R7_REPO, 'deploy', 'history-limits.mjs'), r7path.join(tree, 'deploy', 'history-limits.mjs'));   // run 3538: the driver imports it
     for (const n of r7fs.readdirSync(r7path.join(R7_REPO, 'ccd', 'history'))) {
       if (!r7fs.existsSync(r7path.join(tree, 'ccd', 'history', n))) r7fs.symlinkSync(r7path.join(R7_REPO, 'ccd', 'history', n), r7path.join(tree, 'ccd', 'history', n));
     }

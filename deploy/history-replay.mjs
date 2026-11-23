@@ -44,6 +44,8 @@ import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
 import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, spendBudgetInForce, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
+import { decideLimits, parseLimitsRow } from './history-limits.mjs';
+export { decideLimits, parseLimitsRow };   // the limits reading's pure rules, moved out by run 3538; every importer keeps this path
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
 /** Every word the driver refuses with, in one frozen list. The first sixteen are W2-D59's, in its order (each owner
@@ -1946,13 +1948,9 @@ export async function runBatch(jobs, opts = {}) {
 // ── W2-4 Task 6: the limits stop and the spend budget (W2-D55; spec §10.2 "stops at a stated threshold", erratum E18) ──
 // Before each batch and before each spawn the driver reads ONE limits row, `$HOME/.cc-limits/<account id>.json`,
 // read-only: the one `~/.cc-limits` read in the spec (§5.2). lstat first, so a symlink, a directory or a FIFO is never
-// opened; then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. The row
-// is parsed by readLimits' rules (server/src/limits.ts), term for term: a lapsed resetAt is a FACT and writes 0; only
-// then does the age fallback infer a 0 for a value older than its own window. readLimits folds both into one
-// `*RolledOver` flag; the driver keeps the provenance beside it (`*Inferred`), because here the two answer differently:
-// a resetAt 0 is a measured reset and may admit a batch, an age-inferred 0 measured nothing and stops it as stale.
-// A parity case in history-replay.test.ts holds parseLimitsRow to readLimits over rolloverCases' bytes, so the two
-// spellings of these rules cannot drift (a .mjs operator script cannot import server/src/*.ts). The budget is the
+// opened; then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. The row's
+// pure rules, parseLimitsRow and decideLimits, live in deploy/history-limits.mjs (moved there by run 3538) and are
+// re-exported here; their header says how a row is read. The budget is the
 // cumulative spend ledger under --out (Task 4); a stop throws DriverRefusal (exit 2), and a re-run resumes, since
 // runBatch skips every finished job (Task 5). Before part 1 the values are LIMITS_DEFAULTS and a required --budget;
 // W2-5a and W2-5b pass part 1's or part 2's values through the same parameters.
@@ -1964,37 +1962,8 @@ export const LIMITS_DEFAULTS = Object.freeze({
   threshold_pct: 70, max_age_ms: 3_600_000, batch_max: BATCH_MAX, concurrency: CONCURRENCY_MAX,
 });
 
-const LIMITS_FIVE_WINDOW_S = 18000;     // readLimits' FIVE_WINDOW: a five sample older than its own 5h window has rolled over
-const LIMITS_SEVEN_WINDOW_S = 604800;   // readLimits' SEVEN_WINDOW, the same for seven
 const LIMITS_ROW_CAP = 65536;           // a limits row is about 150 bytes; a file past 64 KiB is not one, and is malformed
-const LIMITS_FUTURE_SKEW_MS = 60_000;   // a ts at most a minute ahead of the clock is skew; further ahead measured nothing
 const LIMITS_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;   // one path segment, never `..`-led or hidden
-const limitsNum = (v) => (typeof v === 'number' ? v : null);   // readLimits' numOrNull
-
-/** One limits row's text, by readLimits' rules, keeping the provenance it folds. Throws on non-JSON or a non-object. */
-export function parseLimitsRow(text, nowS) {
-  const raw = JSON.parse(text);
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new TypeError('a limits row is one JSON object');
-  const ts = limitsNum(raw.ts);
-  const fiveResetAt = limitsNum(raw.fiveResetAt);
-  const sevenResetAt = limitsNum(raw.sevenResetAt);
-  let five = limitsNum(raw.five);
-  let seven = limitsNum(raw.seven);
-  // The FACT first: a lapsed resetAt comes straight from the API, so its 0 is a measured reset.
-  let fiveRolledOver = five !== null && fiveResetAt !== null && nowS >= fiveResetAt;
-  let sevenRolledOver = seven !== null && sevenResetAt !== null && nowS >= sevenResetAt;
-  if (fiveRolledOver) five = 0;
-  if (sevenRolledOver) seven = 0;
-  // Then the INFERENCE, which may not re-derive what the fact already said (readLimits' `!fiveRolledOver` guards).
-  // readLimits sets only *RolledOver here; the driver also says the 0 was inferred, because that 0 measured nothing.
-  let fiveInferred = false;
-  let sevenInferred = false;
-  if (ts !== null) {
-    if (!fiveRolledOver && five !== null && nowS - ts > LIMITS_FIVE_WINDOW_S) { five = 0; fiveRolledOver = true; fiveInferred = true; }
-    if (!sevenRolledOver && seven !== null && nowS - ts > LIMITS_SEVEN_WINDOW_S) { seven = 0; sevenRolledOver = true; sevenInferred = true; }
-  }
-  return { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver, fiveInferred, sevenInferred };
-}
 
 /** `$HOME/.cc-limits/<accountId>.json`, read-only, through readPlain (D-5986): lstat first (only a regular file is
  *  opened), then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. Every
@@ -2010,33 +1979,6 @@ export function readLimitsRow(home, accountId, nowS) {
     return { state: 'unreadable', code: read.code };
   }
   try { return { state: 'row', row: parseLimitsRow(read.bytes.toString('utf8'), nowS) }; } catch { return { state: 'malformed' }; }
-}
-
-/** The limits stop (W2-D55): null admits the batch; otherwise the word and detail it stops with. */
-export function decideLimits(read, { nowMs, thresholdPct, maxAgeMs }) {
-  const stale = (detail) => ({ word: 'limits-stale', detail });
-  switch (read.state) {
-    case 'absent': return stale('absent');
-    case 'not-regular': return stale('not-regular');
-    case 'unreadable': return stale(`unreadable ${read.code}`);
-    case 'malformed': return stale('malformed');
-    case 'row': break;
-    default: throw new TypeError(`not a limits read: ${JSON.stringify(read.state)}`);
-  }
-  const r = read.row;
-  if (r.five === null) return stale('five-null');
-  if (r.seven === null) return stale('seven-null');
-  if (!(r.five >= 0 && r.five <= 100) || !(r.seven >= 0 && r.seven <= 100)) return stale('percent-out-of-range');
-  if (r.fiveInferred || r.sevenInferred) return stale('inferred-by-age');
-  if (r.ts === null) return stale('ts-null');
-  const aheadMs = r.ts * 1000 - nowMs;
-  if (aheadMs > LIMITS_FUTURE_SKEW_MS) return stale(`ts-future ${aheadMs}`);
-  const ageMs = nowMs - r.ts * 1000;
-  if (ageMs > maxAgeMs) return stale(`old ${ageMs}`);
-  if (Math.max(r.five, r.seven) >= thresholdPct) {
-    return { word: 'limits-threshold', detail: `five ${r.five} seven ${r.seven} at or over ${thresholdPct}` };
-  }
-  return null;
 }
 
 /** The spend budget (W2-D55): the cumulative ledger at or over the budget stops. */

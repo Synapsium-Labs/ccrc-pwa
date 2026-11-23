@@ -8,7 +8,7 @@
 //
 // ISOLATION: pure. Every row is a string handed to parseLimitsRow at a fixed clock; nothing here reads a limits folder.
 import { describe, it, expect } from 'vitest';
-import * as drv from '../../deploy/history-replay.mjs';
+import * as drv from '../../deploy/history-limits.mjs';
 
 type R = Record<string, any>;
 const D = drv as unknown as R;
