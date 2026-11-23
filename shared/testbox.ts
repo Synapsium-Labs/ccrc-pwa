@@ -657,7 +657,8 @@ export function readTestboxFrame(json: string): Read<TestboxFrame> {
 export interface TestboxRepoPackage {
   readonly name: string;
   /** The files whose sha256 is the package's install key (its `package.json` and `package-lock.json`, plus any the
-   *  row adds), relative to the repository root. */
+   *  row adds), relative to the repository root. The box adds the files the package's own lifecycle scripts run, so
+   *  the row never lists them (D-8966, `agent/src/testbox/pristine.ts#lifecycleInputPaths`). */
   readonly installInputs: readonly string[];
   /** The command heads the box runs in this package (spec §2.5). */
   readonly commands: readonly string[];

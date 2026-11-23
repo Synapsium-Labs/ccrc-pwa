@@ -360,8 +360,9 @@ A run has two phases, each its own unit as the run user (§2.3):
 1. the checkout of §2.1;
 2. for each package in the repository table's install order (ccrc-pwa: `server`, `agent`, `ui`, then `pwa`, which
    resolves `ui` source through its `file:` link), the **install key**: `sha256` of the package's install inputs (its
-   `package.json` and `package-lock.json`; the table adds `ui/package.json` for `pwa`), the node version and the
-   platform, the same inputs as `server-deps`' CI cache key. When a pristine install for that key exists, the prepare
+   `package.json` and `package-lock.json`; the table adds `ui/package.json` for `pwa`; the box adds the files the
+   package's own lifecycle scripts run, below), the node version and the platform, the same inputs as `server-deps`'
+   CI cache key. When a pristine install for that key exists, the prepare
    copies it: `cp -R --reflink=always --preserve=timestamps <pristine>/<key> checkout/<package>/node_modules`. The clone
    shares the pristine install's data blocks and diverges on write, so a test that writes under `node_modules` writes
    its own copy, exactly as it would locally. When none exists, the prepare runs `npm ci --prefer-offline` in the
@@ -645,7 +646,19 @@ prints them and exits with the run's exit status, so "counted exits" read the sa
 
 The test box keeps a repository table in its own config: one row per repository with its fetch URL, its packages in
 install order with their install inputs, the command heads per package, the declared build outputs and their build
-commands, and the system tools it needs. ccrc's code names no repository. ccrc-pwa is the first row, because its suites
+commands, and the system tools it needs. ccrc's code names no repository.
+
+**Install inputs the scripts name are derived, never listed** (D-8966). `npm ci` runs the package's own `preinstall`,
+`install`, `postinstall` and `prepare` scripts, and a pristine build holds only the install inputs, so a file such a
+script runs must be one. The box finds them itself, at the run's tree, when it computes the key: it reads the
+package's `package.json` (a declared input), takes each word of those four scripts that is a plain path relative to
+the package (no glob, brace, tilde, flag or assignment, no absolute path, no `.`, `..` or empty segment, and a `/` or a
+`.` in it), and keeps each one the tree holds as a regular file, at most 16 per package, sorted, after the row's own
+inputs. A script with quoting, expansion, redirection or a background `&` adds nothing, nor does a manifest that is not
+a JSON object; the service says so once on its stderr. So a change to such a script changes the key and the build lays
+it out, and no operator lists it. The row's list still works, unioned with what is derived. The derivation runs on the
+box, not where the row is composed: the row is written once at connect, while the scripts, and the files they name,
+belong to each run's tree. ccrc-pwa is the first row, because its suites
 are the measured load. Other repositories join by adding a row; a repository with no row runs locally with the reason
 in §2.4.
 

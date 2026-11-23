@@ -30,8 +30,8 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import path from 'node:path';
 import type { CaptureAnswer, CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
 import type {
-  ProbeAnswer, ProbeSubmit, RunCancel, RunLog, RunSubmit, RunSummary, StatusAnswer, TestboxFrame, TestboxFrameType, TestboxRepoRow,
-  TestboxSync, TestboxToolVersions,
+  ProbeAnswer, ProbeSubmit, RunCancel, RunLog, RunSubmit, RunSummary, StatusAnswer, TestboxFrame, TestboxFrameType, TestboxRepoPackage,
+  TestboxRepoRow, TestboxSync, TestboxToolVersions,
 } from '../../../shared/testbox.js';
 import type { MirrorOps } from './mirror.js';
 import type { CaptureDesk } from './captureDesk.js';
@@ -43,7 +43,7 @@ import {
   type InstallStep, type KeptRun, type Pool, type RunAct, type RunEvent, type RunState,
 } from './runs.js';
 import {
-  adopt, buildEnded, buildQueued, copyEnded, due, emptyStore, expire, nodeChanged, pristineLists, seen, undoom,
+  adopt, buildEnded, buildQueued, copyEnded, due, emptyStore, expire, lifecycleInputPaths, nodeChanged, pristineLists, seen, undoom,
   type InstallInput, type PristineSettings, type PristineStore,
 } from './pristine.js';
 import { buildInstallSpec, buildRunSpec, runPaths, writeInstallSpec, writeSpec, type RunSpec, type SpecSettings } from './spec.js';
@@ -86,6 +86,9 @@ export interface ServiceDeps {
   readonly probes?: ProbeDesk;
   /** The build capture desk (spec 2026-11-22); absent, a `capture.submit` is refused. */
   readonly captures?: CaptureDesk;
+  /** Where the service's notes go (D-8966: a lifecycle script it could not read for a package's install inputs);
+   *  absent, stderr, as the drain's driver writes its own. */
+  readonly log?: (line: string) => void;
   /** A submission was queued (D-8907: while a drain has the queue on disk, its driver writes this one there at once,
    *  so the updater's stop loses no run); absent, nothing. */
   readonly queued?: () => void;
@@ -100,8 +103,9 @@ export interface ServiceDeps {
 /** What the pristine store needs from outside (D-7543). */
 export interface PristineDeps {
   readonly settings: PristineSettings;
-  /** A run's install inputs at its tree in the mirror, in the given order; `null` when one cannot be read. */
-  readonly inputs: (mirror: string, runId: string, paths: readonly string[]) => Promise<InstallInput[] | null>;
+  /** A run's install inputs at its tree in the mirror, in the given order; `null` when one cannot be read. Each
+   *  `optional` path follows them when the tree holds it as a regular file, and is skipped otherwise (D-8966). */
+  readonly inputs: (mirror: string, runId: string, paths: readonly string[], optional?: readonly string[]) => Promise<InstallInput[] | null>;
   /** The node version the box's installs run under. */
   readonly node: () => string;
   readonly platform: string;
@@ -149,6 +153,8 @@ export class TestboxService {
   private readonly fleetTools: TestboxToolVersions | null = null;
   private readonly driving = new Set<Promise<void>>();
   private store: PristineStore | null;
+  /** The notes already written (D-8966). */
+  private readonly noted = new Set<string>();
 
   constructor(private readonly d: ServiceDeps) {
     this.pool = makePool(d.settings.runs);
@@ -481,10 +487,9 @@ export class TestboxService {
 
   /** Each package's install step for a run, in the row's install order; every key named is used now. */
   private async installSteps(run: Run, runDir: string): Promise<InstallStep[]> {
-    const pd = this.d.pristine!;
     const steps: InstallStep[] = [];
     for (const pkg of run.row.packages) {
-      const inputs = await pd.inputs(run.row.mirrorPath, run.submit.runId, pkg.installInputs).catch(() => null);
+      const inputs = await this.installInputs(run, pkg).catch(() => null);
       let key: string | null = null;
       let present = false;
       if (inputs !== null && this.store !== null) {
@@ -496,6 +501,28 @@ export class TestboxService {
       steps.push(installStep(pkg.name, key, present, this.pristineRoot, path.join(runDir, 'checkout')));
     }
     return steps;
+  }
+
+  /** D-8966: a package's install inputs at the run's tree: the row's, in its order, then the files its lifecycle
+   *  scripts run (`pristine.ts#lifecycleInputPaths` decides which to look for; the mirror read keeps the regular
+   *  files). `null` when one cannot be read, so the run installs in its own copy and no key is queued. */
+  private async installInputs(run: Run, pkg: TestboxRepoPackage): Promise<InstallInput[] | null> {
+    const pd = this.d.pristine!;
+    const declared = await pd.inputs(run.row.mirrorPath, run.submit.runId, pkg.installInputs);
+    if (declared === null) return null;
+    const manifest = declared.find((i) => i.path === `${pkg.name}/package.json`)?.bytes ?? null;
+    const derived = lifecycleInputPaths(pkg.name, manifest, pkg.installInputs);
+    for (const n of derived.notes) this.note(`${run.row.name}: ${n}`);
+    if (derived.paths.length === 0) return declared;
+    const found = await pd.inputs(run.row.mirrorPath, run.submit.runId, [], derived.paths);
+    return found === null ? null : [...declared, ...found];
+  }
+
+  /** A note, once per service for each distinct line, so a row's unreadable script is not said on every run. */
+  private note(line: string): void {
+    if (this.noted.has(line)) return;
+    this.noted.add(line);
+    (this.d.log ?? console.error)(`ccrc-testbox: ${line}`);
   }
 
   /** Every due key queued as a `pristine` entry, then the queue pumped. */
