@@ -539,6 +539,27 @@ describe('POST /api/linking/suggest', () => {
     expect(coord!.linkingOf('project-a').teamCandidates).toMatchObject([{ key: 'AAA', workspaceId: WS_A }]);
   });
 
+  // w8-suggest-workspace-id (D-8808): the remedy, "send it again with `workspace` set to one of the workspaces the detail
+  // names", is satisfiable from the refusal alone. Before this, the detail named no workspace and `linear workspaces` named URL
+  // keys only, so a coordinator held nothing the door accepts.
+  it('the team-ambiguous refusal names each holding workspace by the id the door accepts, and either one resent is taken', async () => {
+    app = await boot();
+    const res = await suggest(app, (() => { const b = ok({ team: 'AAA' }); delete b['workspace']; return b; })());
+    expect([res.statusCode, res.json().error]).toEqual([409, 'team-ambiguous']);
+    // Only what the client prints: the refusal body. Every Linear workspace id it names, in the door's own grammar.
+    const named = [...new Set(res.body.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) ?? [])];
+    expect(named.sort(), 'the detail names both holders by id').toEqual([WS_A, WS_B].sort());
+    expect(typeof res.json().detail).toBe('string');
+    // Each named id, sent back as `workspace`, is its own suggestion.
+    for (const workspace of named) {
+      const again = await suggest(app, ok({ team: 'AAA', workspace }));
+      expect(again.statusCode, again.body).toBe(200);
+      expect(again.json().suggestion).toMatchObject({ key: 'AAA', workspaceId: workspace });
+    }
+    // The refusal word, its status and the stored candidates are as before: the door decides nothing new.
+    expect(coord!.linkingOf('project-a').teamCandidates).toMatchObject([{ key: 'AAA', workspaceId: named[named.length - 1] }]);
+  });
+
   it('a project with a key refuses it team-set and writes nothing', async () => {
     app = await boot();
     coord!.setLinking('project-a', { teamKey: 'AAA', override: null }, 'd', 1);
