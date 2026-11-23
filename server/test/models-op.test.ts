@@ -5175,8 +5175,16 @@ describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
       blocked: [], sessionsBehind: [], sessionsUnmeasured: [] });
   });
 
-  it('an empty class held by a revert is behind the newest model of its stored family', () => {
+  it('an empty class held by a revert with nothing naming what it left waits: its candidate may be that very model', () => {
+    // revert-ends-itself (call 469): a revert hold whose from nothing derives never ends on that pass; the refresh stamps it.
     const hold = { at: '2026-10-22T08:00:00Z', by: 'revert' };
+    plantH({ advance: stepAdvance({ fable: { family: 'delta', hold } }) });
+    expect(laneH(health())['heldBehind']).toEqual([]);
+    expect(laneH(health())['holdsWaiting']).toEqual([{ class: 'fable', pin: null, hold, from: null }]);
+  });
+
+  it('an empty class held by a hand hold is behind the newest model of its stored family', () => {
+    const hold = { at: '2026-10-22T08:00:00Z', by: 'hand' };
     plantH({ advance: stepAdvance({ fable: { family: 'delta', hold } }) });
     expect(laneH(health())['heldBehind']).toEqual([{ class: 'fable', pin: null, newer: 'model-6-delta', reason: 'empty',
       hold, from: null, ...DUE }]);
@@ -6656,7 +6664,8 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
       expect(refresh(T4).body['moved']).toEqual([]);
       expect(readAliases().classes.opus.id).toBe(X2);
       expect(act('revert', T5).code).toBe(0);
-      expect(opus().hold, 'the second revert holds where the first did').toEqual({ at: T5, by: 'revert', model: X2 });
+      // revert-ends-itself (call 469): the alias names the held id, so there is no new id to read; it keeps X3.
+      expect(opus().hold, 'the second revert holds where the first did').toEqual({ at: T5, by: 'revert', model: X2, from: X3 });
       expect(opus().history).toHaveLength(1);
       // Released at X2 with the alias at X2: nothing moved, nothing recorded.
       release(T6);
@@ -6674,7 +6683,8 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
       fs.mkdirSync(aliasesFile());
       const r = act('revert', T4);
       expect(r.code, r.stdout + r.stderr).toBe(0);
-      expect(opus().hold).toEqual({ at: T4, by: 'revert', model: X2 });
+      // revert-ends-itself (call 469): no new id to read, so it keeps what the hold it replaces waited for.
+      expect(opus().hold).toEqual({ at: T4, by: 'revert', model: X2, from: X3 });
     });
 
     it('an older build reads a file carrying the evidence and keeps the field', async () => {

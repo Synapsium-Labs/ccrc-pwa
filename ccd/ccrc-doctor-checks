@@ -12487,7 +12487,7 @@ _dr_ma_report() {   # <check name> <rows> <remedy fn> <pass detail> [<tail>]
   return "$rc"
 }
 
-# revert-ends-itself: no remedy names a hold, a release, a shell verb or a button; each says what happens by itself.
+# revert-ends-itself: no remedy names a hold, a release or a button; each says what happens by itself.
 _dr_ma_held_back_fix() {   # <lane> <class>…
   shift
   if [ "$#" -eq 1 ]; then
@@ -12627,7 +12627,10 @@ _check_model-held-behind() {
       [.lanes[] | .id as $id | .anthropic as $alias
        | ((.holdsWaiting[]
            | "\($id) \(.class) is held on \(.pin // "none") until "
-             + (if $alias != true and .from == null then "a model of its family appears"
+             + (if .from == null and .hold.by == "revert"
+                then "the next hourly refresh records the model its Revert left and "
+                  + (if $alias == true then "its alias names a third model after it" else "a newer model of its family appears" end)
+                elif $alias != true and .from == null then "a model of its family appears"
                 elif $alias != true then "a model of its family newer than \(.from) appears"
                 elif .from == .pin then "its alias names another model, on evidence after the hold"
                 else "its alias names a model other than \(.pin) and \(.from), on evidence after the hold" end)),

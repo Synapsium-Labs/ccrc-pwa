@@ -83,7 +83,7 @@ import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '.
 import {
   AdvanceInvalid, advanceIneligible, backfillAdvance, candidateFor, chooseCandidate, classWaits, clearEffortFallback,
   clientWindowNotice, effortDroppedDetail, effortFallbacks, endHold, familyOf, heldBackOf, historyReason, holdEndEntry,
-  holdEndFor, holdEnds, holdReading, observedAt, parseAdvance, reconcilePending, recordFailure, refreshRecord, recordMove,
+  holdEndFor, codexHoldEnd, holdReading, parseAdvance, reconcilePending, recordFailure, refreshRecord, recordMove,
   resolveEffort, revertHold, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves, withEffort,
 } from '../shared/model-advance.mjs';
 import { ANTHROPIC_OPS, anthropicArm, anthropicLabels } from './models-anthropic.mjs';
@@ -1801,9 +1801,9 @@ function advancePlanOp(a, account, registry, catalogue, win) {
       candidate: null, reason: null, blocked: null, effortTo: null, canaryEffort: null,
     };
     if (why !== null) return row;
-    Object.assign(row, candidateFor({ registry, catalogue, cls, family: stored,
-      missing: adv === null ? undefined : adv.classes[cls].missing, nowMs: Date.parse(now()) }));
-    if (row.held && holdEnds({ arm: 'codex', c: adv.classes[cls], pin, choice: row }).ends) row.held = false;
+    const c = adv === null ? null : adv.classes[cls], nowMs = Date.parse(now());
+    Object.assign(row, candidateFor({ registry, catalogue, cls, family: stored, missing: c?.missing, nowMs }));
+    if (row.held && codexHoldEnd({ registry, catalogue, cls, c, choice: row, nowMs }).ends) row.held = false;
     if (row.candidate !== null && row.blocked === null && win.state === 'unreadable') {
       row.blocked = 'windows-unreadable';
     }
@@ -1921,9 +1921,9 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     if (catalogue === null || catalogue.stale) return abandon('catalogue-stale');
     if (win.state === 'unreadable') return abandon('windows-unreadable');
   }
-  const choice = candidateFor({ registry, catalogue, cls, family: adv.classes[cls].family,
-    missing: adv.classes[cls].missing, nowMs: Date.parse(now()) });
-  const ended = holdEndFor({ c: adv.classes[cls], pin: registry.classes[cls] ?? null, choice, to: a.to });
+  const c = adv.classes[cls], nowMs = Date.parse(now());
+  const choice = candidateFor({ registry, catalogue, cls, family: c.family, missing: c.missing, nowMs });
+  const ended = holdEndFor({ registry, catalogue, cls, c, choice, to: a.to, nowMs });
   if (ended !== null && !ended.ends) return abandon('held');
   if (registry.classes[cls] !== from) return abandon('pin-moved');
   /** One failed advance on record (D-5192), with what the
@@ -2236,7 +2236,7 @@ function laneHealth(acc, ctx) {
         `family ${fam} is followed by ${[cls, ...others].join(' and ')}, and its newest model is already another class's pin`);
     }
     const held = c === null || c.hold === null ? null
-      : holdReading({ c, cls, pin, choice, sinceAt: observedAt(cat.catalogue), nowMs: ctx.nowMs });
+      : holdReading({ registry, catalogue: cat.catalogue, cls, c, choice, nowMs: ctx.nowMs });
     if (held?.waiting !== undefined) { lane.holdsWaiting.push(held.waiting); continue; }
     if (held !== null) lane.heldBehind.push(held.behind);
     if (choice.candidate !== null && choice.blocked === null) waiting = true;

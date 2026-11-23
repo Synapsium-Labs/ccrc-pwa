@@ -311,12 +311,21 @@ describe('model-held-behind', () => {
     expect(r.code).toBe(0);
   });
 
-  it('a hold on an empty class ends at its family\'s first model', () => {
+  it('a hand hold on an empty class ends at its family\'s first model', () => {
+    const h = box();
+    plantLane(h, { advance: stepAdvance({ fable: { family: 'delta', hold: { at: '2026-10-22T08:00:00Z', by: 'hand' } } }) });
+    expect(check(h, 'model-held-behind').out.split('\n')[0]).toBe('WARN model-held-behind: lane-a fable is held '
+      + '(2026-10-22T08:00Z, by hand) on none though the catalogue observed 2026-09-10T00:26Z lists model-6-delta for its '
+      + 'empty class, and the hold still stands past the hourly refresh that ends it');
+  });
+
+  it('a revert hold nothing names what it left for waits, and says the next refresh records it (call 469)', () => {
     const h = box();
     plantLane(h, { advance: stepAdvance({ fable: { family: 'delta', hold: { at: '2026-10-22T08:00:00Z', by: 'revert' } } }) });
-    expect(check(h, 'model-held-behind').out.split('\n')[0]).toBe('WARN model-held-behind: lane-a fable is held '
-      + '(2026-10-22T08:00Z, by revert) on none though the catalogue observed 2026-09-10T00:26Z lists model-6-delta for its '
-      + 'empty class, and the hold still stands past the hourly refresh that ends it');
+    const r = check(h, 'model-held-behind');
+    expect(r.out).toBe(`${HB_PASS}; lane-a fable is held on none until the next hourly refresh records the model its Revert `
+      + 'left and a newer model of its family appears\n');
+    expect(r.code).toBe(0);
   });
 
   it('a held class whose pin has left the catalogue says so, and never calls an older fallback newer', () => {
@@ -966,6 +975,19 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     expect(laneOf(h)['holdsWaiting']).toEqual([{ class: 'opus', pin: X1, hold: { at: R1, by: 'revert' }, from: X2 }]);
     expect(check(h, 'model-held-behind').out).toContain(`; lane-c opus is held on ${X1} until its alias names a model other `
       + `than ${X1} and ${X2}, on evidence after the hold`);
+  });
+
+  it('a revert hold nothing names what it left for waits for the next refresh to record it, never held behind (call 469)', () => {
+    const h = box();
+    reverted(h);
+    const a = JSON.parse(fs.readFileSync(advancePath(h), 'utf8')) as { classes: Record<string, Json> };
+    a.classes['opus']!['hold'] = { at: R1, by: 'revert', model: X1 };
+    a.classes['opus']!['history'] = [];
+    fs.writeFileSync(advancePath(h), `${JSON.stringify(a, null, 2)}\n`);
+    expect(laneOf(h)['heldBehind']).toEqual([]);
+    expect(laneOf(h)['holdsWaiting']).toEqual([{ class: 'opus', pin: X1, hold: { at: R1, by: 'revert' }, from: null }]);
+    expect(check(h, 'model-held-behind').out).toContain(`; lane-c opus is held on ${X1} until the next hourly refresh records `
+      + 'the model its Revert left and its alias names a third model after it');
   });
 
   it('an unobserved class is never held behind', () => {

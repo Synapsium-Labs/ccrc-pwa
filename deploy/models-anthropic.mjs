@@ -9,7 +9,7 @@ import path from 'node:path';
 import { CLASSES, MODEL_ID_RE, aliasesFileName } from '../shared/models.mjs';
 import { MODEL_ENV_KEYS, readRegular } from '../shared/modelenv.mjs';
 import {
-  SIDECAR_TS_MAX_S, endHold, holdEndDue, holdEnds, isoSeconds, recordMove, seedAnthropicAdvance,
+  SIDECAR_TS_MAX_S, endHold, holdEndDue, holdEnds, holdFrom, isoSeconds, recordMove, seedAnthropicAdvance,
 } from '../shared/model-advance.mjs';
 import {
   AliasesInvalid, VERSION_RE, aliasSessionBehind, aliasesSourceCause, bareModelId, parseAliases, parseCatalogueCache,
@@ -468,7 +468,9 @@ export function anthropicArm(io) {
    *     than the one the Revert left and the held one, on evidence after the hold), in an aliases file that was there
    *     before, is settled as a release is: a move from the held id to the alias's id, `previous` at the held id, and the
    *     hold cleared in the same advance write (`endHold`, which records `releasedAt` as a release does). The aliases file
-   *     this refresh writes is resolved without that hold. Any other held class records nothing, as before.
+   *     this refresh writes is resolved without that hold. Any other held class records nothing, as before, except that
+   *     a revert hold nothing derives a `from` for gets the alias's id stamped as its `from` in this refresh's advance
+   *     write (`holdEnds`' `stamp`, call 469), and does not end on that pass.
    *   - THE CRASH KEY, read for every class: a refresh cut short after the advance write left the class's newest entry, an
    *     `ok` move TO the alias's id, LATER than the aliases file we started from. That entry is answered so it is pushed
    *     then, and nothing is appended, whatever id that older file names (a hold's end may have been the first refresh to
@@ -514,6 +516,7 @@ export function anthropicArm(io) {
     const moves = [];
     const settled = [];
     const ended = [];
+    const stamped = [];
     for (const c of CLASSES) {
       const before = prior.aliases === null ? null : prior.aliases.classes[c];
       const after = next.classes[c];
@@ -523,8 +526,11 @@ export function anthropicArm(io) {
       // aliases file below still records where the alias went, which is how doctor names the class held behind; the first
       // trustworthy refresh after the release records the move (D-8857).
       if (was !== null && was.hold !== null) {
-        // revert-ends-itself: the one exception, a hold whose end has come, judged against a file that was there before.
-        if (prior.aliases === null || !holdEnds({ arm: 'alias', c: was, row: after }).ends) continue;
+        // revert-ends-itself: the one exception, a hold whose end has come, judged against a file that was there
+        // before; a revert hold nothing derives a `from` for gets the alias's id stamped as one, and waits (call 469).
+        const end = holdEnds({ arm: 'alias', c: was, row: after });
+        if (typeof end.stamp === 'string') stamped.push([c, end.stamp]);
+        if (prior.aliases === null || !end.ends) continue;
         ended.push(c);
         moves.push({ class: c, from: was.hold.model, to: after.id, evidenceAt: after.evidenceAt, recorded: false });
         continue;
@@ -559,7 +565,7 @@ export function anthropicArm(io) {
       for (const c of ended) delete holds[c];
       next = resolveAliases({ ...evidence, holds });
     }
-    if (toRecord.length > 0 || settled.length > 0) {
+    if (toRecord.length > 0 || settled.length > 0 || stamped.length > 0) {
       let advance = cur.advance ?? seedAnthropicAdvance();
       for (const m of toRecord) {
         advance = recordMove(advance, m.class, {
@@ -570,6 +576,7 @@ export function anthropicArm(io) {
       }
       for (const c of settled) delete advance.classes[c].releasedHold;
       for (const c of ended) advance = endHold(advance, c, at, { alias: true });
+      for (const [c, from] of stamped) advance.classes[c].hold = { ...advance.classes[c].hold, from };
       const w = writeAdvance(a.id, advance);
       if (w !== null) return refuse(1, w[0], w[1]);
     }
@@ -604,8 +611,10 @@ export function anthropicArm(io) {
    *     as it did; one that finds the alias moved keeps it, and a revert over that revert's hold at the held id holds there
    *     again without reading the aliases file for it. Its hold names what it moved the class away from
    *     (`from`, revert-ends-itself): the class's current id in the aliases file when that row is one a launch can use, so
-   *     the hold ends once the alias names a third id; with no such row, or an id equal to the held one, it is left out
-   *     (`holdFrom` then reads the held id).
+   *     the hold ends once the alias names a third id; with no such row, or an id equal to the held one, a re-revert keeps
+   *     what the hold it replaces waited for, and otherwise it is left out: `holdFrom` then reads the newest move from the
+   *     held id, and failing that the next refresh stamps the alias's id (call 469). A revert hold never ends on the id
+   *     it left.
    *   - `release` clears the hold and records the time as the class's `releasedAt`, so a later reader can count a day from
    *     it, and the held id with that time as `releasedHold`, the evidence the next trustworthy refresh settles (D-8857).
    *     It makes no history entry and spends no `HISTORY_CAP` slot, and `lastMoveOf` never sees it. */
@@ -686,12 +695,15 @@ export function anthropicArm(io) {
             + `${path.join(homeOf(account), 'settings.json')} yourself, then hold again. Nothing was written.`);
       }
       // revert-ends-itself: a revert names the id it moves the class away from, read from the aliases file; never refused
-      // for it, so an unreadable file or row only leaves `from` out.
+      // for it. With no new one to read, a re-revert keeps what the hold it replaces waited for (call 469); with
+      // neither, `from` is left out and the next refresh stamps it.
       let left = null;
       if (opName === 'revert') {
         const al = readAliases(a.id);
         const k = al.err !== undefined || al.aliases === null ? null : al.aliases.classes[a.class];
+        const kept = c.hold === null ? null : holdFrom(c, c.hold.model, 'alias');
         if (releaseReadable(k) && k.id !== model) left = k.id;
+        else if (kept !== model) left = kept;
       }
       c.hold = { at: now(), by: opName === 'revert' ? 'revert' : 'hand', model, ...(left !== null ? { from: left } : {}) };
       if (opName === 'hold') delete c.releasedHold;

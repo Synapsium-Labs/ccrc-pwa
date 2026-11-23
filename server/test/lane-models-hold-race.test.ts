@@ -243,18 +243,21 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, action: 'hold', class: CLS, changed: true });
     expect(commitRes.first, commitRes.stdout).toMatchObject({ ok: true, op: 'advance-commit', class: CLS });
-    // The lock orders them, and either order is whole. Hold first: the commit abandons `held` and the class stays. Commit
-    // first: the class moves, and the hold lands on the moved model. Never a move that a hold stood over, never a lost hold.
+    // The lock orders them, and either order is whole (revert-ends-itself: a hand hold waits only to be passed by a model
+    // newer than its own, and the commit's candidate is one). Hold first: the commit moves past it and clears the hold in
+    // the write that records the move. Commit first: the class moves, and the hold lands on the moved model. Either way
+    // the class is at TO, and a hold stands only on the model the class runs.
     const registry = JSON.parse(fs.readFileSync(join(b.home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8')) as { classes: Record<string, string> };
-    expect(readHold(b.home), 'the hold is lost').toMatchObject({ by: 'hand' });
-    if (commitRes.first!.outcome === 'abandoned') {
-      expect(commitRes.first).toMatchObject({ why: 'held' });
-      expect(registry.classes[CLS], 'a held class moved').toBe(FROM);
-    } else {
-      expect(commitRes.first).toMatchObject({ outcome: 'moved' });
-      expect(registry.classes[CLS]).toBe(TO);
+    expect(commitRes.first).toMatchObject({ outcome: 'moved' });
+    expect(registry.classes[CLS]).toBe(TO);
+    // Hold first, the POST's `changed: true` above is the hold it placed; its answer is a re-read after the act, which the
+    // commit may already have passed, so it is not pinned in that order.
+    const hold = readHold(b.home);
+    if (hold !== null) {
+      expect(hold, 'commit first: the hold lands on the moved model').toMatchObject({ by: 'hand' });
+      expect((res.json().models as { advance: { classes: Record<string, { hold: unknown }> } }).advance.classes[CLS]!.hold)
+        .toMatchObject({ by: 'hand' });
     }
-    expect((res.json().models as { advance: { classes: Record<string, { hold: unknown }> } }).advance.classes[CLS]!.hold).toMatchObject({ by: 'hand' });
   }, 90_000);
 
   it.skipIf(!HAVE_FLOCK)('a lock held past the verb\'s wait is 409 lane-act-refused lock-busy, inside the spawn bound, and writes nothing', async () => {
