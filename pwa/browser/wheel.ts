@@ -148,7 +148,7 @@ export async function settle(page: Page, kind: Kind): Promise<Reading> {
 
 /** Bring the target to the middle of the scroller. Virtuoso re-measures rows as they mount, so one jump can land
  *  elsewhere: repeat until the target's centre sits within 8 px of the scroller's centre on three reads in a row,
- *  searching upward from the bottom while the row is not mounted. */
+ *  searching upward from the bottom while the row is not mounted, and opening the closed tool-activity rows in reach. */
 export async function reveal(page: Page, kind: Kind): Promise<void> {
   let centred = 0;
   for (let i = 0; i < 120 && centred < 3; i += 1) {
@@ -157,6 +157,11 @@ export async function reveal(page: Page, kind: Kind): Promise<void> {
       const sc = document.querySelector<HTMLElement>('.chat-scroller')!;
       const box = f(k);
       if (!box) {
+        // An answered question's card sits in its stretch's closed tool-activity row (desktop polish wave 168): open
+        // every closed one in reach before searching further up.
+        const closed = [...document.querySelectorAll<HTMLElement>('.tool-activity-row[aria-expanded="false"]')];
+        for (const row of closed) row.click();
+        if (closed.length > 0) return { state: 'searching', off: 0 };
         sc.scrollTop = Math.max(0, sc.scrollTop - 500);
         return { state: sc.scrollTop === 0 ? 'absent' : 'searching', off: 0 };
       }
