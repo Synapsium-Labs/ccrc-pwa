@@ -2090,24 +2090,6 @@ export function isSkillState(v: unknown): v is SkillState {
  * `SkillState` above is REUSED for both skills rather than copied — this block
  * adds no fifth word for a question wave 2 already gave a vocabulary.
  */
-export type FloorState = 'seeded' | 'not-seeded' | 'unmeasurable';
-
-/** Presentational only, and keyed BY the type so the compiler keeps it total —
- *  a member added to the union with no key here is a compile error, which is
- *  what makes the derived list below trustworthy. */
-export const FLOOR_STATE_MAP: Record<FloorState, string> = {
-  seeded: 'deviation floor seeded',
-  'not-seeded': 'no deviation floor yet',
-  unmeasurable: 'could not be measured',
-};
-
-export const FLOOR_STATES: readonly FloorState[] =
-  Object.keys(FLOOR_STATE_MAP) as FloorState[];
-
-export function isFloorState(v: unknown): v is FloorState {
-  return typeof v === 'string' && (FLOOR_STATES as readonly string[]).includes(v);
-}
-
 /** `absent` is a PROVEN ENOENT on the token path; `unmeasurable` is any other
  *  read failure. The BOOT read (`coord/token.ts`) cannot produce the third
  *  member at all — it throws and the server never starts — which is why the
@@ -2264,11 +2246,10 @@ export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
   return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
 }
 
-/** The five measured preconditions, without the derived verdict or the stamp. */
+/** The four measured preconditions, without the derived verdict or the stamp. */
 export interface ReadinessFacts {
   readonly worker: SkillState;
   readonly coordinator: SkillState;
-  readonly floor: FloorState;
   readonly boxToken: TokenState;
   readonly coordDb: CoordDbState;
 }
@@ -2544,7 +2525,6 @@ export const READINESS_CELL: {
 } = {
   worker: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
   coordinator: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
-  floor: (v) => (v === 'seeded' ? 'ok' : v === 'not-seeded' ? 'blocked' : 'unknown'),
   boxToken: (v) => (v === 'configured' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
   // No `unknown` arm: every member of `CoordDbState` is a proven condition.
   coordDb: (v) => (v === 'available' ? 'ok' : 'blocked'),

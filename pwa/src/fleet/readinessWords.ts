@@ -1,5 +1,5 @@
 import {
-  COORD_DB_STATE_MAP, FLOOR_STATE_MAP, READY_VERDICT_MAP, SKILL_STATE_MAP, TOKEN_STATE_MAP,
+  COORD_DB_STATE_MAP, READY_VERDICT_MAP, SKILL_STATE_MAP, TOKEN_STATE_MAP,
   READINESS_KEYS, preconditionCell,
   type ProjectReadiness, type ReadinessFacts, type ReadyVerdict,
 } from '../../../shared/api';
@@ -48,7 +48,6 @@ export function readinessWord(r: ProjectReadiness): string {
 const PHRASE: { readonly [K in keyof ReadinessFacts]: (r: ProjectReadiness) => string } = {
   worker: (r) => `worker skill ${SKILL_STATE_MAP[r.worker]}`,
   coordinator: (r) => `coordinator skill ${SKILL_STATE_MAP[r.coordinator]}`,
-  floor: (r) => FLOOR_STATE_MAP[r.floor],
   boxToken: (r) => TOKEN_STATE_MAP[r.boxToken],
   coordDb: (r) => COORD_DB_STATE_MAP[r.coordDb],
 };

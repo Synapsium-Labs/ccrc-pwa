@@ -170,7 +170,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectRepoWire,
+  type DelegationProjectionWire, type ProjectRow, type ProjectPoolsWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, ASK_OPERATOR_PRINCIPAL, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
@@ -3335,24 +3335,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...servedAge,
       };
     }
-    const coord = deps.coord;
     return {
       ...listed,
-      projects: listed.projects.map((p) => {
-        // Caught PER PROJECT: one unreadable row must not blank the rest.
-        // `ledgerFloor` has no result type — a sick store throws — and a
-        // failed read is `unmeasurable`, never `not-seeded`, which would send
-        // an operator to seed a floor that may already exist.
-        let floor: FloorState;
-        try {
-          floor = coord === undefined
-            ? 'unmeasurable'
-            : coord.ledgerFloor(p.name) === null ? 'not-seeded' : 'seeded';
-        } catch {
-          floor = 'unmeasurable';
-        }
-        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p), ...linkingCell(p) };
-      }),
+      projects: listed.projects.map((p) => ({ ...p, readiness: projectReadiness(fleet), ...poolCells(p), ...repoCell(p), ...linkingCell(p) })),
       ...servedAge,
     };
   });

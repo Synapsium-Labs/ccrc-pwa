@@ -2084,7 +2084,7 @@ describe('StartProgramSheet', () => {
 // operator is choosing a project to start a program on.
 describe('the program-ready badge', () => {
   const READY: ProjectReadiness = {
-    worker: 'present', coordinator: 'present', floor: 'seeded',
+    worker: 'present', coordinator: 'present',
     boxToken: 'configured', coordDb: 'available', verdict: 'ready', at: 1,
   };
 
@@ -2119,7 +2119,7 @@ describe('the program-ready badge', () => {
   });
 
   it('names the unmeasurable precondition visibly too — an unknown is not a blank', async () => {
-    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    openSheet(async () => withReadiness({ boxToken: 'unmeasurable', verdict: 'unknown' }));
     await screen.findByText(/readiness unknown/);
     expect(document.querySelector('.proj-ready-why')?.textContent)
       .toContain('could not be measured');
@@ -2134,7 +2134,7 @@ describe('the program-ready badge', () => {
   it('says unknown — NOT "not ready" — when a precondition could not be measured', async () => {
     // The whole point of the feature: absence of evidence is not evidence of
     // absence, and the operator must be able to tell the two apart.
-    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    openSheet(async () => withReadiness({ boxToken: 'unmeasurable', verdict: 'unknown' }));
     expect(await screen.findByText(/readiness unknown/)).toBeTruthy();
     expect(screen.queryByText(/not ready/)).toBeNull();
     const badge = document.querySelector('.proj-ready[data-verdict="unknown"]');
@@ -2164,7 +2164,7 @@ describe('the program-ready badge', () => {
 // independent spellings of each vocabulary's ok-member with nothing checking.
 describe('missingPreconditions agrees with readyVerdict, by construction', () => {
   const READY: ReadinessFacts = {
-    worker: 'present', coordinator: 'present', floor: 'seeded',
+    worker: 'present', coordinator: 'present',
     boxToken: 'configured', coordDb: 'available',
   };
   const stamp = (f: ReadinessFacts): ProjectReadiness =>
@@ -2182,8 +2182,6 @@ describe('missingPreconditions agrees with readyVerdict, by construction', () =>
   it.each([
     ...(['absent', 'unmeasurable'] as const).flatMap((v) =>
       [['worker', v], ['coordinator', v]] as [keyof ReadinessFacts, string][]),
-    ...(['not-seeded', 'unmeasurable'] as const).map((v) =>
-      ['floor', v] as [keyof ReadinessFacts, string]),
     ...(['absent', 'unmeasurable'] as const).map((v) =>
       ['boxToken', v] as [keyof ReadinessFacts, string]),
     ...(['degraded', 'not-configured'] as const).map((v) =>
@@ -2199,9 +2197,9 @@ describe('missingPreconditions agrees with readyVerdict, by construction', () =>
     // The corollary stated as its own case: this is the shape an operator
     // actually hits — a badge saying "not ready" over nothing at all.
     for (const worker of ['present', 'absent', 'unmeasurable'] as const) {
-      for (const floor of ['seeded', 'not-seeded', 'unmeasurable'] as const) {
+      for (const boxToken of ['configured', 'absent', 'unmeasurable'] as const) {
         for (const coordDb of ['available', 'degraded', 'not-configured'] as const) {
-          const facts = { ...READY, worker, floor, coordDb };
+          const facts = { ...READY, worker, boxToken, coordDb };
           const empty = missingPreconditions(stamp(facts)).length === 0;
           expect(empty, JSON.stringify(facts)).toBe(readyVerdict(facts) === 'ready');
         }

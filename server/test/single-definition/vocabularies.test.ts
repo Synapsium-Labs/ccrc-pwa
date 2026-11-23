@@ -321,8 +321,6 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
   // the thing being protected — a fifth vocabulary added next to these should
   // trip the same three assertions without anyone remembering to write them.
   it('defines the four readiness vocabularies exactly once, in shared/', () => {
-    oneDefinition(/^\s*export type FloorState\b/m, 'FloorState');
-    oneDefinition(/^\s*export const FLOOR_STATE_MAP\b/m, 'FLOOR_STATE_MAP');
     oneDefinition(/^\s*export type TokenState\b/m, 'TokenState');
     oneDefinition(/^\s*export const TOKEN_STATE_MAP\b/m, 'TOKEN_STATE_MAP');
     oneDefinition(/^\s*export type CoordDbState\b/m, 'CoordDbState');
@@ -334,7 +332,7 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
   it('DERIVES every readiness member list from its map', () => {
     const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
     for (const [list, map] of [
-      ['FLOOR_STATES', 'FLOOR_STATE_MAP'], ['TOKEN_STATES', 'TOKEN_STATE_MAP'],
+      ['TOKEN_STATES', 'TOKEN_STATE_MAP'],
       ['COORD_DB_STATES', 'COORD_DB_STATE_MAP'], ['READY_VERDICTS', 'READY_VERDICT_MAP'],
     ] as const) {
       expect(api, `${list} is not derived from ${map}`).toMatch(
