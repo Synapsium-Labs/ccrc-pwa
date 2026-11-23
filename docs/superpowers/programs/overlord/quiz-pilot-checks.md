@@ -4,7 +4,8 @@ The note of run 3514 (programme `overlord`, issue #2491), for the coordinator to
 D-number was issued, so departures are named by slug. It covers what changed and why, what the change means for the
 history gate's own pilot, what was measured and what was not, and the design options for the three failures this round
 leaves open. It reads after run 3508's note (`quiz-weekly-repair.md`, section 3, on PR #3252's branch until that PR lands),
-whose finding it builds on. Fix round 1 (review 3522) is folded in throughout and summarised under "In short".
+whose finding it builds on. Fix round 1 (review 3522) is folded in throughout and summarised under "In short". Fix
+round 2 (review 3528) added tests and words only: no line of the three deploy files changed after e0cd075057.
 
 ## In short
 
@@ -44,7 +45,7 @@ whose finding it builds on. Fix round 1 (review 3522) is folded in throughout an
 |---|---|
 | The alias table and its reader (`grantedToolNamesOf`), the plugin class (`pluginClassOf`), the plugins record (`pluginsLoadedOf`), the tools and plugins rows of `initChecksOf` | `deploy/history-replay.mjs` |
 | The leftover's shape (`leftoverShapeOf`, with `LEFTOVER_SHAPE_MAX_ENTRIES` 1000 and `LEFTOVER_SHAPE_NAMED_DEPTH` 2), added by `persistenceMeasured` to a measured `left` run | `deploy/history-replay.mjs` |
-| `arms --repilot`, the one door that pilots a failed week's `--out` again (`repilotPrepare`, `step0bResultOf`, `step0bFailedRel`); the pin's one composer `releasePinText` and its one reader `armsPinOf`; the word `repilot-release-moved` | `deploy/history-quiz-single.mjs` |
+| `arms --repilot`, the one door that pilots a failed week's `--out` again (`repilotPrepare`, `step0bResultOf`, `step0bFailedRel`); the pin's one composer `releasePinText` and the module's pin reader `armsPinOf` (the runner has its own, section 3); the word `repilot-release-moved` | `deploy/history-quiz-single.mjs` |
 | `repilotOf`, `repilotPermitOf`, `PILOTS_MAX` (3), `PILOT_FAILED`, `STAY_CLOSED`; the pilot record, the reopening, the one-act permission and the `--repilot` flag | `deploy/history-quiz-unattended.mjs` |
 | The pins | `server/test/history-replay.test.ts` (the characterization block and the rulings 1 to 3 blocks at its end, and two older rows that now project the plugins state), `server/test/history-quiz-single.test.ts` (ruling 5's door), `server/test/history-quiz-unattended.test.ts` (the decider's table and the wiring) |
 
@@ -88,6 +89,7 @@ changes.
 | Where the pilot runs | In the same week directory, through `arms --repilot`, so its spend lands on the week's one ledger. |
 | What `--repilot` does | With no failed result on the `--out`, it does nothing. With one, it first refuses `out-refused` if any arm batch was ever planned there, because the week's arms would then span two releases. It also refuses `out-refused` if the pin is not this setup's: the kind and setup check stays on the pin it replaces. If the pin already names the round after the failed one, that round is under way: it stopped before its result was written. It is resumed only on the release it was pinned to; on any other release it refuses `repilot-release-moved`, so one pilot result never mixes two releases. Otherwise it keeps the failed result as `quiz/step0b/<mode>.failed.r<round>.json`, writes the pin for the next round on the release it measures, and runs step 0b as that round. It makes no decision of its own. |
 | Why the pin has two write sites | The first start writes the pin and every later `arms` verifies it (`pinArmsRelease`). After a failed pilot, the pin is replaced on purpose for the round it starts (`repilotPrepare`). Both read the pin through `armsPinOf` and compose it with `releasePinText`. The reviewer's words for the replacement's safety: "the overwrite is gated on a verified failed pilot of this setup with no arm batch planned; `pinArmsRelease` re-reads the new pin on the next line; setup and frozen list are verified independently". The kind and setup check is kept on the replaced pin anyway (F3). |
+| Why the pin has two readers | The single-arm module reads the pin through `armsPinOf`, which checks the kind and the setup sha and answers the round. The runner reads it through `pinnedReleaseOf`, only to label a week's first pilot. The two are legitimately different: the runner's reader is the stricter one (it also wants `v` 1 and a non-empty string release), it reads only its own week folder, and it fails closed, so a pin it cannot read keeps the week closed. |
 | A pass | The week carries on into arms, judge, report and record, as a first pass would. |
 | Status wire | No change. `last` keeps its fields, and a closed week reads `act: done, outcome: refused, word: pilot-failed` as before (see the first known limit in section 7). |
 
@@ -168,27 +170,40 @@ sweep tick would have read the folder, because the code shows that it cannot.
 
 ## 5. Measurements
 
-Every count below was measured at commit `884ceeeb95`, the last commit that changes a file under test. The note's own
-commit after it changes no file under test. Every run went through `ccrc test` in this workspace.
+Where each count comes from:
+- **The workspace.** The suites, the type check and the guards ran in this workspace's `server` package through
+  `ccrc test`, at commit `285755f04d`. That is the last commit that changes a file under test. The note's own commit after
+  it changes no file under test, and no deploy file has changed since `e0cd075057`.
+- **The scratch copy.** The mutants ran in a scratch copy of the tree at the commit each list names, also through
+  `ccrc test` in that copy's `server` package.
+- **The user.** Every count was taken as an ordinary user, not root. The kill cases and the unreadable-leftover case
+  skip themselves when the tests run as root, so the mutants only those cases kill (N3, N8, N9, N14, R8, R9) are killed
+  only as an ordinary user.
 
 - **Characterization first.** Commit `57d8a746c3` pinned today's behaviour on the measured shapes and was green against
   `main` d7c8b5866b. On those shapes, tools, plugins and skill failed, persistence failed through both halves, and the
   failure detail listed persistence, tools, plugins and skill. The change commit edited exactly the rows that rulings 1
   and 2 move: tools now pass, and the detail now lists persistence, plugins and skill. Each edited row says which ruling
   moved it.
-- **Suites at `884ceeeb95`, all green:**
-  - `history-replay`: 1895 cases, run alone with one worker. The first try at this commit was stopped by the fleet test
-    slice's shared memory cap (exit 137, no test failed); the second run passed.
-  - Together in one run: `history-quiz-single`, `history-quiz-single-characterization`, `history-quiz-unattended`
-    (171 cases on its own in the scratch copy), `continuity-quiz-lane` and `lifecycle`: 364 cases.
+- **Suites at `285755f04d`, in the workspace, all green:**
+  - `history-replay`: 1895 cases, run alone with one worker. At `884ceeeb95`, the first try was stopped by the fleet test
+    slice's shared memory cap (exit 137, no test failed) and the second run passed. Its test file and the code it tests
+    are unchanged since that commit.
+  - Together in one run: `history-quiz-single`, `history-quiz-single-characterization`, `history-quiz-unattended`,
+    `continuity-quiz-lane` and `lifecycle`: 372 cases. Of these, `history-quiz-single` has 55 and
+    `history-quiz-unattended` has 174, measured as the pair in one run (229).
   - The tree guards: 64 files, 1889 cases, 3 skipped. They are `growth-caps`, `growth-check`, `anchors`, `citations`,
     `deviation-refs`, `ownership`, `dtbd`, `oss-metadata`, `single-definition/*` and `rings/*`.
   - The test tree's type check is clean.
   - Code lines in `deploy/history-replay.mjs`: 6793 against its cap of 6796 (`main` has 6756).
 - **Not run:** the whole server suite. It was not run locally; the PR's CI run on the pushed tip is the measurement of it.
-- **Mutants, all re-measured at `884ceeeb95`.** Each mutant was applied to a scratch copy of the tree at that commit
-  (never to the workspace), its named tests were run, and the file was restored; a kill is a non-zero exit with a test
-  summary printed. Round 1's twenty and fix round 1's sixteen are killed. One is equivalent (N8b, below).
+- **Mutants.** Each mutant was applied to a scratch copy of the tree (never to the workspace), its named tests were run,
+  and the file was restored. A kill is a non-zero exit with a test summary printed.
+  - Round 1's twenty (M) and fix round 1's sixteen (N) were re-measured at `884ceeeb95` and are all killed. One more is
+    equivalent (N8b, below).
+  - Fix round 2's ten (R) were measured at `285755f04d`, whose deploy files match `884ceeeb95`'s: each new case was green
+    there unmutated and red under its mutant.
+  - R1, R2 and R3 are the three mutants review 3528 executed at `e0cd075057`, where all three survived.
 
 | Mutant | Killed by |
 |---|---|
@@ -226,6 +241,16 @@ commit after it changes no file under test. Every run went through `ccrc test` i
 | N12a, N12b, N12c the pin reader takes another kind, another version, a release that is no string (A3) | the pin rows |
 | N13 the permission not given back after a resumable stop | the resume on its own release |
 | N14 a re-pilot counted twice at its closure | the counts in the kill and wiring cases |
+| R1 a pin with no round read as round 1 (review 3528 executed it; it survived at e0cd075057) | a pin with no round, as older code wrote it, pilots as round 1 |
+| R2 the refusal of a round past the next removed (review 3528 executed it; it survived) | a pin whose round is past the next one is refused |
+| R3 the kind check dropped from the pin reader (review 3528 executed it; it survived) | a pin of another kind is refused, even with this setup's sha |
+| R4 the refusal of a removed pin removed | a failed week whose pin was removed is refused |
+| R5 the composer accepts any round | the composer refuses a round that is not a non-negative integer |
+| R6 the runner passes the flag a value (`--repilot true`) | the exact argument list: the first pilot's, then the bare flag |
+| R7 the permission given back after a stop that is not resumable | window (a), the stop that is not resumable |
+| R8 the permission left on the row before the spawn | window (a), the kill |
+| R9 the same mutant, measured against window (b) | window (b): the kill after the pin moved |
+| R10 a damaged pilot list read as an older row | the damaged-list rows `true` and `{ release }`, which replaced `[]` and `[null]`: those two closed under the older reader too, so they did not discriminate (A7) |
 
 **The equivalent one, N8b.** Removing the save at the reopening changes no answer. The permission's own save, when the
 `arms` act takes the permission off the row, is the save before the spawn, and it writes the whole reopened row. Between
@@ -233,10 +258,13 @@ the reopening and that act, the runner's only steps are its checks (record path,
 spawns. The reopening's save is kept so the row stands even when one of those checks stops the tick; it is named here
 rather than counted as a kill.
 
-**The kill stand-in.** A runner killed between the driver's write and its save is played by a stub driver that writes its
-evidence (the week's new pin), then makes the quiz root read-only. The runner's save after the act then fails, which the
-runner reports as an internal error. The case restores the root and removes the stale lock, as a restart would find them,
-then ticks again. It is a stand-in: no process is killed.
+**The kill stand-in.** A runner killed after a point in the act is played by a stub driver that writes what the real
+driver has written by that point, then makes the quiz root read-only. Before the pin moves it writes nothing; after, it
+writes the week's new pin. The runner's save after the act then fails, which the runner reports as an internal error. The
+case restores the root and removes the stale lock, as a restart would find them, then ticks again. Every later act is
+answered by the stub as the real single-arm module answers at that point: `release-moved` while the pin still names the
+old release, `pilot-failed` once the pin names the installed release, and `repilot-release-moved` for a round under way on
+another release. It is a stand-in: no process is killed.
 
 ## 6. Departures, by slug
 
@@ -253,6 +281,10 @@ then ticks again. It is a stand-in: no process is killed.
 - **permission-one-act**: the re-pilot permission is `{ release }`, good for one `arms` act. After a resumable stop it is
   given back only for that release. A move of the release in between closes the week through the driver's own
   `release-moved`, without a new decision.
+- **pin-round-past-the-next-refused**: `repilotPrepare` refuses `out-refused` when the pin names a round past the one it
+  would start. No writer makes such a pin, so it stands only for a damaged folder.
+- **bare-flag-for-true**: the runner's `flagsOf` passes a `true` value as a bare flag (`--repilot`), for every act. The
+  single-arm module's argument grammar takes `repilot` as a flag that has no value.
 - **pin-carries-its-round**: the release pin carries the step 0b round it was written for (`round`). A pin written before
   this change reads as round 0. The runner's pin reader does not read the round.
 - **repilot-release-moved**: a new refusal word of the single-arm module (`QUIZ_SINGLE_REASONS`), for a round under way on
@@ -296,5 +328,18 @@ then ticks again. It is a stand-in: no process is killed.
 - **`--repilot` by hand decides nothing** (F2). Outside the runner the flag stays a permission: it applies no cap and no
   same-release rule. It only refuses a pin that is not this setup's, an arm batch already planned, and a round under way
   on another release.
-- **A kill after the reopening's save and before the spawn** spends nothing. The next tick runs that same pilot, which is
-  already counted, while its release is installed.
+- **A kill after the reopening's save and before the permission's save** spends nothing. The next tick runs that same
+  pilot, which is already counted, while its release is installed. Later in the act, two windows lose the counted pilot
+  (fix round 2, F1). In both, nothing is spent and no later release reopens the week. Taking the permission off the row
+  before the spawn is what keeps a kill from buying a second pilot on one release, and that bound matters more than the
+  availability it costs. Both windows are pinned by tests as they stand today.
+  - (a) A kill, or a stop that is not resumable, after the permission's save and before the driver has moved the pin. The
+    week closes on the `release-moved` word with the counted pilot unrun.
+  - (b) A kill after the pin is written and before the result. The week closes on the pilot word, and a later release is
+    then refused with the round's own word, `repilot-release-moved`.
+- **The week's first pilot is counted when its refusal returns** (fix round 2, A1). A kill after the driver wrote its failed
+  result and before that save, followed by a release move, closes the week on the `release-moved` word, and the week is
+  not piloted again. This is fail-closed: nothing is spent.
+- **Two readings of the release** (fix round 2, A2). The pilot is counted against the runner's reading of the installed
+  release, and the driver pins its own reading seconds later. An update that lands between the two readings can let one
+  more pilot run on a release already piloted. The cap of three and the week's one budget still hold.
