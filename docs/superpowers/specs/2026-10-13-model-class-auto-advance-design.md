@@ -28,7 +28,11 @@ the written spec with them on 2026-10-15.
 > in the same write as the move, once a model newer than that one appears: on a Codex lane a newer version of the
 > same family, on an Anthropic lane the alias resolving to a third id after the hold. Doctor stops telling anyone to
 > release a hold. The phone's sheet offers Revert alone, on both kinds of lane, wherever the box reports that it ends
-> holds itself. A hold written before this, with no record of what it reverted from, ends at the next newer model.
+> holds itself. Holds written before this differ by kind. A hand hold takes the held id as its baseline and ends at the
+> first model newer than it. A Revert with a recorded baseline ends on a model newer than the one it left. An older Revert
+> with no record reads the class's history for that baseline, on either kind of lane; with no usable history, a
+> trustworthy refresh records the current candidate as the baseline and does not end the hold on that pass. The
+> retirement exception and the canary are unchanged.
 > Where the sections below still describe a Hold switch, a Release, a hold as a standing brake, or when doctor warns
 > about a held class, this note governs.
 > The programme records it as modification 94 of its definition of done (done-when 5 and 6).
@@ -397,15 +401,16 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
 - **The canary is a marked launch.** A synthetic request would gate nothing, because every new launch already goes to
   the new model. So running sessions move only after a fresh alias launch on that lane has reported the new id
   (§2.5.2): the newest kept launch reading must be the class's current id, never merely present.
-- **ccd's routing record gains the model id beside the class,** on every lane, and its readback compares the id when
-  the pending change is an id change (`_route_readback` confirms by family today, through `_model_family_class`, so an
-  id change alone has nothing to confirm it). The id is recorded from the session's own reading, never typed, by a
-  step of the supervise tick of its own, beside the applier and outside its pending check: in the steady state
-  nothing is pending, and the applier returns before it reads anything. The same step fills a launch's mark. A
-  reading counts only when it is strictly later than the record's stamp and the process start, as the readback holds
-  it today. Every spawn rewrites the routing record, and a class change drops the id, so the id is recorded again
-  after either. A session with no routing record gets none, and a session with no recorded id is never pending. The
-  step costs the tick no fork while nothing has changed.
+- **ccd's routing record gains the model id beside the class,** on every lane. An observed id is recorded, never
+  queued or typed as an id change: nothing is pending on an id change (D-8833). The class readback still confirms by
+  family (`_route_readback`, through `_model_family_class`) and records the id it confirmed (D-8853); it does not compare
+  against a pending id. The id is recorded from the session's own reading, never typed, by a step of the supervise tick
+  of its own, beside the applier: in the steady state nothing is pending, and the applier returns before it reads
+  anything. The same step fills a launch's mark. A reading counts only when it is strictly later than the record's
+  stamp and the process start, as the readback holds it. Every spawn rewrites the routing record, and a class change
+  drops the id, so the id is recorded again after either. A session with no routing record gets none. The step costs
+  the tick no fork while nothing has changed. (The approved text had a pending id change and a readback that compared
+  ids; neither was built, and the idle relaunch below decides from the recorded id and the fresh reading instead.)
 - **A running session moves by the existing idle relaunch, and nothing is typed (#3238, call 409).** This replaces the
   typed re-pick the approved text described (see the history below). A running Anthropic session whose model is not its
   class's current target becomes one more reason for the automatic roll (`ccd hibernate --roll`, decided in
@@ -527,9 +532,9 @@ sequenceDiagram
   - a `/model` typed with a name saves the account default (sourced: `ccd/ccrc-doctor-checks:7111`).
 - **D12 (Agreed): shell verbs.** The same `ccrc models <id> hold|release|revert <class>` the operation spawns are
   documented for shell use, for a box whose console is down. The verbs exist either way, because the operation
-  needs them; D12 decides only whether the README offers them to the operator. (Amended 2026-11-22: the console
-  offers Revert alone; whether the shell keeps `hold` and `release` is decided by the run that removes them from the
-  sheet and the door, and nothing tells the operator to run them.)
+  needs them; D12 decides only whether the README offers them to the operator. (Amended 2026-11-22, shipped in #3246: the
+  console's sheet and its write door offer Revert alone; `hold` and `release` remain shell verbs and agent vocabulary,
+  and nothing tells the operator to run them.)
 
 ### 2.8 What doctor reports
 
@@ -679,8 +684,9 @@ Each part ships with tests that go red when its guard is removed, measured, per 
     target only after a launch has been seen on it, a held id needs no launch, and a cache target with only an older
     kept launch reading is not a target (#3238; the typed re-pick tests of the first design are superseded).
   - The canary by real use: no move before a marked launch reports the new id, and a move after one.
-  - ccd's routing record with the model id: a newer id counts as pending on an Anthropic lane, and the readback
-    compares the id.
+  - ccd's routing record with the model id: an id change is recorded, never typed or pending, and the readback confirms
+    by family and records the id it confirmed (D-8833, D-8853). The first design's tests (a newer id pending on an
+    Anthropic lane, a readback comparing the id) are superseded.
   - The hold's launch-environment id is present only while held, and an unreadable advance file still launches.
   - Effort: the composed `--effort` is unchanged by an id move, and an orphaned saved level is carried only under
     `auto`.

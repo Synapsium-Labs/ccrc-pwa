@@ -131,7 +131,7 @@ Each row edited one source line in place, ran the named tests, and restored the 
 ## What review 3493 measured
 
 Review 3493 read fix round 1's head (call 555) and is the evidence for the counts below. They are the reviewer's, not the
-worker's counts above, and not the old head's. The worker's own reported count at fix round 1's head was 259 unit
+worker's counts above, and not the old head's. The worker's own reported count at fix round 1's head was 259 focused
 passes; it is recorded here as that report only, with its file set unmeasured, and is a different set from 246 and 11.
 
 - **Unit and screen files:** 246 passes across `models`, `models-sheet-words`, `models-sheet` and `accounts-screen`.

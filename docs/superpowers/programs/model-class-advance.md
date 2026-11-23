@@ -185,8 +185,9 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   Anthropic lanes with `revert-holds-until-newer`, offered on both kinds of lane only where the box ends holds.
 - **A Revert's hold ends by itself (calls 411 and 412).** A Revert records the model it moved away from. One decider in
   the advance rule ends the hold: on a Codex lane when a newer version of the same family appears, on an Anthropic lane
-  when the alias, seen after the hold began, names a third id. A hold that records nothing derives it, from the
-  history on a Codex lane, else the held id, so an old hand hold ends at the next newer model. The refresh clears the
+  when the alias, seen after the hold began, names a third id. A hand hold takes the held id as its baseline and ends at
+  the first newer model. A Revert that records nothing reads the class's history for it, on either kind of lane; with no
+  usable history, a trustworthy refresh records the candidate as the baseline and does not end the hold on that pass. The refresh clears the
   hold in the same write as the move. A held pin the catalogue has retired ends its hold and takes the move an unheld
   class would take. Doctor warns only when a hold should have ended and still stands. The read gains a fact that the
   box ends holds, and the sheet offers Revert only where it is present, so a new console never strands a hold on an
@@ -202,7 +203,7 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   text-level cutter, the literal `--apply` read, a supervisor started through the service manager, and a bare
   `ccd <verb>`, which is not an edge. #3222's one-reader guard reads the spellings it names, not every way to write a
   second call.
-- **What wave 10 reconciled (2026-11-23, run 3500).** The spec's status, §2.2 and §2.8 and "Where things stand", and this
+- **What wave 10 reconciled (2026-11-23, run 3500).** The spec's status, §2.2, §2.5.6, §2.8, the section 5 bullets and "Where things stand", and this
   ledger, now describe what shipped rather than the plans' future tense: a normal Codex advance goes strictly forward
   after a passing canary, the one exception being the retirement of a pin the catalogue no longer lists, after six hours of
   continuous fresh sightings counted on the catalogue's own fetch times, with no shortcut by the clock; an Anthropic lane

@@ -9,12 +9,13 @@ at 31a07be5d0, which contains #3246 (merge 7ac5df4c96).
 - **The spec** (`docs/superpowers/specs/2026-10-13-model-class-auto-advance-design.md`): its status line; §2.2's
   exception as the six-hour retirement rule (continuous fresh sightings, the catalogue's own fetch times, a gap of more
   than 90 minutes restarting the count, no wall-clock shortcut); §2.8's `model-held-behind` row, the wave 3 causes and
-  the `model-release-lookup` check; the Shipped list; and "Waiting on you", which is now the live checks, none of them a
-  step for the owner.
+  the `model-release-lookup` check; §2.5.6 and the section 5 bullets (the idle relaunch with nothing typed, no pending id
+  change or readback compare, the first design's tests marked superseded); the banner's three kinds of older hold; D12 in
+  shipped tense; the Shipped list; and "Waiting on you", which is now the live checks, none of them a step for the owner.
 - **The programme ledger** (`docs/superpowers/programs/model-class-advance.md`): the merged follow-ups, the waves table,
   what wave 10 reconciled, the Models sheet after #3246, the issues read, the proposed done-when 3 correction, and a
   "Remaining" section that keeps merge, release, installation and live observation apart.
-- **`fu-revert-holds-until-newer.md`**: D-8857's three ways to settle, review 3493's counts kept apart from the worker's,
+- **`fu-revert-holds-until-newer.md`**: D-8857's settling examples (not an exhaustive list), review 3493's counts kept apart from the worker's,
   the cross-check against calls 469, 503, 527, 555 and 561.
 - **The Anthropic arm's plan**: a correction under D-8751 to one push per class move, with the over-cap wording and the
   strong-timeout limit. Its head commit carries the `Ledger-Edit:` trailer.
