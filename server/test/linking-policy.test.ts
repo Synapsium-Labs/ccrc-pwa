@@ -342,16 +342,35 @@ describe('parseTeamConfirm, confirmedCandidate and overlordLinkCallBody (D-8809)
 // D-8808, D-8809: the pair's verdict over the measured route.
 describe('teamPairVerdict', () => {
   const slot = (id: string, teams: string[]): LinearRouteSlot => ({ ref: { source: 'file', id }, workspaceId: id, urlKey: null, teamKeys: teams });
-  it('answers the one holder, and each refusal its own word with a fixed detail', () => {
+  it('answers the one holder, and each refusal its own word with a fixed detail (the team-ambiguous one, its holders: below)', () => {
     expect(teamPairVerdict({ kind: 'slot', slot: slot('ws-a', ['AAA']) })).toEqual({ ok: true, workspaceId: 'ws-a' });
     expect(teamPairVerdict({ kind: 'unmeasured' })).toEqual({ ok: false, error: 'unavailable', detail: 'a Linear workspace the pair depends on could not be read' });
-    expect(teamPairVerdict({ kind: 'refused', word: 'team-ambiguous', candidates: [] }))
-      .toEqual({ ok: false, error: 'team-ambiguous', detail: 'more than one connected Linear workspace holds the key' });
     expect(teamPairVerdict({ kind: 'refused', word: 'not-configured' })).toEqual({ ok: false, error: 'not-configured', detail: 'no Linear workspace is connected' });
     for (const word of ['team-unknown', 'workspace-unknown', 'workspace-required'] as const) {
       expect(teamPairVerdict({ kind: 'refused', word }), word)
         .toEqual({ ok: false, error: 'team-unknown', detail: 'the pair is not held in the connected Linear workspaces now' });
     }
+  });
+});
+
+describe('teamPairVerdict: the team-ambiguous detail names each holding workspace by id (D-8808, D-8809)', () => {
+  const W = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const ambiguous = (holders: Array<{ workspaceId: string; urlKey: string | null }>) =>
+    teamPairVerdict({ kind: 'refused', word: 'team-ambiguous', candidates: [], holders });
+  const PREFIX = 'more than one connected Linear workspace holds the key; send one of these as workspace: ';
+  it('two holders: the id with its URL key, or the bare id when it has none', () => {
+    expect(ambiguous([{ workspaceId: W(1), urlKey: 'ws-a' }, { workspaceId: W(2), urlKey: null }]))
+      .toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${W(1)} (ws-a), ${W(2)}` });
+  });
+  it('a URL key is Linear\'s data: cleaned, and bare when it cleans to nothing', () => {
+    expect(ambiguous([{ workspaceId: W(1), urlKey: '  ws-a\u202e\n ' }, { workspaceId: W(2), urlKey: ' \u200b\u202e\n ' }]))
+      .toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${W(1)} (ws-a), ${W(2)}` });
+  });
+  it('at most 8 holders are named, and the rest are counted', () => {
+    const nine = Array.from({ length: 9 }, (_, i) => ({ workspaceId: W(i + 1), urlKey: null }));
+    const eight = nine.slice(0, 8);
+    expect(ambiguous(nine)).toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${eight.map((h) => h.workspaceId).join(', ')}, and 1 more` });
+    expect(ambiguous(eight)).toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${eight.map((h) => h.workspaceId).join(', ')}` });
   });
 });
 

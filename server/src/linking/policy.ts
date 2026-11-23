@@ -8,6 +8,7 @@ import type {
 import { TEAM_SUGGESTION_WHY_MAX, teamEvidenceClause } from '../../../shared/linking.js';
 import { CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_TEXT_MAX, CALL_WHY_MAX } from '../coord/coordCalls.js';
 import { measuredProjectTeam, type LinearRoute, type TeamRoutes } from '../linear/route.js';
+import { cleanName } from '../../../shared/unprintable.js';
 import { claimsOpenRunOf } from '../roleOf.js';
 import { isWsProject } from '../../../shared/slug.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
@@ -131,17 +132,33 @@ export function confirmedCandidate(candidates: readonly TeamCandidateWire[], tea
   return candidates.find((c) => c.key === team && (c.workspaceId ?? null) === workspace) ?? null;
 }
 
+/** How many holding workspaces a `team-ambiguous` detail names; the rest are counted. */
+const AMBIGUOUS_HOLDERS_NAMED_MAX = 8;
+
+/** D-8808, D-8809: the `team-ambiguous` detail: each holder as `<workspace id> (<URL key>)`, or the bare id when it has no URL key
+ *  (or one that cleans to nothing). The id is what a caller sends back as `workspace`. */
+function ambiguousDetail(holders: ReadonlyArray<{ workspaceId: string; urlKey: string | null }>): string {
+  const named = holders.slice(0, AMBIGUOUS_HOLDERS_NAMED_MAX).map((h) => {
+    const key = cleanName(h.urlKey);
+    return key === null ? h.workspaceId : `${h.workspaceId} (${key})`;
+  });
+  const more = holders.length - named.length;
+  return `more than one connected Linear workspace holds the key; send one of these as workspace: ${named.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
+}
+
 /** D-8808 (final review I2, I3), D-8809: what a (key, workspace) pair's MEASURED route through the live Linear store
  *  (`measuredProjectTeam`) means for a suggestion or a confirm: the workspace of the one slot that holds it; `unavailable` when a
  *  slot the answer depends on could not be read (never `team-unknown`: the pair may well be held there); `team-ambiguous` for a key
  *  two connected workspaces hold with no workspace named (storing it with none would resolve nowhere); `not-configured` when no
  *  Linear workspace is connected at all; every other refusal `team-unknown` (every workspace the pair depends on was read, and none
- *  holds it: for a named workspace, that workspace alone). A refusal carries its fixed `detail`, decided here. */
+ *  holds it: for a named workspace, that workspace alone). A refusal carries its `detail`, decided here: fixed, except that
+ *  `team-ambiguous` names each holding workspace by the id the doors accept as `workspace` (its URL key beside it when it has one,
+ *  cleaned: Linear's data), at most `AMBIGUOUS_HOLDERS_NAMED_MAX` of them, then a count of the rest. */
 export function teamPairVerdict(route: LinearRoute | { kind: 'unmeasured' }):
   { ok: true; workspaceId: string } | { ok: false; error: 'team-unknown' | 'team-ambiguous' | 'unavailable' | 'not-configured'; detail: string } {
   if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId };
   if (route.kind === 'unmeasured') return { ok: false, error: 'unavailable', detail: 'a Linear workspace the pair depends on could not be read' };
-  if (route.word === 'team-ambiguous') return { ok: false, error: 'team-ambiguous', detail: 'more than one connected Linear workspace holds the key' };
+  if (route.word === 'team-ambiguous') return { ok: false, error: 'team-ambiguous', detail: ambiguousDetail(route.holders) };
   if (route.word === 'not-configured') return { ok: false, error: 'not-configured', detail: 'no Linear workspace is connected' };
   return { ok: false, error: 'team-unknown', detail: 'the pair is not held in the connected Linear workspaces now' };
 }

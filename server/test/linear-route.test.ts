@@ -68,11 +68,25 @@ describe('the routing rule (spec §4.2), row by row', () => {
     const B2 = slot(WS_B, 'ws-b', ['BBB', 'AAA']);
     for (const slots of [[A, B2], [B2, A]]) {
       for (const ask of [byTeam('AAA'), issue('aaa')]) {
-        expect(routeLinear(slots, ask)).toEqual({ kind: 'refused', word: 'team-ambiguous', candidates: ['ws-a', 'ws-b'] });
+        expect(routeLinear(slots, ask)).toEqual({
+          kind: 'refused', word: 'team-ambiguous', candidates: ['ws-a', 'ws-b'],
+          holders: [{ workspaceId: WS_A, urlKey: 'ws-a' }, { workspaceId: WS_B, urlKey: 'ws-b' }],
+        });
       }
       // `--workspace` is the remedy, for a team and for an issue reference alike.
       expect(routedTo(routeLinear(slots, byTeam('AAA', 'ws-b')))).toBe(WS_B);
       expect(routedTo(routeLinear(slots, issue('AAA', 'ws-a')))).toBe(WS_A);
+    }
+  });
+
+  it('D-8808: every holder is named by workspace id, one with no URL key too (never a candidate), sorted by id, in any order', () => {
+    const noKey = slot(WS_L, null, ['AAA']);
+    const B2 = slot(WS_B, 'ws-b', ['AAA']);
+    for (const slots of [[B2, noKey, A], [A, noKey, B2], [noKey, A, B2]]) {
+      expect(routeLinear(slots, byTeam('AAA'))).toEqual({
+        kind: 'refused', word: 'team-ambiguous', candidates: ['ws-a', 'ws-b'],
+        holders: [{ workspaceId: WS_A, urlKey: 'ws-a' }, { workspaceId: WS_B, urlKey: 'ws-b' }, { workspaceId: WS_L, urlKey: null }],
+      });
     }
   });
 
