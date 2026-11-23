@@ -3143,7 +3143,16 @@ button.proj-card-pool::before {
 }
 
 /* `.caps-save` is `<Button variant="quiet">` — see `.coord-toggle`. Its own
-   0.97 press rides at the call site, since the variant carries 0.96. */
+   0.97 press rides at the call site, since the variant carries 0.96.
+   `.caps-auto` ("use automatic", D-8920) is the same variant
+   with nothing of its own. */
+
+/* What the cap is and why ("Automatic: 16 (from 64 GB and 16 cores)"): a line
+   of its own under the dial (`CONTROL_ROW_NOTE`), in the row's own ink. Named-
+   ancestor descendant, so the audit measures it against `.caps-control`'s ground. */
+.caps-control .caps-source {
+  color: var(--ink-secondary);
+}
 
 /* Named-ancestor descendant for the same reason `.coord-error` is one. */
 /* Ink only — see `.coord-error`. */

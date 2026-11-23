@@ -685,3 +685,122 @@ describe('POST /api/linking/suggest', () => {
     expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
   });
 });
+
+// D-8808, D-8809: what the two team doors answer when a workspace cannot be read, or none is connected. Each row is one case; the
+// expected cell is today's answer, so a later change of one door's behaviour changes single cells.
+describe('characterization: unread and unconnected workspaces (w8-confirm-unmeasured)', () => {
+  const WS_A = '00000000-0000-4000-8000-0000000000a1';
+  const WS_B = '00000000-0000-4000-8000-0000000000b2';
+  const WS_C = '00000000-0000-4000-8000-0000000000c3';
+  type Held = 'ws-a' | 'ws-b';
+  /** A readable slot: its record is current, holding `keys`. */
+  const readable = async (id: string, urlKey: Held, keys: string[], fill: string): Promise<void> => {
+    const key = `lin_api_${fill.repeat(40)}`;
+    await putLinearSlot(path.join(home, '.ccrc'), key, {
+      workspaceId: id, name: `Workspace ${urlKey}`, urlKey, user: 'User A',
+      teams: keys.map((k, i) => ({ id: `00000000-0000-4000-8000-${String(fill.charCodeAt(0) * 10 + i).padStart(12, '0')}`, key: k, name: `Team ${k}` })),
+      teamsAt: 1, keyTail: keyTailOf(key), keyDigest: valueDigestHex(key), checkedAt: 1, outcome: 'ok',
+    }, { replace: true });
+  };
+  /** A slot with a usable key and no record yet: what its teams are is not known (`unreadableWorkspaces`). */
+  const unread = (id: string): void => {
+    const dir = path.join(home, '.ccrc', 'linear');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${id}.key`), `lin_api_${'u'.repeat(40)}\n`, { mode: 0o600 });
+  };
+  type Store = 'readable' | 'only-unread' | 'none' | 'one-readable-one-unread';
+  const stand = async (store: Store): Promise<void> => {
+    if (store === 'readable') { await readable(WS_A, 'ws-a', ['AAA'], 'a'); await readable(WS_B, 'ws-b', ['AAA', 'BBB'], 'b'); }
+    if (store === 'only-unread') unread(WS_C);
+    if (store === 'one-readable-one-unread') { await readable(WS_A, 'ws-a', ['AAA'], 'a'); unread(WS_C); }
+  };
+  /** [case, store, team, workspace named (null: none), status, error or the workspace stored (`'none'`: stored with none)] */
+  const CASES: ReadonlyArray<readonly [string, Store, string, string | null, number, string]> = [
+    ['(a) held, named', 'readable', 'BBB', WS_B, 200, WS_B],
+    ['(a) held, unnamed', 'readable', 'BBB', null, 200, WS_B],
+    ['(b) held by none, named', 'readable', 'ZZZ', WS_B, 404, 'team-unknown'],
+    ['(b) held by none, unnamed', 'readable', 'ZZZ', null, 404, 'team-unknown'],
+    ['(c) only slot unread, named', 'only-unread', 'AAA', WS_C, 503, 'unavailable'],
+    ['(c) only slot unread, unnamed', 'only-unread', 'AAA', null, 503, 'unavailable'],
+    ['(d) none connected, named', 'none', 'AAA', WS_A, 501, 'not-configured'],
+    ['(d) none connected, unnamed', 'none', 'AAA', null, 501, 'not-configured'],
+    ['(e) one holder, another unread, named', 'one-readable-one-unread', 'AAA', WS_A, 200, WS_A],
+    ['(e) one holder, another unread, unnamed', 'one-readable-one-unread', 'AAA', null, 503, 'unavailable'],
+  ];
+
+  describe('POST /api/projects/:project/linking', () => {
+    // The write stores none for an unnamed key no workspace holds, so its cells read `none` where the suggestion's read a refusal.
+    const WRITE: ReadonlyArray<readonly [string, Store, string, string | null, number, string]> = [
+      ['(a) held, named', 'readable', 'BBB', WS_B, 200, WS_B],
+      ['(a) held, unnamed', 'readable', 'BBB', null, 200, WS_B],
+      ['(b) held by none, named', 'readable', 'ZZZ', WS_B, 404, 'team-unknown'],
+      ['(b) held by none, unnamed', 'readable', 'ZZZ', null, 200, 'none'],
+      ['(c) only slot unread, named', 'only-unread', 'AAA', WS_C, 503, 'unavailable'],
+      ['(c) only slot unread, unnamed', 'only-unread', 'AAA', null, 503, 'unavailable'],
+      ['(d) none connected, named', 'none', 'AAA', WS_A, 404, 'team-unknown'],
+      ['(d) none connected, unnamed', 'none', 'AAA', null, 200, 'none'],
+      ['(e) one holder, another unread, named', 'one-readable-one-unread', 'AAA', WS_A, 200, WS_A],
+      ['(e) one holder, another unread, unnamed', 'one-readable-one-unread', 'AAA', null, 503, 'unavailable'],
+    ];
+    for (const [name, store, team, workspace, status, expected] of WRITE) {
+      it(name, async () => {
+        await stand(store);
+        app = await open({ coord });
+        const res = await post(app, 'project-a', { teamKey: team, override: null, workspace });
+        expect(res.statusCode, res.body).toBe(status);
+        if (status === 200) {
+          expect(res.json().linking).toMatchObject({ teamKey: team, teamWorkspace: expected === 'none' ? null : expected });
+        } else {
+          expect(res.json()).toMatchObject({ error: expected });
+          expect(coord!.linkingOf('project-a')).toMatchObject({ teamKey: null, teamWorkspace: null });
+        }
+      });
+    }
+
+    // Review 3286 F1 (the coordinator's ruling: review 2971 F2 holds): a row stored with no workspace, its unchanged key sent back
+    // naming a workspace whose own slot holds it, keeps the stored none and its source, whether or not ANOTHER slot is unread; the
+    // named slot unread is `unavailable`, and the row is left as it was.
+    const KEPT: ReadonlyArray<readonly [string, Store, string, string, number, 'kept' | string]> = [
+      ['stored none, every slot read, its holder named', 'readable', 'BBB', WS_B, 200, 'kept'],
+      ['stored none, another slot unread, its holder named', 'one-readable-one-unread', 'AAA', WS_A, 200, 'kept'],
+      ['stored none, the named slot unread', 'one-readable-one-unread', 'AAA', WS_C, 503, 'unavailable'],
+    ];
+    for (const [name, store, team, workspace, status, expected] of KEPT) {
+      it(name, async () => {
+        await stand(store);
+        app = await open({ coord });
+        const evidence = { kind: 'name-match', matched: 'project', on: 'name' } as const;
+        expect(coord!.linkTeamAuto('project-a', { key: team, name: `Team ${team}`, evidence }, 5)).toBe(true);
+        const before = coord!.linkingOf('project-a');
+        expect(before).toMatchObject({ teamKey: team, teamWorkspace: null, teamLink: { source: 'auto' } });
+        const res = await post(app, 'project-a', { teamKey: team, override: null, workspace });
+        expect(res.statusCode, res.body).toBe(status);
+        if (expected !== 'kept') expect(res.json()).toMatchObject({ error: expected });
+        expect(coord!.linkingOf('project-a')).toMatchObject({ teamKey: team, teamWorkspace: null, teamLink: before.teamLink });
+      });
+    }
+  });
+
+  describe('POST /api/linking/suggest', () => {
+    const ME = { byId: 'project-a-calm-mesa', byUuid: 'u-project-a-calm-mesa' };
+    for (const [name, store, team, workspace, status, expected] of CASES) {
+      it(name, async () => {
+        seedRow(home, ME.byId, { project: 'project-a' });
+        coord!.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: ME.byId });
+        coord!.recordLinkingReading('project-a', { state: 'measured', visibility: 'private', slug: 'owner/repo', template: 'present', at: 1 });
+        await stand(store);
+        app = await open({ coord, mailToken: ID_GATE_TOKEN });
+        const body: Record<string, unknown> = { ...ME, project: 'project-a', team, why: 'the branches name this team' };
+        if (workspace !== null) body['workspace'] = workspace;
+        const res = await app.inject({ method: 'POST', url: '/api/linking/suggest', payload: body as never, headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN } });
+        expect(res.statusCode, res.body).toBe(status);
+        if (status === 200) {
+          expect(res.json().suggestion).toMatchObject({ key: team, workspaceId: expected });
+        } else {
+          expect(res.json()).toMatchObject({ ok: false, error: expected });
+          expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+        }
+      });
+    }
+  });
+});

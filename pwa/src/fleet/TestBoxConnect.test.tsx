@@ -448,6 +448,16 @@ describe('step 6: parity', () => {
     await waitFor(() => expect(screen.getByText(T.parityPassed)).toBeInTheDocument());
     expect(within(flow()).queryByRole('button', { name: T.runParity })).toBeNull();
     expect(flow().querySelector('[data-testbox="parity-record"]')!.textContent).toContain(T.parityPrs(1));
+    // a record from before the light check (D-8945) carries no file count, and the card says none
+    expect(flow().querySelector('[data-testbox="parity-record"]')!.textContent).not.toContain('compared on each side');
+  });
+
+  it('a record that counts its test files says how many were compared on each side, and the rest reads as before (D-8945)', async () => {
+    fakeFleet(connected({ parity: { ...record('pass'), files: 54 } }));
+    await mount();
+    expect(screen.getByText(T.parityPassed)).toBeInTheDocument();
+    const items = [...flow().querySelectorAll('[data-testbox="parity-record"] li')].map((li) => li.textContent);
+    expect(items).toEqual([T.parityPrs(1), T.parityFiles(54), 'git-state: pass', 'socket: pass', 'workers: pass']);
   });
 
   it('a failed record says so and offers it again; a record that no longer matches the box says parity must run again', async () => {

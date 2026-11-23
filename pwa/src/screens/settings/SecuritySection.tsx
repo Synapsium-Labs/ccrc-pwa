@@ -1,14 +1,17 @@
 // Settings › Security (settings spec §3.3, §5.5; D-5503): the Sign-in gate card (`SignInGateCard.tsx`), then Your
 // sign-in and This session (`YourSignInCard.tsx`, `ThisSessionCard.tsx`; from Accounts, R2d, D-5508), then the Box
-// token card, then the Linear card (named workspaces S4b), then Project linking (D-8147), then Approvals (D-8382), then Permission prompts (M38, approvals plan §3.1), each a
+// token card, then Approvals (D-8382), then Permission prompts (M38, approvals plan §3.1), each a
 // `Section` with its scope. The slot before Box token
 // is reserved for "Recent account changes".
-// The auth status, the passkey list and the Linear connection the cards show are the frame's reads.
+// The auth status and the passkey list the cards show are the frame's reads.
+// Linear and Project linking sat here after Box token; they are Settings › Integrations' now (D-8932,
+// `IntegrationsSection.tsx`), and one line after Box token says so, for a link that still opens this page for them.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { UpdatesView } from '../../../../shared/api';
-import { Button, Section, Skeleton, useNow } from '@ccrc/ui';
-import { BOX_TOKEN_CARD, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_WHEN, useResultLine } from '../../fleet/settingsText';
+import { Button, Section, Skeleton, TextLink, useNow } from '@ccrc/ui';
+import { BOX_TOKEN_CARD, ResultLine, SECURITY_MOVED_TEXT, SETTINGS_AMBER_NOTE, SETTINGS_WHEN, inAppClick, useResultLine } from '../../fleet/settingsText';
+import { LINEAR_PROJECTS_SETTINGS_PATH } from '../../../../shared/ledgers';
 import type { UpdatesPoll } from '../../fleet/useUpdatesView';
 import { isPlaceableInstant } from '../../fleet/updatesRead';
 import { armedMode } from '../../lib/auth';
@@ -25,9 +28,6 @@ import { TOKEN_ROTATION_INTERVAL_MS } from '../../../../shared/box-token';
 import { dayClock, elapsedWords } from '../updates';
 import '../../fleet/fleet.css';
 import type { AuthRead, PasskeysRead } from './SettingsDataProvider';
-import type { LinearWorkspacesPoll } from '../../fleet/useLinearWorkspaces';
-import { LinearSection } from '../LinearSection';
-import { ProjectLinkingCard } from './ProjectLinkingCard';
 import { ApprovalsTopologyCard } from './ApprovalsTopologyCard';
 import { ApprovalCensusSection } from '../../fleet/ApprovalCensusSection';
 import { SignInGateCard } from './SignInGateCard';
@@ -192,9 +192,9 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
 /** The Security page's body (the heading is the frame's `<h2>`): the Sign-in gate card over the frame's one status
  *  read; Your sign-in and This session while that read says the gate is armed (absent while it is off, unread or
  *  pending, the gate card saying why: spec §5.5's table); then the Box token card over its one /api/updates poll; then
- *  the Linear card over the frame's one Linear read. */
-export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
-  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void; linear: LinearWorkspacesPoll;
+ *  the pointer to Integrations, Approvals and Permission prompts. */
+export function SecuritySection({ poll, auth, passkeys, refreshAuth }: {
+  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void;
 }): ReactNode {
   const now = useNow(30_000);
   return (
@@ -213,14 +213,13 @@ export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
         // today's page drew none then.
         <Skeleton lines={3} />
       ) : null}
-      {/* The Linear key is a credential the box holds, like the box token, so its card follows it: last, after the
-          reserved "Recent account changes" slot and Box token (spec §3.3), which adding it reshuffles nothing of. It
-          reads its own endpoint, so it does not wait on /api/updates. */}
-      <LinearSection poll={linear} />
-      {/* Project linking (D-8147) follows Linear: how each project's pull requests reach their ticket. It reads the
-          project list itself, and takes the Linear card's one workspace list and its legacy row (the picker's
-          source) from the frame's read, so it waits on neither poll. */}
-      <ProjectLinkingCard workspaces={linear.view?.workspaces ?? null} legacy={linear.view?.legacy ?? null} />
+      {/* Linear and Project linking moved to Integrations (D-8932). A Waiting on you item written
+          before the move names this page in its text, so the place they held says where they went. The line is not
+          for good: it goes once no open item names the old path (the task note's follow-up). */}
+      <p className="settings-note" data-security-moved="">
+        {SECURITY_MOVED_TEXT.note}{' '}
+        <TextLink href={LINEAR_PROJECTS_SETTINGS_PATH} onClick={inAppClick(LINEAR_PROJECTS_SETTINGS_PATH)}>{SECURITY_MOVED_TEXT.link}</TextLink>
+      </p>
       {/* Approvals (D-8382): one read-only line on where approval rulings are minted and signed. It reads the
           overrides route itself, so it waits on neither poll. */}
       <ApprovalsTopologyCard />

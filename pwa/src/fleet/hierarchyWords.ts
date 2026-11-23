@@ -140,3 +140,107 @@ export const inboundWords = (n: number): string | null =>
 /** The consequence line of the all-projects confirm. */
 export const ownerForAllConsequence = (id: string): string =>
   `Every project with Linear settings gets ${id} as its Linear owner. Each project's other settings stay as they are.`;
+
+// ── The compact list (D-8932) ─────────────────────────────────────────────────────────────────────
+
+/** A listed row's owner, in a few words: who owns the project's team now. One word for "running", the select's own
+ *  ("Default: none live", "(not live)"), so the line and the control under it never say one fact two ways. */
+export function ownerShortWords(row: Pick<HierarchyProjectRow, 'project' | 'ownerNow'>): string {
+  const { now, unmeasured } = ownerFrom(row);
+  if (unmeasured) return 'owner not measured';
+  if (now.id === null) return 'no live owner';
+  return now.live ? `owner: ${now.id}` : `owner: ${now.id} (not live)`;
+}
+
+/** The inbound count on a listed row's line, or null when none wait. */
+export const inboundShortWords = (n: number): string | null =>
+  n <= 0 ? null : n === 1 ? '1 inbound issue waiting' : `${n} inbound issues waiting`;
+
+/** Inbound issues that wait while no live coordinator owns the project's team, and the owner is this project's own to
+ *  set: the count, else null. Not said of an owner that could not be measured (unknown is not "none"), nor of an owner
+ *  that comes from another project (the project owning the shared key: its row holds the setting, and says so). */
+export function inboundUnowned(row: Pick<HierarchyProjectRow, 'project' | 'teamKey' | 'ownerNow' | 'inboundWaiting'>): number | null {
+  if (row.teamKey === null || row.inboundWaiting <= 0) return null;
+  const { now, unmeasured } = ownerFrom(row);
+  if (unmeasured || ownerIsInherited(row) || (now.id !== null && now.live)) return null;
+  return row.inboundWaiting;
+}
+
+/** That reason, in words, with the control that settles it (the Linear owner select). */
+export const inboundUnownedWords = (n: number): string =>
+  `${inboundWords(n) ?? ''}, and this project has no live Linear owner. Choose a live coordinator as its Linear owner.`;
+
+/** One option of a coordinator select. */
+export interface CoordinatorOption { id: string; words: string }
+
+/** How many live coordinators a coordinator select lists before it is asked for more. A fleet can have a live coordinator
+ *  per project; past this many the select would be the wall of ids it replaces, so it then lists none until asked. */
+export const COORDINATOR_SHORT_LIST = 8;
+
+/** What a coordinator select offers (the row's Linear owner, and the one coordinator for every project).
+ *  Until the operator asks for more (`showAll`): the live coordinators when they fit the short list, else none of them.
+ *  Once asked: every live one, then the ones that are not live as a group of their own.
+ *  `selected` is the chosen id as an option of its own when it is not among those offered (a not-live one while they are
+ *  hidden, one past the short list, or one the list does not hold, worded by `unlisted`), so the select always shows what
+ *  is stored. `more` is the words of the control that shows or hides the rest, or null when nothing is behind it. */
+export function coordinatorChoices(
+  list: readonly { id: string; live: boolean }[], selected: string | null, showAll: boolean, unlisted: (id: string) => string,
+): { selected: CoordinatorOption | null; live: CoordinatorOption[]; notLive: CoordinatorOption[]; more: string | null } {
+  const option = (c: { id: string; live: boolean }): CoordinatorOption => ({ id: c.id, words: coordinatorWords(c) });
+  const lives = list.filter((c) => c.live).map(option);
+  const rest = list.filter((c) => !c.live).map(option);
+  const short = lives.length <= COORDINATOR_SHORT_LIST;
+  const live = showAll || short ? lives : [];
+  const notLive = showAll ? rest : [];
+  const offered = selected !== null && [...live, ...notLive].some((c) => c.id === selected);
+  const listed = selected === null ? undefined : [...lives, ...rest].find((c) => c.id === selected);
+  const behind = short ? rest.length : list.length;
+  return {
+    selected: selected === null || offered ? null : listed ?? { id: selected, words: unlisted(selected) },
+    live, notLive,
+    more: behind === 0 ? null
+      : short ? (showAll ? NOT_LIVE_WORDS.hide : NOT_LIVE_WORDS.show(behind))
+        : (showAll ? NOT_LIVE_WORDS.fewer : NOT_LIVE_WORDS.showAll(behind)),
+  };
+}
+
+/** A coordinator select's words for what it does not list at first. */
+export const NOT_LIVE_WORDS = {
+  group: 'Not live',
+  show: (n: number): string => (n === 1 ? 'Show 1 coordinator that is not live' : `Show ${n} coordinators that are not live`),
+  hide: 'Hide coordinators that are not live',
+  showAll: (n: number): string => `Show all ${n} coordinators`,
+  fewer: 'Show fewer coordinators',
+} as const;
+
+/** A team key several projects hold while none of them is its owning project: the key and the other projects, or null.
+ *  Only holders that can be the same team count, as the server's owner rule reads them (`planPolicy.ts`
+ *  `teamOwnerProject`, D-8808): a project whose key is stored in another Linear workspace holds another team, so it
+ *  neither shares the key nor settles it. `workspaceOf` is each project's stored workspace; a project it does not name,
+ *  or names with none, can be any workspace's. */
+export function owningUnchosen(
+  project: string, rows: readonly Pick<HierarchyProjectRow, 'project' | 'teamKey' | 'ownsTeam'>[],
+  workspaceOf: ReadonlyMap<string, string | null> = new Map(),
+): { key: string; others: string[] } | null {
+  const mine = rows.find((r) => r.project === project)?.teamKey;
+  if (mine === null || mine === undefined) return null;
+  const key = mine.toUpperCase();
+  const at = workspaceOf.get(project) ?? null;
+  const sameTeam = (r: { project: string }): boolean => {
+    const theirs = workspaceOf.get(r.project) ?? null;
+    return r.project === project || at === null || theirs === null || at === theirs;
+  };
+  const holders = rows.filter((r) => r.teamKey !== null && r.teamKey.toUpperCase() === key && sameTeam(r));
+  if (holders.length < 2 || holders.some((r) => r.ownsTeam)) return null;
+  return { key: mine, others: holders.filter((r) => r.project !== project).map((r) => r.project) };
+}
+
+/** That reason, in words: who else holds the key, what the box does meanwhile (the first project that set the key owns
+ *  it, `planPolicy.ts` `rankHolders`), and the control that settles it. */
+export const owningUnchosenWords = (s: { key: string; others: readonly string[] }): string =>
+  `Team key ${s.key} is also used by ${s.others.join(', ')}, and no project is chosen as its owning project. `
+  + `Until one is, the project that set the key first owns it. Tick ${HIERARCHY_TEXT.owning} on the one that should.`;
+
+/** The reason a row with a map waiting says. */
+export const mapWaitingWords = (team: string | null): string =>
+  `A map of how ${team === null ? 'this team' : `team ${team}`} fits the plan waits for your approval.`;

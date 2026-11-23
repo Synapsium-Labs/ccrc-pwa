@@ -52,6 +52,18 @@ describe('ItemRoute', () => {
     expect(tick.mock.calls[0]).toEqual([8]);
   });
 
+  it('a Do item ticked with a note carries the note to the route (D-8931)', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 8 })] }) }));
+    const tick = vi.spyOn(api, 'tickItem').mockResolvedValue({ ok: true, item: itemView({ id: 8, state: 'checking', answer: 'Done at noon.' }) });
+    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView() });
+    render(<ItemRoute id={8} store={store} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /note to the coordinator/i }), { target: { value: 'Done at noon.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(tick).toHaveBeenCalledTimes(1));
+    expect(tick.mock.calls[0]).toEqual([8, 'Done at noon.']);
+  });
+
   it('a refused tick shows its sentence and reads nothing again', async () => {
     const store = mk();
     act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 9 })] }) }));

@@ -3,11 +3,19 @@
 // repository row's mirror missing); `degraded` for a tool sync in progress or failed, a failed pristine key, a run
 // user held out by a failed cleanup, a tool whose version differs from the fleet host's last measured one, or tools
 // and release the box has not measured yet (TB6 fills them); `ok` otherwise. The reasons are joined in that order.
+//
+// Spec 2026-11-22-test-box-managed-node-design.md §2.6: a managed box's versions are the ones its updater measured
+// (`MeasuredTools`), and a tool it could not measure is not measured alone. The answer carries the placeholder for
+// that tool and the reason names it, so the fleet host's version row differs on that tool and the run falls back to a
+// local run. No field is added to the answer for it (D-8912): the six `tools` cells are the carrier they always were.
 import {
   TESTBOX_PROTO, TESTBOX_TOOLS, versionCellsDiffer,
   type StatusAnswer, type TestboxFailedKey, type TestboxPristine, type TestboxProbes, type TestboxRepoName, type TestboxSync,
-  type TestboxToolVersions,
+  type TestboxTool, type TestboxToolVersions,
 } from '../../../shared/testbox.js';
+
+/** The box's tool versions as it measured them: a tool it could not measure is `null`. */
+export type MeasuredTools = { readonly [K in TestboxTool]: string | null };
 
 export type ProbeResult = { readonly ok: true } | { readonly ok: false; readonly detail: string };
 
@@ -19,8 +27,8 @@ export interface StatusFacts {
   /** The release tag the box's tree came from; `null` when it cannot be read. */
   readonly release: string | null;
   readonly serviceVersion: string;
-  /** The box's measured tool versions; `null` until the tool sync has measured them (TB6). */
-  readonly tools: TestboxToolVersions | null;
+  /** The box's measured tool versions; `null` until any is measured (TB6), a tool's own `null` when it alone is not. */
+  readonly tools: MeasuredTools | null;
   /** The fleet host's versions from the last `tools.sync`; `null` before one. */
   readonly fleetTools: TestboxToolVersions | null;
   readonly sync: TestboxSync;
@@ -37,8 +45,9 @@ export interface StatusFacts {
 /** The status answer's placeholder for an unknown release tag (never `ok`: the reason names it). */
 export const UNKNOWN_RELEASE = 'v0.0.0';
 const UNKNOWN_VERSION = '0';
-const unknownTools = (): TestboxToolVersions =>
-  Object.fromEntries(TESTBOX_TOOLS.map((t) => [t, UNKNOWN_VERSION])) as unknown as TestboxToolVersions;
+/** The six cells the answer carries: each measured version, the placeholder where there is none. */
+const cells = (m: MeasuredTools | null): TestboxToolVersions =>
+  Object.fromEntries(TESTBOX_TOOLS.map((t) => [t, m?.[t] ?? UNKNOWN_VERSION])) as unknown as TestboxToolVersions;
 
 export function downReasons(f: StatusFacts): string[] {
   const out: string[] = [];
@@ -54,7 +63,11 @@ export function degradedReasons(f: StatusFacts): string[] {
   for (const k of f.failedKeys) out.push(`pristine install failed (${k.package} ${k.key}, exit ${k.exit})`);
   for (const u of f.heldRunUsers) out.push(`run user held out (${u})`);
   if (f.tools === null) out.push('tool versions not measured');
-  else if (f.fleetTools !== null) for (const t of versionCellsDiffer(f.fleetTools, f.tools)) out.push(`tool version differs (${t})`);
+  else {
+    const tools = f.tools;
+    for (const t of TESTBOX_TOOLS) if (tools[t] === null) out.push(`tool version not measured (${t})`);
+    if (f.fleetTools !== null) for (const t of versionCellsDiffer(f.fleetTools, cells(tools))) if (tools[t] !== null) out.push(`tool version differs (${t})`);
+  }
   if (f.release === null) out.push('release not known');
   return out;
 }
@@ -66,7 +79,7 @@ export function statusAnswer(f: StatusFacts): StatusAnswer {
   const reason = state === 'down' ? down.join('; ') : state === 'degraded' ? degraded.join('; ') : null;
   return {
     t: 'status', state, reason, serviceVersion: f.serviceVersion, proto: TESTBOX_PROTO,
-    release: f.release ?? UNKNOWN_RELEASE, tools: f.tools ?? unknownTools(), sync: f.sync,
+    release: f.release ?? UNKNOWN_RELEASE, tools: cells(f.tools), sync: f.sync,
     runs: { inProgress: f.inProgress, limit: f.limit }, queueDepth: f.queueDepth,
     pristine: f.pristine, failedKeys: f.failedKeys, heldRunUsers: f.heldRunUsers,
     repositories: f.mirrors.map((m) => ({ name: m.name, mirrorPath: m.mirrorPath })),

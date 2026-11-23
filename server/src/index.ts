@@ -28,6 +28,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
+import { OverlordRestoreState, preWitnessFacts } from './coord/overlordRestoreState.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -176,6 +177,12 @@ const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuar
 const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
   overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
 runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
+// Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`): one
+// instance over the same `coord.db`, journal and guard. Its witness facts are `preWitnessFacts` until the witness exchange
+// (authority journal B) lands; whichever of the two lands second puts B's exchange here.
+const overlordRestore = new OverlordRestoreState({
+  db: coordDb, journal: overlordAuthority, guard: overlordAuthorityGuard, witness: preWitnessFacts(overlordAuthority),
+});
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
@@ -518,7 +525,7 @@ const masker = new SecretMasker({
   },
 });
 deps.masker = masker;
-deps.responseStamp = () => responseStampNow(responseBoot);
+deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 push?.setMasker(masker);
 deps.operatorModel = operatorModel.store;
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
@@ -531,6 +538,7 @@ setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now(
 
 deps.overlordAuthority = overlordAuthority;
 deps.overlordAuthorityGuard = overlordAuthorityGuard;
+deps.overlordRestore = overlordRestore;
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

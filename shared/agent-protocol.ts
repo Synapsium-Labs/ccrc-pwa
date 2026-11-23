@@ -1021,9 +1021,16 @@ export const PRESSURE_OP = 'pressure';
 /** The `pressure` op's reply: exactly what the decider takes, in this one type. D-8122 adds `headroomBytes`, the session
  *  slice's memory headroom (`memory.max` minus `memory.current`, no more than `MemAvailable`; `MemAvailable` alone when
  *  the slice has no `memory.max`), or `null` when it could not be read. ADDITIVE: an older agent sends no field, which
- *  the server reads as `null` (unmeasured), never as room. */
-export type PressureOpReply = HostPsi & { headroomBytes?: number | null };
-import type { HostPsi } from './pressure.js';
+ *  the server reads as `null` (unmeasured), never as room. D-8920 adds `machine`, the host's size (the
+ *  box's total memory, its cores and the sessions' memory limit, each as measured), or `null` when it could not be
+ *  measured. ADDITIVE in the same way: an older agent sends no field, which the server reads as unmeasured
+ *  (`readHostMachine`, `agent-older`), never as a small machine. A box with no PSI (the two kernel files unreadable)
+ *  answers `PressureOpSizeOnly`: a size does not depend on the PSI, and a reply with no PSI reads as no reading
+ *  (`readHostPsi`), exactly as the error such a box answered before did. */
+export type PressureOpReply = HostPsi & { headroomBytes?: number | null; machine?: HostMachine | null };
+/** The `pressure` op's reply from a box with no PSI: the size alone. */
+export interface PressureOpSizeOnly { machine: HostMachine | null }
+import type { HostMachine, HostPsi } from './pressure.js';
 
 // ── the `testbox` and `testbox-tools-sync` ops (test box plan TB9, D-7411; spec 2026-10-28 §2.7, §2.10) ─────────────
 // The fleet agent reads its host's test box settings through the wrapper's own printer, measures the six tools with

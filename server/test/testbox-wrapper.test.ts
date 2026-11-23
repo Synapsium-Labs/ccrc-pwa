@@ -88,17 +88,22 @@ exec "$@"
 /** The fixture command head, local and on the box: each named test file (all of test/ when none is named) passes,
  *  or fails when it says FAIL; ENV prints the names the run sees; HOLD holds until killed; SKIP-ON-BOX skips its
  *  second test where VITEST_MAX_WORKERS is set (the box's run sets it, the fixture session does not). It writes vitest's
- *  JSON report when given --outputFile.json=, and junit on stdout for --reporter=junit. */
+ *  JSON report when given --outputFile.json=, junit on stdout for --reporter=junit, and tap-flat on stdout for
+ *  --reporter=tap-flat (the parity tool's legs, D-8946); `list --filesOnly` names the test files, as vitest's does. */
 const VITEST = `#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
 const args = process.argv.slice(2);
-let out = null, junit = false; const files = [];
+let out = null, junit = false, tap = false; const files = [];
 for (const a of args) {
   if (a.startsWith('--outputFile.json=')) out = a.slice('--outputFile.json='.length);
   else if (a === '--reporter=junit') junit = true;
+  else if (a === '--reporter=tap-flat') tap = true;
   else if (/\\.test\\.[a-z]+$/.test(a)) files.push(a);
 }
-const list = files.length ? files : fs.readdirSync('test').filter((n) => /\\.test\\./.test(n)).sort().map((n) => 'test/' + n);
+const all = () => fs.readdirSync('test').filter((n) => /\\.test\\./.test(n)).sort().map((n) => 'test/' + n);
+if (args[0] === 'list' && args[1] === '--filesOnly') { process.stdout.write(all().map((f) => f + '\\n').join('')); process.exit(0); }
+const list = files.length ? files : all();
+let n = 0;
 const results = []; const cases = []; let failed = false;
 for (const f of list) {
   const body = fs.readFileSync(f, 'utf8');
@@ -112,6 +117,7 @@ for (const f of list) {
     assertionResults: [{ fullName: f + ' t1', status: fail ? 'failed' : 'passed' }] });
   cases.push('<testcase classname="' + f + '" name="t1">' + (fail ? '<failure/>' : '') + '</testcase>');
   cases.push('<testcase classname="' + f + '" name="t2">' + (skip ? '<skipped/>' : '') + '</testcase>');
+  if (tap) process.stdout.write((fail ? 'not ok ' : 'ok ') + (++n) + ' - ' + f + ' > t1\\n' + 'ok ' + (++n) + ' - ' + f + ' > t2' + (skip ? ' # SKIP' : '') + '\\n');
 }
 if (out) fs.writeFileSync(out, JSON.stringify({ testResults: results }));
 if (junit) process.stdout.write('<testsuites>' + cases.join('') + '</testsuites>\\n');
@@ -881,7 +887,9 @@ describe('TB8: spec §5 row 6, what a remote run costs the fleet host', () => {
 
 describe('TB8: ccd/testbox-parity (spec §6, for TB14)', () => {
   const parity = (w: World, revs: string[]): Promise<Ran> => {
-    const args = ['--repo', w.clone, '--workers', '2', ...revs.flatMap((r) => ['--rev', r]), '--', './node_modules/.bin/vitest', 'run'];
+    // --sample-budget: the tool's CI-time budget (D-8945); this fixture's repository has no CI times, so its few test files are
+    // sampled by count, and every one of them is in the sample
+    const args = ['--repo', w.clone, '--workers', '2', '--sample-budget', '240', ...revs.flatMap((r) => ['--rev', r]), '--', './node_modules/.bin/vitest', 'run'];
     return wrapAsync(w, args, { script: PARITY });
   };
   it('two fixture PRs against the in-process service agree; a planted skip on one side is a disagreement', async () => {
