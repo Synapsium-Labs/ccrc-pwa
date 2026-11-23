@@ -15,13 +15,24 @@
 // record verb share pass honestly (`in-session` when CLAUDECODE is set at all, `in-pane` when TMUX_PANE is). Nothing here
 // ever unsets either variable, and the children get a by-name environment (HOME, LANG, PATH) that carries neither.
 //
-// The account (the coordinator's ruling of 2026-11-21): chosen once, at setup, from the placement reading. The candidates are
-// the roster's accounts that are not hidden, whose `exec.kind` is upstream or generated and whose telemetry is neither
-// openrouter nor codex (never usage credits, never a Codex lane); the arm, writer and judge model stay the Opus id. Room is
-// the driver's own reading (history-replay.mjs's readLimitsRow and decideLimits at LIMITS_DEFAULTS): the candidate with the
-// lowest `seven` among those with room is tried first, the next on `account-refused`; with none, the tick waits (`no-room`,
-// never latched). Before every `arms` and `judge` the setup's account is re-read the same way. A week still running when a
-// new ISO week starts is closed `failed` (`week-ended`): the runner works the current week only.
+// The account. The setup's (the coordinator's ruling of 2026-11-21) is chosen once, at setup, from the placement reading. The
+// candidates are the roster's accounts that are not hidden, whose `exec.kind` is upstream or generated and whose telemetry is
+// neither openrouter nor codex (never usage credits, never a Codex lane), less any the operator's lane kill switch turns off;
+// the arm, writer and judge model stay the Opus id. Room is the driver's own reading (readLimitsRow, and decideLimits at
+// LIMITS_DEFAULTS, which judges a plan with no five-hour window on its weekly figure alone): the candidate with the lowest
+// `seven` among those with room is tried first, the next on `account-refused`; with none, the tick waits (`no-room`, never
+// latched). The setup is never re-made for an account: its sample, freeze and hashes stand.
+// Each WEEK's account is chosen again (run 3538, the coordinator's ruling 2 of 2026-11-23, revising 2026-11-21's "the
+// setup's account only", whose idle account's row went past the hour and waited for good): weekAccountChoiceOf decides it,
+// pure, before every `arms` and `judge`, and the runner passes it as `--account`. A week that has spawned anything stays on
+// the account its folder records (history-quiz-single.mjs writes that record, the one writer, before the week's first
+// spawn); one that has spawned nothing keeps the previous account when it has room, else takes the candidate with the
+// lowest `seven`; when admission refuses that one (`account-refused`, before any record), the next in the choice's order
+// is tried, as setup does, and with every one refused the tick waits `no-room` (fix round 1, F1); a stop ends the walk,
+// `interrupted` (fix round 2). The walk is written for `arms` and `judge` alike; only `arms` can meet an unrecorded week. The week's one
+// --budget is the week's, whatever the account. The status's account is the week's when
+// recorded. A week still running when a new ISO week starts is closed `failed` (`week-ended`): the runner works the current
+// week only.
 //
 // What it writes: only under `$HOME/.ccrc/quiz/` (mode 0700): the state file `unattended.json` (written whole, by a
 // rename), a lock, `journal.log`, the setup's --out at `setup.<n>` and one --out per ISO week at `weeks/<YYYY-Www>`. The ONE
@@ -71,7 +82,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EXIT, HEADLESS_LIST_MAX_BYTES, parseHeadlessList } from '../ccd/history/lib.mjs';
 import { LIMITS_DEFAULTS, decideLimits, readLimitsRow, readReleaseStamp } from './history-replay.mjs';
-import { JUDGED_FILE, OUT_MARKER, RELEASE_PIN_FILE, RELEASE_PIN_KIND, REPORT_FILE, SETUP_FILE, SUMMARY_FILE } from './history-quiz-single.mjs';
+import { JUDGED_FILE, OUT_MARKER, RELEASE_PIN_FILE, RELEASE_PIN_KIND, REPORT_FILE, SETUP_FILE, SUMMARY_FILE, weekAccountOf } from './history-quiz-single.mjs';
 
 const PREFIX = 'ccrc quiz-unattended';
 
@@ -106,7 +117,7 @@ export const LAST_ACTS = Object.freeze([...ACTS, 'none']);
 export const OUTCOMES = Object.freeze(['ok', 'waiting', 'refused', 'failed']);
 /** This file's own words that can stand in `last.word` (beside the driver's refusal words, which pass through, and the record
  *  verb's, an open set: the first token of its last stderr line). */
-export const OWN_WORDS = Object.freeze(['no-account-admitted', 'no-room', 'account-disabled', 'record-path-missing', 'week-ended', 'marker-sha-mismatch', 'marker-unparseable',
+export const OWN_WORDS = Object.freeze(['no-account-admitted', 'no-room', 'account-disabled', 'week-account-unreadable', 'record-path-missing', 'week-ended', 'marker-sha-mismatch', 'marker-unparseable',
   'headless-on-incomplete', 'headless-on-unreadable', 'headless-on-cross-device', 'history-store-absent', 'record-failed',
   'record-unconfirmed', 'record-sha-mismatch', 'driver-failed', 'spawn-failed', 'no-sha-line', 'internal-error']);
 /** The words that only ever reach stderr (a tick that prints one writes no `last`, and posts nothing). */
@@ -359,6 +370,35 @@ function laneDisabled(home, id) {
 export function roomOrderOf(readings) {
   return readings.map((r, i) => ({ ...r, i })).filter((r) => r.room).sort((x, y) => (x.seven - y.seven) || (x.i - y.i)).map((r) => r.id);
 }
+/** The account this ISO week's spend acts run on (run 3538, the coordinator's ruling 2 of 2026-11-23); the runner only acts
+ *  on the answer. `recorded` is the week's own record (history-quiz-single.mjs's weekAccountOf over the week's folder) with
+ *  that account's room and lane kill switch, or null when the week has spawned nothing. A week that has spawned anything
+ *  stays on its account, and waits while that account is switched off or has no room. A week that has spawned nothing keeps
+ *  `previous` (last week's account, else the setup's) when it is a candidate with room; otherwise it takes the candidate with
+ *  the lowest weekly figure among those with room, ties in roster order (roomOrderOf). `candidates` are exactly setup's (the
+ *  eligible accounts not switched off, in roster order), each with roomOf's reading. With none with room it waits `no-room`,
+ *  the detail naming each candidate's word by position, as setup's does.
+ *  `refused` (fix round 1, F1) maps each candidate that `arms`'s admission refused this tick to that refusal's detail, as
+ *  setup falls through on `account-refused`: an unspawned week's next answer skips them, in the same order, and when every
+ *  candidate with room was refused it waits `no-room`, each refused one named `account-refused <detail>` in its position. A
+ *  recorded week ignores it (a refusal of its own account closes it on its word). Pure.
+ *  @param {{ recorded: null | { id: string, disabled: boolean, room: boolean, word?: string, detail?: string },
+ *    previous: string, candidates: Array<{ id: string, room: boolean, seven?: number, word?: string }>,
+ *    refused?: Record<string, string> }} o
+ *  @returns {{ account: string, why: 'recorded' | 'previous' | 'lowest' } | { wait: 'no-room' | 'account-disabled', detail: string }} */
+export function weekAccountChoiceOf({ recorded, previous, candidates, refused = {} }) {
+  if (recorded !== null) {
+    if (recorded.disabled) return { wait: 'account-disabled', detail: 'the week\'s account is switched off by the operator\'s lane kill switch' };
+    if (!recorded.room) return { wait: 'no-room', detail: `the week's account: ${recorded.word} ${recorded.detail}` };
+    return { account: recorded.id, why: 'recorded' };
+  }
+  const wasRefused = (id) => Object.hasOwn(refused, id);
+  if (candidates.some((c) => c.id === previous && c.room && !wasRefused(c.id))) return { account: previous, why: 'previous' };
+  const order = roomOrderOf(candidates).filter((id) => !wasRefused(id));
+  if (order.length > 0) return { account: order[0], why: 'lowest' };
+  if (candidates.length === 0) return { wait: 'no-room', detail: 'the roster names no eligible account' };
+  return { wait: 'no-room', detail: candidates.map((c, i) => `${i + 1}: ${wasRefused(c.id) ? `account-refused ${refused[c.id]}` : c.word}`).join(', ') };
+}
 function candidatesOf(home) {
   let roster;
   try { roster = JSON.parse(readFileSync(path.join(home, '.ccrc', 'accounts.json'), 'utf8')); } catch (e) {
@@ -522,6 +562,47 @@ const weekPaths = (ctx, w) => {
 };
 const baseFlags = (ctx, p) => ({ out: p.out, setup: p.setup, 'setup-sha256': ctx.state.setup.setup_sha256, frozen: p.frozen, 'frozen-sha256': ctx.state.setup.frozen_sha256 });
 
+/** The inputs of the week's account for its spend acts (ruling 2), gathered once per act for weekAccountChoiceOf: the week's
+ *  own record, then, for a week that has spawned nothing, setup's candidates with roomOf's reading and the previous account. A
+ *  record it cannot read is refused `week-account-unreadable` and spends nothing (the week stays running). Resolves the
+ *  choice's input or {stop}. */
+function weekAccountInputsOf(ctx, w) {
+  const s = ctx.state.setup;
+  const rec = weekAccountOf(w.out, s.setup_sha256, s.account);
+  if (rec.state === 'unreadable') return { stop: { outcome: 'refused', word: 'week-account-unreadable', detail: oneLine(rec.detail), driver: false } };
+  const reading = (id) => ({ id, ...roomOf(ctx, id) });
+  const recorded = rec.state === 'recorded' ? { ...reading(rec.account), disabled: laneDisabled(ctx.home, rec.account) } : null;
+  let candidates = [];
+  if (recorded === null) {
+    const c = candidatesOf(ctx.home);
+    if (c.error !== undefined) return { stop: { outcome: 'refused', word: 'no-account-admitted', detail: c.error, driver: false } };
+    candidates = c.ids.map(reading);
+  }
+  return { recorded, previous: previousAccountOf(ctx), candidates };
+}
+/** The account the newest earlier week ran on, by its own record; the setup's when no earlier week recorded one. */
+function previousAccountOf(ctx) {
+  const s = ctx.state.setup;
+  for (const key of Object.keys(ctx.state.weeks).filter((k) => WEEK_KEY_RE.test(k) && k < ctx.weekKey).sort().reverse()) {
+    const w = ctx.state.weeks[key];
+    if (!plainObject(w) || typeof w.out !== 'string') continue;
+    const r = weekAccountOf(w.out, s.setup_sha256, s.account);
+    if (r.state === 'recorded') return r.account;
+  }
+  return s.account;
+}
+/** The status's account (ruling 5): this week's, when its folder records one; else the setup's. */
+function statusAccountOf(ctx) {
+  const s = ctx.state?.setup;
+  if (!plainObject(s)) return null;
+  const w = ctx.state.weeks?.[ctx.weekKey];
+  if (plainObject(w) && typeof w.out === 'string' && typeof s.setup_sha256 === 'string') {
+    const r = weekAccountOf(w.out, s.setup_sha256, s.account);
+    if (r.state === 'recorded') return r.account;
+  }
+  return s.account ?? null;
+}
+
 /** arms, judge and report on the week's directory. A word a resume cures leaves the week running; any other word closes it. */
 async function actWeek(ctx, act) {
   let w = ctx.state.weeks[ctx.weekKey];
@@ -532,23 +613,45 @@ async function actWeek(ctx, act) {
     ctx.state.weeks[ctx.weekKey] = w;
     ctx.save(null);   // the row stands before the driver runs, so a crash mid-arms resumes this directory
   }
-  if (act === 'arms' || act === 'judge') {   // the spend steps: the setup's account must still have room (report and record spend nothing)
-    if (laneDisabled(ctx.home, ctx.state.setup.account)) {
-      return { stop: { outcome: 'waiting', word: 'account-disabled', detail: 'the setup\'s account is switched off by the operator\'s lane kill switch', driver: false } };
-    }
-    const r = roomOf(ctx, ctx.state.setup.account);
-    if (!r.room) return noRoomStop(`the setup's account: ${r.word} ${r.detail}`);
-  }
+  const spend = act === 'arms' || act === 'judge';   // the spend steps run on the week's account (report and record spend nothing)
+  const inputs = spend ? weekAccountInputsOf(ctx, w) : null;
+  if (inputs?.stop !== undefined) return inputs;
+  const refused = {};   // fix round 1, F1: this act's admission refusals, which the choice walks past as setup does
+  const choose = () => (spend ? weekAccountChoiceOf({ ...inputs, refused }) : { account: null, why: null });
+  const waitOf = (d) => ({ stop: { outcome: 'waiting', word: d.wait, detail: oneLine(d.detail), driver: false } });
+  let d = choose();
+  if (d.wait !== undefined) return waitOf(d);
   // F2: the permission is for one act. It leaves the row, durably, before the spawn; it is passed only on its own release.
   const permit = act === 'arms' ? w.repilot : undefined;
   if (permit !== undefined) { delete w.repilot; ctx.save(null); }
   const repilot = repilotPermitOf(permit, readReleaseStamp(ctx.home));
   const p = weekPaths(ctx, w);
   const arms = { 'arms-summary': p.summary, 'arms-summary-sha256': w.arms_sha256 };
-  const flags = act === 'arms' ? { ...baseFlags(ctx, p), ...(repilot ? { repilot: true } : {}) }
-    : act === 'judge' ? { ...baseFlags(ctx, p), ...arms }
-      : { ...baseFlags(ctx, p), ...arms, judged: p.judged, 'judged-sha256': w.judged_sha256 };
-  const r = await driverStep(ctx, act, flagsOf(flags));
+  let r;
+  for (;;) {
+    // fix round 2 (review 3549 F2): a stop ends the walk before its next spawn; the week stays running, resumable
+    if (ctx.stopping) {
+      if (repilot) w.repilot = permit;
+      return { stop: { outcome: 'waiting', word: 'interrupted', detail: 'a stop signal arrived during the week\'s account walk', driver: false } };
+    }
+    const account = d.account;
+    const flags = act === 'arms' ? { ...baseFlags(ctx, p), account, ...(repilot ? { repilot: true } : {}) }
+      : act === 'judge' ? { ...baseFlags(ctx, p), ...arms, account }
+        : { ...baseFlags(ctx, p), ...arms, judged: p.judged, 'judged-sha256': w.judged_sha256 };
+    r = await driverStep(ctx, act, flagsOf(flags));
+    // An unspawned week's account refused at admission, before the driver wrote any record: the next candidate is tried, in
+    // the choice's order. Only an admitted account becomes the week's record (history-quiz-single.mjs writes it after
+    // admission, before any spawn), so a week whose folder records one never falls through. The walk covers judge too, but
+    // a judge never meets an unrecorded week today: its arms recorded the account, or ran on an older build that left the pin.
+    if (!spend || d.why === 'recorded' || r.stop?.word !== 'account-refused'
+      || weekAccountOf(w.out, ctx.state.setup.setup_sha256, ctx.state.setup.account).state !== 'none') break;
+    refused[account] = r.stop.detail;
+    d = choose();
+    if (d.wait !== undefined) {
+      if (repilot) w.repilot = permit;   // nothing spawned: the same pilot's permission stands, checked again at its next use
+      return waitOf(d);
+    }
+  }
   if (r.stop !== undefined) {
     if (repilot && r.stop.outcome === 'waiting') w.repilot = permit;   // the same pilot, resumable: its next use is checked again
     if (r.stop.driver && r.stop.outcome === 'refused') {
@@ -658,7 +761,7 @@ async function postStatus(ctx) {
   const last = ctx.state?.last;
   if (!plainObject(last)) return;
   const body = JSON.stringify({ week: last.week, act: last.act, outcome: last.outcome, word: last.word,
-    detail: typeof last.detail === 'string' ? last.detail.slice(0, STATUS_DETAIL_MAX) : null, at: last.at_ms, account: ctx.state.setup?.account ?? null, by: traceOf(ctx) });
+    detail: typeof last.detail === 'string' ? last.detail.slice(0, STATUS_DETAIL_MAX) : null, at: last.at_ms, account: statusAccountOf(ctx), by: traceOf(ctx) });
   let posted = false;
   try {
     const r = await runChild(ctx, ctx.client, ['quiz', 'status', '--json', '-'], { input: body, timeoutMs: POST_TIMEOUT_MS });

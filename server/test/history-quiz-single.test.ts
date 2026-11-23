@@ -270,8 +270,8 @@ describe('Task 3: the module refuses inside a pane and inside a session before i
     expect([bare.status, bare.stderr], 'CONTROL: outside both, the grammar answers').toEqual([2, 'ccrc history-quiz-single: args-invalid: no subcommand\n']);
   });
 
-  it('its words: the driver\'s, plus its own two, and only those', () => {
-    expect([...QS.QUIZ_SINGLE_REASONS]).toEqual(['in-session', 'release-moved', 'repilot-release-moved']);
+  it('its words: the driver\'s, plus its own, and only those (run 3538 adds account-moved)', () => {
+    expect([...QS.QUIZ_SINGLE_REASONS]).toEqual(['in-session', 'release-moved', 'repilot-release-moved', 'account-moved']);
     for (const w of QS.QUIZ_SINGLE_REASONS as string[]) expect(D.DRIVER_REASONS, w).not.toContain(w);
     expect(() => new QS.QuizSingleRefusal('in-pane', 'x')).toThrow(TypeError);
   });
@@ -994,6 +994,23 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
     expect(existsSync(join(w.out, QS.step0bFailedRel(w.mode, 0) as string)), 'the round 0 result kept').toBe(true);
   });
 
+  // review 3533, F5: a round that is present but damaged reads as round 0, as the absent one does (no writer makes one); the
+  // mutant that reads it as written (`round: p.round`) refuses 1.5, '2' and 7.5 out-refused, so these rows tell the two apart.
+  for (const damaged of [1.5, '2', -3, 7.5, null]) {
+    it(`a pin whose round is present but damaged (${JSON.stringify(damaged)}) reads as round 0: --repilot pilots as round 1`, async () => {
+      const w = await failedWeek();
+      const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+      writeFileSync(pinPath, `${L.canonicalJson({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: damaged }) as string}\n`);
+      expect(json(pinPath).round, 'fixture: the pin carries the damaged round').toEqual(damaged);
+      plantStep0b(w.home, w.mode);
+      setRelease(w.home, 'v9.9.9');
+      const r = await run(w.home, w.argv(['--repilot']), FAKE);
+      expect(r.refusal).toBeNull();
+      expect(json(resultPath(w))).toMatchObject({ round: 1, passed: true });
+      expect(json(pinPath)).toMatchObject({ ccrc_release: 'v9.9.9', round: 1 });
+    });
+  }
+
   it('a pin whose round is past the next one is refused out-refused, and nothing is replaced', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
@@ -1182,5 +1199,204 @@ describe('Task 6: W2\'s readers refuse every file the module writes (skip condit
     const empty = join(mkTmp('ccrc-qs-ctl-'), 'x.json');
     writeFileSync(empty, '{}\n');
     expect(refusedByW2(empty, fz).ok, 'CONTROL: an empty object is refused by every reader').toBe(true);
+  });
+});
+
+// ── run 3538: the week's account (the coordinator's rulings 3 and 4 of 2026-11-23) ──────────────────────────────────────
+describe('run 3538: arms and judge run on the week\'s account, recorded in the week\'s folder', () => {
+  const GEN = 'gen-b';
+  const GEN_LOG = 'stub-log-gen-b.jsonl';
+  /** The fixture HOME's folder for a generated account's declared credentials file, as history-replay.test.ts's admission
+   *  fixtures spell it; the file planted there is empty, and admission only stats it. */
+  const CRED_DIR = '.cc-secrets';
+  /** A second account, generated, with its own launcher (the stub, logging to its own file), credentials file and limits row,
+   *  all inside the fixture HOME. */
+  function addGen(home: string, row: R | null = { five: 10, seven: 10 }): void {
+    const f = join(home, '.ccrc', 'accounts.json');
+    const roster = json(f);
+    roster.accounts.push({ id: GEN, label: GEN, configDirSuffix: '.gen-b', homeAble: true, telemetry: 'anthropic',
+      exec: { kind: 'generated', provider: 'anthropic', secretsFile: `${CRED_DIR}/gen-b.env` } });
+    writeFileSync(f, `${JSON.stringify(roster, null, 2)}\n`);
+    writeFileSync(join(home, '.local', 'bin', GEN), STUB.replace(JSON.stringify(STUB_LOG), JSON.stringify(GEN_LOG)), { mode: 0o700 });
+    mkdirSync(join(home, CRED_DIR), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, CRED_DIR, 'gen-b.env'), '', { mode: 0o600 });
+    const nowS = Math.floor(Date.now() / 1000);
+    if (row !== null) writeFileSync(join(home, '.cc-limits', `${GEN}.json`), JSON.stringify({ ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400, ...row }));
+  }
+  const genRuns = (home: string): R[] => (existsSync(join(home, GEN_LOG)) ? readFileSync(join(home, GEN_LOG), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as R) : []);
+  const recPath = (out: string): string => join(out, 'quiz', 'week-account.json');
+  const judgeArgv = (w: R, extra: string[] = []): string[] => {
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    return ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath), ...extra];
+  };
+
+  it('arms --account runs the week on that account: recorded through the one composer, step 0b and every arm on its launcher', async () => {
+    const w = await week();
+    addGen(w.home);
+    const r = await run(w.home, w.argv(['--account', GEN]), FAKE);
+    expect(r.refusal).toBeNull();
+    expect(readFileSync(recPath(w.out), 'utf8')).toBe(QS.weekAccountText(w.s.sha, GEN));
+    expect(runs(w.home), 'nothing ran on the setup\'s launcher').toEqual([]);
+    expect(genRuns(w.home).filter((x) => x.argv[0] !== '--version').length).toBeGreaterThan(0);
+    expect(json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`)).account, 'ruling 4: the pilot\'s checks ran on the account in use').toBe(GEN);
+    expect(w.s.value.account, 'CONTROL: the setup is the other account').toBe('up-a');
+  });
+
+  it('without --account the week is the setup\'s, as before, and is recorded so', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    expect(readFileSync(recPath(w.out), 'utf8')).toBe(QS.weekAccountText(w.s.sha, 'up-a'));
+  });
+
+  it('the record stands before the first spawn: a pilot that fails leaves it', async () => {
+    const w = await week();
+    addGen(w.home);
+    const p = (D.step0bProbesOf(w.home, D.STEP0B_SYNTHETIC_TRANSCRIPT) as R[]).find((x) => x.probe === 'deny-rg')!;
+    plantStep0b(w.home, w.mode, { 'deny-rg': stream({ session: 'fixture-qs-deny-rg', calls: [{ command: p.command }] }) });
+    expect((await run(w.home, w.argv(['--account', GEN]), FAKE)).refusal?.word).toBe('pilot-failed');
+    expect(json(recPath(w.out)).account).toBe(GEN);
+  });
+
+  // fix round 1 (review 3545 F3): the record is on disk before the --version spawn, the week's first
+  it('the record stands before the --version spawn: a --version that fails leaves it', async () => {
+    const w = await week();
+    addGen(w.home);
+    rmSync(join(w.home, STUB_VERSION));   // the stub then prints no version line
+    const r = await run(w.home, w.argv(['--account', GEN]), FAKE);
+    expect(r.refusal?.word).toBe('version-unmeasured');
+    expect(readFileSync(recPath(w.out), 'utf8')).toBe(QS.weekAccountText(w.s.sha, GEN));
+    expect(genRuns(w.home), 'CONTROL: nothing past --version ran').toEqual([]);
+  });
+
+  it('the record stands before the --version spawn: a run killed while --version runs leaves it', async () => {
+    const w = await week();
+    addGen(w.home);
+    // the week's launcher holds its --version run open and says so, so the driver can be killed there
+    const launcher = join(w.home, '.local', 'bin', GEN);
+    const held = readFileSync(launcher, 'utf8').replace("if (argv[0] === '--version') {",
+      "if (argv[0] === '--version') { fs.writeFileSync(at('version.pid'), String(process.pid)); await new Promise((r) => setTimeout(r, 30000));");
+    expect(held, 'fixture: the --version line was found').not.toBe(readFileSync(launcher, 'utf8'));
+    writeFileSync(launcher, held, { mode: 0o700 });
+    const wrapper = join(mkTmp('ccrc-qs-wrap-'), 'run.mjs');
+    writeFileSync(wrapper, `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});
+const deps = {
+  recheck: async (_rs, es) => new Map(es.map((e) => [e.qid, { ok: true, boundaryEntryId: 0, cut: { qid: e.qid } }])),
+  payloads: (_rs, _id, _q, cut) => ({ state: 'payloads', plain: 'fixture payload ' + cut.qid + '\\n', carded: ${JSON.stringify(`${CARD}\n\nfixture payload `)} + cut.qid + '\\n', card: { state: 'card', line: ${JSON.stringify(CARD)} } }),
+};
+process.exitCode = await m.main(process.argv.slice(2), { HOME: process.env.HOME, LANG: process.env.LANG }, deps);
+`);
+    const child = spawn(process.execPath, ['--no-warnings', wrapper, ...w.argv(['--account', GEN])],
+      { cwd: w.home, env: { ...scrubbedEnv(process.env), HOME: w.home } as NodeJS.ProcessEnv, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (b: Buffer) => { stderr += b.toString('utf8'); });
+    const closed = new Promise<{ signal: string | null }>((resolve) => child.on('close', (_s, signal) => resolve({ signal })));
+    const pidFile = join(w.home, 'version.pid');
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(pidFile) && child.exitCode === null && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    try {
+      expect(existsSync(pidFile), `fixture: the --version run started (${stderr})`).toBe(true);
+      child.kill('SIGKILL');
+      expect((await closed).signal).toBe('SIGKILL');
+      expect(readFileSync(recPath(w.out), 'utf8'), 'a week killed at its first spawn is a spawned week on its account').toBe(QS.weekAccountText(w.s.sha, GEN));
+    } finally {
+      child.kill('SIGKILL');
+      if (existsSync(pidFile)) { try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ } }
+    }
+  }, 60_000);
+
+  // fix round 1 (review 3545 F1): only an admitted account becomes the week's record, so the runner can try the next one
+  it('an account admission refuses is never recorded: no --out, no record, nothing spawned', async () => {
+    const w = await week();
+    addGen(w.home);
+    rmSync(join(w.home, CRED_DIR, 'gen-b.env'));   // its declared credentials file absent: admission refuses it
+    const r = await run(w.home, w.argv(['--account', GEN]), FAKE);
+    expect(r.refusal?.word).toBe('account-refused');
+    expect(existsSync(w.out)).toBe(false);
+    expect(existsSync(recPath(w.out))).toBe(false);
+    expect([runs(w.home), genRuns(w.home)]).toEqual([[], []]);
+  });
+
+  // fix round 1 (review 3545 F2): every spawn's gate reads the week's account's row, not the setup's
+  it('the spawn gate reads the week\'s account\'s row: it rising past the threshold after admission stops the run, the setup\'s row low', async () => {
+    const w = await week();
+    addGen(w.home);
+    const genRow = join(w.home, '.cc-limits', `${GEN}.json`);
+    const deps: R = { ...FAKE, recheck: async (rs: unknown, es: R[]): Promise<Map<string, R>> => {
+      if (es.length > 1) {   // the arms' preflight of its whole batch, after admission and step 0b, before any question spawns
+        const nowS = Math.floor(Date.now() / 1000);
+        writeFileSync(genRow, JSON.stringify({ five: 90, seven: 90, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      }
+      return (FAKE.recheck as (a: unknown, b: R[]) => Promise<Map<string, R>>)(rs, es);
+    } };
+    const r = await run(w.home, w.argv(['--account', GEN]), deps);
+    expect(r.refusal?.word).toBe('limits-threshold');
+    expect(json(genRow).seven, 'CONTROL: the week\'s row was raised').toBe(90);
+    expect(json(join(w.home, '.cc-limits', 'up-a.json')).seven, 'CONTROL: the setup\'s row stayed low').toBe(10);
+    expect(genRuns(w.home).filter((x) => typeof x.stdin === 'string' && x.stdin.startsWith(`${CARD}\n\nfixture payload `)), 'no question spawned').toEqual([]);
+    expect(json(recPath(w.out)).account).toBe(GEN);
+  });
+
+  it('the gate reads the week\'s account\'s own row: no row there stops the act before --out, whatever the setup\'s row says', async () => {
+    const w = await week();
+    addGen(w.home, null);
+    const r = await run(w.home, w.argv(['--account', GEN]), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'limits-stale', detail: 'absent' });
+    expect(existsSync(w.out)).toBe(false);
+    expect(genRuns(w.home)).toEqual([]);
+  });
+
+  it('an act given another account than the week\'s record refuses account-moved before any spawn: arms and judge', async () => {
+    const w = await week();
+    addGen(w.home);
+    expect((await run(w.home, w.argv(['--account', GEN]), FAKE)).refusal).toBeNull();
+    const before = [runs(w.home).length, genRuns(w.home).length];
+    const arms = await run(w.home, w.argv(['--account', 'up-a']), FAKE);
+    expect(arms.refusal?.word).toBe('account-moved');
+    expect(arms.refusal?.detail, 'no account is named in the detail').not.toMatch(/up-a|gen-b/);
+    const armsBare = await run(w.home, w.argv(), FAKE);
+    expect(armsBare.refusal?.word, 'no flag is the setup\'s account, which is not this week\'s').toBe('account-moved');
+    const judge = await run(w.home, judgeArgv(w, ['--account', 'up-a']), FAKE);
+    expect(judge.refusal?.word).toBe('account-moved');
+    expect([runs(w.home).length, genRuns(w.home).length], 'nothing spawned').toEqual(before);
+    expect(readFileSync(recPath(w.out), 'utf8'), 'the record is never rewritten').toBe(QS.weekAccountText(w.s.sha, GEN));
+    expect((await run(w.home, judgeArgv(w, ['--account', GEN]), FAKE)).refusal, 'CONTROL: the week\'s own account judges').toBeNull();
+  });
+
+  it('a week an older build ran (its release pin, no record) reads as the setup\'s account', async () => {
+    const w = await week();
+    addGen(w.home);
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    rmSync(recPath(w.out));
+    expect(QS.weekAccountOf(w.out, w.s.sha, 'up-a')).toEqual({ state: 'recorded', account: 'up-a', older: true });
+    expect((await run(w.home, w.argv(['--account', GEN]), FAKE)).refusal?.word).toBe('account-moved');
+    expect((await run(w.home, w.argv(), FAKE)).refusal, 'CONTROL: the setup\'s account resumes it').toBeNull();
+    expect(existsSync(recPath(w.out)), 'an older week is not given a record').toBe(false);
+  });
+
+  it('a record that is not this run\'s, or not a regular file, refuses out-refused and spawns nothing', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const n = runs(w.home).length;
+    writeFileSync(recPath(w.out), QS.weekAccountText('0'.repeat(64), 'up-a') as string);
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toMatchObject({ word: 'out-refused', detail: 'quiz/week-account.json is not this run\'s record' });
+    rmSync(recPath(w.out));
+    mkdirSync(recPath(w.out));
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toMatchObject({ word: 'out-refused', detail: 'quiz/week-account.json is not-regular' });
+    expect(runs(w.home).length).toBe(n);
+  });
+
+  it('weekAccountOf answers none for a week that has spawned nothing, and never throws on a missing folder', () => {
+    const out = freshOut('never');
+    expect(QS.weekAccountOf(out, 'a'.repeat(64), 'up-a')).toEqual({ state: 'none' });
+    mkdirSync(join(out, 'quiz'), { recursive: true });
+    writeFileSync(join(out, 'quiz', 'week-account.json'), QS.weekAccountText('a'.repeat(64), 'lane-a') as string);
+    expect(QS.weekAccountOf(out, 'a'.repeat(64), 'up-a')).toEqual({ state: 'recorded', account: 'lane-a', older: false });
+    writeFileSync(join(out, 'quiz', 'week-account.json'), 'not json');
+    expect(QS.weekAccountOf(out, 'a'.repeat(64), 'up-a').state).toBe('unreadable');
+  });
+
+  it('the composer refuses an account that is not a non-empty string', () => {
+    for (const bad of ['', null, 7, undefined]) expect(() => QS.weekAccountText('a'.repeat(64), bad), String(bad)).toThrow(TypeError);
+    expect(JSON.parse(QS.weekAccountText('a'.repeat(64), 'lane-a') as string)).toEqual({ kind: QS.WEEK_ACCOUNT_KIND, v: 1, setup_sha256: 'a'.repeat(64), account: 'lane-a' });
   });
 });
