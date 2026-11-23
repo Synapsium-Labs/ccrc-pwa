@@ -1152,13 +1152,13 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the newest call's one-line summary. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
   },
-  '.tool-activity-approval': {
+  '.tool-activity-wait': {
     under: ['var(--bg-page)'],
-    why: "the approval line under a collapsed row, in the attention status ink, beside its control. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+    why: "the wait line of the current turn's newest row, in the attention status ink, beside its control. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
   },
   '.tool-activity-answer': {
     under: ['var(--bg-page)'],
-    why: "the approval's control, a bordered button with no background. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+    why: "the wait line's control, a bordered button with no background. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
   },
   '.build-line': {
     under: ['var(--bg-surface)'],

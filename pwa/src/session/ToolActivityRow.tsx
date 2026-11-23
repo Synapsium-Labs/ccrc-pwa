@@ -2,9 +2,10 @@
 // disclosure, drawn the same way in both skins.
 //
 // Collapsed by default, it reads "Tool activity · N calls", "running" while the stretch is live, and the newest call's
-// one-line summary. What wants the reader is never only inside: the attention counts ride the row, and the FIRST such
-// entry (a failed call, an open question, a call waiting on approval) is drawn under it as its own card, with that card's
-// own controls (Answer, its disclosure). Opened, the row shows the stretch's rows exactly as the transcript drew them
+// one-line summary. What wants the reader is never only inside: the flags ride the row, a live wait no card is
+// identified as is a line of the row's own with the transcript's control (open or closed), and the FIRST entry that
+// wants the reader (the question asked now, else a failed call) is drawn under the closed row as its own card, with that
+// card's own controls (Answer, its disclosure). Opened, the row shows the stretch's rows exactly as the transcript drew them
 // before the fold, through the set's own row part (`renderRow`), so a skin's run groups and every tool card are
 // unchanged inside it.
 //
@@ -14,7 +15,7 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { FOCUS_RING } from '@ccrc/ui';
-import { APPROVAL_WORD, activityWords, approvalControlWord, type ToolActivityItem } from './toolActivity';
+import { activityWords, waitControlWord, waitWord, type ToolActivityItem } from './toolActivity';
 import { useTranscriptRow } from './transcriptRow';
 
 /** A separator the eye reads and the screen reader skips. The spaces around it are what keep the row's spoken name
@@ -64,22 +65,22 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
         {' '}
         <span className="tool-activity-latest">{words.latest}</span>
       </button>
-      {!open && first !== undefined && (
-        <div className="tool-activity-first" data-attention={first.kind}>
-          {renderItem(first.entry)}
-          {/* A call waiting on approval: its own card has no control (an ask card has its Answer), so the row offers the
-              transcript's, which raises the sheet or the inline card and sends nothing (`ToolCard`'s ONE CONTROL rule). */}
-          {first.kind === 'approval' && (
-            <p className="tool-activity-approval">
-              <span>{APPROVAL_WORD}</span>
-              {answer.onAnswer !== undefined && (
-                <button type="button" className={`tool-activity-answer ${FOCUS_RING}`} onClick={answer.onAnswer}>
-                  {approvalControlWord(answer.askBelow === true, answer.answerLabel)}
-                </button>
-              )}
-            </p>
+      {/* A live wait no card is identified as: the row's own line, open or closed, with the transcript's control, which
+          raises the pending sheet or the inline card and sends nothing (`ToolCard`'s ONE CONTROL rule). */}
+      {item.waiting && (
+        <p className="tool-activity-wait">
+          <span>{waitWord(answer.askBelow === true)}</span>
+          {answer.onAnswer !== undefined && (
+            <button type="button" className={`tool-activity-answer ${FOCUS_RING}`} onClick={answer.onAnswer}>
+              {waitControlWord(answer.askBelow === true, answer.answerLabel)}
+            </button>
           )}
-        </div>
+        </p>
+      )}
+      {/* Closed, the first entry that wants the reader is drawn as its own card: the question asked now (its card carries
+          Answer), else the first failure. Opened, the same cards are in the body, in order. */}
+      {!open && first !== undefined && (
+        <div className="tool-activity-first" data-attention={first.kind}>{renderItem(first.entry)}</div>
       )}
       {open && (
         <div id={bodyId} className="tool-activity-body">

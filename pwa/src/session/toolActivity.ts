@@ -22,9 +22,8 @@ import { groupToolRun, toolSummary, type RunItem } from './toolSummary';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
-/** Why an entry of a stretch wants the reader: its call failed, it is a question still open, or it is the call the
- *  session is holding for the reader's approval. */
-export type AttentionKind = 'failed' | 'question' | 'approval';
+/** Why an entry of a stretch wants the reader: its call failed, or it is the question the session is asking now. */
+export type AttentionKind = 'failed' | 'question';
 
 export interface Attention {
   readonly kind: AttentionKind;
@@ -40,13 +39,19 @@ export interface ToolActivityItem {
   entries: ToolItem[];
   /** What the row shows expanded: the entries under the skin's own grouping, in order. */
   inner: RunItem[];
-  /** The session is working, and this stretch is the newest one and holds a call with no result yet. A resultless call
-   *  of a turn that ended (an interrupted one) is never running. */
+  /** The session is working, this stretch is in the CURRENT turn (after the last user prompt), and one of its calls has
+   *  no result yet, whichever of them it is (parallel calls finish out of order). A resultless call of an earlier turn
+   *  is never running. */
   live: boolean;
   /** The newest entry's one-line summary (`toolSummary`). */
   latest: string;
-  /** The entries that want the reader: those that block the session first, then the failures, each in transcript order. */
+  /** The entries that want the reader: the question the session is asking now first, then the failures, each in
+   *  transcript order. */
   attention: Attention[];
+  /** The session holds a live ask or dialog that no card is identified as (an approval, a dialog, or a question this
+   *  turn does not single out). Set on the newest stretch of the current turn only, which draws it as a line of its own
+   *  with the transcript's answer control. */
+  waiting: boolean;
 }
 
 /** What a transcript renders: plain items, folded runs, and stretches of a turn's tool activity folded into one row,
@@ -63,78 +68,98 @@ export interface ActivityFold {
 
 const ASK = 'AskUserQuestion';
 
-/** Why an entry wants the reader, or null. `waiting` is the key of the call the session's live ask or dialog belongs
- *  to: the newest tool entry, while it has no result. */
-function attentionOf(entry: ToolItem, waiting: string | null): AttentionKind | null {
-  if (entry.result != null && entry.result.isError === true) return 'failed';
-  if (entry.result != null) return null;
-  if (entry.use.name === ASK) return 'question';
-  return entry.key === waiting ? 'approval' : null;
+/** A user prompt: what starts a turn. A user message, or mail typed into the pane as one (the legacy mail lane). */
+function isPrompt(item: ChatItem): boolean {
+  return (item.kind === 'message' || item.kind === 'mail') && item.event.kind === 'user';
 }
 
+const failed = (e: ToolItem): boolean => e.result != null && e.result.isError === true;
+
 /** Fold each stretch of consecutive tool entries into one `tool-activity` item. Every other item passes through
- *  untouched, in order. */
+ *  untouched, in order.
+ *
+ *  WHAT IS LIVE IS THE CURRENT TURN'S. The turn the session is in starts after the last user prompt; nothing before it
+ *  runs, waits or holds a live control, whatever its calls lack.
+ *
+ *  A LIVE ASK OR DIALOG IS TIED TO A CARD ONLY WHEN THE TRANSCRIPT SINGLES ONE OUT. The live state (`askPending`) says
+ *  that the session waits, not on which call: an approval names a tool, never a call, so no card is inferred for it.
+ *  The one card it singles out is a question: the current turn's only AskUserQuestion with no result, whose own card
+ *  carries Answer into the same sheet. Every other wait is the current turn's newest row's `waiting` line, and with no
+ *  row in the current turn yet (a new prompt before its first call) the transcript draws none: the session's own
+ *  surfaces carry it. So one live wait is drawn once, never twice. */
 export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold): (ChatItem | ToolActivityItem)[] {
-  // The newest tool entry overall: the only one a session-wide live ask or dialog can be about.
-  let newest: ToolItem | null = null;
-  for (const item of items) if (item.kind === 'tool') newest = item;
-  const waiting = fold.askPending && newest !== null && newest.result == null ? newest.key : null;
+  let turnStart = 0;
+  items.forEach((item, i) => { if (isPrompt(item)) turnStart = i + 1; });
+  const openAsks: ToolItem[] = [];
+  let newestCurrent = -1; // the index of the current turn's newest tool entry
+  for (let i = turnStart; i < items.length; i += 1) {
+    const item = items[i]!;
+    if (item.kind !== 'tool') continue;
+    newestCurrent = i;
+    if (item.use.name === ASK && item.result == null) openAsks.push(item);
+  }
+  const question = fold.askPending && openAsks.length === 1 ? openAsks[0]! : null;
+  const waitingRow = fold.askPending && question === null;
 
   const out: (ChatItem | ToolActivityItem)[] = [];
   let stretch: ToolItem[] = [];
-  const close = (): void => {
+  let from = 0; // the index of the stretch's first entry
+  const close = (to: number): void => {
     const first = stretch[0];
     const last = stretch[stretch.length - 1];
     if (first === undefined || last === undefined) return;
-    // What blocks the session (an open question, a call waiting on approval) leads, then the failures, each in
-    // transcript order: the row draws the FIRST, so the one the reader must act on now is never behind an older failure.
-    const blocking: Attention[] = [];
-    const failed: Attention[] = [];
-    for (const entry of stretch) {
-      const kind = attentionOf(entry, waiting);
-      if (kind === 'failed') failed.push({ kind, entry });
-      else if (kind !== null) blocking.push({ kind, entry });
-    }
-    const attention = [...blocking, ...failed];
+    const current = from >= turnStart;
+    const attention: Attention[] = [
+      ...stretch.filter((e) => e === question).map((entry) => ({ kind: 'question' as const, entry })),
+      ...stretch.filter(failed).map((entry) => ({ kind: 'failed' as const, entry })),
+    ];
     out.push({
       kind: 'tool-activity',
       key: `activity-${first.key}`,
       entries: stretch,
       inner: fold.runs === 'tool-runs' ? groupToolRun(stretch) : [...stretch],
-      live: fold.busy && last === newest && stretch.some((e) => e.result == null),
+      live: fold.busy && current && stretch.some((e) => e.result == null),
       latest: toolSummary(last).sentence,
       attention,
+      // The stretch holding the current turn's newest call; no stretch spans a prompt, so it is in the current turn.
+      waiting: waitingRow && newestCurrent >= from && newestCurrent < to,
     });
     stretch = [];
   };
-  for (const item of items) {
+  items.forEach((item, i) => {
     if (item.kind === 'tool') {
+      if (stretch.length === 0) from = i;
       stretch.push(item);
-      continue;
+      return;
     }
-    close();
+    close(i);
     out.push(item);
-  }
-  close();
+  });
+  close(items.length);
   return out;
 }
 
-/** The words of an attention count, by kind, in this order. */
+/** The words of an attention count, by kind, in this order: what the reader can act on now before the failures. */
 const ATTENTION_WORDS: Readonly<Record<AttentionKind, (n: number) => string>> = {
-  failed: (n) => `${n} failed`,
   question: (n) => (n === 1 ? '1 question' : `${n} questions`),
-  approval: (n) => `${n} waiting on you`,
+  failed: (n) => `${n} failed`,
 };
 const ATTENTION_ORDER = Object.keys(ATTENTION_WORDS) as AttentionKind[];
 
-/** The control beside a call waiting on the reader's approval: it raises the answer sheet, or with the answer surface
- *  mounted below the transcript (the desk) it takes the reader there. It answers nothing itself. */
-export function approvalControlWord(askBelow: boolean, answerLabel: string | undefined): string {
-  return askBelow ? 'Go to approval' : (answerLabel ?? 'Answer');
+/** The row's flag for a live wait no card is identified as. */
+export const WAITING_FLAG = 'waiting on you';
+
+/** The line a `waiting` row draws: the session waits on the reader, and the transcript says so without naming a call it
+ *  cannot identify. With the answer surface mounted below the transcript (the desk), it says where. */
+export function waitWord(askBelow: boolean): string {
+  return askBelow ? 'waiting for you, below' : 'waiting for you';
 }
 
-/** The word beside that control, as the ask card says its own. */
-export const APPROVAL_WORD = 'waiting for you';
+/** The control on that line: it raises the answer sheet (the pending ask or dialog, whichever it is), or with the
+ *  answer surface below the transcript it takes the reader there. It answers nothing itself. */
+export function waitControlWord(askBelow: boolean, answerLabel: string | undefined): string {
+  return askBelow ? 'Go to the prompt' : (answerLabel ?? 'Answer');
+}
 
 /** What a tool-activity row says, in words both skins draw. */
 export interface ActivityWords {
@@ -146,7 +171,8 @@ export interface ActivityWords {
   readonly state: string | null;
   /** The newest call's one-line summary. */
   readonly latest: string;
-  /** One count per kind that wants the reader ("1 failed", "1 question"), in a fixed order. Empty when none does. */
+  /** A flag per thing that wants the reader, what can be acted on now first: the live wait no card is identified as
+   *  ("waiting on you"), then one count per kind ("1 question", "1 failed"). Empty when nothing does. */
   readonly attention: readonly string[];
 }
 
@@ -159,9 +185,12 @@ export function activityWords(item: ToolActivityItem): ActivityWords {
     calls: n === 1 ? '1 call' : `${n} calls`,
     state: item.live ? 'running' : null,
     latest: item.latest,
-    attention: ATTENTION_ORDER.flatMap((k) => {
-      const c = counts.get(k);
-      return c === undefined ? [] : [ATTENTION_WORDS[k](c)];
-    }),
+    attention: [
+      ...(item.waiting ? [WAITING_FLAG] : []),
+      ...ATTENTION_ORDER.flatMap((k) => {
+        const c = counts.get(k);
+        return c === undefined ? [] : [ATTENTION_WORDS[k](c)];
+      }),
+    ],
   };
 }

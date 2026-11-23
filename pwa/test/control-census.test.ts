@@ -288,7 +288,7 @@ const CONTROLS: Record<string, string> = {
     'TOKEN. The tool-activity row (desktop polish wave 168): the whole line is the disclosure that opens the stretch; '
     + '`.tool-activity-row` declares the floor.',
   'session/ToolActivityRow.tsx <button> tool-activity-answer':
-    'TOKEN. The approval\'s control under a collapsed tool-activity row (desktop polish wave 168): `.tool-activity-answer` '
+    'TOKEN. The wait line\'s control on the current turn\'s tool-activity row (desktop polish wave 168): `.tool-activity-answer` '
     + 'declares the floor.',
   'inspector/HistorySection.tsx <button> insp-link':
     "TOKEN. The inspector's door to the session's history (W2 Task S8, D-5474): `.insp-link` declares the floor.",

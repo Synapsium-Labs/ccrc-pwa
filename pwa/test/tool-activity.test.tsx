@@ -99,11 +99,13 @@ function transcript() {
   };
 }
 
-/** A long, tool-heavy session: TURNS turns of prose and tools mixed, one failed call, one answered question, then a
- *  last turn whose final stretch holds an open question and, newest, a call waiting on approval. */
+/** A long, tool-heavy session: TURNS turns of prose and tools mixed, one failed call, one answered question, one
+ *  STALE question (an ask of an earlier turn that never got a result), then a last turn whose final stretch holds the
+ *  question the session is asking now. */
 const TURNS = 14;
 function longSession() {
   const t = transcript();
+  let stale: Use | null = null;
   for (let i = 0; i < TURNS; i += 1) {
     t.user(`Step ${i}.`);
     t.say(`Reading for step ${i}.`);
@@ -115,6 +117,7 @@ function longSession() {
     t.call('Edit', { file_path: `/repo/src/a${i}.ts`, old_string: 'x', new_string: 'y' }, i === 3);
     t.call('Grep', { pattern: `step${i}` });
     if (i === 5) t.answered('Which colour reads best?');
+    if (i === 7) stale = t.ask('A question nobody answered?');
     t.call('Bash', { command: 'git status' });
     t.say(`Step ${i} done.`);
   }
@@ -122,8 +125,7 @@ function longSession() {
   t.say('Checking first.');
   t.call('Read', { file_path: '/repo/src/last.ts' });
   const question = t.ask('Ship it now?');
-  const approval = t.live('Bash', { command: 'npm publish' });
-  return { ...t, question, approval };
+  return { ...t, question, stale: stale! };
 }
 
 const activities = (items: readonly unknown[]): ToolActivityItem[] =>
@@ -165,38 +167,94 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
     expect(activityWords(row).attention).toEqual(['1 failed']);
   });
 
-  it('surfaces an open question and the call waiting on approval, those that block first', () => {
+  it('surfaces the question the session is asking now, and never a stale one', () => {
     const s = longSession();
-    const rows = activities(foldToolActivity(buildChatItems(s.events, [], true), { runs: 'tool-runs', askPending: true, busy: true }));
+    const fold = (askPending: boolean) =>
+      activities(foldToolActivity(buildChatItems(s.events, [], true), { runs: 'tool-runs', askPending, busy: true }));
+    const rows = fold(true);
     const last = rows[rows.length - 1]!;
-    expect(last.attention.map((a) => [a.kind, a.entry.key])).toEqual([
-      ['question', s.question.toolId],
-      ['approval', s.approval.toolId],
-    ]);
-    expect(activityWords(last)).toMatchObject({ calls: '3 calls', state: 'running', attention: ['1 question', '1 waiting on you'] });
-    // A blocking entry leads an older failure in the same stretch.
+    expect(last.attention.map((a) => [a.kind, a.entry.key])).toEqual([['question', s.question.toolId]]);
+    expect(activityWords(last)).toMatchObject({ calls: '2 calls', state: 'running', attention: ['1 question'] });
+    // The stale ask of turn 7 is not asked now: no flag, no card, no live control, in its own row or any other.
+    const staleRow = rows.find((r) => r.entries.some((e) => e.key === s.stale.toolId))!;
+    expect(staleRow.attention).toEqual([]);
+    expect(staleRow.live).toBe(false);
+    // One live wait, drawn once: the question's card carries it, so no row draws a wait line too.
+    expect(rows.filter((r) => r.waiting)).toEqual([]);
+    // With no live ask or dialog, the turn's open ask is not asked now either.
+    expect(fold(false).flatMap((r) => r.attention.map((a) => a.kind))).not.toContain('question');
+  });
+
+  it('leads with the question asked now, ahead of a failure in the same stretch', () => {
     const t = transcript();
     t.user('Go.');
     t.call('Bash', { command: 'npm test' }, true);
-    const waiting = t.live('Bash', { command: 'npm publish' });
+    const ask = t.ask('Retry?');
     const row = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true, busy: true }))[0]!;
-    expect(row.attention.map((a) => [a.kind, a.entry.key])).toEqual([['approval', waiting.toolId], ['failed', 't2']]);
+    expect(row.attention.map((a) => [a.kind, a.entry.key])).toEqual([['question', ask.toolId], ['failed', 't2']]);
   });
 
-  it('marks an approval only while the session holds a live ask or dialog, and only on the newest call', () => {
-    const s = longSession();
-    const idle = activities(foldToolActivity(buildChatItems(s.events, [], true), { runs: 'none', askPending: false, busy: true }));
-    expect(idle.flatMap((r) => r.attention.map((a) => a.kind))).not.toContain('approval');
-    // An older resultless call (an interrupted one) is never the one a dialog is about.
+  it('names no call for a live wait the transcript does not single out: the current turn\'s newest row waits', () => {
+    const fold = (t: ReturnType<typeof transcript>, askPending = true) =>
+      activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending, busy: true }));
+    // An approval: it names a tool, never a call, so no card is inferred; the newest row of the turn says the session waits.
+    const a = transcript();
+    a.user('Publish.');
+    a.call('Read', { file_path: '/repo/a.ts' });
+    a.say('Building, then publishing.');
+    a.call('Bash', { command: 'npm run build' });
+    a.live('Bash', { command: 'npm publish' });
+    const rows = fold(a);
+    expect(rows.map((r) => r.waiting)).toEqual([false, true]);
+    expect(rows.flatMap((r) => r.attention)).toEqual([]);
+    expect(activityWords(rows[1]!).attention).toEqual(['waiting on you']);
+    expect(fold(a, false).map((r) => r.waiting)).toEqual([false, false]);
+    // Two parallel calls, the newest already answered and the first not: still no card is named, and the row runs.
+    const p = transcript();
+    p.user('Go.');
+    const first = p.live('Bash', { command: 'npm publish' });
+    const second = p.live('Read', { file_path: '/repo/a.ts' });
+    p.events.push({ kind: 'tool_result', ts: TS, toolId: second.toolId, text: 'ok', isError: false });
+    const [par] = fold(p);
+    expect(par!.entries.map((e) => e.key)).toEqual([first.toolId, second.toolId]);
+    expect(par!.waiting).toBe(true);
+    expect(par!.attention).toEqual([]);
+    expect(par!.live, 'a resultless call before an answered one is still running').toBe(true);
+    // Every call of the turn has its result, and the session still waits (a helper's approval, a menu): the row waits.
+    const r = transcript();
+    r.user('Go.');
+    r.call('Agent', { description: 'review the diff' });
+    const [done] = fold(r);
+    expect(done!.waiting).toBe(true);
+    expect(done!.live).toBe(false);
+    // Two open asks in one turn: the transcript does not single one out, so neither card takes the wait.
+    const q = transcript();
+    q.user('Go.');
+    q.ask('One?');
+    q.ask('Two?');
+    const [two] = fold(q);
+    expect(two!.attention).toEqual([]);
+    expect(two!.waiting).toBe(true);
+  });
+
+  it('keeps every live state to the current turn: a new prompt before its first call leaves the last turn quiet', () => {
     const t = transcript();
-    t.user('Go.');
+    t.user('Run it.');
     t.live('Bash', { command: 'sleep 100' });
-    t.say('Interrupted; carrying on.');
-    const newest = t.live('Bash', { command: 'npm publish' });
+    t.ask('Old question?');
+    t.user('Never mind, do this instead.');
     const rows = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true, busy: true }));
-    expect(rows.map((r) => r.attention.map((a) => [a.kind, a.entry.key]))).toEqual([[], [['approval', newest.toolId]]]);
-    // And only the newest stretch is running.
-    expect(rows.map((r) => r.live)).toEqual([false, true]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.live, 'an earlier turn\'s resultless call reads as running').toBe(false);
+    expect(rows[0]!.waiting, 'an earlier turn\'s row hosts the live wait').toBe(false);
+    expect(rows[0]!.attention, 'an earlier turn\'s ask reads as asked now').toEqual([]);
+    // Only a prompt starts a turn: the assistant's own prose between calls does not.
+    const m = transcript();
+    m.user('Go.');
+    m.live('Bash', { command: 'npm test' });
+    m.say('Still going.');
+    const [still] = activities(foldToolActivity(buildChatItems(m.events, [], true), { runs: 'none', askPending: false, busy: true }));
+    expect(still!.live, 'assistant prose ended the turn').toBe(true);
   });
 
   it('says running only while the session works: a turn that ended with a call unanswered is not running', () => {
@@ -274,16 +332,20 @@ describe.each(SETS)('%s draws one collapsed row per stretch', (_name, set) => {
     }
     // Collapsed, the only cards drawn are the entries surfaced for the reader: one per row that has any.
     const surfaced = container.querySelectorAll('.tool-activity-first');
-    expect(surfaced).toHaveLength(2); // the failed Edit's row, and the last row (its open question leads)
+    expect(surfaced).toHaveLength(2); // the failed Edit's row, and the last row (its question asked now); never the stale ask's
     expect(container.querySelectorAll('.ref-tool-group')).toHaveLength(0);
     // The row's words: the title, the count, the running state and the newest call's summary.
     const last = rows[rows.length - 1]!;
     expect(last.textContent).toContain('Tool activity');
-    expect(last.textContent).toContain('3 calls');
+    expect(last.textContent).toContain('2 calls');
     expect(last.textContent).toContain('running');
-    expect(last.textContent).toContain('Ran npm');
+    expect(last.textContent).toContain('AskUserQuestion');
     expect(last.textContent).toContain('1 question');
-    expect(last.textContent).toContain('1 waiting on you');
+    expect(last.textContent).not.toContain('waiting on you');
+    // One live wait, drawn once: the question's card, and no wait line anywhere.
+    expect(container.querySelectorAll('.tool-activity-wait')).toHaveLength(0);
+    // Only the current turn runs.
+    expect(rows.filter((r) => (r.textContent ?? '').includes('running'))).toHaveLength(1);
   });
 
   it('surfaces a failed call on the collapsed row as its own card', () => {
@@ -304,26 +366,49 @@ describe.each(SETS)('%s draws one collapsed row per stretch', (_name, set) => {
     expect(question!.textContent).toContain('Ship it now?');
     fireEvent.click(within(question!).getByRole('button', { name: 'Answer' }));
     expect(onAnswer).toHaveBeenCalledTimes(1);
+    // Opened, the same card is in the body with its Answer, and is not drawn twice.
+    const rows = rowsOf(container);
+    const row = rows[rows.length - 1]!;
+    fireEvent.click(row);
+    const box = row.closest('.tool-activity') as HTMLElement;
+    expect(box.querySelector('.tool-activity-first')).toBeNull();
+    const body = box.querySelector<HTMLElement>('.tool-activity-body')!;
+    expect(within(body).getAllByText('Ship it now?')).toHaveLength(1);
+    fireEvent.click(within(body).getByRole('button', { name: 'Answer' }));
+    expect(onAnswer).toHaveBeenCalledTimes(2);
   });
 
-  it('surfaces a call waiting on approval with the transcript\'s answer control', () => {
+  it('draws a live wait no card is identified as on the current turn\'s newest row, closed and open, with the answer control', () => {
     const onAnswer = vi.fn();
     const t = transcript();
     t.user('Publish.');
     t.call('Bash', { command: 'npm run build' });
     t.live('Bash', { command: 'npm publish' });
     const { container, rerender } = render(list(set, t.events, { askPending: true, onAnswer, busy: true }));
-    const approval = container.querySelector<HTMLElement>('.tool-activity-first[data-attention="approval"]');
-    expect(approval, 'the approval is not surfaced').not.toBeNull();
-    expect(approval!.textContent).toContain('waiting for you');
-    fireEvent.click(within(approval!).getByRole('button', { name: 'Answer' }));
+    const waitLine = (): HTMLElement | null => container.querySelector<HTMLElement>('.tool-activity-wait');
+    expect(waitLine(), 'the live wait is not drawn').not.toBeNull();
+    expect(waitLine()!.textContent).toContain('waiting for you');
+    // No card is named for it: the transcript does not know which call the approval is about.
+    expect(container.querySelector('.tool-activity-first')).toBeNull();
+    fireEvent.click(within(waitLine()!).getByRole('button', { name: 'Answer' }));
     expect(onAnswer).toHaveBeenCalledTimes(1);
+    // Opened, the line and its control are still there.
+    fireEvent.click(rowsOf(container)[0]!);
+    expect(rowsOf(container)[0]!.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(within(waitLine()!).getByRole('button', { name: 'Answer' }));
+    expect(onAnswer).toHaveBeenCalledTimes(2);
     // With the answer surface mounted below the transcript (the desk), the control takes the reader there.
     rerender(list(set, t.events, { askPending: true, askBelow: true, onAnswer, busy: true }));
-    expect(within(container).getByRole('button', { name: 'Go to approval' })).toBeTruthy();
-    // No live dialog: nothing waits on the reader, and nothing is surfaced.
+    expect(waitLine()!.textContent).toContain('waiting for you, below');
+    expect(within(waitLine()!).getByRole('button', { name: 'Go to the prompt' })).toBeTruthy();
+    // No live ask or dialog: nothing waits on the reader, and nothing is drawn.
     rerender(list(set, t.events, { askPending: false, onAnswer, busy: true }));
-    expect(container.querySelector('.tool-activity-first')).toBeNull();
+    expect(waitLine()).toBeNull();
+    // A new prompt before its first call: the last turn's row no longer runs or waits.
+    t.user('Something else first.');
+    rerender(list(set, [...t.events], { askPending: true, onAnswer, busy: true }));
+    expect(waitLine()).toBeNull();
+    expect(rowsOf(container)[0]!.textContent).not.toContain('running');
   });
 
   it('opens a row in place into what the transcript drew before the fold', () => {
@@ -345,7 +430,7 @@ describe.each(SETS)('%s draws one collapsed row per stretch', (_name, set) => {
     expect(row.closest('.tool-activity')!.querySelector('.tool-activity-body')).toBeNull();
   });
 
-  it('keeps a row open while it is scrolled out of reach and back, and while calls arrive', () => {
+  it('keeps a row open while it is scrolled out of reach and back', () => {
     const s = longSession();
     const { container, rerender } = render(list(set, s.events));
     const indexOf = (row: HTMLElement): number => Number(row.closest('[data-index]')!.getAttribute('data-index'));
@@ -376,6 +461,27 @@ describe.each(SETS)('%s draws one collapsed row per stretch', (_name, set) => {
     seen.window = null;
     rerender(list(set, [...s.events], { id: 't' }));
     expect(rowsOf(container)[0]!.getAttribute('aria-expanded'), "another session's row opened with this one's choice").toBe('false');
+  });
+
+  it('keeps an open row open while calls arrive in it, and shows each one', () => {
+    const t = transcript();
+    t.user('Go.');
+    t.say('Reading.');
+    t.call('Read', { file_path: '/repo/a.ts' });
+    t.live('Bash', { command: 'npm test' });
+    const { container, rerender } = render(list(set, [...t.events], { busy: true }));
+    const row = (): HTMLElement => rowsOf(container)[0]!;
+    fireEvent.click(row());
+    const cards = (): number => row().closest('.tool-activity')!.querySelectorAll('.tool-activity-body .toolcard, .tool-activity-body .ref-tool-group').length;
+    const before = cards();
+    t.call('Grep', { pattern: 'x' }, true);
+    t.call('Edit', { file_path: '/repo/a.ts', old_string: 'x', new_string: 'y' });
+    rerender(list(set, [...t.events], { busy: true }));
+    expect(row().getAttribute('aria-expanded'), 'an arriving call closed the row').toBe('true');
+    expect(row().textContent).toContain('4 calls');
+    expect(cards(), 'the arriving calls are not in the opened row').toBeGreaterThan(before);
+    // Open, a failure that arrives is in the body, not drawn a second time under the row.
+    expect(row().closest('.tool-activity')!.querySelector('.tool-activity-first')).toBeNull();
   });
 
   it('an append into a closed stretch leaves it closed and moves no index the list was handed', () => {
@@ -436,13 +542,13 @@ describe('the jsdom renderer and the heights', () => {
     expect(shapeOf(rows[0]!)).toEqual({ bucket: 'activity', lines: 1 });
     const failed = rows.find((r) => r.attention.length > 0)!;
     expect(shapeOf(failed)).toEqual({ bucket: 'activity', lines: 2 });
-    // An approval's card has its word and control under it: one line more.
+    // A live wait's line is one line more.
     const t = transcript();
     t.user('Go.');
     t.live('Bash', { command: 'npm publish' });
-    const approval = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true, busy: true }))[0]!;
-    expect(approval.attention.map((a) => a.kind)).toEqual(['approval']);
-    expect(shapeOf(approval)).toEqual({ bucket: 'activity', lines: 3 });
+    const waiting = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true, busy: true }))[0]!;
+    expect(waiting.waiting).toBe(true);
+    expect(shapeOf(waiting)).toEqual({ bucket: 'activity', lines: 2 });
   });
 
   it("names a row word by word, and points its aria-controls only at a body that is there", () => {
@@ -454,9 +560,9 @@ describe('the jsdom renderer and the heights', () => {
     const hidden = [...last.querySelectorAll('[aria-hidden="true"]')].map((el) => el.textContent ?? '');
     let name = last.textContent ?? '';
     for (const h of hidden) name = name.replace(h, '');
-    expect(name.replace(/\s+/g, ' ').trim()).toBe('Tool activity 3 calls running 1 question 1 waiting on you Ran npm');
+    expect(name.replace(/\s+/g, ' ').trim()).toBe('Tool activity 2 calls running 1 question AskUserQuestion');
     // Every word is apart from the next, in the text itself.
-    expect(name).not.toMatch(/activity\d|calls\S|running\d|you\S/);
+    expect(name).not.toMatch(/activity\d|calls\S|running\d|question\S/);
     expect(last.hasAttribute('aria-controls')).toBe(false);
     fireEvent.click(last);
     const controls = last.getAttribute('aria-controls');

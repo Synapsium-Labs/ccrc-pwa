@@ -301,11 +301,11 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
     case 'tool-group': return { bucket: 'group', lines: 1 };
     // One collapsed line, and the first entry that wants the reader drawn under it as its own card (desktop polish
     // wave 168); open, it is never sampled (`inOpeningForm`).
-    // An approval's card has its word and control under it, one line more.
+    // A live wait's line is one line more.
     case 'tool-activity': {
       const first = item.attention[0];
-      const card = first === undefined ? 0 : shapeOf(first.entry, m).lines + (first.kind === 'approval' ? 1 : 0);
-      return { bucket: 'activity', lines: 1 + card };
+      const card = first === undefined ? 0 : shapeOf(first.entry, m).lines;
+      return { bucket: 'activity', lines: 1 + (item.waiting ? 1 : 0) + card };
     }
     case 'message': return messageShape(item.event, m);
     case 'tool': {

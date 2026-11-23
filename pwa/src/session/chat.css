@@ -2252,8 +2252,10 @@ button.metachip:active {
 }
 
 /* The tool-activity row (desktop polish wave 168, `ToolActivityRow`): one stretch of a turn's tool activity as one
-   collapsed line, in both skins. The line never wraps; the newest call's summary takes what is left and is cut first,
-   so the title, the count, the running state and every attention flag stay on a 360 column. */
+   collapsed line, in both skins. The line never wraps and never overflows its column: the flags (what the reader can act
+   on) never shrink, and the compact details give way to them in order: the newest call's summary first (it takes only
+   what is left), then the title, then the count and the running state, each cut with an ellipsis. Measured at 360 in
+   both skins with a running stretch carrying two flags (`browser/tool-activity.browser.test.ts`). */
 .tool-activity {
   min-width: 0;
   max-width: 100%;
@@ -2273,16 +2275,24 @@ button.metachip:active {
   cursor: pointer;
   font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   white-space: nowrap;
+  overflow: hidden;
 }
 .tool-activity-chev {
   flex: none;
   transition: transform var(--dur-base) var(--curve-swift);
 }
 .tool-activity-row[aria-expanded='true'] .tool-activity-chev { transform: rotate(90deg); }
-.tool-activity-title { flex: none; color: var(--ink-primary); }
+.tool-activity-title { flex: 0 100 auto; color: var(--ink-primary); }
+.tool-activity-title,
+.tool-activity-calls,
+.tool-activity-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tool-activity-sep { flex: none; color: var(--ink-tertiary); }
-.tool-activity-calls { flex: none; font-variant-numeric: tabular-nums; }
-.tool-activity-state { flex: none; color: var(--status-busy-text); }
+.tool-activity-calls { flex: 0 1 auto; font-variant-numeric: tabular-nums; }
+.tool-activity-state { flex: 0 1 auto; color: var(--status-busy-text); }
 .tool-activity-attention-count { display: inline-flex; flex: none; gap: var(--sp-1); }
 .tool-activity-flag {
   padding: 2px var(--sp-1);
@@ -2291,7 +2301,7 @@ button.metachip:active {
   background: var(--status-attention-tint);
 }
 .tool-activity-latest {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2308,7 +2318,7 @@ button.metachip:active {
 }
 /* The opened stretch sits one step in from its row, so its rows read as the row's contents. */
 .tool-activity-body { padding-left: var(--sp-3); }
-.tool-activity-approval {
+.tool-activity-wait {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
