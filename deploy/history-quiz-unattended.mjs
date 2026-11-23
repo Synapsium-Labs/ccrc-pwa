@@ -27,7 +27,9 @@
 // pure, before every `arms` and `judge`, and the runner passes it as `--account`. A week that has spawned anything stays on
 // the account its folder records (history-quiz-single.mjs writes that record, the one writer, before the week's first
 // spawn); one that has spawned nothing keeps the previous account when it has room, else takes the candidate with the
-// lowest `seven`. The week's one --budget is the week's, whatever the account. The status's account is the week's when
+// lowest `seven`; when `arms`'s admission refuses that one (`account-refused`, before any record), the next in the choice's
+// order is tried, as setup does, and with every one refused the tick waits `no-room` (fix round 1, F1). The week's one
+// --budget is the week's, whatever the account. The status's account is the week's when
 // recorded. A week still running when a new ISO week starts is closed `failed` (`week-ended`): the runner works the current
 // week only.
 //
@@ -374,21 +376,27 @@ export function roomOrderOf(readings) {
  *  `previous` (last week's account, else the setup's) when it is a candidate with room; otherwise it takes the candidate with
  *  the lowest weekly figure among those with room, ties in roster order (roomOrderOf). `candidates` are exactly setup's (the
  *  eligible accounts not switched off, in roster order), each with roomOf's reading. With none with room it waits `no-room`,
- *  the detail naming each candidate's word by position, as setup's does. Pure.
+ *  the detail naming each candidate's word by position, as setup's does.
+ *  `refused` (fix round 1, F1) maps each candidate that `arms`'s admission refused this tick to that refusal's detail, as
+ *  setup falls through on `account-refused`: an unspawned week's next answer skips them, in the same order, and when every
+ *  candidate with room was refused it waits `no-room`, each refused one named `account-refused <detail>` in its position. A
+ *  recorded week ignores it (a refusal of its own account closes it on its word). Pure.
  *  @param {{ recorded: null | { id: string, disabled: boolean, room: boolean, word?: string, detail?: string },
- *    previous: string, candidates: Array<{ id: string, room: boolean, seven?: number, word?: string }> }} o
+ *    previous: string, candidates: Array<{ id: string, room: boolean, seven?: number, word?: string }>,
+ *    refused?: Record<string, string> }} o
  *  @returns {{ account: string, why: 'recorded' | 'previous' | 'lowest' } | { wait: 'no-room' | 'account-disabled', detail: string }} */
-export function weekAccountChoiceOf({ recorded, previous, candidates }) {
+export function weekAccountChoiceOf({ recorded, previous, candidates, refused = {} }) {
   if (recorded !== null) {
     if (recorded.disabled) return { wait: 'account-disabled', detail: 'the week\'s account is switched off by the operator\'s lane kill switch' };
     if (!recorded.room) return { wait: 'no-room', detail: `the week's account: ${recorded.word} ${recorded.detail}` };
     return { account: recorded.id, why: 'recorded' };
   }
-  if (candidates.some((c) => c.id === previous && c.room)) return { account: previous, why: 'previous' };
-  const order = roomOrderOf(candidates);
+  const wasRefused = (id) => Object.hasOwn(refused, id);
+  if (candidates.some((c) => c.id === previous && c.room && !wasRefused(c.id))) return { account: previous, why: 'previous' };
+  const order = roomOrderOf(candidates).filter((id) => !wasRefused(id));
   if (order.length > 0) return { account: order[0], why: 'lowest' };
   if (candidates.length === 0) return { wait: 'no-room', detail: 'the roster names no eligible account' };
-  return { wait: 'no-room', detail: candidates.map((c, i) => `${i + 1}: ${c.word}`).join(', ') };
+  return { wait: 'no-room', detail: candidates.map((c, i) => `${i + 1}: ${wasRefused(c.id) ? `account-refused ${refused[c.id]}` : c.word}`).join(', ') };
 }
 function candidatesOf(home) {
   let roster;
@@ -553,10 +561,11 @@ const weekPaths = (ctx, w) => {
 };
 const baseFlags = (ctx, p) => ({ out: p.out, setup: p.setup, 'setup-sha256': ctx.state.setup.setup_sha256, frozen: p.frozen, 'frozen-sha256': ctx.state.setup.frozen_sha256 });
 
-/** The week's account for its spend acts (ruling 2), gathered for weekAccountChoiceOf: the week's own record, then, for a
- *  week that has spawned nothing, setup's candidates with roomOf's reading and the previous account. A record it cannot read
- *  is refused `week-account-unreadable` and spends nothing (the week stays running). Resolves {account} or {stop}. */
-function weekAccountPickOf(ctx, w) {
+/** The inputs of the week's account for its spend acts (ruling 2), gathered once per act for weekAccountChoiceOf: the week's
+ *  own record, then, for a week that has spawned nothing, setup's candidates with roomOf's reading and the previous account. A
+ *  record it cannot read is refused `week-account-unreadable` and spends nothing (the week stays running). Resolves the
+ *  choice's input or {stop}. */
+function weekAccountInputsOf(ctx, w) {
   const s = ctx.state.setup;
   const rec = weekAccountOf(w.out, s.setup_sha256, s.account);
   if (rec.state === 'unreadable') return { stop: { outcome: 'refused', word: 'week-account-unreadable', detail: oneLine(rec.detail), driver: false } };
@@ -568,9 +577,7 @@ function weekAccountPickOf(ctx, w) {
     if (c.error !== undefined) return { stop: { outcome: 'refused', word: 'no-account-admitted', detail: c.error, driver: false } };
     candidates = c.ids.map(reading);
   }
-  const d = weekAccountChoiceOf({ recorded, previous: previousAccountOf(ctx), candidates });
-  if (d.wait !== undefined) return { stop: { outcome: 'waiting', word: d.wait, detail: oneLine(d.detail), driver: false } };
-  return { account: d.account };
+  return { recorded, previous: previousAccountOf(ctx), candidates };
 }
 /** The account the newest earlier week ran on, by its own record; the setup's when no earlier week recorded one. */
 function previousAccountOf(ctx) {
@@ -605,22 +612,39 @@ async function actWeek(ctx, act) {
     ctx.state.weeks[ctx.weekKey] = w;
     ctx.save(null);   // the row stands before the driver runs, so a crash mid-arms resumes this directory
   }
-  let account = null;
-  if (act === 'arms' || act === 'judge') {   // the spend steps run on the week's account (report and record spend nothing)
-    const pick = weekAccountPickOf(ctx, w);
-    if (pick.stop !== undefined) return pick;
-    account = pick.account;
-  }
+  const spend = act === 'arms' || act === 'judge';   // the spend steps run on the week's account (report and record spend nothing)
+  const inputs = spend ? weekAccountInputsOf(ctx, w) : null;
+  if (inputs?.stop !== undefined) return inputs;
+  const refused = {};   // fix round 1, F1: this act's admission refusals, which the choice walks past as setup does
+  const choose = () => (spend ? weekAccountChoiceOf({ ...inputs, refused }) : { account: null, why: null });
+  const waitOf = (d) => ({ stop: { outcome: 'waiting', word: d.wait, detail: oneLine(d.detail), driver: false } });
+  let d = choose();
+  if (d.wait !== undefined) return waitOf(d);
   // F2: the permission is for one act. It leaves the row, durably, before the spawn; it is passed only on its own release.
   const permit = act === 'arms' ? w.repilot : undefined;
   if (permit !== undefined) { delete w.repilot; ctx.save(null); }
   const repilot = repilotPermitOf(permit, readReleaseStamp(ctx.home));
   const p = weekPaths(ctx, w);
   const arms = { 'arms-summary': p.summary, 'arms-summary-sha256': w.arms_sha256 };
-  const flags = act === 'arms' ? { ...baseFlags(ctx, p), account, ...(repilot ? { repilot: true } : {}) }
-    : act === 'judge' ? { ...baseFlags(ctx, p), ...arms, account }
-      : { ...baseFlags(ctx, p), ...arms, judged: p.judged, 'judged-sha256': w.judged_sha256 };
-  const r = await driverStep(ctx, act, flagsOf(flags));
+  let r;
+  for (;;) {
+    const account = d.account;
+    const flags = act === 'arms' ? { ...baseFlags(ctx, p), account, ...(repilot ? { repilot: true } : {}) }
+      : act === 'judge' ? { ...baseFlags(ctx, p), ...arms, account }
+        : { ...baseFlags(ctx, p), ...arms, judged: p.judged, 'judged-sha256': w.judged_sha256 };
+    r = await driverStep(ctx, act, flagsOf(flags));
+    // An unspawned week's account refused at admission, before the driver wrote any record: the next candidate is tried, in
+    // the choice's order. Only an admitted account becomes the week's record (history-quiz-single.mjs writes it after
+    // admission, before any spawn), so a week whose folder records one never falls through.
+    if (!spend || d.why === 'recorded' || r.stop?.word !== 'account-refused'
+      || weekAccountOf(w.out, ctx.state.setup.setup_sha256, ctx.state.setup.account).state !== 'none') break;
+    refused[account] = r.stop.detail;
+    d = choose();
+    if (d.wait !== undefined) {
+      if (repilot) w.repilot = permit;   // nothing spawned: the same pilot's permission stands, checked again at its next use
+      return waitOf(d);
+    }
+  }
   if (r.stop !== undefined) {
     if (repilot && r.stop.outcome === 'waiting') w.repilot = permit;   // the same pilot, resumable: its next use is checked again
     if (r.stop.driver && r.stop.outcome === 'refused') {

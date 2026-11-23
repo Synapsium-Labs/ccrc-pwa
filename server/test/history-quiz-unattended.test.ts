@@ -1653,15 +1653,29 @@ describe('weekAccountChoiceOf: the pure choice of a week\'s account, as a table'
       { wait: 'no-room', detail: '1: limits-stale, 2: limits-threshold' }],
     ['no candidate at all: no-room',
       { recorded: null, previous: 'lane-b', candidates: [] }, { wait: 'no-room', detail: 'the roster names no eligible account' }],
+    // fix round 1 (review 3545 F1): admission's refusals this tick, walked past in the same order, as setup does
+    ['a refused previous account is walked past to the lowest with room',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-b', 40), cand('lane-c', 30), cand('lane-d', 20)], refused: { 'lane-b': 'secrets-absent' } },
+      { account: 'lane-d', why: 'lowest' }],
+    ['a refused lowest is walked past to the next lowest',
+      { recorded: null, previous: 'lane-x', candidates: [cand('lane-c', 30), cand('lane-d', 20)], refused: { 'lane-d': 'secrets-absent' } },
+      { account: 'lane-c', why: 'lowest' }],
+    ['every candidate with room refused: no-room, each candidate named by position, a refused one by its refusal',
+      { recorded: null, previous: 'lane-c', candidates: [cand('lane-b', null), cand('lane-c', 30), cand('lane-d', 20)],
+        refused: { 'lane-c': 'secrets-absent', 'lane-d': 'upstream-config-dir' } },
+      { wait: 'no-room', detail: '1: limits-stale, 2: account-refused secrets-absent, 3: account-refused upstream-config-dir' }],
+    ['a recorded week stays on its account whatever was refused (its own refusal closes it on its word)',
+      { recorded: rec('lane-b'), previous: 'lane-b', candidates: [], refused: { 'lane-b': 'secrets-absent' } }, { account: 'lane-b', why: 'recorded' }],
   ];
   it.each(rows)('%s', (_name, input, want) => {
     expect(U.weekAccountChoiceOf(input)).toEqual(want);
   });
-  it('it never answers an account without room, and never one outside the candidates for an unspawned week', () => {
+  it('it never answers an account without room, never a refused one, and never one outside the candidates for an unspawned week', () => {
     for (const [, input, want] of rows) {
       if (want.account === undefined || input.recorded !== null) continue;
       const c = (input.candidates as R[]).find((x) => x.id === want.account);
       expect(c?.room, JSON.stringify(input)).toBe(true);
+      expect(Object.keys((input.refused ?? {}) as R), JSON.stringify(input)).not.toContain(want.account);
     }
   });
 });
@@ -1762,6 +1776,57 @@ describe('the runner runs each week on the week\'s account (run 3538)', () => {
     b.setLimits('acct-b', null);
     await b.tick({ now: NEXT_NOW });
     expect(body().account, 'the new week ran on acct-c').toBe('acct-c');
+  });
+
+  // fix round 1 (review 3545 F1): an unspawned week whose pick admission refuses tries the next, as setup does
+  const three = (): Box => mkBox({ accounts: [acct('acct-b'), acct('acct-c'), acct('acct-d')],
+    limits: { 'acct-b': { five: 10, seven: 10 }, 'acct-c': { five: 10, seven: 20 }, 'acct-d': { five: 10, seven: 30 } } });
+  const refusedAtAdmission = (detail: string): R => ({ ...REFUSE('account-refused', detail), noRecord: true });
+
+  it('an unspawned week\'s pick refused at admission: the next in the choice\'s order runs the week and is its record', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [refusedAtAdmission('secrets-absent')] });
+    await b.tick();
+    expect((b.state() as R).setup.account, 'CONTROL: the setup took the lowest, acct-b').toBe('acct-b');
+    expect(spends(b).map((c) => [c.argv[0], accountArg(c)])).toEqual([['arms', 'acct-b'], ['arms', 'acct-c'], ['judge', 'acct-c']]);
+    expect(recordOf(b)?.account).toBe('acct-c');
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed' });
+    expect(subs(b).filter((s) => s === 'setup').length, 'the setup is never re-made').toBe(1);
+  });
+
+  it('every candidate refused at admission: the week waits no-room naming each, stays running, and the next tick tries again', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [refusedAtAdmission('secrets-absent')], 'arms@acct-c': [refusedAtAdmission('provider-other')],
+      'arms@acct-d': [refusedAtAdmission('upstream-config-dir')] });
+    await b.tick();
+    const st = b.state() as R;
+    expect(st.last).toMatchObject({ act: 'arms', outcome: 'waiting', word: 'no-room',
+      detail: '1: account-refused secrets-absent, 2: account-refused provider-other, 3: account-refused upstream-config-dir' });
+    expect(st.weeks[WEEK]).toMatchObject({ state: 'running' });
+    expect(recordOf(b)).toBeNull();
+    expect(spends(b).map(accountArg)).toEqual(['acct-b', 'acct-c', 'acct-d']);
+    await b.tick({ now: NOW + 3600_000 });
+    expect(spends(b).slice(3).map((c) => [c.argv[0], accountArg(c)])).toEqual([['arms', 'acct-b'], ['judge', 'acct-b']]);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed' });
+  });
+
+  it('a recorded week whose account is later refused closes on its word, as before: nothing is tried on another', async () => {
+    const b = three();
+    b.plan({ arms: [REFUSE('interrupted'), REFUSE('account-refused', 'secrets-absent')] });
+    await b.tick();
+    expect(recordOf(b)?.account).toBe('acct-b');
+    await b.tick({ now: NOW + 3600_000 });
+    expect(spends(b).map(accountArg)).toEqual(['acct-b', 'acct-b']);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'account-refused' });
+  });
+
+  it('a refusal after the act recorded the account (a refusal past admission) closes the week, never falls through', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [REFUSE('account-refused', 'launcher-EACCES')] });   // the fake records first, as the real one would by then
+    await b.tick();
+    expect(spends(b).map(accountArg)).toEqual(['acct-b']);
+    expect(recordOf(b)?.account).toBe('acct-b');
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'account-refused' });
   });
 
   it('ruling 1 on the runner\'s own reading: an account whose row is marked with no five-hour window has room on its weekly figure', async () => {
