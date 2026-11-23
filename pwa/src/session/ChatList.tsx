@@ -27,10 +27,10 @@ import {
 import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
-import { foldToolActivity } from './toolActivity';
+import { foldToolActivity, type TranscriptItem } from './toolActivity';
 import { ToolActivityRow } from './ToolActivityRow';
-import { groupToolRun, type TranscriptItem } from './toolSummary';
-import { TranscriptRowContext, expansionMemo, type ExpansionMemo } from './transcriptRow';
+import { groupToolRun } from './toolSummary';
+import { TranscriptRowContext, useExpansionMemo, type ExpansionMemo } from './transcriptRow';
 import './chat.css';
 
 /** Animated "Claude is working this turn" pulse — mirrors the terminal's
@@ -127,9 +127,9 @@ function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
  *  both are on. Applied BEFORE the list is handed to Virtuoso, because a fold changes the count, the indices and the
  *  seeded heights, which no per-item row can. Data, not logic: nothing here compares a skin id (D-5469), and outside a
  *  frame (most suites) nothing folds. */
-function transcriptOf(set: SkinSet | null, items: ChatItem[], askPending: boolean): TranscriptItem[] {
+function transcriptOf(set: SkinSet | null, items: ChatItem[], askPending: boolean, busy: boolean): TranscriptItem[] {
   const runs = set?.transcriptGrouping ?? 'none';
-  if (set?.toolActivity === 'stretches') return foldToolActivity(items, { runs, askPending });
+  if (set?.toolActivity === 'stretches') return foldToolActivity(items, { runs, askPending, busy });
   return runs === 'tool-runs' ? groupToolRun(items) : items;
 }
 
@@ -218,9 +218,9 @@ export function ChatListInner({
   day,
 }: ChatListProps): ReactNode {
   const set = useFrameSet();
-  const items = transcriptOf(set, buildChatItems(events, pending, busy), askPending === true);
+  const items = transcriptOf(set, buildChatItems(events, pending, busy), askPending === true, busy);
   // The reader's open rows, for as long as this session's view is open.
-  const expansion = useMemo(() => expansionMemo(), [id]);
+  const expansion = useExpansionMemo(id);
   return (
     <div className="chat-inner">
       {items.map((item) => (
@@ -301,9 +301,11 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
     case 'tool-group': return { bucket: 'group', lines: 1 };
     // One collapsed line, and the first entry that wants the reader drawn under it as its own card (desktop polish
     // wave 168); open, it is never sampled (`inOpeningForm`).
+    // An approval's card has its word and control under it, one line more.
     case 'tool-activity': {
       const first = item.attention[0];
-      return { bucket: 'activity', lines: 1 + (first === undefined ? 0 : shapeOf(first.entry, m).lines) };
+      const card = first === undefined ? 0 : shapeOf(first.entry, m).lines + (first.kind === 'approval' ? 1 : 0);
+      return { bucket: 'activity', lines: 1 + card };
     }
     case 'message': return messageShape(item.event, m);
     case 'tool': {
@@ -744,12 +746,12 @@ function ChatScroller({
   const set = useFrameSet();
   const waiting = askPending === true;
   const items = useMemo(
-    () => transcriptOf(set, buildChatItems(events, pending, busy), waiting),
+    () => transcriptOf(set, buildChatItems(events, pending, busy), waiting, busy),
     [events, pending, busy, set, waiting],
   );
   // The reader's open tool-activity rows, for as long as this session's view is open: the list's, not a row's, because
   // virtuoso unmounts a row scrolled out of reach.
-  const expansion = useMemo(() => expansionMemo(), [id]);
+  const expansion = useExpansionMemo(id);
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
 

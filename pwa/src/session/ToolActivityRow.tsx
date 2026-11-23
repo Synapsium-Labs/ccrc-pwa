@@ -17,9 +17,10 @@ import { FOCUS_RING } from '@ccrc/ui';
 import { APPROVAL_WORD, activityWords, approvalControlWord, type ToolActivityItem } from './toolActivity';
 import { useTranscriptRow } from './transcriptRow';
 
-/** A separator the eye reads and the screen reader skips. */
+/** A separator the eye reads and the screen reader skips. The spaces around it are what keep the row's spoken name
+ *  word by word (a flex row draws no whitespace between its items, so they cost no width). */
 function Dot(): ReactNode {
-  return <span className="tool-activity-sep" aria-hidden="true">·</span>;
+  return <>{' '}<span className="tool-activity-sep" aria-hidden="true">·</span>{' '}</>;
 }
 
 export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode {
@@ -39,7 +40,7 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
         type="button"
         className={`tool-activity-row ${FOCUS_RING}`}
         aria-expanded={open}
-        aria-controls={bodyId}
+        aria-controls={open ? bodyId : undefined}
         onClick={toggle}
       >
         <span className="tool-activity-chev" aria-hidden="true">▸</span>
@@ -53,10 +54,14 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
           </>
         )}
         {words.attention.length > 0 && (
-          <span className="tool-activity-attention-count">
-            {words.attention.map((w) => <span key={w} className="tool-activity-flag">{w}</span>)}
-          </span>
+          <>
+            {' '}
+            <span className="tool-activity-attention-count">
+              {words.attention.map((w) => <span key={w} className="tool-activity-flag">{`${w} `}</span>)}
+            </span>
+          </>
         )}
+        {' '}
         <span className="tool-activity-latest">{words.latest}</span>
       </button>
       {!open && first !== undefined && (

@@ -12,10 +12,10 @@
 // so no skin re-implements a card (W2 Global constraints, "One data model").
 // A tool-activity row (desktop polish wave 168) draws its expansion through
 // `renderRow`, so a folded run inside it is the set's own row again.
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ChatItem } from './chatItems';
-import type { TranscriptItem } from './toolSummary';
+import type { TranscriptItem } from './toolActivity';
 
 export interface TranscriptRowValue {
   /** The row to draw: a plain item, a folded run of tool entries, or a stretch of tool activity. */
@@ -44,6 +44,15 @@ export interface AnswerControl {
 export interface ExpansionMemo {
   get(key: string): boolean;
   set(key: string, open: boolean): void;
+}
+
+/** The list's memo for the session `id`: held in state, so React never drops it, and fresh when the session changes. */
+export function useExpansionMemo(id: string): ExpansionMemo {
+  const [held, setHeld] = useState(() => ({ id, memo: expansionMemo() }));
+  if (held.id === id) return held.memo;
+  const next = { id, memo: expansionMemo() };
+  setHeld(next);
+  return next.memo;
 }
 
 /** A fresh memo: every row closed until the reader opens it. */

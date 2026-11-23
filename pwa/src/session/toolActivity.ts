@@ -40,7 +40,8 @@ export interface ToolActivityItem {
   entries: ToolItem[];
   /** What the row shows expanded: the entries under the skin's own grouping, in order. */
   inner: RunItem[];
-  /** The stretch is the newest one and holds a call with no result yet. */
+  /** The session is working, and this stretch is the newest one and holds a call with no result yet. A resultless call
+   *  of a turn that ended (an interrupted one) is never running. */
   live: boolean;
   /** The newest entry's one-line summary (`toolSummary`). */
   latest: string;
@@ -48,11 +49,16 @@ export interface ToolActivityItem {
   attention: Attention[];
 }
 
-/** What the fold reads besides the items: the set's inner grouping, and whether the session holds a live ask or
- *  dialog (`askSource`, the one decider; the screen's `askPending`). */
+/** What a transcript renders: plain items, folded runs, and stretches of a turn's tool activity folded into one row,
+ *  whose expansion holds the first two. Declared here, not in `toolSummary.ts`, so the two L1 modules import one way. */
+export type TranscriptItem = RunItem | ToolActivityItem;
+
+/** What the fold reads besides the items: the set's inner grouping, whether the session holds a live ask or dialog
+ *  (`askSource`, the one decider; the screen's `askPending`), and whether it is working a turn (the list's `busy`). */
 export interface ActivityFold {
   readonly runs: 'tool-runs' | 'none';
   readonly askPending: boolean;
+  readonly busy: boolean;
 }
 
 const ASK = 'AskUserQuestion';
@@ -95,7 +101,7 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       key: `activity-${first.key}`,
       entries: stretch,
       inner: fold.runs === 'tool-runs' ? groupToolRun(stretch) : [...stretch],
-      live: last === newest ? stretch.some((e) => e.result == null) : false,
+      live: fold.busy && last === newest && stretch.some((e) => e.result == null),
       latest: toolSummary(last).sentence,
       attention,
     });

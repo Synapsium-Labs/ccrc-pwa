@@ -4,7 +4,7 @@
 // rows it changed (the streaming turn, a new row, a call whose result arrived), never the rest.
 //
 // L1: pure, and `import type` only.
-import type { TranscriptItem } from './toolSummary';
+import type { TranscriptItem } from './toolActivity';
 
 /** The fields an item derives from its own `event`: `buildChatItems` parses them again on every build (a mail item's
  *  envelope, a task item's notification), so they are compared through `event` alone. */

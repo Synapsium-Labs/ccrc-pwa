@@ -7,7 +7,8 @@ import type { ChatEvent } from '../../shared/api';
 import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
 import { readsClock, sameRowProps, sameTranscriptItem } from '../src/session/sameRow';
-import { groupToolRun, type TranscriptItem } from '../src/session/toolSummary';
+import type { TranscriptItem } from '../src/session/toolActivity';
+import { groupToolRun } from '../src/session/toolSummary';
 
 const TS = '2026-10-28T10:00:00.000Z';
 const assistant = (uuid: string, text: string): ChatEvent => ({ kind: 'assistant', uuid, ts: TS, text });

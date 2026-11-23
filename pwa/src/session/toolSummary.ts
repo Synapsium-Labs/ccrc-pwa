@@ -27,7 +27,6 @@
 // own name, verbatim.
 import type { ToolResultEvent, ToolUseEvent } from '@ccrc/ui';
 import type { ChatItem } from './chatItems';
-import type { ToolActivityItem } from './toolActivity';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
@@ -217,12 +216,9 @@ export interface ToolGroupItem {
   sentence: string;
 }
 
-/** What `groupToolRun` hands back: plain items, and runs folded into groups. */
+/** What `groupToolRun` hands back: plain items, and runs folded into groups. A transcript renders these and the
+ *  tool-activity rows above them (`toolActivity.ts#TranscriptItem`). */
 export type RunItem = ChatItem | ToolGroupItem;
-
-/** What a transcript renders: plain items, folded runs, and stretches of a turn's tool activity folded into one row
- *  (`toolActivity.ts`), whose expansion holds the first two. */
-export type TranscriptItem = RunItem | ToolActivityItem;
 
 /** Never folded: an ask (a question for the reader), a failed entry and a
  *  live one. Each ends the run it would join, and stands alone. */

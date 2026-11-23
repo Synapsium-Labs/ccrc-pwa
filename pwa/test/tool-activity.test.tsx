@@ -137,7 +137,7 @@ const unfold = (items: readonly (ChatItem | ToolActivityItem)[]): ChatItem[] =>
 describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool activity', () => {
   it('makes exactly one row per stretch the transcript wrote, each holding that stretch\'s calls in order', () => {
     const s = longSession();
-    const folded = foldToolActivity(buildChatItems(s.events, [], false), { runs: 'none', askPending: false });
+    const folded = foldToolActivity(buildChatItems(s.events, [], false), { runs: 'none', askPending: false, busy: false });
     const rows = activities(folded);
     expect(rows.map((r) => r.entries.map((e) => e.key))).toEqual(s.stretches);
     // A long session: many turns, more than one stretch per turn.
@@ -147,7 +147,7 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
   it('never reorders the transcript: unfolded, it is exactly the list `buildChatItems` made', () => {
     const s = longSession();
     const items = buildChatItems(s.events, [], true);
-    const folded = foldToolActivity(items, { runs: 'tool-runs', askPending: true });
+    const folded = foldToolActivity(items, { runs: 'tool-runs', askPending: true, busy: true });
     expect(unfold(folded).map((i) => i.key)).toEqual(items.map((i) => i.key));
     // Every item that is not a tool entry stands outside every row, prose above all.
     expect(folded.filter((i) => i.kind === 'message').length).toBe(items.filter((i) => i.kind === 'message').length);
@@ -156,7 +156,7 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
 
   it('keeps a failed call inside its stretch and surfaces it', () => {
     const s = longSession();
-    const rows = activities(foldToolActivity(buildChatItems(s.events, [], false), { runs: 'tool-runs', askPending: false }));
+    const rows = activities(foldToolActivity(buildChatItems(s.events, [], false), { runs: 'tool-runs', askPending: false, busy: false }));
     const withFailure = rows.filter((r) => r.attention.some((a) => a.kind === 'failed'));
     expect(withFailure).toHaveLength(1);
     const row = withFailure[0]!;
@@ -167,7 +167,7 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
 
   it('surfaces an open question and the call waiting on approval, those that block first', () => {
     const s = longSession();
-    const rows = activities(foldToolActivity(buildChatItems(s.events, [], true), { runs: 'tool-runs', askPending: true }));
+    const rows = activities(foldToolActivity(buildChatItems(s.events, [], true), { runs: 'tool-runs', askPending: true, busy: true }));
     const last = rows[rows.length - 1]!;
     expect(last.attention.map((a) => [a.kind, a.entry.key])).toEqual([
       ['question', s.question.toolId],
@@ -179,13 +179,13 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
     t.user('Go.');
     t.call('Bash', { command: 'npm test' }, true);
     const waiting = t.live('Bash', { command: 'npm publish' });
-    const row = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true }))[0]!;
+    const row = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true, busy: true }))[0]!;
     expect(row.attention.map((a) => [a.kind, a.entry.key])).toEqual([['approval', waiting.toolId], ['failed', 't2']]);
   });
 
   it('marks an approval only while the session holds a live ask or dialog, and only on the newest call', () => {
     const s = longSession();
-    const idle = activities(foldToolActivity(buildChatItems(s.events, [], true), { runs: 'none', askPending: false }));
+    const idle = activities(foldToolActivity(buildChatItems(s.events, [], true), { runs: 'none', askPending: false, busy: true }));
     expect(idle.flatMap((r) => r.attention.map((a) => a.kind))).not.toContain('approval');
     // An older resultless call (an interrupted one) is never the one a dialog is about.
     const t = transcript();
@@ -193,20 +193,30 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
     t.live('Bash', { command: 'sleep 100' });
     t.say('Interrupted; carrying on.');
     const newest = t.live('Bash', { command: 'npm publish' });
-    const rows = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true }));
+    const rows = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true, busy: true }));
     expect(rows.map((r) => r.attention.map((a) => [a.kind, a.entry.key]))).toEqual([[], [['approval', newest.toolId]]]);
     // And only the newest stretch is running.
     expect(rows.map((r) => r.live)).toEqual([false, true]);
+  });
+
+  it('says running only while the session works: a turn that ended with a call unanswered is not running', () => {
+    const t = transcript();
+    t.user('Go.');
+    t.live('Bash', { command: 'npm test' });
+    const fold = (busy: boolean): boolean =>
+      activities(foldToolActivity(buildChatItems(t.events, [], busy), { runs: 'none', askPending: false, busy }))[0]!.live;
+    expect(fold(true)).toBe(true);
+    expect(fold(false)).toBe(false);
   });
 
   it('keeps its key while the stretch grows, so the reader\'s choice outlives an arriving call', () => {
     const t = transcript();
     t.user('Go.');
     t.call('Read', { file_path: '/repo/a.ts' });
-    const before = activities(foldToolActivity(buildChatItems([...t.events], [], true), { runs: 'none', askPending: false }));
+    const before = activities(foldToolActivity(buildChatItems([...t.events], [], true), { runs: 'none', askPending: false, busy: true }));
     t.call('Read', { file_path: '/repo/b.ts' });
     t.live('Bash', { command: 'npm test' });
-    const after = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: false }));
+    const after = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: false, busy: true }));
     expect(after.map((r) => r.key)).toEqual(before.map((r) => r.key));
     expect(after[0]!.entries).toHaveLength(3);
     expect(after[0]!.latest).toBe('Ran npm');
@@ -215,10 +225,10 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
   it('opens into the skin\'s own grouping, unchanged: the runs for a set that folds them, the entries otherwise', () => {
     const s = longSession();
     const items = buildChatItems(s.events, [], false);
-    for (const row of activities(foldToolActivity(items, { runs: 'tool-runs', askPending: false }))) {
+    for (const row of activities(foldToolActivity(items, { runs: 'tool-runs', askPending: false, busy: false }))) {
       expect(row.inner).toEqual(groupToolRun(row.entries));
     }
-    for (const row of activities(foldToolActivity(items, { runs: 'none', askPending: false }))) {
+    for (const row of activities(foldToolActivity(items, { runs: 'none', askPending: false, busy: false }))) {
       expect(row.inner).toEqual(row.entries);
     }
   });
@@ -227,7 +237,7 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
     const t = transcript();
     t.user('Go.');
     t.call('Read', { file_path: '/repo/a.ts' });
-    const one = activities(foldToolActivity(buildChatItems(t.events, [], false), { runs: 'none', askPending: false }))[0]!;
+    const one = activities(foldToolActivity(buildChatItems(t.events, [], false), { runs: 'none', askPending: false, busy: false }))[0]!;
     expect(activityWords(one)).toEqual({
       title: 'Tool activity', calls: '1 call', state: null, latest: 'Read a.ts', attention: [],
     });
@@ -239,11 +249,11 @@ const SETS: [string, SkinSet][] = [['Refined', REFINED_SET], ['Instrument', INST
 
 const rowsOf = (root: ParentNode): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('.tool-activity-row')];
 
-interface MountOpts { askPending?: boolean; askBelow?: boolean; onAnswer?: () => void; busy?: boolean }
+interface MountOpts { askPending?: boolean; askBelow?: boolean; onAnswer?: () => void; busy?: boolean; id?: string }
 const list = (set: SkinSet, events: ChatEvent[], o: MountOpts = {}) => (
   <SkinSetProvider set={set}>
     <ChatList
-      id="s" events={events} pending={[]} busy={o.busy ?? false} onRetry={() => {}} onDiscard={() => {}}
+      id={o.id ?? 's'} events={events} pending={[]} busy={o.busy ?? false} onRetry={() => {}} onDiscard={() => {}}
       askPending={o.askPending} askBelow={o.askBelow} onAnswer={o.onAnswer}
     />
   </SkinSetProvider>
@@ -355,6 +365,19 @@ describe.each(SETS)('%s draws one collapsed row per stretch', (_name, set) => {
     expect(container.querySelector(`[data-index="${neighbour}"] .tool-activity-row`)!.getAttribute('aria-expanded')).toBe('false');
   });
 
+  it("forgets the reader's choices when the view moves to another session", () => {
+    const s = longSession();
+    const { container, rerender } = render(list(set, s.events));
+    fireEvent.click(rowsOf(container)[0]!);
+    expect(rowsOf(container)[0]!.getAttribute('aria-expanded')).toBe('true');
+    // Another session whose transcript has the same keys: its rows open closed.
+    seen.window = [0, 0];
+    rerender(list(set, s.events, { id: 't' }));
+    seen.window = null;
+    rerender(list(set, [...s.events], { id: 't' }));
+    expect(rowsOf(container)[0]!.getAttribute('aria-expanded'), "another session's row opened with this one's choice").toBe('false');
+  });
+
   it('an append into a closed stretch leaves it closed and moves no index the list was handed', () => {
     const t = transcript();
     for (let i = 0; i < 6; i += 1) {
@@ -409,9 +432,35 @@ describe('the jsdom renderer and the heights', () => {
   it('prices a row in its own bucket: one line, and the surfaced card\'s lines', () => {
     expect(HEIGHT_BUCKETS).toContain('activity');
     const s = longSession();
-    const rows = activities(foldToolActivity(buildChatItems(s.events, [], false), { runs: 'none', askPending: false }));
+    const rows = activities(foldToolActivity(buildChatItems(s.events, [], false), { runs: 'none', askPending: false, busy: false }));
     expect(shapeOf(rows[0]!)).toEqual({ bucket: 'activity', lines: 1 });
     const failed = rows.find((r) => r.attention.length > 0)!;
     expect(shapeOf(failed)).toEqual({ bucket: 'activity', lines: 2 });
+    // An approval's card has its word and control under it: one line more.
+    const t = transcript();
+    t.user('Go.');
+    t.live('Bash', { command: 'npm publish' });
+    const approval = activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', askPending: true, busy: true }))[0]!;
+    expect(approval.attention.map((a) => a.kind)).toEqual(['approval']);
+    expect(shapeOf(approval)).toEqual({ bucket: 'activity', lines: 3 });
+  });
+
+  it("names a row word by word, and points its aria-controls only at a body that is there", () => {
+    const s = longSession();
+    const { container } = render(list(REFINED_SET, s.events, { askPending: true, busy: true }));
+    const rows = rowsOf(container);
+    const last = rows[rows.length - 1]!;
+    // What a screen reader is given: the text, less what is hidden from it (the chevron and the separators).
+    const hidden = [...last.querySelectorAll('[aria-hidden="true"]')].map((el) => el.textContent ?? '');
+    let name = last.textContent ?? '';
+    for (const h of hidden) name = name.replace(h, '');
+    expect(name.replace(/\s+/g, ' ').trim()).toBe('Tool activity 3 calls running 1 question 1 waiting on you Ran npm');
+    // Every word is apart from the next, in the text itself.
+    expect(name).not.toMatch(/activity\d|calls\S|running\d|you\S/);
+    expect(last.hasAttribute('aria-controls')).toBe(false);
+    fireEvent.click(last);
+    const controls = last.getAttribute('aria-controls');
+    expect(controls).not.toBeNull();
+    expect(document.getElementById(controls!)).not.toBeNull();
   });
 });
