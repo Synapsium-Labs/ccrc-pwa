@@ -13,8 +13,9 @@ import { execFileSync, execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { crossTreeCollisions, definitionsIn, floorFromScan,
+import { crossTreeCollisions, definitionsIn, floorFromScan, selfAssignedCollisions,
          LEDGER_ALLOCATOR_ERA, type Definition } from '../src/coord/ledger.js';
+import { readDefinitionFilesAt } from '../scripts/next-deviation.js';
 import { LEDGER_SEED_GAP } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -75,7 +76,7 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
     const fresh = collisions().filter(([n]) => !GRANDFATHERED.has(n));
     expect(fresh.map(([n, es]) =>
       `D-${n}:\n${es.map((e) => `  ${e.file} :: ${e.subject}`).join('\n')}`),
-      'one number, two deviations — allocate through POST /api/ledger/deviations').toEqual([]);
+      'one number, two deviations — take fresh numbers with `cd server && npm run next-deviation -- <count>`').toEqual([]);
   });
 
   it('the scanner is looking at something', () => {
@@ -436,6 +437,15 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
       `the base holds only ${definitionsIn(there).length} ledger entries`).toBeGreaterThanOrEqual(300);
   });
 
+  it('no self-assigned D-<n> is defined twice across this branch and its base', () => {
+    const hits = selfAssignedCollisions(readDefinitionFilesAt(ROOT, 'HEAD'),
+      readDefinitionFilesAt(ROOT, LEDGER_BASE!));
+    expect(hits.map((c) => `D-${c.n}: ${c.files.join(' / ')}`),
+      `measured against ${LEDGER_BASE}. A self-assigned number is defined twice. Take fresh numbers ` +
+      'with `cd server && npm run next-deviation -- <count>`, then renumber the entry and every ' +
+      'reference to it.').toEqual([]);
+  });
+
   it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {
     const here = plansAt('HEAD');
     const there = plansAt(LEDGER_BASE!);
@@ -458,8 +468,8 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     });
     expect(described,
       `measured against ${LEDGER_BASE}. A number defined in two different plans across the two ` +
-      'trees. If one side is this branch and the other the base: allocate fresh numbers through ' +
-      'POST /api/ledger/deviations and renumber NOW, before the merge decides it for you. TWO ' +
+      'trees. If one side is this branch and the other the base: take fresh numbers with ' +
+      '`cd server && npm run next-deviation -- <count>` and renumber NOW, before the merge decides it for you. TWO ' +
       'KNOWN FALSE POSITIVES, check both before renumbering anything — (1) a plan RENAMED, or its ' +
       'entries MOVED between files, on this branch: file identity here is the basename, so the ' +
       'same entries under two names read as two definitions and the right action is to change ' +

@@ -27,7 +27,7 @@
 //      real plan" that stood here was false of at least four fixtures and was
 //      refuted by this file's own nesting paragraph (D-1432).
 import { describe, it, expect } from 'vitest';
-import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra,
+import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra, selfAssignedCollisions,
          unallocatedDefinitions } from '../src/coord/ledger.js';
 
 const f = (path: string, text: string): { path: string; text: string } => ({ path, text });
@@ -420,5 +420,36 @@ describe('unallocatedDefinitions — a number nobody asked for', () => {
   it('collects every file that defines the same unallocated number', () => {
     expect(unallocatedDefinitions(defs(['b.md', 900], ['a.md', 900]), new Set([274])))
       .toEqual([{ n: 900, files: ['a.md', 'b.md'] }]);
+  });
+});
+
+describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
+  const def = (n: number): string => `### ${D(n)} \u2014 a subject\n`;
+  const P = 'docs/superpowers/plans/a.md';
+  const Q = 'docs/superpowers/specs/b.md';
+
+  it('two paths, one per tree, defining the same number collide', () => {
+    expect(selfAssignedCollisions([f(P, def(10007))], [f(Q, def(10007))]))
+      .toEqual([{ n: 10007, files: [P, Q] }]);
+  });
+  it('one path defining a number on two lines of one tree collides with itself', () => {
+    expect(selfAssignedCollisions([f(P, def(10007) + def(10007))], []))
+      .toEqual([{ n: 10007, files: [P, P] }]);
+  });
+  it('the same path defining once in each tree is not a collision', () => {
+    expect(selfAssignedCollisions([f(P, def(10007))], [f(P, def(10007))])).toEqual([]);
+  });
+  it('task notes with the same basename in different programmes collide by full path', () => {
+    const a = 'docs/superpowers/programs/x/task-1.md';
+    const b = 'docs/superpowers/programs/y/task-1.md';
+    expect(selfAssignedCollisions([f(a, def(10009))], [f(b, def(10009))]))
+      .toEqual([{ n: 10009, files: [a, b] }]);
+  });
+  it('a definition quoted inside a fenced block elsewhere is not a second definition', () => {
+    const quoted = '```\n' + def(10011) + '```\n';
+    expect(selfAssignedCollisions([f(P, def(10011)), f(Q, quoted)], [])).toEqual([]);
+  });
+  it('numbers below the era are left to the old rule', () => {
+    expect(selfAssignedCollisions([f(P, def(8000) + def(8000)), f(Q, def(8000))], [])).toEqual([]);
   });
 });

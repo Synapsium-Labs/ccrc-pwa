@@ -333,6 +333,36 @@ export function crossTreeCollisions(
 /** Self-assigned numbers start here: every number below it is history (allocator or hand-numbered). */
 export const SELF_ASSIGNED_ERA = 10000;
 
+type Files = readonly { readonly path: string; readonly text: string }[];
+
+/**
+ * Self-assigned numbers (n >= SELF_ASSIGNED_ERA) defined twice: in two distinct paths across the
+ * two trees, or twice in one path within one tree. The same path defining n once in each tree is
+ * the branch and its base agreeing, not a collision. `files` lists a path once per defining line
+ * (its larger count over the two trees), sorted. Pure, like `crossTreeCollisions`.
+ */
+export function selfAssignedCollisions(branch: Files, base: Files): CrossTreeCollision[] {
+  const byN = new Map<number, Map<string, number>>();
+  for (const tree of [branch, base]) {
+    const seen = new Map<number, Map<string, number>>();
+    for (const d of definitionsIn(tree)) {
+      if (d.n < SELF_ASSIGNED_ERA) continue;
+      const m = seen.get(d.n) ?? new Map<string, number>();
+      m.set(d.file, (m.get(d.file) ?? 0) + 1);
+      seen.set(d.n, m);
+    }
+    for (const [n, m] of seen) {
+      const all = byN.get(n) ?? new Map<string, number>();
+      for (const [file, c] of m) all.set(file, Math.max(all.get(file) ?? 0, c));
+      byN.set(n, all);
+    }
+  }
+  return [...byN.entries()]
+    .map(([n, m]) => ({ n, files: [...m].flatMap(([file, c]) => Array<string>(c).fill(file)).sort() }))
+    .filter((c) => c.files.length > 1)
+    .sort((a, b) => a.n - b.n);
+}
+
 /**
  * The next `count` deviation numbers: one past the highest definition at or above the era, or the era
  * itself when there is none. Pure; the caller reads the tree (`scripts/next-deviation.ts`).

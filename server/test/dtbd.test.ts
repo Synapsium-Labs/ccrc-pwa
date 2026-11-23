@@ -32,7 +32,7 @@ describe('no D-TBD placeholder lands (D13)', () => {
       return;
     }
     expect.fail('a D-TBD placeholder is trying to land — the allocator was unreachable when ' +
-      'this was written; allocate the real number (POST /api/ledger/deviations) and replace ' +
+      'this was written; take the real number (`cd server && npm run next-deviation -- <count>`) and replace ' +
       `it before merging:\n${out}`);
   });
 });
