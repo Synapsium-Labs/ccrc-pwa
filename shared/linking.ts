@@ -108,6 +108,13 @@ export interface LinkingShowAnswer extends ProjectLinkingWire { ok: true; projec
  *  (`workspace` optional). Never a link; the reason is shown in the console only. */
 export interface TeamSuggestionBody { byId: string; byUuid: string; project: string; team: string; workspace?: string; why: string }
 
+/** D-8808: every refusal word `POST /api/linking/suggest` decides itself: the one list its handler answers from (`refuseSuggest`,
+ *  `server/src/linking/routes.ts`) and the coordinator plan reference's `## linking suggest` guard reads. The box token's
+ *  `unauthenticated` and the attribution check's words are the box-token lanes' own, passed through, and not in it. */
+export const TEAM_SUGGEST_REFUSALS = ['bad-request', 'unavailable', 'not-a-coordinator', 'run-unreadable', 'team-set',
+  'team-unknown', 'team-ambiguous', 'not-configured', 'linear-text-public', 'no-project', 'write-failed'] as const;
+export type TeamSuggestRefusal = (typeof TEAM_SUGGEST_REFUSALS)[number];
+
 /** `POST /api/linking/suggest`'s 200 (D-8808): the caller's own stored suggestion and nothing else about the project, so the door
  *  is no way round `GET /api/linking`'s own-project rule. */
 export interface TeamSuggestionAnswer {
@@ -118,6 +125,13 @@ export interface TeamSuggestionAnswer {
 /** `POST /api/linking/confirm` (D-8809): the Overlord confirms one of a project's current team candidates. Closed: exactly these
  *  keys; `workspace` is the candidate's workspace id, null only for a candidate stored without one. */
 export interface TeamConfirmBody { byId: string; byUuid: string; project: string; team: string; workspace: string | null }
+
+/** D-8809: every refusal word `POST /api/linking/confirm` decides itself: the one list its handler answers from (`refuseConfirm`)
+ *  and the Overlord skill's team candidate guard reads. The box token's `unauthenticated` and the Overlord gate's own words
+ *  are not in it. */
+export const TEAM_CONFIRM_REFUSALS = ['bad-request', 'unavailable', 'no-project', 'team-set', 'team-unknown', 'team-ambiguous',
+  'not-configured', 'write-failed'] as const;
+export type TeamConfirmRefusal = (typeof TEAM_CONFIRM_REFUSALS)[number];
 
 /** `POST /api/linking/confirm`'s 200 (D-8809): the link it wrote and the call that records it, and nothing else about the
  *  project (Task 8.4's rule: a machine lane never reveals a project's slug, override, visibility or other candidates). */
@@ -130,8 +144,11 @@ export interface TeamConfirmAnswer {
 /** `POST /api/projects/:project/linking`: the operator's write. */
 export interface LinkingWriteBody {
   teamKey: string | null; override: LinkingOverride | null;
-  /** D-8808: the workspace id the key lives in. Omitted keeps the stored one while it holds the key; omitted otherwise, or null,
-   *  names none, and the server stores the one connected workspace that holds the key (`workspaceAfterWrite`, review 2971 F4). */
+  /** D-8808: the workspace id the key lives in; the server decides what it stores (`workspaceAfterWrite`, which states every case).
+   *  Named: it must hold the key. Omitted with the unchanged key: the stored choice, with no read. Omitted with a changed key: a
+   *  stored workspace while it holds the new key, else as null. Null: the one connected workspace that holds the key (the
+   *  unchanged key keeps a stored none), a slot the answer depends on unread `unavailable` (nothing written), a key none holds
+   *  stored with none. */
   workspace?: string | null;
 }
 

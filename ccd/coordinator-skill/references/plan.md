@@ -257,16 +257,44 @@ project: sending again replaces your earlier one. A project keeps at most eight 
 other sessions suggest, and setting the project's key clears them all. A suggestion is a candidate and never a
 link: it appears on the console's Project linking card, under the project, with the workspace and your reason, and the
 operator taps it, or the Overlord confirms it within its authority. The reason is shown in the console only, never written
-to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
-`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
-`team-unknown` (no connected workspace has that team, or the named workspace does not; the workspace the pair depends on was read), `not-configured` (no Linear workspace is connected: do not retry; tell the operator), `team-ambiguous` (no workspace named
-and the key is in more than one connected workspace: send it again with `workspace`), `not-a-coordinator` (the session claims
-no open run: only a programme's coordinator suggests), `run-unreadable` (the open run claimants could not be read: try again),
-`unavailable` (the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the operator), `write-failed` (the store write failed: try once more;
-if it is refused again, stop and tell the operator), `no-project`, `linear-text-public` and `bad-request` (a body with a key
-other than these, or a field missing or malformed: the project, the team key, a `workspace` that is present but not a Linear
-id, or a reason that is empty, over 280 characters (an emoji counts as two) or not one plain line; the detail names the
-field).
+to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`).
+
+**What the operator's save stores as the workspace.** The operator's write of a key decides the workspace beside it by one
+rule, so a suggestion's workspace is kept only as the write measures it:
+
+- A workspace named: it must hold the key, or the write is refused `team-unknown`, as it is when no workspace is connected;
+  a named workspace that cannot be read is `unavailable`, and nothing is written.
+- The workspace omitted with the unchanged key: the stored choice stays, a stored none included, and the Linear store is
+  not read.
+- The workspace omitted with a changed key: a stored workspace stays while it holds the new key, and is `unavailable`
+  while it cannot be read; otherwise the write goes on as with none named.
+- None named (omitted as above, or an explicit `null`, which reads the store with the unchanged key too): the one connected
+  workspace that holds the key is stored; two holders are `team-ambiguous`; any workspace the answer depends on that cannot
+  be read, while two readable ones do not already hold the key, is `unavailable`, and nothing is written; a key no
+  connected workspace holds, every one read, or no workspace connected at all, is stored with none.
+- A row stored with no workspace keeps that none, with its evidence, when its unchanged key is sent back and one readable
+  workspace holds it, whether that workspace is named (even while another workspace cannot be read) or not (every
+  workspace read). Only two readable holders undo the keep.
+- A cleared key stores no workspace; a workspace named with no key is `team-unknown`.
+
+Refusals, each with what to do:
+
+- `bad-request`: a body with a key other than these, or a field missing or malformed: the project, the team key, a
+  `workspace` that is present but not a Linear id, or a reason that is empty, over 280 characters (an emoji counts as two)
+  or not one plain line. The detail names the field: fix it and send again.
+- `unavailable`: the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell
+  the operator.
+- `not-a-coordinator`: the session claims no open run: only a programme's coordinator suggests.
+- `run-unreadable`: the open run claimants could not be read: try again.
+- `team-set`: the project already has a key; a project whose key the operator cleared still takes suggestions.
+- `team-unknown`: no connected workspace has that team, or the named workspace does not; the workspace the pair depends on
+  was read. Check the key, and the workspace if you named one, before you send again.
+- `team-ambiguous`: no workspace named and the key is in more than one connected workspace: send it again with `workspace`.
+- `not-configured`: no Linear workspace is connected: do not retry; tell the operator.
+- `linear-text-public`: the reason names a ticket id or another name that may not be shown publicly: reword it and send
+  again.
+- `no-project`: ccrc has no row for that project: check the project's name.
+- `write-failed`: the store write failed: try once more; if it is refused again, stop and tell the operator.
 
 ## Keep the plan: the programme page shows what remains
 
