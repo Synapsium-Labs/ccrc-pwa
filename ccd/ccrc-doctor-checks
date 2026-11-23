@@ -11873,18 +11873,20 @@ _check_pane-scope-stop() {
 
 # ── quiz-weekly ───────────────────────────────────────────────────────────
 # WHAT THE WEEKLY RUNNER RECORDED, READ AND NEVER RE-DERIVED (Overlord W1a). `ccd-quiz-weekly.timer`'s service
-# (`deploy/history-quiz-unattended.mjs`) rewrites `~/.ccrc/quiz/unattended.json` whole by rename at every tick; its `last` block
-# is the tick's time, act, outcome, word and detail. This is the EFFECT check beside `services` (which asks after the timer): it
-# reads that record with jq, by existence and then content, and never prints it whole. Not that record's JSON is a WARN; a
-# refused or failed last tick is a WARN naming its week, act, word and detail (cut to 200 characters). A STARVED TRIGGER IS SAID
-# IN WORDS (run 3508, ruling (e)): with no run in flight (the runner's lock names no live pid), a last tick older than two of the
-# shipped timer's periods (12 h) is a WARN that the timer is not firing, whatever the last tick's outcome (a refused or failed
-# record included), since a firing timer ticks once a period and every tick that reaches the runner's acts rewrites the
-# record; with no record at all, the same holds once the installed timer unit is older than two periods. A fresh refused or
-# failed record WARNs with its own words, as before.
-# With a run in flight, the bound is a run plus two ticks (TimeoutStartSec's 12 h + two periods, 24 h), and past it the run is
-# stuck. SKIPs on a server-role box (no history store); on macOS the timer is never installed, so the record and the unit are
-# absent and it PASSes. Re-run doctor after the next tick: a refusal is the runner's own and clears itself.
+# (`deploy/history-quiz-unattended.mjs`) rewrites `~/.ccrc/quiz/unattended.json` whole by rename at every tick that reaches its
+# acts (a tick with nothing to do, a closed-failed week and a latched refusal included; the early refusals, a `locked` tick and an
+# unreadable record write none); its `last` block is the tick's time, act, outcome, word and detail. This is the EFFECT check
+# beside `services` (which asks after the timer): it reads that record with jq, by existence and then content, and never prints
+# it whole. Not that record's JSON is a WARN; a fresh refused or failed last tick is a WARN naming its week, act, word and detail
+# (cut to 200 characters). A STARVED TRIGGER IS SAID IN WORDS (run 3508, ruling (e)): with no run in flight (the runner's lock
+# names no live pid), a last tick older than two of the shipped timer's periods (12 h) is a WARN that the timer is not firing,
+# whatever its outcome (a refused or failed record included) when the timer's cadence can be read; with an unreadable cadence
+# or an unloaded reader an old refused or failed record keeps its own words. With no record, the same holds once the installed
+# timer unit is older than two periods. With a run in flight, the bound is a run plus two ticks (TimeoutStartSec's 12 h + two
+# periods, 24 h), measured from the last tick or, with no record, from the lock; past it the run is stuck, whatever the record's
+# outcome (a real run cannot outlive its 12 h, so that is a stale lock). SKIPs on a server-role box (no history store); on macOS
+# the timer is never installed, so the record and the unit are absent and it PASSes. Re-run doctor after the next tick: a
+# refusal is the runner's own and clears itself.
 _check_quiz-weekly() {
   local role="" rec="$HOME/.ccrc/quiz/unattended.json" lockf="$HOME/.ccrc/quiz/unattended.lock" vd out at wk act oc word det st age win cad_rc=0
   local pid="" why="" inflight=0 unit="" placed
@@ -11901,6 +11903,21 @@ _check_quiz-weekly() {
   fi
   if [ ! -e "$rec" ]; then
     [ "${CCD_OS:-linux}" = darwin ] || unit="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-quiz-weekly.timer)"
+    # A run in flight with no record yet (run 3508 review F3): its lock's age stands for the run's, so a lock left by a dead run
+    # whose pid was reused is stuck past a run plus two ticks, not a first run for ever.
+    if [ "$inflight" -eq 1 ] && placed="$(_plat_mtime "$lockf" 2>/dev/null)" && [[ "$placed" =~ ^[0-9]+$ ]]; then
+      win="$(_dr_cycles_s ccd-quiz-weekly.timer 2)" || cad_rc=$?
+      case "$cad_rc" in
+        1) _dr_cadence_unread quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 2 ;;
+        3) _dr_cadence_unloaded quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 1 ;;
+      esac
+      age=$(( $(date +%s) - placed ))
+      if (( age > win + 12 * 3600 )); then
+        _dr_warn quiz-weekly "a run is in flight and no unattended quiz tick is recorded, its lock taken $(( age / 3600 )) h ago, more than a run plus two ticks ($(( (win + 12 * 3600) / 3600 )) h), so the run is stuck" \
+          "systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service"
+        return 2
+      fi
+    fi
     if [ -n "$unit" ] && [ -f "$unit" ] && [ "$inflight" -eq 0 ] && placed="$(_plat_mtime "$unit" 2>/dev/null)" && [[ "$placed" =~ ^[0-9]+$ ]]; then
       win="$(_dr_cycles_s ccd-quiz-weekly.timer 2)" || cad_rc=$?
       case "$cad_rc" in
@@ -11939,6 +11956,13 @@ _check_quiz-weekly() {
       "systemctl --user list-timers ccd-quiz-weekly.timer (its NEXT and LAST); systemctl --user status ccd-quiz-weekly.timer; journalctl --user -u ccd-quiz-weekly.service"
     return 2
   fi
+  # Stuck before any outcome too (run 3508 review F1): a real run cannot outlive its 12 h, so a run in flight behind a record
+  # older than a run plus two ticks is a stale lock, where the record's own words ("the next tick retries") would be false.
+  if [ "$cad_rc" -eq 0 ] && [ "$inflight" -eq 1 ] && (( age > win + 12 * 3600 )); then
+    _dr_warn quiz-weekly "a run is in flight and the last unattended quiz tick was $(( age / 3600 )) h ago, more than a run plus two ticks ($(( (win + 12 * 3600) / 3600 )) h), so the run is stuck" \
+      "systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service"
+    return 2
+  fi
   case "$oc" in
     refused|failed)
       _dr_warn quiz-weekly "the last unattended quiz tick $oc: week $wk, act $act, word $word, detail: $det" \
@@ -11949,11 +11973,6 @@ _check_quiz-weekly() {
     1) _dr_cadence_unread quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 2 ;;
     3) _dr_cadence_unloaded quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 1 ;;
   esac
-  if [ "$inflight" -eq 1 ] && (( age > win + 12 * 3600 )); then
-    _dr_warn quiz-weekly "a run is in flight and the last unattended quiz tick was $(( age / 3600 )) h ago, more than a run plus two ticks ($(( (win + 12 * 3600) / 3600 )) h), so the run is stuck" \
-      "systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service"
-    return 2
-  fi
   _dr_pass quiz-weekly "the last unattended quiz tick ($act, $oc) was $(( age / 3600 )) h ago: week $wk is $st$( [ "$inflight" -eq 1 ] && printf '; a run is in flight' )"
 }
 

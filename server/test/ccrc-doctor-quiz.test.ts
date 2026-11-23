@@ -1,12 +1,13 @@
 // Doctor's `quiz-weekly` check (Overlord W1a): the EFFECT of the weekly replay quiz's timer, read from the record its runner
-// rewrites every tick (`~/.ccrc/quiz/unattended.json`, its `last` block) and never written. A record that is not JSON or not the
+// rewrites at every tick that reaches its acts (`~/.ccrc/quiz/unattended.json`, its `last` block) and never written. A record that is not JSON or not the
 // runner's kind WARNs unreadable; a fresh refused or failed last tick WARNs naming its week, act, word and detail (cut to 200
 // characters); a good one PASSes naming the week and its state; it SKIPs on a server-role box and answers PASS on Darwin, where no
 // record exists. Run 3508, ruling (e): a starved trigger is said in words. With no run in flight (the runner's lock names no live
 // pid, the runner's own pidAlive rule: a pid it may not signal is alive), a last tick older than two of the shipped timer's periods
 // (12 h) WARNs that the timer is not firing whatever its outcome (a refused or failed one included, F2), and so does no record
-// at all once the installed timer unit is older than that; with a run in flight the bound is a run plus two ticks (24 h), past
-// which the run is stuck. Fixture HOMEs only (`healthy()`); the check runs alone, sourced, as the pane-scope-stop suite runs its own.
+// at all once the installed timer unit is older than that (the starved reading needs a readable cadence: with none, an old refused
+// or failed record keeps its own words); with a run in flight the bound is a run plus two ticks (24 h), from the last tick or,
+// with no record, from the lock, past which the run is stuck whatever the record's outcome (review F1, F3). Fixture HOMEs only (`healthy()`); the check runs alone, sourced, as the pane-scope-stop suite runs its own.
 import { describe, expect, it } from 'vitest';
 import { appendFileSync, chmodSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,12 +31,16 @@ const last = (o: Partial<Last> = {}): Last =>
 /** A pid no process holds: a child that has already exited (its pid is not reused this soon). */
 const deadPid = (): number => { const r = spawnSync('true'); expect(r.pid).toBeGreaterThan(0); return r.pid!; };
 
-function box(prefix: string, o: { record?: string; env?: string[]; lockPid?: number | string; unitAgeMs?: number } = {}): string {
+function box(prefix: string, o: { record?: string; env?: string[]; lockPid?: number | string; lockAgeMs?: number; unitAgeMs?: number } = {}): string {
   const home = healthy(prefix);
   if (o.env) appendFileSync(join(home, '.ccrc', 'ccrc.env'), o.env.map((l) => `${l}\n`).join(''));
   if (o.record !== undefined || o.lockPid !== undefined) mkdirSync(join(home, '.ccrc', 'quiz'), { recursive: true });
   if (o.record !== undefined) writeFileSync(join(home, '.ccrc', 'quiz', 'unattended.json'), o.record);
-  if (o.lockPid !== undefined) writeFileSync(join(home, '.ccrc', 'quiz', 'unattended.lock'), `${o.lockPid}\n`);
+  if (o.lockPid !== undefined) {
+    const f = join(home, '.ccrc', 'quiz', 'unattended.lock');
+    writeFileSync(f, `${o.lockPid}\n`);
+    if (o.lockAgeMs !== undefined) { const t = (Date.now() - o.lockAgeMs) / 1000; utimesSync(f, t, t); }   // the lock, taken that long ago
+  }
   if (o.unitAgeMs !== undefined) {   // the installed timer unit, placed that long ago
     const dir = join(home, '.config', 'systemd', 'user');
     mkdirSync(dir, { recursive: true });
@@ -127,10 +132,14 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
       // with a run in flight, the same old record is the tick's own refusal, as before
       const live = check(box(`ccrc-doctor-qw-flight-${outcome}-`, { record: state(last({ at_ms: Date.now() - 13 * HOUR, outcome, act: 'done', word: 'pilot-failed', detail: 'd' })), lockPid: process.pid }));
       expect(live.out[0], outcome).toBe(`WARN quiz-weekly: the last unattended quiz tick ${outcome}: week 2026-W47, act done, word pilot-failed, detail: d`);
+      // past a run plus two ticks a run in flight is a stale lock: stuck, whatever the record says (review 3519 F1)
+      const stuck = check(box(`ccrc-doctor-qw-stuck-${outcome}-`, { record: state(last({ at_ms: Date.now() - 30 * HOUR, outcome, act: 'done', word: 'pilot-failed', detail: 'd' })), lockPid: process.pid }));
+      expect(stuck.code, outcome).toBe(2);
+      expect(stuck.out[0], outcome).toBe('WARN quiz-weekly: a run is in flight and the last unattended quiz tick was 30 h ago, more than a run plus two ticks (24 h), so the run is stuck');
     }
   });
 
-  it('a lock that names no pid (zero, a negative, junk) is no run in flight (run 3508, F6)', () => {
+  it('a lock of zero or a negative number is no run in flight, by the pid shape guard; junk and an empty lock read the same (run 3508, F6)', () => {
     for (const lock of ['0', '-1', '12abc', '']) {
       const r = check(box(`ccrc-doctor-qw-junklock-${lock === '' ? 'empty' : lock.replace(/[^a-z0-9]/g, 'x')}-`, { record: state(last({ at_ms: Date.now() - 13 * HOUR })), lockPid: lock }));
       expect(r.code, JSON.stringify(lock)).toBe(2);
@@ -164,6 +173,12 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
     // a unit placed inside the bound, a first run in flight, or Darwin (no systemd unit) still PASS
     expect(check(box('ccrc-doctor-qw-newunit-', { unitAgeMs: 11 * HOUR })).out[0]).toMatch(/^PASS quiz-weekly: no unattended run recorded yet /);
     expect(check(box('ccrc-doctor-qw-firstrun-', { unitAgeMs: 13 * HOUR, lockPid: process.pid })).out[0]).toMatch(/^PASS quiz-weekly: no unattended run recorded yet /);
+    // a first run whose lock is older than a run plus two ticks is a stale lock: stuck, in the record path's words (review 3519 F3)
+    const stale = check(box('ccrc-doctor-qw-stalelock-', { unitAgeMs: 40 * HOUR, lockPid: process.pid, lockAgeMs: 30 * HOUR }));
+    expect(stale.code).toBe(2);
+    expect(stale.out[0]).toBe('WARN quiz-weekly: a run is in flight and no unattended quiz tick is recorded, its lock taken 30 h ago, more than a run plus two ticks (24 h), so the run is stuck');
+    expect(stale.out[1]).toBe('  remedy: systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service');
+    expect(check(box('ccrc-doctor-qw-younglock-', { unitAgeMs: 40 * HOUR, lockPid: process.pid, lockAgeMs: 23 * HOUR })).out[0]).toMatch(/^PASS quiz-weekly: no unattended run recorded yet /);
     expect(check(box('ccrc-doctor-qw-never-darwin-', { unitAgeMs: 13 * HOUR }), 'darwin').out[0]).toMatch(/^PASS quiz-weekly: no unattended run recorded yet /);
     // the bound is read from the shipped timer here too
     const home = box('ccrc-doctor-qw-never-notimer-', { unitAgeMs: 13 * HOUR });
@@ -181,8 +196,13 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
     const r = check(home);
     expect(r.code).toBe(2);
     expect(r.out[0]).toMatch(/^WARN quiz-weekly: ccd-quiz-weekly\.timer's cadence could not be read from the shipped unit file \(.*ccd-quiz-weekly\.timer\), so the stale bound is unmeasured$/);
-    // a refused tick is reported without the bound: it needs no cadence
+    // a fresh refused tick is reported without the bound: it needs no cadence (an old one with an unreadable cadence keeps
+    // these words too, since the starved reading needs the cadence)
     expect(check(box('ccrc-doctor-qw-notimer2-', { record: state(last({ outcome: 'failed', word: 'w', detail: 'd' })) })).out[0]).toMatch(/^WARN quiz-weekly: the last unattended quiz tick failed/);
+    // and a check table sourced without ccrc's timer reader is a FAIL naming the bug on the record path too (review 3519 F6)
+    const unloaded = check(box('ccrc-doctor-qw-rec-unloaded-', { record: state(last()) }), 'linux', 'unset BOX_TREE_DIR; ');
+    expect(unloaded.code).toBe(1);
+    expect(unloaded.out[0]).toBe('FAIL quiz-weekly: ccrc\'s own timer reader is not loaded, so the stale bound was never measured');
   });
 
   it('PASS for a good last tick, naming its act, outcome, age, week and the week\'s state', () => {
