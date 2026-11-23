@@ -719,6 +719,7 @@ describe('ModelsSheet: a Revert confirm is re-checked against the CURRENT read (
 
   it('a read that no longer proves the fleet box ends holds withdraws it too (an older build answered), and the control goes', async () => {
     await withdrawnBy(read(okAdvance(), {}, false));
+    expect(alertText()).toMatch(/no longer shows that it ends a revert's hold by itself/i);
     expect(screen.queryByRole('button', { name: 'Revert the opus class' })).toBeNull();
     expect(screen.getByTestId('models-revert-unoffered')).toBeTruthy();
   });
@@ -787,6 +788,18 @@ describe('ModelsSheet: an Anthropic lane', () => {
     mount(aread({ opus: { aliasId: 'claude-opus-9-1' } }, aadvance({ opus: aclass('opus', { hold: HELD }) })), { anthropic: true });
     await ready();
     expect(fact('opus', 'alias')).toBeNull();
+  });
+
+  it('a Revert refused with alias-source-absent says a revert\'s own words: no hold as the act\'s reason and no refresh promise', async () => {
+    const adv = aadvance({ opus: aclass('opus', { hold: HELD, revertable: true, previous: { model: 'claude-opus-9-0', effort: null } }) });
+    const load = vi.fn(async () => wire(aread({}, adv)));
+    mount(aread({}, adv), { anthropic: true, act: async () => { throw new ApiError(409, { ok: false, error: 'lane-act-refused', verbCode: 'alias-source-absent' }); }, load });
+    await ready();
+    await confirmRevert('opus');
+    await waitFor(() => expect(noteOf('opus')).toBeTruthy());
+    const text = noteOf('opus').textContent ?? '';
+    expect(text).toBe(VERB_CODE_WORDS['alias-source-absent']);
+    expect(text).not.toMatch(/to hold|was not held|not held|refresh/i);
   });
 
   it('a revertable held Anthropic class offers Revert where the read proves holds end, with its hold facts, hold sentence and previous kept', async () => {

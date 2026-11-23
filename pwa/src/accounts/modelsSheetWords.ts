@@ -88,10 +88,10 @@ export const VERB_CODE_WORDS: Readonly<Record<string, string>> = {
   'unroutable-lane': 'The lane\'s files cannot be rendered for routing, so the model was not moved. A hold may already be in place: the row shows what the lane holds now.',
   'no-such-account': 'The fleet box has no account by this name.',
   'anthropic-lane': 'This is an Anthropic lane: its classes are the client\'s own and carry no registry, so there is nothing to revert.',
-  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias yet, or only one this lane\'s Claude Code cannot launch, so there is no model to hold. The next session started on this lane, or the next hourly refresh, records one.',
-  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so the class\'s current model is unknown and was not held. Doctor names the file.',
-  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so the class\'s current model is unknown and was not held. Doctor names the file.',
-  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over a hold, so the hold could not reach a launch and was not made.',
+  'alias-source-absent': 'The fleet box has no model on record for this class\'s alias that this lane\'s Claude Code can launch, so a revert cannot tell which earlier model to put back.',
+  'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so a revert cannot tell which earlier model to put back. Doctor names the file.',
+  'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so a revert cannot tell which earlier model to put back. Doctor names the file.',
+  'settings-overrides-hold': 'This lane\'s own settings name a model for this class, and they win over the model a revert sets, so the revert could not reach a launch.',
   'registry-unwritable': 'The lane\'s class registry could not be written on the fleet box. A revert\'s hold may already be in place: the row shows what the lane holds now.',
   'advance-unwritable': 'The lane\'s advance file could not be written on the fleet box. The row shows what the lane holds now.',
   'settings-unwritable': 'The lane\'s settings could not be rendered or written on the fleet box. A revert\'s hold, and its move of the model, may already be in place: the row shows what the lane holds now.',
@@ -372,10 +372,11 @@ export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass,
 export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass): boolean =>
   read?.kind === 'read' && classActs(read.advance, cls, revertHoldEndsOn(read)).revert;
 /** Said when a Revert that was asked about is withdrawn because the lane's current read no longer offers it: the class
- *  has no earlier model on record now, or the read no longer shows the advance record at all (it is unreadable, invalid,
- *  unreported, absent or was not read, or the lane itself could not be read). */
+ *  has no earlier model on record now, the read no longer shows the advance record at all (it is unreadable, invalid,
+ *  unreported, absent or was not read, or the lane itself could not be read), or the read no longer proves the fleet box
+ *  ends a revert's hold by itself (`revertHoldEnds`). */
 export const revertWithdrawnWords = (cls: ModelClass): string =>
-  `The revert of the ${cls} class was cancelled: the lane's latest read no longer offers it, because the class has no earlier model on record or the lane's advance record could not be read just now. Nothing was sent.`;
+  `The revert of the ${cls} class was cancelled: the lane's latest read no longer offers it, because the class has no earlier model on record, the lane's advance record could not be read just now, or the fleet box no longer shows that it ends a revert's hold by itself. Nothing was sent.`;
 
 export const revertAriaLabel = (cls: ModelClass): string => `Revert the ${cls} class`;
 export const revertTitle = (cls: ModelClass): string => `Revert the ${cls} class?`;

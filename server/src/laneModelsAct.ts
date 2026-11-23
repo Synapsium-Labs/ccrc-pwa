@@ -48,15 +48,15 @@ export function parseModelsActBody(lane: string, body: unknown): ModelsActParsed
   if (!isObj(body)) return { ok: false, why: 'bad-body' };
   for (const k of Object.keys(body)) if (k !== 'action' && k !== 'class') return { ok: false, why: 'bad-body' };
   const { action, class: cls } = body;
-  if (action !== 'revert') {
+  if (!(MODELS_DOOR_ACTIONS as readonly unknown[]).includes(action)) {
     // `show`, `hold` and `release` are real actions the builder accepts, but never this door's: the lane is judged first,
     // as the builder does, then the action is refused (an unknown action reads the same way).
     const laneOnly = buildModelsArgv(lane, 'show', undefined);
     return { ok: false, why: laneOnly.ok ? 'bad-action' : laneOnly.why };
   }
-  const built = buildModelsArgv(lane, action, cls);
+  const built = buildModelsArgv(lane, action as ModelsDoorAction, cls);
   if (!built.ok) return { ok: false, why: built.why };
-  return { ok: true, action, cls: cls as ModelClass };
+  return { ok: true, action: action as ModelsDoorAction, cls: cls as ModelClass };
 }
 
 /** The extra keys a refusal carries, each a short word: never a sentence, a path or a command. */
