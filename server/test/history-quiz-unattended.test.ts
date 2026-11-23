@@ -75,6 +75,10 @@ const made = () => {
   if (!fs.existsSync(m)) fs.writeFileSync(m, '');
 };
 if (step.mkdir === true) made();
+// files the step writes as the real driver would (its release pin), then a stand-in for a hard kill after the driver's write:
+// the quiz root turns read-only, so the runner's save after the act fails
+for (const [f, text] of step.writes ?? []) fs.writeFileSync(f, text);
+if (step.chmodRoot === true) fs.chmodSync(path.join(home, '.ccrc', 'quiz'), 0o500);
 if (step.exit !== undefined && step.exit !== 0) { process.stderr.write(step.stderr ?? ''); process.exitCode = step.exit; }
 else {
   made();
@@ -1300,11 +1304,12 @@ describe('repilotOf: the pure decision, as a table', () => {
 
 describe('the runner acts on repilotOf: it reopens the week and runs arms --repilot in the same directory', () => {
   const setRelease = (b: Box, tag: string): void => writeFileSync(join(b.home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', version: tag }));
-  /** The driver's release pin, as the single-arm module writes it into a week's directory before its pilot. */
-  const pin = (b: Box, tag: string): void => {
+  /** The driver's release pin, composed by the single-arm module's own releasePinText (so the runner's reader is held to the
+   *  module's bytes, fix round 1 F3), written into a week's directory as that module does before its pilot. */
+  const pin = (b: Box, tag: string, text?: string): void => {
     const dir = join(b.root, 'weeks', WEEK, 'quiz');
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'arms-release.json'), JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: tag }));
+    writeFileSync(join(dir, 'arms-release.json'), text ?? (QS.releasePinText('f'.repeat(64), tag, 0) as string));
   };
   const armsCalls = (b: Box): R[] => b.calls('driver').filter((c) => c.argv[0] === 'arms');
   const HOUR = 3600_000;
@@ -1340,7 +1345,8 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     expect(arms[1]!.argv).toContain('--repilot');
     expect(arms[1]!.argv[arms[1]!.argv.indexOf('--out') + 1], 'the same week directory, so the same ledger and --budget').toBe(join(b.root, 'weeks', WEEK));
     const w = (b.state() as R).weeks[WEEK];
-    expect(w).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1' }] });
+    expect(w).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2', at_ms: NOW + HOUR }] });
+    expect(w.repilot, 'the permission was for one act').toBeUndefined();
     expect(subs(b).filter((s) => s === 'judge').length).toBe(1);
     expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/week \S+ piloted again: pilot 2 of 3, release v1\.0\.2, after v1\.0\.1/);
   });
@@ -1394,7 +1400,7 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     setRelease(b, 'v1.0.2');
     await b.tick({ now: NOW + 2 * HOUR });
     expect(armsCalls(b).length).toBe(2);
-    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1', at_ms: null }] });
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1', at_ms: null }, { release: 'v1.0.2' }] });
   });
 
   it('an unreadable pin keeps the week closed: an unmeasured release never re-spends', async () => {
@@ -1407,6 +1413,122 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     await b.tick({ now: NOW + HOUR });
     expect(armsCalls(b).length).toBe(1);
   });
+
+  // fix round 1, F1: the pilot is counted before the spawn, so a kill after the driver's write cannot hide it.
+  /** One tick whose driver writes its evidence and then the runner dies before its save after the act (the quiz root turns
+   *  read-only, so that save fails). The quiz root is given back and the stale lock removed, as a restart would find them. */
+  async function killedTick(b: Box, now: number): Promise<void> {
+    const r = await b.tick({ now });
+    expect(r.code, 'fixture: the save after the act failed').toBe(1);
+    chmodSync(b.root, 0o700);
+    try { unlinkSync(join(b.root, 'unattended.lock')); } catch { /* released */ }
+  }
+  for (const legacy of [false, true]) {
+    it.skipIf(process.getuid?.() === 0)(`a kill between the driver's write and the save: no second pilot on that release, and the count is right (${legacy ? 'a row closed before this change' : 'a new-style row'})`, async () => {
+      const b = await failedOn('v1.0.1');
+      const rePin = [join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json'), QS.releasePinText('f'.repeat(64), 'v1.0.2', 1) as string];
+      // the queue's first answer was the first pilot's (already given); then the killed re-pilot, then the driver's own refusal
+      b.plan({ arms: [REFUSE('pilot-failed'), { ...REFUSE('pilot-failed'), chmodRoot: true, writes: [rePin] }, REFUSE('pilot-failed')] });
+      if (legacy) {
+        const st = b.state() as R;
+        delete st.weeks[WEEK].pilots;
+        writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+      }
+      setRelease(b, 'v1.0.2');
+      await killedTick(b, NOW + HOUR);   // the stub driver re-pins the week to v1.0.2, as the real one does, then the runner dies
+      expect(JSON.parse(readFileSync(rePin[0]!, 'utf8')).ccrc_release, 'fixture: the pin moved during the act').toBe('v1.0.2');
+      const onDisk = (b.state() as R).weeks[WEEK];
+      expect(onDisk, 'saved before the spawn: the pilot on v1.0.2 is counted, the permission already gone')
+        .toMatchObject({ state: 'running', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      expect(onDisk.repilot).toBeUndefined();
+      // the next tick on the same release: the arms run without --repilot, so the driver's failed result closes the week
+      await b.tick({ now: NOW + 2 * HOUR, deps: { isAlive: () => false } });
+      const arms = armsCalls(b);
+      expect(arms.length).toBe(3);
+      expect(arms[2]!.argv, 'no second pilot on v1.0.2').not.toContain('--repilot');
+      expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      await b.tick({ now: NOW + 3 * HOUR });
+      expect(armsCalls(b).length, 'and it stays closed on v1.0.2').toBe(3);
+      setRelease(b, 'v1.0.3');
+      await b.tick({ now: NOW + 4 * HOUR });
+      expect(armsCalls(b)[3]!.argv, 'a newer release is the third pilot').toContain('--repilot');
+      expect((b.state() as R).weeks[WEEK].pilots.map((p: R) => p.release)).toEqual(['v1.0.1', 'v1.0.2', 'v1.0.3']);
+    });
+  }
+
+  // fix round 1, F2: the permission is for one pilot on one release; a resumable stop gives it back for that release only.
+  it('a re-pilot that stopped resumably is resumed on its own release with --repilot', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
+    setRelease(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'running', repilot: { release: 'v1.0.2' } });
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true, true]);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+  });
+
+  for (const [why, tag] of [['forward to a newer release', 'v1.0.3'], ['back to the release that already failed', 'v1.0.1']] as Array<[string, string]>) {
+    it(`a re-pilot that stopped resumably, then the release moved ${why}: never continued on the flag, nothing counted`, async () => {
+      const b = await failedOn('v1.0.1', [REFUSE('interrupted'), REFUSE('release-moved')]);
+      setRelease(b, 'v1.0.2');
+      await b.tick({ now: NOW + HOUR });
+      setRelease(b, tag);
+      await b.tick({ now: NOW + 2 * HOUR });
+      const arms = armsCalls(b);
+      expect(arms.length).toBe(3);
+      expect(arms[2]!.argv, 'the permission named v1.0.2, so it is not passed').not.toContain('--repilot');
+      const w = (b.state() as R).weeks[WEEK];
+      expect(w).toMatchObject({ state: 'failed', word: 'release-moved', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      expect(w.repilot).toBeUndefined();
+      await b.tick({ now: NOW + 3 * HOUR });
+      expect(armsCalls(b).length, 'a week closed on another word stays closed').toBe(3);
+    });
+  }
+
+  it('repilotPermitOf: the permission passes only on its own measured release', () => {
+    const tag = (t: string): R => ({ state: 'value', tag: t });
+    expect(U.repilotPermitOf({ release: 'v1' }, tag('v1'))).toBe(true);
+    expect(U.repilotPermitOf({ release: 'v1' }, tag('v2'))).toBe(false);
+    expect(U.repilotPermitOf({ release: 'v1' }, { state: 'absent' })).toBe(false);
+    expect(U.repilotPermitOf(undefined, tag('v1'))).toBe(false);
+    expect(U.repilotPermitOf(true, tag('v1')), 'the round-1 boolean form').toBe(false);
+    expect(U.repilotPermitOf({ release: 7 }, tag('7'))).toBe(false);
+  });
+
+  // fix round 1, A2: only a row with no pilot list at all is an older row.
+  for (const damaged of [{}, null, 'x', 5, [], [null]]) {
+    it(`a pilot-failed row whose pilot list is damaged (${JSON.stringify(damaged)}) stays closed on a newer release`, async () => {
+      const b = await failedOn('v1.0.1');
+      const st = b.state() as R;
+      st.weeks[WEEK].pilots = damaged;
+      writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+      setRelease(b, 'v1.0.2');
+      await b.tick({ now: NOW + HOUR });
+      expect(armsCalls(b).length).toBe(1);
+      expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
+    });
+  }
+
+  // fix round 1, A3: the pin reader takes only the module's own pin.
+  for (const [why, text] of [
+    ['another kind', JSON.stringify({ kind: 'not-the-pin', v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0 })],
+    ['another version', JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 2, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0 })],
+    ['a release that is no string', JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 101, round: 0 })],
+    ['an empty release', JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: '', round: 0 })],
+    ['no JSON', '{'],
+  ] as Array<[string, string]>) {
+    it(`a pin with ${why} is read as no release: the first pilot is counted unmeasured and the week stays closed`, async () => {
+      const b = mkBox();
+      b.plan({ arms: [REFUSE('pilot-failed')] });
+      setRelease(b, 'v1.0.1');
+      pin(b, 'v1.0.1', text);
+      await b.tick();
+      expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: null, at_ms: NOW }]);
+      setRelease(b, 'v1.0.2');
+      await b.tick({ now: NOW + HOUR });
+      expect(armsCalls(b).length).toBe(1);
+    });
+  }
 
   it('only the current ISO week is piloted again; a past week stays as it was', async () => {
     const b = await failedOn('v1.0.1');
