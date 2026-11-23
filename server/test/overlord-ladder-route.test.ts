@@ -367,7 +367,7 @@ describe('ladder GET', () => {
   });
   it('reads an actual designated degraded generation and binds the condition', async () => {
     const db = new DatabaseSync(':memory:');
-    for (const name of ['CREATE TABLE lane_arm_settings', 'CREATE TABLE continuity_starts', 'CREATE TABLE continuity_generations', 'ADD COLUMN prevLane', 'CREATE TABLE overlord_designation', 'ALTER TABLE overlord_designation ADD COLUMN actorKind', 'CREATE TABLE overlord_ladder']) {
+    for (const name of ['CREATE TABLE lane_arm_settings', 'CREATE TABLE continuity_starts', 'CREATE TABLE continuity_generations', 'ADD COLUMN prevLane', 'ADD COLUMN designatedClass', 'CREATE TABLE overlord_designation', 'ALTER TABLE overlord_designation ADD COLUMN actorKind', 'CREATE TABLE overlord_ladder']) {
       db.exec(MIGRATIONS.find((m) => m.includes(name))!);
     }
     db.exec(`INSERT INTO overlord_designation (id, sessionId, generation, term, designatedTerm, model, accountPools, actor, updatedAt)

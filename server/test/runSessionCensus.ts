@@ -277,6 +277,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
   { file: 'server/src/continuity/continuityStore.ts', text: 'g.sessionId === sessionId',
     why: 'a session\'s newest live generation row among those the store read (the renewal hand-offs\' sessionLiveGeneration): a generation row\'s own session, no run is read' },
+  { file: 'server/src/continuity/renewalReadings.ts', text: 'd.sessionId === sessionId',
+    why: "the designation's bound session against the session an Overlord generation runs in (the renewal readings PR C, termRaisedOf and classChangedOf): the designation read, no run is read" },
   { file: 'server/src/turnverdict.ts', text: "live.state.sessionId !== ''",
     why: "the live process file's conversation id, unread when empty (Overlord W2 forecasts B, F3's conversationAfterClearFor): Claude Code's conversation, no run is read" },
   { file: 'server/src/turnverdict.ts', text: 'live.state.sessionId !== prior',

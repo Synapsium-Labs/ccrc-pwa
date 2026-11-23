@@ -7,8 +7,14 @@
 // producer has not merged is not answered here at all, and keeps the lane's `W1` default (`renewalInputsOf`).
 //
 // PR A: `fittedCeilingOf` (the soft ceiling, from the probes' `fittedCeiling`) and the daily backstop
-// (`backstopInstantBefore`, `backstopDueOf`). The later pull requests of the plan add the other mappers here.
+// (`backstopInstantBefore`, `backstopDueOf`). PR C: the designation's two readings (`termRaisedOf`, `classChangedOf`), the
+// class a generation is minted under (`designatedClassAtMint`) and the `probes-failed-twice` latch's decider
+// (`probesFailedTwiceOf`). The later pull requests of the plan add the other mappers here.
+import type { GenerationState } from '../../../shared/continuity.js';
+import type { FleetRole } from '../../../shared/fleetRoles.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { GenEvent } from './generationMachine.js';
 import { fittedCeiling, type SpotProbe } from './probes.js';
 import { hardCapTokens, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
 
@@ -99,4 +105,57 @@ export function backstopDueOf(b: BackstopRead, startReportedAt: number, nowMs: n
   const instant = backstopInstantBefore(nowMs, b.backstop.hour, b.backstop.zone);
   if (instant === null) return unmeasured('zone unreadable');
   return { kind: 'measured', value: startReportedAt < instant };
+}
+
+/** The generation the designation's two readings judge: its session, the term it was minted (or re-stamped) under, and the
+ *  designated class it was minted under (`designatedClassAtMint`; null when not recorded). */
+export interface DesignatedGeneration { readonly sessionId: string; readonly term: number; readonly designatedClass: string | null }
+
+/** The designation's answer for one generation: unmeasured, not this session's (no designation, or one bound to another
+ *  session, which a rebind ends), or this session's live binding. */
+function boundTo(d: DesignationRead, sessionId: string):
+  { readonly kind: 'unmeasured'; readonly why: string } | false | Extract<DesignationRead, { kind: 'designated' }> {
+  if (d.kind === 'unmeasured') return { kind: 'unmeasured', why: 'designation unreadable' };
+  return d.kind === 'designated' && d.sessionId === sessionId ? d : false;
+}
+
+/** Table 3.3.11b "The term was raised" (hard; Overlord): the designation's term is above the one this generation was minted
+ *  under (a Confirm of the restore raises it). Not this session's designation: measured false (the row does not apply). */
+export function termRaisedOf(d: DesignationRead, g: Pick<DesignatedGeneration, 'sessionId' | 'term'>): Reading<boolean> {
+  const b = boundTo(d, g.sessionId);
+  if (b === false) return { kind: 'measured', value: false };
+  if (b.kind === 'unmeasured') return b;
+  return { kind: 'measured', value: b.term > g.term };
+}
+
+/** Table 3.3.11b "The operator changed the designated class in Settings" (soft; Overlord): the designation's class differs from
+ *  the one this generation was minted under, never from the class it runs, which a fallback generation records (slug
+ *  designated-class-stamped-at-mint). A generation minted before the class was recorded reads unmeasured for its life
+ *  (review 2183 F13): blind, never a default, and the next generation is stamped. */
+export function classChangedOf(d: DesignationRead, g: Pick<DesignatedGeneration, 'sessionId' | 'designatedClass'>): Reading<boolean> {
+  const b = boundTo(d, g.sessionId);
+  if (b === false) return { kind: 'measured', value: false };
+  if (b.kind === 'unmeasured') return b;
+  if (g.designatedClass === null) return unmeasured('minted before the class was recorded');
+  return { kind: 'measured', value: b.row.model !== g.designatedClass };
+}
+
+/** The class a mint stamps (`MintInput.designatedClass`): the designation row's model when the generation is minted as the
+ *  Overlord (`identityOf` answers `overlord`: the live binding, or a pending `designate`), else null. An unmeasured designation
+ *  stamps null, and that generation's `classChanged` stays unmeasured (review 2183 F13). */
+export function designatedClassAtMint(d: DesignationRead, identity: string): string | null {
+  if (identity !== 'overlord' || d.kind === 'unmeasured' || d.row === null) return null;
+  return d.row.model;
+}
+
+/** Table 7.5a "Probes failed twice after a renewal" (latch, cap `chat`): a live Overlord step from `probing` to `degraded` on
+ *  a second failed round. `view` is the row BEFORE the step: `degrade` resets `probeRounds` to 0, so the row after it would
+ *  never latch (review 2183 F8). A shadow walk (`shadowState`), a coordinator, a first failed round, a passed round and a
+ *  `deadline` in `probing` never latch (slug latch-raised-on-a-live-step-only). */
+export function probesFailedTwiceOf(i: {
+  readonly role: FleetRole; readonly from: GenerationState; readonly event: GenEvent; readonly view: { readonly probeRounds: number };
+  readonly next: GenerationState; readonly column: 'state' | 'shadowState';
+}): boolean {
+  return i.role === 'overlord' && i.column === 'state' && i.from === 'probing' && i.event.kind === 'probes' && !i.event.passed
+    && i.view.probeRounds >= 1 && i.next === 'degraded';
 }
