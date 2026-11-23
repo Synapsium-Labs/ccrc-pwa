@@ -64,6 +64,7 @@ import type { ChildMark } from '../../../shared/api.js';
 import type { CapMode } from '../../../shared/runCap.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
+import { lifecycleLaneRowsSince, type LifecycleLaneRow } from './lifecycleLaneRows.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
@@ -5714,6 +5715,11 @@ export class CoordStore {
   /** D-6795: record that the cap's ask is raised, once per cap level (`reviewCapStore.ts`). */
   raiseReviewCapAsk(workRunId: number, now: number): boolean {
     return raiseReviewCapAsk(this.db, workRunId, now);
+  }
+
+  /** D-8955: the disk cleanup lanes' journal rows since `atMs`, oldest first, at most `limit` (`lifecycleLaneRows.ts`). */
+  lifecycleLaneRowsSince(atMs: number, acts: readonly string[], limit: number): LifecycleLaneRow[] {
+    return lifecycleLaneRowsSince(this.db, atMs, acts, limit);
   }
 
   /** D-8125: a coordinator allows three more review rounds (`reviewCapStore.ts`). */

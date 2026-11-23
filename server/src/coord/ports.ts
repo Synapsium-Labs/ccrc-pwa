@@ -77,7 +77,7 @@ export type WatcherCoordMember =
   | 'insertCensusRow' | 'insertDelegationEvents' | 'insertDigestResponses' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor' | 'isPinned' | 'itemById'
   | 'itemHistory' | 'itemsFor' | 'journalGenerations' | 'landingReadProjects' | 'laneArmSetting' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
-  | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkTeamAuto' | 'linkingAll' | 'liveBlocksOf' | 'liveGenerations' | 'liveNotes'
+  | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLaneRowsSince' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkTeamAuto' | 'linkingAll' | 'liveBlocksOf' | 'liveGenerations' | 'liveNotes'
   | 'mailForRecipient' | 'mailOrigin' | 'mailQueuedSince' | 'markAcked' | 'markAdmissionWoken' | 'markApprovalFetched'
   | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markBlockWoken' | 'markClaudeBuildAttempt'
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
