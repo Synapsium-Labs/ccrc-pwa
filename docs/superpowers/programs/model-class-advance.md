@@ -65,6 +65,9 @@ Statements 5 and 6 read as modification 94 rewrote them on 2026-11-22.
 | Follow-up | `no-keys-transitive`: the no-key guard follows calls through ccd's own call graph | #3219 | merged 2026-11-22 |
 | Follow-up | `cache-row-skip`: one bad row in Claude Code's catalogue cache no longer blinds the whole file | #3223 | merged 2026-11-22 |
 | Wave 9 | An Anthropic lane's labels and Models sheet from its aliases file, one push per class move (D-8921 to D-8930) | #3221 | merged 2026-11-22 |
+| Follow-up | `revert-ends-itself`: a Revert records what it left and the refresh ends its hold by itself, on both kinds of lane | #3237 | merged 2026-11-23 |
+| Follow-up | `typed-repick`: a session behind its class's id is one more reason for the existing idle roll, which types no command | #3238 | merged 2026-11-23 |
+| Follow-up | `revert-holds-until-newer` with `ccrcdir-param-drop`: the sheet and its door offer Revert alone, where the box reports that it ends holds (D-8757) | #3246 | merged 2026-11-23; v0.0.1416 is a published prerelease |
 
 The hourly advance has moved classes by itself, each move after a passing canary: one class on both Codex lanes on
 2026-10-26, and on one lane an opus class that stepped to an older model on 2026-11-10 and back two hours later (wave 3
@@ -108,37 +111,36 @@ and acceptance.
 | 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | #3118 | merged 2026-11-22 |
 | - | doctor | doctor-land | Land #2943 | #2943 | merged 2026-11-19; the plan's ticket stays open (below) |
 | 4 | models-sheet | models-sheet | `POST /api/models/:lane` hold, release and revert, and the Models sheet; closes #1441 | #3028 | merged |
-| - | models-sheet | revert-ends-itself | A Revert records the model it left, and the refresh ends its hold by itself when a newer model appears, on both kinds of lane; doctor's hold remedies go | | building (run 3405) |
-| - | models-sheet | revert-holds-until-newer | Hold and Release leave the sheet and the door; Revert returns on Anthropic lanes where the box reports that it ends holds | | after `revert-ends-itself` |
+| - | models-sheet | revert-ends-itself | A Revert records the model it left, and the refresh ends its hold by itself when a newer model appears, on both kinds of lane; doctor's hold remedies go | #3237 | merged 2026-11-23 |
+| - | models-sheet | revert-holds-until-newer | Hold and Release leave the sheet and the door; Revert returns on Anthropic lanes where the box reports that it ends holds | #3246 | merged 2026-11-23 (run 3475) |
 | 5 | read-path | retire-grant | Retire the model-file read grant; an unknown advance state reads `invalid` with the classes kept | #3041 | merged |
 | 6 | anthropic-arm | anthropic-plan | Amend the spec's D18 with the measured alias evidence, and plan the arm | #3027 | merged |
 | 7 | anthropic-arm | anthropic-writer | The alias file, holds and doctor causes on Anthropic lanes | #3107 | merged 2026-11-20 |
 | 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | #3122 | merged 2026-11-22 |
-| 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | #3221 | merged 2026-11-22, with no Hold, Release or Revert on an Anthropic lane yet (below) |
-| 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | planned |
+| 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | #3221 | merged 2026-11-22, with no Hold, Release or Revert on an Anthropic lane until #3246 (below) |
+| 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | building (run 3500) |
 | - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | #3085 | merged 2026-11-21 |
 | - | models-sheet | transient-beside-kept-answer | The sheet names a transient answer beside a kept one; a session-screen case and two text corrections | #3086 | merged 2026-11-19 |
 | - | models-sheet | revert-writes-before-refusing | A refused Revert must not leave the class held | #3118 | folded into wave 3 |
-| - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | | folds into `revert-holds-until-newer`, which edits the same files |
+| - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | #3246 | merged 2026-11-23, with `revert-holds-until-newer` |
 | - | doctor | release-lookup-warn | Doctor warns when the Codex release lookup has failed for over a day | #3118 | folded into wave 3 |
 | - | anthropic-arm | repick-landing-notes | Six notes for the id re-pick, read with A3.6's re-check | | dropped: no typed re-pick is built (below) |
 | - | acceptance | natural-move | Watch the next real release through: canary, move, a new session, no sessions-behind warning | | watched from wave 1's rollout |
 | - | anthropic-arm | cache-row-skip | One bad row in Claude Code's model cache must not make the whole file unreadable (wave 7's review, F5) | #3223 | merged 2026-11-22 |
 | - | doctor | doctor-caps-one-reader | One reader of `ccd caps` in doctor; an unmeasured answer is never a PASS (wave 7's review, F6) | #3222 | merged 2026-11-22 |
 | - | doctor | effort-fallback-pins | Pin the two terms of the effort-file claim that wave 3's last review found unpinned, with three note corrections | #3217 | merged 2026-11-22 |
-| - | anthropic-arm | typed-repick | Move a running Anthropic session onto its class's new id with no hand keystroke: a session behind its class's id is relaunched at idle by the existing roll | | building (run 3403) |
+| - | anthropic-arm | typed-repick | Move a running Anthropic session onto its class's new id with no hand keystroke: a session behind its class's id is relaunched at idle by the existing roll | #3238 | merged 2026-11-23 |
 | - | catalogue-current | effort-level-dropped | A dropped effort level must not stop a lane's hourly refresh (wave 1's review, F2) | #3118 | folded into wave 3 |
 | - | doctor | release-lookup-pins | Pin the release lookup's library read with a stand-in library, and two text corrections (wave 3's fifth review) | #3216 | merged 2026-11-22 |
 | - | anthropic-arm | no-keys-transitive | Guard passive alias observation against indirect key senders (wave 8's third review) | #3219 | merged 2026-11-22 |
 | - | anthropic-arm | entry-comment-seven | The launcher's comment names its seven libraries, with the launcher's next change of substance | | with that change |
-| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10 |
+| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10, run 3500: the hunks wait on the freeze holder's consent (below) |
 
 Order: waves 3 and 8 merged on 2026-11-22 (#3118, then #3122), and wave 9 built on both and merged that evening
-(#3221). Five follow-ups ran beside wave 9, each on files wave 9 did not hold, and all merged the same day. What
-remains runs side by side on separate files: `typed-repick` (the roll's decider and the shared model reader) and
-`revert-ends-itself` (the advance rule, the models op and doctor), whose two workers trade written consent for the one
-rule both need. `revert-holds-until-newer` follows `revert-ends-itself`, because removing Release before a Revert's hold
-ends by itself would leave every Codex revert held for good. Wave 10 is last.
+(#3221). Five follow-ups ran beside wave 9, each on files wave 9 did not hold, and all merged the same day. On
+2026-11-23 `revert-ends-itself` (#3237) and `typed-repick` (#3238) merged, then `revert-holds-until-newer` with
+`ccrcdir-param-drop` (#3246), which had to follow `revert-ends-itself`, because removing Release before a Revert's hold
+ends by itself would have left every Codex revert held for good. Wave 10 is last.
 
 ## Waiting on the owner
 
@@ -200,14 +202,47 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   text-level cutter, the literal `--apply` read, a supervisor started through the service manager, and a bare
   `ccd <verb>`, which is not an edge. #3222's one-reader guard reads the spellings it names, not every way to write a
   second call.
+- **What wave 10 reconciled (2026-11-23, run 3500).** The spec's status, §2.2 and §2.8 and "Where things stand", and this
+  ledger, now describe what shipped rather than the plans' future tense: a normal Codex advance goes strictly forward
+  after a passing canary, the one exception being the retirement of a pin the catalogue no longer lists, after six hours of
+  continuous fresh sightings counted on the catalogue's own fetch times, with no shortcut by the clock; an Anthropic lane
+  follows the resolved class alias with its model and effort, preserves a held id, and moves a running session by the
+  existing idle relaunch, typing nothing, and the ledger makes no claim that belongs to the renewal programme (call 452);
+  doctor says what the files it reads show, not when the next refresh will act. The README's hunks are held (below).
+  The corrected D-8751, the over-cap wording and the strong-timeout limit are in the Anthropic arm's plan (a
+  correction under D-8751). The `ccrc-models` test's title was checked and not confirmed stale, so no test changed.
+- **The Models sheet and its door after #3246.** They offer Revert only, on a class with explicit literal-`true` support
+  read fresh before the act; Hold and Release stay shell and agent verbs. The Anthropic copy predicts no target and the
+  Codex copy names it; the fresh read after the act is authoritative. D-8857: released-hold evidence can outlast a
+  refresh when a Revert's hold stands; it settles on a trustworthy refresh with no hold standing, by ending with the
+  Revert's hold, or by another Release replacing it, and a repeat Anthropic Revert may refresh the timestamp without
+  changing the model, so it stays offered. Review 3493's counts are in `model-class-advance/fu-revert-holds-until-newer.md`:
+  246 unit passes in four files, 11 browser passes on the successful attempt, and mutations restored green, distinct from the
+  worker's and the old head's counts. Server proof from review 3487 was carried on byte-identical inputs, not rerun. The
+  two-call race, the busy preflight and an older console's wording stay recorded limits. Calls 469, 503, 527, 555 and 561
+  hold: old holds need usable baseline evidence, a same-ID or effort-only successful Revert is skipped as model-changing
+  history, the history scan does not cross episodes, the same write that records a move clears the hold, and the Codex
+  retirement exception stays.
+- **Issues, as read on 2026-11-23.** #2607's residual (a stale catalogue under a class model with no measured window)
+  is named by `clientWindowNotice` (D-8685, #2943) beside #2701's move notice (D-8384), both on `show`, `lanes` and
+  doctor's `models` row, each pinned by tests, so this wave's PR closes it. #1441 closed with the sheet (D-8690) and is
+  not reopened. No issue for the Fable share ceiling and per-lane effort that D-8690 moved out was found; its text is in
+  the wave's task note for the coordinator to file. #2943 landed outside a run, so its plan ticket stays open.
+- **Proposed correction to done-when 3, not applied.** The pinned statement says doctor warns on "a held class behind a
+  newer model". Since a Revert's hold is a held class behind a newer model until its end comes, the proposed wording is
+  "a hold that has come due to end and still stands". The pin is the owner's to change through a modification, so this
+  wave only flags it.
 - **Carried to later work.** From wave 9: a lane whose kind is unknown is drawn as a Codex lane (the window is narrow,
   and the server refuses behind it); a push dropped for lack of the strong timeout capability writes no log line. From
   `no-keys-transitive` (call 299): `_watchdog_resume_run`'s header comment says it types nothing, which needs a
   correction at `ccd/ccd`'s next change, and the stand-downs of the supervisor's typing paths (auto-compact, the route
-  typers) want pins of their own. Wave 10 takes the `ccrc-models` test's stale title, D-8751's prose after wave 9's one
-  push per class move, and the over-cap log wording. Done-when 3 still says doctor warns on a held class behind a newer
-  model, which a Revert's hold now is by design until its end comes; its wording goes to the owner with wave 10's
-  docs as a proposed modification of the definition of done.
+  typers) want pins of their own. Wave 10 took D-8751's prose after wave 9's one push per
+  class move, and recorded the over-cap log wording and the strong-timeout limit (both in the Anthropic arm's plan); it
+  did not confirm the `ccrc-models` test's title as stale. Done-when 3 still says doctor warns on a held class behind a
+  newer model, which a Revert's hold is by design until its end comes: the proposed correction is above. Still carried:
+  `entry-comment-seven`, the watchdog header and the supervisor stand-down proof, until a substantive edit and actual
+  proof. The unread directory argument was dropped in #3246, and the duplicate carry in the live plan was dropped with
+  the landing credited to the producer ticket.
 - **A pin gone from the catalogue (wave 3, #3118).** Done-when 2's "never to an older version" governs a
   release advance, and wave 3 keeps it: a `newer` move goes only to a version strictly above the pin, and it never
   waits for the grace below. The one step that can still choose an older model is the retirement of a pin the catalogue no longer lists.
@@ -282,16 +317,17 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   review, through the merge queue, at the head that review read.
 - No remedy, item or brief hands the owner a step the system can take.
 
-## Next-wave brief (after wave 9)
+## Remaining after wave 10's docs
 
-- `revert-ends-itself` (run 3405) and `typed-repick` (run 3403) are building; their briefs carry calls 409, 411 and
-  412.
-- `revert-holds-until-newer` follows `revert-ends-itself`: Hold and Release leave the sheet, the door's vocabulary and
-  every word that names them; Revert returns on Anthropic lanes, offered only where the read says the box ends holds;
-  Revert's confirm and the held row name what ends the hold; `CLAUDE.md`'s sentence on the Models sheet's write door
-  and the route census change with the door; `ccrcdir-param-drop` rides along. When it lands, the Overlord programme
-  gets the landing evidence: it left the Models sheet's row of the settings audit to this programme.
-- Wave 10 (`docs-and-issues`, `readme-anthropic-arm`) is last: the README's lines for both arms, the spec's status, #2607,
-  and the carries above.
-- Live checks still owed: `moves-only-forward` measured on the fleet box once a release with wave 3 is there, the
-  sheet's live acceptance after `revert-holds-until-newer` ships, and `natural-move` at the next real model release.
+Merged is not released, released is not installed, and installed is not observed live. #3237, #3238 and #3246 are merged;
+v0.0.1416 is a published prerelease and no evidence of installation. Open, unless separately measured:
+
+- `moves-only-forward`, measured on the fleet box once a release with wave 3 is installed there.
+- The Models sheet's live acceptance, once a build with #3246 is installed.
+- `natural-move` at a real model release: the canary, the move, a new session on the new model, and no sessions-behind
+  warning 24 hours later, doctor's evidence.
+- The renewal programme's evaluation evidence, which owns any claim about session renewal.
+- The README's hunks for the Anthropic arm and the models section, which wait on the consent of the claim holder on
+  `README.md`.
+
+Nothing here moves the fleet or asks the owner for a step.
