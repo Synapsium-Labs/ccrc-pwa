@@ -2231,15 +2231,15 @@ the sheet shows the result of the fresh read made after the act.
 measured window per model in `~/.ccrc/models/<id>.windows.json`, a sibling of the registry, never a key in it (an
 older ccrc refuses registry keys it does not know): `set-window` writes one, a whole number
 from 1,000 to 1,000,000 that you measured — a catalogue number never sets it — and `clear-window` drops one. When
-every model the lane's classes name has a window, the key is the smallest of them, rounded down to 1,000
-and capped at 1,000,000, because Claude Code applies one value to every model in the session, subagents included.
+every model the lane's classes name has a window, the key is the smallest of them, capped at 1,000,000 (a measured window is
+rounded down to 1,000; an advertised one is used as listed), because Claude Code applies one value to every model in the session, subagents included.
 A model's window is, in order, its measured one; else the window its fresh catalogue advertises (the provider's
 promise, operator ruling 2026-11-13); else unknown. So a class moved to a model with no measurement takes the
 catalogue's window and no longer halves the lane. An unknown model counts at Claude Code's own default,
 200,000, so the key never rises above it while any class model is unknown, and is left out when every class model is
 unknown. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
 models. A windows file that cannot be read counts as no measured windows: refresh, materialise and the drift check
-carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
+carry on as if no window were measured, on the catalogue's window or else Claude Code's own default (a measured key left in `settings.json` shows as drift until the next materialise
 replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
 `show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
 `rm` reaps the file with the rest. A stale catalogue's advertised windows are not read, so on a lane where one class
@@ -2253,7 +2253,7 @@ A rollback to a ccrc from before measured windows is safe on a lane whose catalo
 refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
 successful probe, so before rolling back across this change on a lane with windows set, run
 `ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
-puts the lane on the default rule.
+leaves the lane with no measured window, on the catalogue's window or else Claude Code's own default.
 
 **A refusal lowers the window (`direct` Codex lanes).** On a lane in `direct` mode ("A `direct` lane: the bridge",
 below) the bridge records each context refusal in its stats file: the model, the prompt size it estimated, and when.
@@ -2312,10 +2312,13 @@ an argument list or the environment, and only a 200 that carries text moves the 
 re-materialised, the model the class had is kept for `revert`, and one push says so (`<id>: <class> <old> → <new>`).
 The class keeps its effort level when the new model offers it, and otherwise takes the highest level the new model
 offers below it, or its lowest when none is below. A held class does not move while its hold stands, and a
-hold set while a canary is out wins. A Revert's hold records the model it moved the class away from, and the refresh
+Revert made while a canary is out wins. A Revert's hold records the model it moved the class away from, and the refresh
 ends it, in the same write as the move, once a model newer than that one appears (a newer version of the same
-family); the class then advances to it, canary first. A hold with no such record, a hand hold or one an older build
-wrote, ends at the next newer model. A class you emptied by hand stays empty. A candidate the step cannot carry safely (a malformed row, or an effort level that begins with
+family); the class then advances to it, canary first. A hand hold records no such model: it ends at the first model
+newer than the one it holds. A Revert an older build wrote has no recorded model either: the refresh reads the newest
+successful Revert in the class's history for it (a Revert to the same model, or one that changed only the effort,
+does not count), and with none usable it records the class's current candidate as that model, which does not end the
+hold on that pass; the hold then waits for a model newer than that one. A class you emptied by hand stays empty. A candidate the step cannot carry safely (a malformed row, or an effort level that begins with
 `--`) is skipped for that run and never blocks the lane.
 
 **When the step runs.** It runs after the refresh has probed, re-materialised and re-rendered every lane, so it never
@@ -2338,8 +2341,8 @@ else the default, 250 (an empty value is the default too); a whole number is rea
 timer and a hand `ccrc models refresh` (the one `ccrc doctor`'s remedies name included) both honour it. A drop-in
 (`systemctl --user edit ccrc-models.service`, then `[Service]` and `Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without
 the `[Service]` line systemd ignores the assignment) still works as an override for that one unit, because a set
-environment wins. A `ccrc.env` line ccrc cannot read turns the step off for that run and says why on standard error. To
-keep one class still under every run, hold it. The
+environment wins. A `ccrc.env` line ccrc cannot read turns the step off for that run and says why on standard error. A hand hold
+keeps a class still only until a newer model appears. The
 step also does nothing where there is no `flock`, where the lock directory is absent and `mkdir` is not to be had, or
 where `timeout` cannot escalate to KILL.
 
@@ -2356,8 +2359,8 @@ with one tier up and one down (FAIL), a tier it cannot measure (WARN), and a Lit
 runs on the lane (WARN). A lane with both tiers down and no live session passes, and a starting tier shows only in the
 check's tier words. `ccrc models <id> show` lists a model that is still unclassified and any held class, `show --json`
 carries each class's recent moves, and `ccrc codex status <id>` shows each tier's state; a newer model still listed as
-unclassified, with no recent move, is the sign of a lane that keeps waiting. To keep a class where it is whatever
-arrives, hold it.
+unclassified, with no recent move, is the sign of a lane that keeps waiting. A hold keeps a class where it is only until a newer
+model arrives.
 
 **On a `direct` lane** the step asks the bridge instead of the two tiers: it moves a class only when the lane's bridge
 answers as the lane's own (its `direct`-shaped `/ccgpt/lane` answer and the pid its command line proves), and runs no
