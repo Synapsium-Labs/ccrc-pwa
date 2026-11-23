@@ -68,6 +68,14 @@ for (const k of keys) {
 }
 fs.writeFileSync(path.join(home, 'counters.json'), JSON.stringify(counters));
 step = step ?? {};
+// a driver still at work when a stop arrives (fix round 2, F2): it says it started, survives the runner's SIGTERM as the real
+// one's admission does (its stop handler changes no exit code), and then answers the step as planned
+if (step.hold === true) {
+  process.on('SIGTERM', () => { fs.writeFileSync(path.join(home, 'term.seen'), ''); });
+  fs.writeFileSync(path.join(home, 'held'), '');
+  const until = Date.now() + 20000;
+  while (!fs.existsSync(path.join(home, 'term.seen')) && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+}
 const made = () => {
   if (out === null) return;
   fs.mkdirSync(out, { recursive: true, mode: 0o700 });
@@ -1670,12 +1678,13 @@ describe('weekAccountChoiceOf: the pure choice of a week\'s account, as a table'
   it.each(rows)('%s', (_name, input, want) => {
     expect(U.weekAccountChoiceOf(input)).toEqual(want);
   });
-  it('it never answers an account without room, never a refused one, and never one outside the candidates for an unspawned week', () => {
-    for (const [, input, want] of rows) {
-      if (want.account === undefined || input.recorded !== null) continue;
-      const c = (input.candidates as R[]).find((x) => x.id === want.account);
+  it('over every row, its answer for an unspawned week is never an account without room, a refused one, or a non-candidate', () => {
+    for (const [, input] of rows) {
+      const got = U.weekAccountChoiceOf(input) as R;
+      if (got.account === undefined || input.recorded !== null) continue;
+      const c = (input.candidates as R[]).find((x) => x.id === got.account);
       expect(c?.room, JSON.stringify(input)).toBe(true);
-      expect(Object.keys((input.refused ?? {}) as R), JSON.stringify(input)).not.toContain(want.account);
+      expect(Object.keys((input.refused ?? {}) as R), JSON.stringify(input)).not.toContain(got.account);
     }
   });
 });
@@ -1820,14 +1829,38 @@ describe('the runner runs each week on the week\'s account (run 3538)', () => {
     expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'account-refused' });
   });
 
-  it('a refusal after the act recorded the account (a refusal past admission) closes the week, never falls through', async () => {
+  // Today's arms never answers account-refused once it has recorded the account (every emitter is admission, before --out),
+  // so the fake stands for a driver that would: the runner's own re-read of the record is the guard this case pins.
+  it('an account-refused that comes when the week\'s folder already records the account closes the week, never falls through', async () => {
     const b = three();
-    b.plan({ 'arms@acct-b': [REFUSE('account-refused', 'launcher-EACCES')] });   // the fake records first, as the real one would by then
+    b.plan({ 'arms@acct-b': [REFUSE('account-refused', 'fixture detail')] });   // the fake records the account, then refuses
     await b.tick();
     expect(spends(b).map(accountArg)).toEqual(['acct-b']);
     expect(recordOf(b)?.account).toBe('acct-b');
     expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'account-refused' });
   });
+
+  // fix round 2 (review 3549 F2): the walk stops when the runner has been told to stop
+  it('a stop arriving while the first candidate\'s driver refuses at admission: no second spawn, the week still running, interrupted', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [{ ...refusedAtAdmission('secrets-absent'), hold: true }] });
+    // the runner's own stop handler, called directly: no signal is sent to this test process
+    const before = new Set(process.listeners('SIGTERM'));
+    const ticking = b.tick();
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(join(b.home, 'held')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    expect(existsSync(join(b.home, 'held')), 'fixture: the first candidate\'s driver started').toBe(true);
+    const added = process.listeners('SIGTERM').filter((l) => !before.has(l));
+    expect(added, 'fixture: the runner listens for SIGTERM').toHaveLength(1);
+    (added[0] as (s: string) => void)('SIGTERM');
+    await ticking;
+    expect(existsSync(join(b.home, 'term.seen')), 'fixture: the stop reached the refusing driver').toBe(true);
+    expect(spends(b).map(accountArg), 'no second candidate spawned').toEqual(['acct-b']);
+    const st = b.state() as R;
+    expect(st.weeks[WEEK]).toMatchObject({ state: 'running' });
+    expect(st.last).toMatchObject({ act: 'arms', outcome: 'waiting', word: 'interrupted' });
+    expect(recordOf(b)).toBeNull();
+  }, 60_000);
 
   it('ruling 1 on the runner\'s own reading: an account whose row is marked with no five-hour window has room on its weekly figure', async () => {
     const b = mkBox();

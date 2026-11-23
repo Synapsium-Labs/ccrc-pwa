@@ -27,8 +27,9 @@
 // pure, before every `arms` and `judge`, and the runner passes it as `--account`. A week that has spawned anything stays on
 // the account its folder records (history-quiz-single.mjs writes that record, the one writer, before the week's first
 // spawn); one that has spawned nothing keeps the previous account when it has room, else takes the candidate with the
-// lowest `seven`; when `arms`'s admission refuses that one (`account-refused`, before any record), the next in the choice's
-// order is tried, as setup does, and with every one refused the tick waits `no-room` (fix round 1, F1). The week's one
+// lowest `seven`; when admission refuses that one (`account-refused`, before any record), the next in the choice's order
+// is tried, as setup does, and with every one refused the tick waits `no-room` (fix round 1, F1); a stop ends the walk,
+// `interrupted` (fix round 2). The walk is written for `arms` and `judge` alike; only `arms` can meet an unrecorded week. The week's one
 // --budget is the week's, whatever the account. The status's account is the week's when
 // recorded. A week still running when a new ISO week starts is closed `failed` (`week-ended`): the runner works the current
 // week only.
@@ -628,6 +629,11 @@ async function actWeek(ctx, act) {
   const arms = { 'arms-summary': p.summary, 'arms-summary-sha256': w.arms_sha256 };
   let r;
   for (;;) {
+    // fix round 2 (review 3549 F2): a stop ends the walk before its next spawn; the week stays running, resumable
+    if (ctx.stopping) {
+      if (repilot) w.repilot = permit;
+      return { stop: { outcome: 'waiting', word: 'interrupted', detail: 'a stop signal arrived during the week\'s account walk', driver: false } };
+    }
     const account = d.account;
     const flags = act === 'arms' ? { ...baseFlags(ctx, p), account, ...(repilot ? { repilot: true } : {}) }
       : act === 'judge' ? { ...baseFlags(ctx, p), ...arms, account }
@@ -635,7 +641,8 @@ async function actWeek(ctx, act) {
     r = await driverStep(ctx, act, flagsOf(flags));
     // An unspawned week's account refused at admission, before the driver wrote any record: the next candidate is tried, in
     // the choice's order. Only an admitted account becomes the week's record (history-quiz-single.mjs writes it after
-    // admission, before any spawn), so a week whose folder records one never falls through.
+    // admission, before any spawn), so a week whose folder records one never falls through. The walk covers judge too, but
+    // a judge never meets an unrecorded week today: its arms recorded the account, or ran on an older build that left the pin.
     if (!spend || d.why === 'recorded' || r.stop?.word !== 'account-refused'
       || weekAccountOf(w.out, ctx.state.setup.setup_sha256, ctx.state.setup.account).state !== 'none') break;
     refused[account] = r.stop.detail;
