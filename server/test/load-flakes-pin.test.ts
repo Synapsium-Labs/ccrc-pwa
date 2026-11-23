@@ -1,7 +1,8 @@
 // D-8945 (plan docs/superpowers/plans/2026-11-22-testbox-light-parity.md): `server/load-flakes.txt` is the one machine-read
 // copy of CLAUDE.md's known-load-flake list. The test box's parity check reads it from the worktree it tests, so a known load
-// flake that differs is re-run alone once on both sides (`ccd/testbox-parity`). CLAUDE.md's bullet points to the file; this
-// pin keeps the two lists equal and every entry a real test file, so a rename or a change to either list alone is red.
+// flake that differs is re-run alone once on both sides (`ccd/testbox-parity`). This pin keeps the two lists equal and every
+// entry a real test file, so a rename or a change to either list alone is red. (A pointer from CLAUDE.md's bullet to the file
+// is a rules change, which the review judge takes only in a pull request of its own.)
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import path, { join } from 'node:path';
@@ -35,11 +36,5 @@ describe("server/load-flakes.txt is CLAUDE.md's known-load-flake list (D-8945)",
       expect(f, f).toMatch(/^test\/[a-z0-9-]+\.test\.ts$/);
       expect(existsSync(join(REPO, 'server', f)), f).toBe(true);
     }
-  });
-
-  it("CLAUDE.md's bullet points to the file", () => {
-    const md = readFileSync(join(REPO, 'CLAUDE.md'), 'utf8');
-    const at = md.indexOf('- **Known load flakes**');
-    expect(md.slice(at, md.indexOf('\n- **', at + 1))).toContain('`server/load-flakes.txt`');
   });
 });

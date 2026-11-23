@@ -36,3 +36,5 @@ Builds `docs/superpowers/plans/2026-11-22-testbox-light-parity.md` (D-8945, D-89
 - **A tracked e2e test could be sampled.** The universe is now what the package's vitest lists.
 - New tests go red for each guard the review found unpinned: the untimed rules, the 1 MiB cap, negative times, the
   symlinked flakes file and a re-used verdict.
+- **CLAUDE.md is left alone.** A pointer to `server/load-flakes.txt` in its load-flake bullet is a rules change, which the
+  review judge takes only in a pull request of its own; the pin still keeps the two lists equal.
