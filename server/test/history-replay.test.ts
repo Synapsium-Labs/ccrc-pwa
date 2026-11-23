@@ -5153,7 +5153,10 @@ describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
     expect(projects.length, 'CONTROL: the stub wrote one project dir').toBe(1);
     expect(got).toEqual({
       turn_bound: { held: false, turns: 13, num_turns: 13, subtype: 'success' },
-      persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true },
+      // quiz-pilot-checks ruling 3: a measured leftover also carries its shape, names and sizes only.
+      persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true, shape: {
+        entries: [{ path: projects[0], kind: 'dir', size: expect.any(Number) }, { path: `${projects[0]}/sess-left.jsonl`, kind: 'file', size: expect.any(Number) }],
+        subagents_dir: false, transcript_file: true, truncated: false } },
     });
     expect(t9Fs.existsSync(t9Path.join(out, 'step0b', 'turn-bound.run.json')), 'one box-mode run named step0b/turn-bound').toBe(true);
   });
@@ -19081,10 +19084,13 @@ b2t1Describe('W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure 
     b2t1Expect(want, 'CONTROL: the arm argv grants exactly Bash and Agent').toEqual(['Agent', 'Bash']);
     const ok = { sessionId: 's', model: 'm', tools: ['Bash', 'Agent'], mcpServers: [], plugins: [], skills: ['ccrc-history'], slashCommands: [] };
     const all = (state: string): B2t1R => ({ tools: { state }, mcp: { state }, plugins: { state }, skill: { state } });
-    b2t1Expect(D21.initChecksOf([ok, { ...ok, skills: [{ name: 'ccrc-history', path: '/x' }] }], want)).toEqual(all('pass'));
-    b2t1Expect(D21.initChecksOf([ok, null], want), 'a run with no init event').toEqual(all('unmeasured'));
-    b2t1Expect(D21.initChecksOf([], want), 'no run').toEqual(all('unmeasured'));
-    const one = (o: B2t1R): B2t1R => D21.initChecksOf([ok, { ...ok, ...o }], want);
+    // quiz-pilot-checks ruling 2: the plugins check also records what loaded (pluginsLoadedOf, pinned in
+    // history-step0b-pilot-checks.test.ts); these rows pin the states alone.
+    const states = (c: B2t1R): B2t1R => ({ ...c, plugins: { state: c.plugins.state } });
+    b2t1Expect(states(D21.initChecksOf([ok, { ...ok, skills: [{ name: 'ccrc-history', path: '/x' }] }], want))).toEqual(all('pass'));
+    b2t1Expect(states(D21.initChecksOf([ok, null], want)), 'a run with no init event').toEqual(all('unmeasured'));
+    b2t1Expect(states(D21.initChecksOf([], want)), 'no run').toEqual(all('unmeasured'));
+    const one = (o: B2t1R): B2t1R => states(D21.initChecksOf([ok, { ...ok, ...o }], want));
     b2t1Expect(one({ tools: ['Bash', 'Agent', 'Read'] }).tools).toEqual({ state: 'fail' });
     b2t1Expect(one({ tools: ['Bash'] }).tools).toEqual({ state: 'fail' });
     b2t1Expect(one({ tools: ['Bash', 'Bash'] }).tools, 'a repeat is not the set').toEqual({ state: 'fail' });

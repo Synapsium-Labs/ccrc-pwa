@@ -2741,13 +2741,57 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
   return { left: sessionId === null || projectDir || transcripts.length > 0, transcripts, projectDir };
 }
 
+/** The most entries leftoverShapeOf walks in one call; past it the shape says `truncated`. */
+export const LEFTOVER_SHAPE_MAX_ENTRIES = 1000;
+/** The levels below each leftover root whose entries the shape names (quiz-pilot-checks ruling 3: two levels down). */
+export const LEFTOVER_SHAPE_NAMED_DEPTH = 2;
+/** The kind word of an lstat, for the shape: dir, file, link or other. */
+const entryKindOf = (st) => (st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'link' : st.isFile() ? 'file' : 'other');
+/** The shape of what a run left under `projects` (quiz-pilot-checks ruling 3), measured BEFORE anything removes it: each root
+ *  (a path relative to `projects`) and every entry up to LEFTOVER_SHAPE_NAMED_DEPTH levels below it, as `{path, kind, size}`
+ *  (the lstat size; a link is never followed); whether a directory named `subagents` stands anywhere in the walk; whether any
+ *  file named `*.jsonl` (a transcript) does. The walk goes past the named depth only to answer those two, and stops at
+ *  LEFTOVER_SHAPE_MAX_ENTRIES (`truncated`). Names and sizes only: no file is opened. A read failure is recorded as
+ *  `unmeasured` (its errno) beside what was read before it, never a throw: the verdict is decided elsewhere and stays as it is.
+ *  @param {string} projects  @param {readonly string[]} roots  */
+export function leftoverShapeOf(projects, roots) {
+  const entries = [];
+  let subagents = false;
+  let transcript = false;
+  let truncated = false;
+  let unmeasured = null;
+  let seen = 0;
+  const note = (rel, st, depth) => {
+    seen += 1;
+    if (st.isDirectory() && path.basename(rel) === 'subagents') subagents = true;
+    if (st.isFile() && rel.endsWith('.jsonl')) transcript = true;
+    if (depth <= LEFTOVER_SHAPE_NAMED_DEPTH) entries.push({ path: rel, kind: entryKindOf(st), size: st.size });
+  };
+  const walk = (rel, depth) => {
+    if (seen >= LEFTOVER_SHAPE_MAX_ENTRIES) { truncated = true; return; }
+    let st;
+    try { st = lstatSync(path.join(projects, rel)); } catch (e) { unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return; }
+    note(rel, st, depth);
+    if (!st.isDirectory()) return;
+    let names;
+    try { names = readdirSync(path.join(projects, rel)).sort(); } catch (e) { unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return; }
+    for (const n of names) walk(`${rel}/${n}`, depth + 1);
+  };
+  const tops = [...new Set(roots)].sort().filter((r, _i, all) => !all.some((o) => o !== r && r.startsWith(`${o}/`)));
+  for (const r of tops) walk(r, 0);
+  const shape = { entries, subagents_dir: subagents, transcript_file: transcript, truncated };
+  return unmeasured === null ? shape : { ...shape, unmeasured };
+}
+
 /** W2-5b2 Task 1: persistenceLeft as step 0b records it, `{left, transcripts, project_dir}`. An lstat or readdir failure
  *  under projects/ (an errno, which persistenceLeft throws so it never reads as clean) is answered as left, with the errno
  *  named as `unmeasured`: the run is recorded and fails closed after --out, never an exit 1 (D-6309's rule). So is a run
  *  whose stream gave no session id (`unmeasured: 'no-session-id'`) or one that is none (`'session-id-malformed'`: empty,
  *  holding a slash, or starting with a dot): that id is the spawned run's own data, so no transcript half was read and
  *  neither a clean `left: false` nor a `fail` for a leak that was never measured. Any other throw (a TypeError for a bad
- *  argument of the driver's own) is a defect and stays one (F2, F3; W2-5b2 fix round 1 (review 981)).
+ *  argument of the driver's own) is a defect and stays one (F2, F3; W2-5b2 fix round 1 (review 981)). A measured `left`
+ *  run also carries `shape`, leftoverShapeOf's description of what it left (quiz-pilot-checks ruling 3); a clean run and an
+ *  unmeasured one carry none.
  *  @param {{ configDir: string, sessionId: string | null, cwd: string }} o */
 export function persistenceMeasured(o) {
   persistenceConfigDirOk(o.configDir);
@@ -2760,7 +2804,12 @@ export function persistenceMeasured(o) {
     if (e instanceof TypeError || typeof e?.code !== 'string') throw e;
     return { left: true, transcripts: [], project_dir: null, unmeasured: e.code };
   }
-  return { left: l.left, transcripts: l.transcripts, project_dir: l.projectDir };
+  const measured = { left: l.left, transcripts: l.transcripts, project_dir: l.projectDir };
+  if (!l.left) return measured;
+  // quiz-pilot-checks ruling 3: what was left is described here, at the driver's one reading of it, before anything removes it
+  // (the driver removes nothing under projects/). The verdict above is not touched by it.
+  const roots = [...(l.projectDir ? [projectSlugOf(o.cwd)] : []), ...l.transcripts];
+  return { ...measured, shape: leftoverShapeOf(path.join(o.configDir, 'projects'), roots) };
 }
 
 /** Step 0b's mechanics without the seam (W2-D57): one box-mode run of TURN_PROBE_PROMPT named 'step0b/turn-bound'
@@ -7888,17 +7937,46 @@ export function denialCheckOf(f) {
 }
 const skillNamed = (s) => s === HISTORY_SKILL || (plainObject(s) && s.name === HISTORY_SKILL);
 const sameSet = (got, want) => got.length === want.length && [...got].sort().join('\n') === [...want].sort().join('\n');
+/** The tool names a build reports on the wire under another name than the one `--tools` grants, one row per name: the
+ *  reported name, then the granted name it stands for (quiz-pilot-checks ruling 1: Claude Code 2.1.330 reports the Agent tool
+ *  as `Task`). The table is applied to what an init event REPORTS, never to what the argv grants (armToolsOf), and a name not
+ *  in it is never aliased, so the set comparison stays exact. */
+export const WIRE_TOOL_ALIASES = Object.freeze({ Task: 'Agent' });
+/** A reported tool list in the granted vocabulary: each name the table holds becomes its granted name, every other name is
+ *  kept as it is; a repeat stays a repeat, so `Task` beside `Agent` is two Agents and never the set. Pure.
+ *  @param {readonly unknown[]} reported  @returns {unknown[]} */
+export function grantedToolNamesOf(reported) {
+  return reported.map((t) => (typeof t === 'string' && Object.hasOwn(WIRE_TOOL_ALIASES, t) ? WIRE_TOOL_ALIASES[t] : t));
+}
+/** A plugins entry's class (quiz-pilot-checks ruling 2): `build` only when the entry says by BOTH fields that it ships with
+ *  the build, its `source` a string ending in `@builtin` and its `path` the word `builtin`; any other entry, one with a field
+ *  missing or not a string, and an entry that is not an object, is `other`. Pure.  @param {unknown} entry */
+export function pluginClassOf(entry) {
+  return plainObject(entry) && typeof entry.source === 'string' && entry.source.endsWith('@builtin') && entry.path === 'builtin' ? 'build' : 'other';
+}
+/** What one run's plugins list loaded, as the result records it: the count of each class, and each refused (`other`) entry's
+ *  name and source, each the reported string or null when the entry carries no string there. null for a run with no init
+ *  event or no plugins list. Pure.  @param {StreamInit | null} init */
+export function pluginsLoadedOf(init) {
+  if (init === null || init.plugins === null) return null;
+  const str = (v) => (typeof v === 'string' ? v : null);
+  const refused = init.plugins.filter((p) => pluginClassOf(p) === 'other');
+  return { build: init.plugins.length - refused.length, other: refused.length,
+    refused: refused.map((p) => ({ name: str(plainObject(p) ? p.name : undefined), source: str(plainObject(p) ? p.source : undefined) })) };
+}
 /** W2-D57's "the arm's init event" and W2-D58's init assertions, one check each over every arm run's init event: tools
- *  exactly `want` (the arm argv's, armToolsOf), no MCP server, no plugin, the ccrc-history skill listed (a string, or an
- *  object with that name). A run with no init event, or a field that is not a list, leaves that check unmeasured on that
- *  run (foldStates). Pure.
+ *  exactly `want` (the arm argv's, armToolsOf) once the reported names pass through WIRE_TOOL_ALIASES, no MCP server, no
+ *  plugin but the build's own (pluginClassOf), the ccrc-history skill listed (a string, or an object with that name). A run
+ *  with no init event, or a field that is not a list, leaves that check unmeasured on that run (foldStates). The plugins
+ *  check also records, per run in `inits` order, what loaded (pluginsLoadedOf). Pure.
  *  @param {Array<StreamInit | null>} inits  @param {readonly string[]} want */
 export function initChecksOf(inits, want) {
   const over = (read) => ({ state: foldStates(inits.map((i) => (i === null ? 'unmeasured' : read(i)))) });
   return {
-    tools: over((i) => (i.tools === null ? 'unmeasured' : sameSet(i.tools, want) ? 'pass' : 'fail')),
+    tools: over((i) => (i.tools === null ? 'unmeasured' : sameSet(grantedToolNamesOf(i.tools), want) ? 'pass' : 'fail')),
     mcp: over((i) => (i.mcpServers === null ? 'unmeasured' : i.mcpServers.length === 0 ? 'pass' : 'fail')),
-    plugins: over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.length === 0 ? 'pass' : 'fail')),
+    plugins: { ...over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.every((p) => pluginClassOf(p) === 'build') ? 'pass' : 'fail')),
+      loaded: inits.map(pluginsLoadedOf) },
     skill: over((i) => (i.skills === null ? 'unmeasured' : i.skills.some(skillNamed) ? 'pass' : 'fail')),
   };
 }
