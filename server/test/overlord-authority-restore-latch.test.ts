@@ -53,7 +53,8 @@ function boot(f: { dir: string; db: DatabaseSync }, bootId = 'boot-now') {
   raiseRestoreDetectedOn(guard, { coord, journal, clock: time.clock, entropy: time.entropy, inTransaction: () => db.isTransaction, warn: (l) => warns.push(l) });
   runOverlordAuthorityBoot(port, guard, () => {});
   const privacy = PRIVACY_HEAD_UNWIRED.read() as PrivacyHeadRead;
-  const ex = new OverlordAuthorityExchange({ journal, guard, privacy: { read: () => privacy }, boot: bootId, relationOf: () => 'other-host', warn: (l) => warns.push(l), agent: null });
+  const ex = new OverlordAuthorityExchange({ journal, guard, privacy: { read: () => privacy }, boot: bootId, relationOf: () => 'other-host', warn: (l) => warns.push(l), agent: null,
+    committedRows: () => db.isTransaction ? { kind: 'unmeasured' } : journal.readRows(db) });
   return { guard, journal, coord, warns, ex, time };
 }
 const append = (f: { db: DatabaseSync }, journal: OverlordAuthorityJournal, m: OverlordAuthorityMove): void => { tx(f.db, () => journal.appendInTx(f.db, m)); };

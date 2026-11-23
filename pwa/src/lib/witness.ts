@@ -35,12 +35,11 @@ function heldTuple(from: StorageSource): WitnessTuple | null {
   }
 }
 
-/** One exchange: send what is held, keep the higher epoch of held and offered. */
+/** Exchange what was held when the call started; apply the keep rule to what is held when the answer is written. */
 export async function exchangeWitness({ ask = api.overlordWitness, from = pageStorage }: WitnessDeps = {}): Promise<WitnessOutcome> {
-  const held = heldTuple(from);
   let answer: unknown;
   try {
-    answer = await ask(held);
+    answer = await ask(heldTuple(from));
   } catch (e) {
     if (!(e instanceof ApiError)) return { kind: 'failed' };
     const word = (e.body as { error?: unknown } | null)?.error;
@@ -48,9 +47,19 @@ export async function exchangeWitness({ ask = api.overlordWitness, from = pageSt
   }
   const p = parseWitnessTuple((answer as { offer?: unknown } | null)?.offer);
   if (!p.ok) return { kind: 'malformed' };
-  const kept = witnessKeep(held, p.tuple);
-  const wrote = kept !== held && writeKey(WITNESS_KEY, JSON.stringify(kept), from);
-  return { kind: 'offer', kept, wrote };
+  const keep = (): WitnessOutcome => {
+    const latest = heldTuple(from);
+    const kept = witnessKeep(latest, p.tuple);
+    const wrote = kept !== latest && writeKey(WITNESS_KEY, JSON.stringify(kept), from);
+    return { kind: 'offer', kept, wrote };
+  };
+  try {
+    // Only the storage read and write need the origin-wide lock. Browsers without Web Locks still re-read immediately before writing.
+    const locks = globalThis.navigator?.locks;
+    return locks === undefined ? keep() : await locks.request(WITNESS_KEY, keep);
+  } catch {
+    return { kind: 'failed' };
+  }
 }
 
 export interface WitnessSchedule {

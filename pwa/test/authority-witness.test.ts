@@ -136,6 +136,22 @@ describe('witnessKeep', () => {
     const held = at(5, 'held');
     expect(witnessKeep(held, at(5, 'offer'))).toBe(held);
   });
+  it('keeps a higher base even when its total is lower, and never takes a lower base', () => {
+    const earlier = at(9, 'earlier');
+    const confirmed = parsed({ ...at(1, 'confirmed'), base: 7, epoch: 8 });
+    expect(witnessKeep(earlier, confirmed)).toBe(confirmed);
+    expect(witnessKeep(confirmed, earlier)).toBe(confirmed);
+  });
+  it('keeps every measured term against a larger same-base total that loses it', () => {
+    const held = parsed(good());
+    const worseAuthority = parsed({ ...held, epoch: 6, terms: { ...held.terms, authority: 1, privacy: 5 } });
+    const worsePrivacy = parsed({ ...held, epoch: 6, terms: { ...held.terms, authority: 4, privacy: 2 } });
+    expect(witnessKeep(held, worseAuthority)).toBe(held);
+    expect(witnessKeep(held, worsePrivacy)).toBe(held);
+    expect(witnessKeep(held, at(6, 'unwired'))).toBe(held);
+    const advances = parsed({ ...held, epoch: 6, terms: { ...held.terms, authority: 3 } });
+    expect(witnessKeep(held, advances)).toBe(advances);
+  });
 });
 
 describe('WITNESS_RUNGS', () => {

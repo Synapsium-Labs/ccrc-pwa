@@ -465,6 +465,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const answer = deps.exchange?.exchangeConsole(g.actor.toString(), (b as { held: unknown }).held);
     if (answer === undefined) return refuseRoute(reply, 'authority-rolled-back', { cause: 'unmeasured: exchange' });
     if (answer.kind === 'unmeasured') return refuseRoute(reply, 'authority-rolled-back', { cause: `unmeasured: ${answer.why}` });
+    if (answer.kind === 'rolled-back') return refuseRoute(reply, 'authority-rolled-back', { cause: answer.cause });
     return { offer: answer.tuple };
   });
 

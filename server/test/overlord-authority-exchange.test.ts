@@ -52,11 +52,12 @@ function rig(opts: { agent?: boolean } = {}): Rig {
   const link: WitnessLink = { send: (o) => { agent.sends.push(o); return agent.next(o); } };
   const ex = new OverlordAuthorityExchange({
     journal, guard, privacy: { read: () => privacy.now }, boot: BOOT, relationOf: () => agent.host, warn: (l) => warns.push(l),
+    committedRows: () => db.isTransaction ? { kind: 'unmeasured' } : journal.readRows(db),
     agent: opts.agent === false ? null : { held: () => agent.held, link },
   });
   const offer = (): WitnessTuple => {
     const a = ex.exchangeConsole('probe', null);
-    if (a.kind !== 'offer') throw new Error(`no offer: ${a.why}`);
+    if (a.kind !== 'offer') throw new Error(`no offer: ${JSON.stringify(a)}`);
     return a.tuple;
   };
   return {
@@ -80,6 +81,7 @@ describe('an agent', () => {
     r.agent.held = { kind: 'tuple', tuple: ahead(r) };
     await r.ex.exchangeAgent();
     expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+    expect(r.agent.sends).toHaveLength(0);
   });
   it('whose answer to the offer holds a higher epoch does the same', async () => {
     const r = rig();
@@ -118,15 +120,22 @@ describe('an agent', () => {
     expect(r.ex.noWitnessSinceBoot()).toBe('standing');
     expect(r.warns).toEqual([]);
   });
-  it('keeps its last answer when the op is lost, unsent, malformed or predates the op', async () => {
+  it('keeps the newer answer over old ready when the op is lost, unsent, malformed or predates the op', async () => {
     const r = rig();
     r.append(WIDEN);
     r.agent.held = { kind: 'tuple', tuple: r.held({}) };
+    r.append(NARROW);
+    r.agent.next = async () => answered(r.held({}, BOOT));
+    await r.ex.exchangeAgent();
+    expect(r.ex.heldFor(2)).toBe('held');
     for (const a of [{ kind: 'lost', why: 'timeout' }, { kind: 'unsent' }, { kind: 'malformed' }, { kind: 'predates-op' }] as WitnessLinkAnswer[]) {
       r.agent.next = async () => a;
       await r.ex.exchangeAgent();
-      expect(r.ex.noWitnessSinceBoot()).toBe('lifted');
+      expect(r.ex.heldFor(2), a.kind).toBe('held');
     }
+    r.agent.held = { kind: 'nothing' }; // a new ready on a new connection is a new answer
+    await r.ex.exchangeAgent();
+    expect(r.ex.heldFor(2)).toBe('not-yet');
   });
   it('answers unmeasured to the op: judged as malformed, one warn line per change, no refusal and no count', async () => {
     const r = rig();
@@ -172,6 +181,20 @@ describe('an agent', () => {
     await r.ex.exchangeAgent();
     expect(r.agent.sends).toHaveLength(2);
   });
+  it('does not publish a trailing record when the transaction with the appended head rolls back', async () => {
+    const r = rig();
+    r.append(WIDEN);
+    await flush();
+    r.agent.held = { kind: 'nothing' };
+    r.guard.onAppended(() => r.ex.nudge());
+    expect(() => tx(r.db, () => {
+      expect(r.journal.appendInTx(r.db, NARROW).ok).toBe(true);
+      throw new Error('fixture abort');
+    })).toThrow('fixture abort');
+    await flush(); await flush();
+    expect.soft(r.agent.sends).toEqual([]);
+    expect(r.ex.exchangeConsole('dev-a', null).kind).not.toBe('offer');
+  });
   it('is nudged by the guard\'s appended report (the composition root\'s wiring)', async () => {
     const r = rig();
     r.agent.held = { kind: 'nothing' };
@@ -199,12 +222,16 @@ describe('a console', () => {
     expect(t).toMatchObject({ v: 1, boot: BOOT, epoch: 1, base: 0, authority: { sequence: 1 } });
     expect(r.ex.noWitnessSinceBoot()).toBe('standing');
   });
-  it('holding a higher epoch puts the guard in rolled-back and is still offered the tuple', () => {
+  it('withholds the offer on rollback, leaving the held word as evidence on the next exchange', () => {
     const r = rig();
     r.append(WIDEN);
-    const a = r.ex.exchangeConsole('dev-a', ahead(r));
-    expect(a.kind).toBe('offer');
-    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+    r.privacy.now = { kind: 'head', sequence: 5, digest: D('a'), highestMessageId: 5, digestAt: () => D('a') };
+    const held = r.held({ epoch: 3, terms: { authority: 2, privacy: 1, act: 'absent' }, privacy: { sequence: 1, digest: D('a') } });
+    expect(r.offer().epoch).toBe(6);
+    for (const device of ['dev-a', 'dev-b']) {
+      expect(r.ex.exchangeConsole(device, JSON.parse(JSON.stringify(held))).kind).not.toBe('offer');
+      expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+    }
   });
   it('holding another head at a sequence the server holds puts the guard in rolled-back: witness-heads', () => {
     const r = rig();
@@ -224,10 +251,19 @@ describe('a console', () => {
     expect(r.guard.state()).toEqual({ kind: 'coherent' });
     expect(r.ex.noWitnessSinceBoot()).toBe('standing');
   });
-  it('is answered unmeasured, with the why, when no offer can be built', () => {
+  it('fences the guard when the privacy head becomes unreadable even if the console holds nothing', () => {
     const r = rig();
+    r.append(WIDEN);
+    r.ex.exchangeConsole('prior', r.held({}));
+    expect(r.ex.noWitnessSinceBoot()).toBe('lifted');
     r.privacy.now = { kind: 'unmeasured', why: 'the file is unreadable' };
     expect(r.ex.exchangeConsole('dev-a', null)).toEqual({ kind: 'unmeasured', why: 'epoch' });
+    expect(r.guard.state()).toEqual({ kind: 'unmeasured', why: 'privacy-head' });
+  });
+  it('offers nothing to a source whose held word did not parse', () => {
+    const r = rig();
+    expect(r.ex.exchangeConsole('dev-a', { junk: 1 }).kind).not.toBe('offer');
+    expect(r.guard.state()).toEqual({ kind: 'coherent' });
   });
   it('keeps at most 64 sources, dropping the oldest', () => {
     const r = rig();
@@ -290,7 +326,16 @@ describe('the reads', () => {
     r.ex.exchangeConsole('dev-a', { ...o, boot: OLD, highestIds: { restoreGeneration: 4 } });
     expect(r.ex.highest()).toEqual({ kind: 'measured', epoch: 2, restoreGeneration: 4 });
   });
-  it('told() is the narrowest over the counting, consistent sources only', async () => {
+  it('passes the rollback witness narrowing to the Confirm read, but never uses it for a holding receipt', () => {
+    const r = rig();
+    r.append(WIDEN);
+    r.ex.exchangeConsole('dev-a', r.held({ told: { operatorRung: 'advise', latches: [] } }));
+    const told = { operatorRung: 'chat', latches: [{ cause: 'fixture-cap', cap: 'off' }] } as const;
+    r.ex.exchangeConsole('dev-b', { ...ahead(r), told });
+    expect(r.ex.told()).toEqual({ kind: 'measured', told });
+    expect(r.ex.heldFor(2)).toBe('not-yet');
+  });
+  it('told() is the narrowest over off-volume sources with a usable verdict', async () => {
     const r = rig();
     r.append(WIDEN);
     expect(r.ex.told()).toEqual({ kind: 'measured', told: null });
@@ -311,6 +356,26 @@ describe('the reads', () => {
     r.ex.exchangeConsole('dev-a', r.held({ highestIds: { restoreGeneration: 0, message: 7 } }));
     r.ex.exchangeConsole('dev-b', r.held({ highestIds: { restoreGeneration: 0, message: 3 } }));
     expect(r.ex.witnessHighestIds()).toEqual({ message: 7 });
+  });
+  it('withdraws the earlier boot observation on a rollback', () => {
+    const r = rig();
+    r.append(WIDEN);
+    r.ex.exchangeConsole('dev-a', r.held({}));
+    expect(r.ex.noWitnessSinceBoot()).toBe('lifted');
+    r.ex.exchangeConsole('dev-b', ahead(r));
+    expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+  });
+  it('withdraws the earlier boot observation on Confirm and does not re-lift within that boot', () => {
+    const r = rig();
+    r.append(WIDEN);
+    const t = r.held({});
+    r.ex.exchangeConsole('dev-a', t);
+    expect(r.ex.noWitnessSinceBoot()).toBe('lifted');
+    r.guard.confirmed();
+    r.ex.offerNow();
+    expect.soft(r.ex.noWitnessSinceBoot()).toBe('standing');
+    r.ex.exchangeConsole('dev-b', t);
+    expect(r.ex.noWitnessSinceBoot()).toBe('standing');
   });
   it('offerNow() nudges the agent exchange', async () => {
     const r = rig();

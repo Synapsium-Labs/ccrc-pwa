@@ -35,7 +35,7 @@ import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
-import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
+import { openOperatorModelStore, operatorModelBootLines, type WitnessedMessageIds } from './operatorModel/store.js';
 import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operatorModel/bootPass.js';
 import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
@@ -153,7 +153,9 @@ if (!landingReplay.ok) {
 // The Overlord's private store (context C11; Overlord W1 private store A): opened after coord.db and before the watcher, and
 // its throw (`PrivateStoreUnmigratable`) stops the process as coord.db's does. Its privacy journal never stops it: a journal
 // the open cannot trust leaves every message record refused (`journal-unreadable`), and `operatorModelBootLines` says what to do.
-const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall());
+let readWitnessedMessageIds: WitnessedMessageIds['witnessHighestIds'] = () => 'unmeasured';
+const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall(),
+  { witnessHighestIds: () => readWitnessedMessageIds() });
 for (const line of operatorModelBootLines(operatorModel, cfg.home)) console.warn(`ccrc-server: ${line}`);
 // I8, once, with both stores open and before the watcher: re-derive what a crash left (counts only, never a text).
 { const bp = runOperatorModelBootPass({ operatorModel: operatorModel.store, coord, citations: w1Citations, now: () => time.clock.wall() });
@@ -546,12 +548,14 @@ const privacyHead: PrivacyJournalHead = {
 };
 const overlordAuthorityExchange = new OverlordAuthorityExchange({
   journal: overlordAuthority, guard: overlordAuthorityGuard, privacy: privacyHead, boot: collectLane.bootNonce,
+  committedRows: () => coordDb.isTransaction ? { kind: 'unmeasured' } : overlordAuthority.readRows(coordDb),
   agent: fleetClient === null ? null : { held: () => fleetClient!.state.authorityWitness, link: witnessLinkOver(fleetClient) },
   relationOf: () => 'unmeasured', warn: (line) => console.warn(line),
 });
 fleetClient?.onConnected(() => overlordAuthorityExchange.nudge());
 overlordAuthorityGuard.onAppended(() => overlordAuthorityExchange.nudge());
 deps.overlordAuthorityExchange = overlordAuthorityExchange;
+readWitnessedMessageIds = () => overlordAuthorityExchange.witnessHighestIds();
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

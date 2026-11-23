@@ -119,8 +119,13 @@ class StoreStop extends Error {
   constructor(readonly answer: { error: StoreWriteError; detail: string }) { super(answer.detail); }
 }
 
+/** An independently held lower bound on id issuance; absent or unmeasured contributes no id. */
+export interface WitnessedMessageIds {
+  witnessHighestIds(): { message: number | null } | 'unmeasured';
+}
+
 export class OperatorModelStore {
-  constructor(private readonly db: DatabaseSync, private readonly privacy: PrivacyIssuer) {}
+  constructor(private readonly db: DatabaseSync, private readonly privacy: PrivacyIssuer, private readonly witnessedIds?: WitnessedMessageIds) {}
 
   /** Records one message: its text capped, its id issued by the privacy journal inside this transaction, before the
    *  row. A send key this session already recorded answers that record (`replay`), and writes nothing; the same key with
@@ -147,7 +152,10 @@ export class OperatorModelStore {
         }
         if (!this.db.isTransaction) throw new Error('OperatorModelStore: the privacy record must be appended inside the insert\'s transaction');
         const highest = (this.db.prepare('SELECT max(id) AS m FROM operator_messages').get() as { m: number | null }).m;
-        const issued = this.privacy.issue(highest, m.at);
+        const witnessed = this.witnessedIds?.witnessHighestIds();
+        const floor = witnessed === undefined || witnessed === 'unmeasured' || witnessed.message === null
+          ? highest : Math.max(highest ?? 0, witnessed.message);
+        const issued = this.privacy.issue(floor, m.at);
         if (!issued.ok) throw new StoreStop({ error: issued.error, detail: issued.detail });
         const state: MessageState = m.mark ? 'settled' : 'recorded';
         this.db.prepare(
@@ -482,7 +490,7 @@ export function privacyIssuerOf(file: ChainedJournalFile<PrivacyJournalEntry>): 
  *   - `refuse`: every record of a message answers `journal-unreadable`, and reads and the read ledger still work.
  * `at` is the composition root's clock reading, for the anchor's time; this module reads no clock.
  */
-export function openOperatorModelStore(dbPath: string, journalDir: string, at: number): OperatorModelOpen {
+export function openOperatorModelStore(dbPath: string, journalDir: string, at: number, witnessedIds?: WitnessedMessageIds): OperatorModelOpen {
   const db = openOperatorModelDb(dbPath);
   const file = chainedJournalFileAt(PRIVACY_JOURNAL_FORMAT, journalDir, PRIVACY_JOURNAL_BASENAME);
   const journalPath = path.join(journalDir, PRIVACY_JOURNAL_BASENAME);
@@ -500,7 +508,7 @@ export function openOperatorModelStore(dbPath: string, journalDir: string, at: n
   const seen = seenOf(first);
   const verdict = privacyCoherence(seen.kind === 'refused' ? { ...seen, detail: seen.detail + cutFailed } : seen, storeHighest);
   const done = (privacy: PrivacyOpenReport, issuer: PrivacyIssuer): OperatorModelOpen =>
-    ({ store: new OperatorModelStore(db, issuer), db, journalPath, healed, privacy });
+    ({ store: new OperatorModelStore(db, issuer, witnessedIds), db, journalPath, healed, privacy });
   if (verdict.verdict === 'refuse') {
     return done({ verdict: 'refuse', code: verdict.code, detail: verdict.detail }, { kind: 'refused', code: verdict.code, detail: verdict.detail });
   }

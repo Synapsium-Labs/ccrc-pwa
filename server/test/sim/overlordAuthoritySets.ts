@@ -608,6 +608,16 @@ export function narrowestToldCases(m: Pick<Witness, 'narrowestTold'>): Record<st
       expect(m.narrowestTold([wsource('console', 'stale', told('chat'))])).toBeNull();
       expect(m.narrowestTold([wsource('console', 'consistent', null)])).toBeNull();
     },
+    'a rollback verdict contributes its narrowing only off the volume': () => {
+      const narrowing = told('chat', [{ cause: 'a-cause', cap: 'off' }]);
+      for (const host of ['other-host', 'console'] as const) {
+        expect(m.narrowestTold([wsource(host, 'rolled-back', narrowing)])).toEqual(narrowing.told);
+      }
+      for (const host of ['same-host', 'unmeasured'] as const) {
+        expect(m.narrowestTold([wsource(host, 'rolled-back', narrowing)])).toBeNull();
+      }
+      expect(m.narrowestTold([wsource('console', 'unmeasured', narrowing)])).toBeNull();
+    },
     'a counting source with nothing told answers an empty told, not null': () => {
       expect(m.narrowestTold([wsource('console', 'consistent', told(null))])).toEqual({ operatorRung: null, latches: [] });
     },
@@ -633,7 +643,11 @@ export function narrowestToldCases(m: Pick<Witness, 'narrowestTold'>): Record<st
 }
 
 export function witnessKeepCases(m: Pick<WitnessL0, 'witnessKeep'>): Record<string, SuiteCase> {
-  const at = (epoch: number, boot: string): WTuple => wtuple({ epoch, boot, terms: { authority: epoch, privacy: 'absent', act: 'absent' } });
+  const at = (authority: number, boot: string, base = 0, privacy: number | 'absent' = 'absent'): WTuple => wtuple({
+    epoch: base + authority + (privacy === 'absent' ? 0 : privacy), base, boot,
+    terms: { authority, privacy, act: 'absent' },
+    privacy: privacy === 'absent' ? 'absent' : privacy === 0 ? 'empty' : { sequence: privacy, digest: HEX('a') },
+  });
   return {
     'nothing held takes the offer': () => { const o = at(3, 'o'); expect(m.witnessKeep(null, o)).toBe(o); },
     'a higher epoch is taken and a lower one never replaces': () => {
@@ -642,6 +656,21 @@ export function witnessKeepCases(m: Pick<WitnessL0, 'witnessKeep'>): Record<stri
       expect(m.witnessKeep(held, at(4, 'offer'))).toBe(held);
     },
     'equal epochs keep what is held': () => { const held = at(5, 'held'); expect(m.witnessKeep(held, at(5, 'offer'))).toBe(held); },
+    'a different base decides before the epoch and terms': () => {
+      const older = at(8, 'older');
+      const newer = at(0, 'newer', 4);
+      expect(m.witnessKeep(older, newer)).toBe(newer);
+      expect(m.witnessKeep(newer, older)).toBe(newer);
+    },
+    'a higher total on the same base cannot erase a measured term': () => {
+      const held = at(5, 'held', 2, 3);
+      expect(m.witnessKeep(held, at(4, 'offer', 2, 5))).toBe(held);
+      expect(m.witnessKeep(held, at(7, 'offer', 2, 2))).toBe(held);
+      const measuredZero = at(5, 'held', 2, 0);
+      expect(m.witnessKeep(measuredZero, at(6, 'offer', 2))).toBe(measuredZero);
+      const advances = at(6, 'offer', 2, 3);
+      expect(m.witnessKeep(held, advances)).toBe(advances);
+    },
   };
 }
 
@@ -769,13 +798,10 @@ const VERDICT_SET: MutantSet<Witness> = {
     { id: 'V9 base above ignored', old: 'if (tuple.base > epoch.base || termHigher(tuple, epoch))', new: 'if (termHigher(tuple, epoch))' },
     { id: 'V10 terms ignored', old: 'if (tuple.base > epoch.base || termHigher(tuple, epoch))', new: 'if (tuple.base > epoch.base)' },
     { id: 'V11 an equal authority term refuses', old: 'if (tuple.terms.authority > epoch.terms.authority) return true;', new: 'if (tuple.terms.authority >= epoch.terms.authority) return true;' },
-    {
-      id: 'V12 a missing privacy term compared as zero', old: "return mine !== 'absent' && theirs !== 'absent' && theirs > mine;",
-      new: "return (theirs === 'absent' ? 0 : theirs) > (mine === 'absent' ? 0 : mine);",
-    },
+    { id: 'V12 a higher measured privacy term is ignored', old: "return mine !== 'absent' && theirs !== 'absent' && theirs > mine;", new: 'return false;' },
     { id: 'V13 a term the server does not read compared as zero', old: "return mine !== 'absent' && theirs !== 'absent' && theirs > mine;", new: "return theirs !== 'absent' && theirs > (mine === 'absent' ? 0 : mine);" },
     { id: 'V14 an equal privacy term refuses', old: "return mine !== 'absent' && theirs !== 'absent' && theirs > mine;", new: "return mine !== 'absent' && theirs !== 'absent' && theirs >= mine;" },
-    { id: 'V15 the authority digest is not compared', old: 'authority.digestAt(theirs.sequence) !== theirs.digest) return', new: 'authority.digestAt(theirs.sequence) === theirs.digest) return' },
+    { id: 'V15 the authority digest is not compared', old: ' || authority.digestAt(theirs.sequence) !== theirs.digest', new: '' },
     { id: 'V17 an absent witness privacy head is compared', old: "if (held === 'absent' || privacy.kind === 'absent') return 'held';", new: "if (privacy.kind === 'absent') return 'held';" },
     { id: 'V18 an absent server privacy head is compared', old: "if (held === 'absent' || privacy.kind === 'absent') return 'held';", new: "if (held === 'absent') return 'held';" },
     { id: 'V19 an empty witness holds a mismatch', old: "if (held === 'empty') return 'held';", new: "if (held === 'empty') return 'mismatch';" },
@@ -826,8 +852,9 @@ const HOLDERS_SET: MutantSet<Witness> = {
 const TOLD_SET: MutantSet<Witness> = {
   modulePath: WITNESS_TS,
   mutants: [
-    { id: 'T1 a same-host source counts', old: "if ((s.host !== 'other-host' && s.host !== 'console') || s.verdict !== 'consistent' || s.tuple === null) continue;", new: "if (s.verdict !== 'consistent' || s.tuple === null) continue;" },
-    { id: 'T2 any verdict counts', old: "if ((s.host !== 'other-host' && s.host !== 'console') || s.verdict !== 'consistent' || s.tuple === null) continue;", new: "if ((s.host !== 'other-host' && s.host !== 'console') || s.tuple === null) continue;" },
+    { id: 'T1 a same-host source counts', old: "(s.host !== 'other-host' && s.host !== 'console') || ", new: "(s.host === 'unmeasured') || " },
+    { id: 'T2 any verdict counts', old: "(s.verdict !== 'consistent' && s.verdict !== 'rolled-back') || ", new: '' },
+    { id: 'T10 a rollback verdict never contributes', old: "(s.verdict !== 'consistent' && s.verdict !== 'rolled-back')", new: "s.verdict !== 'consistent'" },
     { id: 'T3 the highest rung wins', old: 'rank(t.operatorRung) < rank(rung)', new: 'rank(t.operatorRung) > rank(rung)' },
     { id: 'T4 a null rung wins', old: 'if (t.operatorRung !== null && (rung === null || rank(t.operatorRung) < rank(rung))) rung = t.operatorRung;', new: 'if (t.operatorRung === null || rung === null || rank(t.operatorRung) < rank(rung)) rung = t.operatorRung;' },
     { id: 'T5 the highest cap wins', old: 'rank(l.cap) < rank(had)', new: 'rank(l.cap) > rank(had)' },
@@ -847,6 +874,10 @@ const KEEP_SET: MutantSet<WitnessL0> = {
     { id: 'K3 a lower epoch is taken', old: 'return offered.epoch > held.epoch ? offered : held;', new: 'return offered.epoch < held.epoch ? offered : held;' },
     { id: 'K4 always the offer', old: 'return offered.epoch > held.epoch ? offered : held;', new: 'return offered;' },
     { id: 'K5 always what is held', old: 'return offered.epoch > held.epoch ? offered : held;', new: 'return held;' },
+    { id: 'K6 the base is ignored', old: 'if (offered.base !== held.base) return offered.base > held.base ? offered : held;', new: '' },
+    { id: 'K7 a smaller authority term is kept in the offer', old: 'if (offered.terms.authority < held.terms.authority) return held;', new: '' },
+    { id: 'K8 a smaller measured privacy term is kept in the offer', old: "offeredPrivacy === 'absent' || offeredPrivacy < privacy", new: "offeredPrivacy === 'absent'" },
+    { id: 'K9 absent offered privacy is treated as zero', old: "offeredPrivacy === 'absent' || offeredPrivacy < privacy", new: "(offeredPrivacy === 'absent' ? 0 : offeredPrivacy) < privacy" },
   ],
   suite: (mod) => witnessKeepCases(mod),
 };

@@ -18,9 +18,10 @@
 import type { OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './overlordAuthorityGuard.js';
 import { authorityFold, type AuthorityView } from './overlordAuthority.js';
+import { authorityCoherence, type AuthorityRowsSeen } from './overlordAuthorityCoherence.js';
 import {
-  authorityEpoch, currentWitnessTuple, narrowestTold, offVolumeHeld, offVolumeHolders, witnessVerdict,
-  type AuthorityEpoch, type HostRelation, type ServerWitnessFacts, type WitnessHeld, type WitnessSourceAnswer,
+  authorityEpoch, currentWitnessTuple, measuredWitnessFacts, narrowestTold, offVolumeHeld, offVolumeHolders, witnessVerdict,
+  type AuthorityEpoch, type HostRelation, type ServerWitnessFacts, type WitnessHeld, type WitnessSourceAnswer, type WitnessVerdict,
 } from './overlordAuthorityWitness.js';
 import type { WitnessLink } from './overlordAuthorityWitnessLink.js';
 import type { PrivacyHeadRead, PrivacyJournalHead } from './privacyJournalHead.js';
@@ -30,11 +31,14 @@ import { parseWitnessTuple, type WitnessHead, type WitnessTold, type WitnessTupl
 export const MAX_SOURCES = 64;
 const AGENT_SOURCE = 'agent';
 
-/** What the console door answers: the tuple to keep, or why none could be built. */
-export type ExchangeAnswer = { kind: 'offer'; tuple: WitnessTuple } | { kind: 'unmeasured'; why: string };
+/** What the console door answers: an offer, a measured rollback, or an unmeasured exchange. */
+export type ExchangeAnswer = { kind: 'offer'; tuple: WitnessTuple } | { kind: 'unmeasured'; why: string }
+  | Extract<WitnessVerdict, { kind: 'rolled-back' }>;
 
 export interface OverlordAuthorityExchangeDeps {
   journal: Pick<OverlordAuthorityJournal, 'readVerified'>;
+  /** Read committed rows only; an open transaction cannot attest that its head has landed. */
+  committedRows(): AuthorityRowsSeen;
   guard: OverlordAuthorityGuard;
   privacy: PrivacyJournalHead;
   /** The ONE boot nonce of this process (`collectLane.bootNonce`). */
@@ -58,7 +62,9 @@ export class OverlordAuthorityExchange {
   private readonly sources = new Map<string, WitnessSourceAnswer>();
   /** The sources whose current malformed word has been warned: one line per change, not one per tick. */
   private readonly warned = new Set<string>();
-  private sinceBoot = false;
+  private bootWitness: 'missing' | 'seen' | 'confirmed' = 'missing';
+  /** The ready reader produces a new object on every ready; the same object between passes is not a new answer. */
+  private agentObservation: { ready: ReadyWitness | undefined; held: WitnessHeld } | null = null;
   private highestEpoch = 0;
   private highestGeneration = 0;
   private highestMessage: number | null = null;
@@ -72,7 +78,7 @@ export class OverlordAuthorityExchange {
   private gather(): Gathered {
     const privacy = this.safePrivacy();
     const read = this.deps.journal.readVerified();
-    if (read.kind !== 'records' && read.kind !== 'absent') {
+    if ((read.kind !== 'records' && read.kind !== 'absent') || authorityCoherence(read, this.deps.committedRows()).kind !== 'coherent') {
       return { server: { epoch: 'unmeasured', boot: this.deps.boot, authority: 'unmeasured', privacy }, view: null, head: null, restoreGeneration: 0 };
     }
     const records = read.kind === 'records' ? read.records : [];
@@ -90,7 +96,8 @@ export class OverlordAuthorityExchange {
     try { return this.deps.privacy.read(); } catch (e) { return { kind: 'unmeasured', why: e instanceof Error ? e.message : 'the privacy head read threw' }; }
   }
 
-  private offerFrom(g: Gathered): ExchangeAnswer {
+  private offerTo(g: Gathered, verdict: WitnessVerdict): ExchangeAnswer {
+    if (verdict.kind === 'rolled-back' || verdict.kind === 'unmeasured') return verdict;
     if (g.view === null) return { kind: 'unmeasured', why: 'journal' };
     const highestMessageId = g.server.privacy.kind === 'head' ? g.server.privacy.highestMessageId : null;
     const offered = currentWitnessTuple(g.view, g.head, g.server.epoch, g.server.privacy, this.deps.boot, g.restoreGeneration, highestMessageId);
@@ -99,14 +106,25 @@ export class OverlordAuthorityExchange {
 
   // ── Judging one witness's word ───────────────────────────────────────────────────────────────────────────────────
 
-  /** Asks `witnessVerdict`, then acts and nothing else decides; records the source's last answer for the reads. */
-  private judge(source: string, held: WitnessHeld, host: HostRelation, g: Gathered = this.gather()): void {
+  private applyRefusal(g: Gathered, v: WitnessVerdict): void {
+    const facts = measuredWitnessFacts(g.server);
+    // Rows 1 and 2 of the source verdict do not measure the server. Fence independently of their result.
+    if (facts.kind === 'unmeasured') this.deps.guard.witnessUnmeasured(facts.why);
+    else if (v.kind === 'rolled-back') {
+      if (this.bootWitness !== 'confirmed') this.bootWitness = 'missing';
+      this.deps.guard.witnessRefused(v.cause);
+    } else if (v.kind === 'unmeasured' && v.why !== 'malformed') this.deps.guard.witnessUnmeasured(v.why);
+  }
+
+  /** Record one newly observed source answer. A retry that gets no answer must not replace it or add boot evidence. */
+  private judge(source: string, held: WitnessHeld, host: HostRelation, g: Gathered): WitnessVerdict {
     const v = witnessVerdict(g.server, held, host);
     const malformed = v.kind === 'unmeasured' && v.why === 'malformed';
     if (held.kind === 'tuple') this.noteHighest(held.tuple);
-    if (v.kind === 'rolled-back') this.deps.guard.witnessRefused(v.cause);
-    else if (v.kind === 'unmeasured' && v.why !== 'malformed') this.deps.guard.witnessUnmeasured(v.why);
-    else if (v.kind === 'consistent' && v.counts) this.sinceBoot = true;
+    this.applyRefusal(g, v);
+    if (v.kind === 'consistent' && v.counts && this.bootWitness === 'missing' && this.deps.guard.state().kind === 'coherent') {
+      this.bootWitness = 'seen';
+    }
     if (malformed) {
       if (!this.warned.has(source)) {
         this.warned.add(source);
@@ -121,6 +139,7 @@ export class OverlordAuthorityExchange {
       this.sources.delete(oldest);
       this.warned.delete(oldest);
     }
+    return v;
   }
 
   private noteHighest(t: WitnessTuple): void {
@@ -157,14 +176,27 @@ export class OverlordAuthorityExchange {
   private async once(): Promise<void> {
     const agent = this.deps.agent;
     if (agent === null) return;
-    const ready = agent.held() ?? { kind: 'absent' as const };
-    this.judge(AGENT_SOURCE, readyHeld(ready), this.deps.relationOf());
-    const offer = this.offerFrom(this.gather());
+    const ready = agent.held();
+    const host = this.deps.relationOf();
+    const g = this.gather();
+    let v: WitnessVerdict;
+    if (this.agentObservation === null || this.agentObservation.ready !== ready) {
+      const held = readyHeld(ready ?? { kind: 'absent' });
+      this.agentObservation = { ready, held };
+      v = this.judge(AGENT_SOURCE, held, host, g);
+    } else {
+      // Compare against today's facts for offer safety, but a cached answer must not replace the recorded word or count again.
+      v = witnessVerdict(g.server, this.agentObservation.held, host);
+      this.applyRefusal(g, v);
+    }
+    const offer = this.offerTo(g, v);
     if (offer.kind !== 'offer') return;
     const res = await agent.link.send(offer.tuple);
-    if (res.kind !== 'answered') return;       // no-op, predates-op, unsent, lost, malformed: the last answer stands
+    if (res.kind !== 'answered' || agent.held() !== ready) return; // failed ops and obsolete connections leave the last answer standing
     const a = res.answer;
-    this.judge(AGENT_SOURCE, a.kind === 'held' ? (a.tuple === null ? { kind: 'nothing' } : { kind: 'tuple', tuple: a.tuple }) : { kind: 'malformed' }, this.deps.relationOf());
+    const held: WitnessHeld = a.kind === 'held' ? (a.tuple === null ? { kind: 'nothing' } : { kind: 'tuple', tuple: a.tuple }) : { kind: 'malformed' };
+    this.agentObservation = { ready, held };
+    this.judge(AGENT_SOURCE, held, this.deps.relationOf(), this.gather());
   }
 
   // ── The console ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -179,15 +211,14 @@ export class OverlordAuthorityExchange {
       held = p.ok ? { kind: 'tuple', tuple: p.tuple } : { kind: 'malformed' };
     }
     const g = this.gather();
-    this.judge(`console:${sourceKey}`, held, 'console', g);
-    return this.offerFrom(g);
+    return this.offerTo(g, this.judge(`console:${sourceKey}`, held, 'console', g));
   }
 
   // ── The reads ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  /** Whether a witness off the volume, from an earlier boot, has answered consistently since this boot. It never unsets. */
+  /** A prior-boot answer can lift the condition; rollback withdraws it, and Confirm holds it standing until restart. */
   noWitnessSinceBoot(): 'standing' | 'lifted' {
-    return this.sinceBoot ? 'lifted' : 'standing';
+    return this.bootWitness === 'seen' ? 'lifted' : 'standing';
   }
 
   /** The ladder's `NarrowingWitness`: whether the narrowing at authority record `recordSequence` is held off the volume. */
@@ -208,11 +239,13 @@ export class OverlordAuthorityExchange {
     return { kind: 'measured', epoch: this.highestEpoch, restoreGeneration: this.highestGeneration };
   }
 
+  /** The post-commit notification from Confirm. It must withdraw the earlier boot observation before scheduling any offer. */
   offerNow(): void {
+    this.bootWitness = 'confirmed';
     this.nudge();
   }
 
-  /** The narrowest narrowing over the sources that count (`other-host` or `console`, last verdict `consistent`), `null` with none. */
+  /** Confirm can recover a narrower told value from a consistent or rollback-detecting off-volume source. */
   told(): { kind: 'measured'; told: WitnessTold | null } | { kind: 'unmeasured'; why: string } {
     return { kind: 'measured', told: narrowestTold([...this.sources.values()]) };
   }

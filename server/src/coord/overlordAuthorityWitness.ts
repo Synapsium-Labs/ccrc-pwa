@@ -80,17 +80,27 @@ export function witnessVerdict(server: ServerWitnessFacts, held: WitnessHeld, ho
   if (held.kind === 'malformed') return { kind: 'unmeasured', why: 'malformed' };
   if (held.kind === 'nothing') return { kind: 'no-witness' };
   const tuple = held.tuple;
-  const epoch = server.epoch;
-  if (server.authority === 'unmeasured') return { kind: 'unmeasured', why: 'journal' };
-  if (server.privacy.kind === 'unmeasured') return { kind: 'unmeasured', why: 'privacy-head' };
-  if (epoch === 'unmeasured') return { kind: 'unmeasured', why: 'journal' };
+  const facts = measuredWitnessFacts(server);
+  if (facts.kind !== 'measured') return facts;
+  const { epoch } = facts;
   if (tuple.base < epoch.base) return { kind: 'stale' };
   if (tuple.base > epoch.base || termHigher(tuple, epoch)) return { kind: 'rolled-back', cause: 'witness-epoch' };
-  const heads = headsHeld(server.authority, server.privacy, tuple);
+  const heads = headsHeld(facts.authority, server.privacy, tuple);
   if (heads === 'unmeasured') return { kind: 'unmeasured', why: 'privacy-head' };
   if (heads === 'mismatch') return { kind: 'rolled-back', cause: 'witness-heads' };
   const counting = host === 'other-host' || host === 'console';
   return { kind: 'consistent', counts: counting && tuple.boot !== server.boot };
+}
+
+/** Row 3's check, also read independently by delivery: a source holding nothing or malformed data does not certify the server's facts. */
+export function measuredWitnessFacts(server: ServerWitnessFacts):
+  | { kind: 'measured'; epoch: Exclude<AuthorityEpoch, 'unmeasured'>; authority: Exclude<ServerWitnessFacts['authority'], 'unmeasured'> }
+  | { kind: 'unmeasured'; why: 'journal' | 'privacy-head' } {
+  const epoch = server.epoch;
+  if (server.authority === 'unmeasured') return { kind: 'unmeasured', why: 'journal' };
+  if (server.privacy.kind === 'unmeasured') return { kind: 'unmeasured', why: 'privacy-head' };
+  if (epoch === 'unmeasured') return { kind: 'unmeasured', why: 'journal' };
+  return { kind: 'measured', epoch, authority: server.authority };
 }
 
 /** A term this build reads is higher on the witness. A term the server does not read, or the witness does not hold, is skipped,
@@ -152,15 +162,15 @@ export function offVolumeHolders(sources: readonly WitnessSourceAnswer[], server
   return out;
 }
 
-/** The narrowest `told` over the sources that count (`other-host` or `console`, last verdict `consistent`): the lowest non-null
- *  operator rung by rank, and the union of the latches, each cause at its lowest cap, sorted by cause. `null` when none counts. */
+/** The narrowest `told` from off-volume sources, including the ones that detected rollback and may hold the only surviving
+ *  narrowing. This is not a holding receipt. Take the lowest non-null rung and lowest cap per cause, in cause order. */
 export function narrowestTold(sources: readonly WitnessSourceAnswer[]): WitnessTold | null {
   let any = false;
   let rung: WitnessRung | null = null;
   const caps = new Map<string, WitnessRung>();
   const rank = (r: WitnessRung): number => WITNESS_RUNGS.indexOf(r);
   for (const s of sources) {
-    if ((s.host !== 'other-host' && s.host !== 'console') || s.verdict !== 'consistent' || s.tuple === null) continue;
+    if ((s.host !== 'other-host' && s.host !== 'console') || (s.verdict !== 'consistent' && s.verdict !== 'rolled-back') || s.tuple === null) continue;
     any = true;
     const t = s.tuple.told;
     if (t.operatorRung !== null && (rung === null || rank(t.operatorRung) < rank(rung))) rung = t.operatorRung;

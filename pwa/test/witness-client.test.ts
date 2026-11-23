@@ -27,6 +27,38 @@ describe('exchangeWitness', () => {
     await exchangeWitness({ ask: async () => ({ offer: equal }), from });
     expect(JSON.parse(mem.getItem(WITNESS_KEY)!).boot).toBe('boot-a');
   });
+  it('a delayed offer cannot replace a newer one another tab already kept', async () => {
+    const mem = memoryStorage();
+    const tabA = () => mem;
+    const tabB = () => mem;
+    mem.setItem(WITNESS_KEY, JSON.stringify(tuple(3)));
+    let answer!: (value: unknown) => void;
+    const pending = exchangeWitness({ from: tabA, ask: () => new Promise((resolve) => { answer = resolve; }) });
+    await exchangeWitness({ from: tabB, ask: async () => ({ offer: tuple(12) }) });
+    answer({ offer: tuple(11) });
+    await expect(pending).resolves.toEqual({ kind: 'offer', kept: tuple(12), wrote: false });
+    expect(JSON.parse(mem.getItem(WITNESS_KEY)!)).toEqual(tuple(12));
+  });
+  it('reads storage inside the browser lock, after earlier writers have finished', async () => {
+    const mem = memoryStorage();
+    mem.setItem(WITNESS_KEY, JSON.stringify(tuple(3)));
+    let unlock!: () => void;
+    const locked = new Promise<void>((resolve) => { unlock = resolve; });
+    vi.stubGlobal('navigator', { locks: { request: async (name: string, keep: () => unknown) => {
+      expect(name).toBe(WITNESS_KEY);
+      await locked;
+      return keep();
+    } } });
+    try {
+      const pending = exchangeWitness({ from: () => mem, ask: async () => ({ offer: tuple(11) }) });
+      await Promise.resolve();
+      expect(JSON.parse(mem.getItem(WITNESS_KEY)!)).toEqual(tuple(3));
+      mem.setItem(WITNESS_KEY, JSON.stringify(tuple(12)));
+      unlock();
+      await expect(pending).resolves.toEqual({ kind: 'offer', kept: tuple(12), wrote: false });
+      expect(JSON.parse(mem.getItem(WITNESS_KEY)!)).toEqual(tuple(12));
+    } finally { unlock(); vi.unstubAllGlobals(); }
+  });
   it('sends what is held, and held null for nothing stored, a value that does not parse, and storage that throws', async () => {
     const sent: unknown[] = [];
     const ask = async (h: unknown) => { sent.push(h); return { offer: tuple(1) }; };

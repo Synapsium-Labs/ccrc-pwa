@@ -7,7 +7,7 @@
 // spec already caps a forged caller on a shared-user box at `advise` (Table 3.8a), and every agent reads `unmeasured` until the
 // isolation word lands (question 10), so a forged file lifts nothing in W1. What is left is a false "held" on the console and a
 // refusal a forger can cause, which fences toward safety. A session's spawn denies an edit of it (an accident guard only).
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync, unlinkSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, writeSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { AUTHORITY_WITNESS_FILE_NAME, CCRC_DIR_NAME, type WitnessOpAnswer } from '../../shared/agent-protocol.js';
@@ -18,14 +18,35 @@ export type HeldWitness =
   | { kind: 'unmeasured'; why: 'unreadable' | 'malformed' };
 
 const witnessPath = (home: string): string => path.join(home, CCRC_DIR_NAME, AUTHORITY_WITNESS_FILE_NAME);
+const WITNESS_MAX_BYTES = 64 * 1024;
+const UNREADABLE = { kind: 'unmeasured', why: 'unreadable' } as const;
 
-/** Read the file fresh: absent is `held: null`; any other read error is `unreadable`; contents that are not a tuple are `malformed`. */
+/** This fixed carrier is also read in the synchronous ready path. Open without blocking or following the leaf, and
+ *  bound the read itself as well as the stat, so growth after the stat cannot make it unbounded. */
 export function readHeldWitness(home: string): HeldWitness {
+  let fd: number;
+  try {
+    fd = openSync(witnessPath(home), fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'held', tuple: null } : UNREADABLE;
+  }
   let text: string;
   try {
-    text = readFileSync(witnessPath(home), 'utf8');
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'held', tuple: null } : { kind: 'unmeasured', why: 'unreadable' };
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > WITNESS_MAX_BYTES) return UNREADABLE;
+    const buf = Buffer.alloc(WITNESS_MAX_BYTES + 1);
+    let got = 0;
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, got);
+      if (n === 0) break;
+      got += n;
+    }
+    if (got > WITNESS_MAX_BYTES) return UNREADABLE;
+    text = buf.toString('utf8', 0, got);
+  } catch {
+    return UNREADABLE;
+  } finally {
+    try { closeSync(fd); } catch { /* no further read is possible */ }
   }
   let json: unknown;
   try { json = JSON.parse(text); } catch { return { kind: 'unmeasured', why: 'malformed' }; }
@@ -33,14 +54,16 @@ export function readHeldWitness(home: string): HeldWitness {
   return p.ok ? { kind: 'held', tuple: p.tuple } : { kind: 'unmeasured', why: 'malformed' };
 }
 
-/** Temp file in the same directory (0600), fsync, rename into place, fsync the directory. Throws on any failure, leaving the old file. */
+/** Temp file in the same directory (0600), fsync, rename into place, fsync the directory. */
 function writeTuple(home: string, tuple: WitnessTuple): void {
+  const text = JSON.stringify(tuple);
+  if (Buffer.byteLength(text) > WITNESS_MAX_BYTES) throw new Error('witness exceeds its read bound');
   const dir = path.join(home, CCRC_DIR_NAME);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `.${AUTHORITY_WITNESS_FILE_NAME}.${randomBytes(6).toString('hex')}.tmp`);
   const fd = openSync(tmp, 'wx', 0o600);
   try {
-    writeSync(fd, JSON.stringify(tuple));
+    writeSync(fd, text);
     fsyncSync(fd);
   } catch (e) {
     closeSync(fd);

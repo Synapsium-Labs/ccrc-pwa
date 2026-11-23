@@ -111,8 +111,14 @@ export function parseWitnessTuple(raw: unknown): { ok: true; tuple: WitnessTuple
   };
 }
 
-/** What a witness keeps when offered a tuple: the higher epoch; on equal epochs, what it already holds. */
+/** A new base supersedes the old one. At the same base, an advance must preserve every term the holder measures
+ *  (an absent offer term does not prove that a measured term survived). Equal epochs keep the existing witness. */
 export function witnessKeep(held: WitnessTuple | null, offered: WitnessTuple): WitnessTuple {
   if (held === null) return offered;
+  if (offered.base !== held.base) return offered.base > held.base ? offered : held;
+  if (offered.terms.authority < held.terms.authority) return held;
+  const privacy = held.terms.privacy;
+  const offeredPrivacy = offered.terms.privacy;
+  if (privacy !== 'absent' && (offeredPrivacy === 'absent' || offeredPrivacy < privacy)) return held;
   return offered.epoch > held.epoch ? offered : held;
 }

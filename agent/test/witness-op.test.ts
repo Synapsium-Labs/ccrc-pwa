@@ -79,6 +79,28 @@ describe('the witness file and its answer', () => {
     expect(statSync(file(home)).isDirectory()).toBe(true);
   });
 
+  it('refuses an oversized regular file without overwriting it, even when it contains valid JSON', () => {
+    fixture = makeFixture();
+    const home = fixture.home;
+    mkdirSync(path.join(home, CCRC_DIR_NAME), { recursive: true });
+    const original = JSON.stringify(tuple(3)) + ' '.repeat(128 * 1024);
+    writeFileSync(file(home), original);
+    expect(readHeldWitness(home)).toEqual({ kind: 'unmeasured', why: 'unreadable' });
+    expect(answerWitness(home, tuple(9))).toEqual({ kind: 'unmeasured', why: 'unreadable' });
+    expect(readFileSync(file(home), 'utf8')).toBe(original);
+  });
+
+  it('does not replace a readable witness with an offer it could not read back', () => {
+    fixture = makeFixture();
+    const home = fixture.home;
+    answerWitness(home, tuple(3));
+    const large = tuple(9);
+    large.told.latches = Array.from({ length: 3000 }, (_, i) => ({ cause: `fixture-${String(i).padStart(4, '0')}`, cap: 'chat' }));
+    const answer = answerWitness(home, large);
+    expect(answer.kind === 'unmeasured' ? answer.why : answer.kind).toBe('unwritable');
+    expect(readHeldWitness(home)).toEqual({ kind: 'held', tuple: tuple(3) });
+  });
+
   it('a write failure answers unwritable and leaves no file (the parent is a plain file)', () => {
     fixture = makeFixture();
     const home = fixture.home;

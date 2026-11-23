@@ -79,6 +79,31 @@ the coordinator can allocate numbers when it folds them into the plan.
 - Not covered here, PR C's: Confirm leaves `restore-detected` standing, stamped with the Confirm record's sequence. A latch raised
   row-only over an incoherent journal can be cleared only once Confirm makes the journal coherent.
 
+## Review round: local proof before integration
+
+- `rollback-witness-keeps-told`: Confirm's narrowest `told` includes a parsed rollback verdict from an off-volume source, as well as a
+  consistent one. Stale, malformed and unmeasured answers and non-off-volume sources do not contribute. Rollback evidence is not a
+  holding receipt.
+- `refused-offer-keeps-rollback-evidence`: a rollback or unmeasured verdict gets no offer. A holder takes a higher base; on the same
+  base it takes a strictly higher epoch only if no measured term regresses or disappears. Both carriers use that same keep rule.
+
+The focused negative controls and regressions were observed on fixtures, not a live box:
+
+| Check | Observed before the fix | Observed after the fix |
+| --- | --- | --- |
+| Tuple retention | 2 failed: a higher base was refused and a same-base offer could erase a measured term | 21 passed |
+| Browser client | 2 failed: a delayed response replaced a newer tuple and a write ran before the lock | 10 passed |
+| Agent carrier | Oversized held JSON was accepted; a separate targeted check failed because an oversized offer was written | 17 passed |
+| Server exchange | 9 failed: publication on rollback or a trailing record, ready ordering, unreadable own facts, rollback `told`, and boot confidence | 30 passed |
+| Witness route | 1 failed: 200 instead of 503 for a measured rollback | 9 passed |
+| Message issuance | Targeted test failed: issued 2 with a witnessed floor of 40, rather than 41 | 33 passed |
+| Witness policy and selected mutation checks | The new eligibility line left two stale mutation targets | Policy: 51 passed; seven witness mutation sets and two floor checks passed, with no floor edit |
+
+The restore-latch fixture (11), coordination rings (20), box-token census (69), and privacy-journal census (3) passed. Source
+typechecks passed in all three packages. The server test-project typecheck exceeded the test slice's 6 GiB cap (exit 137); its
+result is unmeasured. A full suite was not run. The original red-first chronology for Tasks 5–7 remains partly unmeasured.
+Confirm and the measured agent relation are not wired or verified by this local round.
+
 ## Seams with peers
 
 - PR C (Confirm the restore) declares its consumer port `RestoreWitnessFacts` (`epoch()`, `highest()`, `offerNow()`, `told()`) with a

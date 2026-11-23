@@ -54,6 +54,13 @@ describe('POST /api/overlord/witness', () => {
     expect(none.statusCode).toBe(503);
     expect(none.json()).toMatchObject({ error: 'authority-rolled-back', cause: expect.stringContaining('unmeasured') });
   });
+  it('returns the measured rollback cause without giving the witness an offer', async () => {
+    const r = rig({ kind: 'rolled-back', cause: 'witness-epoch' });
+    const res = await r.app.inject({ method: 'POST', url: '/api/overlord/witness', payload: { held: TUPLE } });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ ok: false, error: 'authority-rolled-back', cause: 'witness-epoch' });
+    await r.app.close();
+  });
   it('refuses auth-off through the real gate while sign-in is dark', async () => {
     const base = testDeps(mkTmp('witness-door-'));
     const app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: false } });
