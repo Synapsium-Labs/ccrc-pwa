@@ -104,7 +104,8 @@ change.
 | Chrome, both skins, both palettes, 390 and 1280: one line, failed surfaced, no loose cards, append while scrolled up moves nothing, opened row holds the column, open state survives scrolling away and back | `pwa/browser/tool-activity.browser.test.ts` | Measured locally, 8 green |
 | Chrome, both skins, both palettes, 360 and 390: a running row with `waiting on you` and `1 failed` and its wait line, no overflow of the row or the column, neither flag cut (both flags 20-90px inside the row's edge, measured) | same | Measured locally, 8 green |
 | Chrome, both skins, 390 and 1280: the live row changing size opened, a failure surfacing closed, and the same while the reader is mid-list (the numbers in section 3) | same | Measured locally, 4 green; red before the foot follow |
-| Refined's opened groups hold the column, with the activity rows opened first | `pwa/browser/tool-group-fit.browser.test.ts` | Measured, 16 green |
+| Refined's opened groups hold the column, with the activity rows opened first | `pwa/browser/tool-group-fit.browser.test.ts` | Measured locally, 16 green |
+| Checks that expand a tool card or read an answered question's chip, now opening the stretch's activity row first: the well colour check (red in all 16 views after round 1, which no CI run had caught) and the wheel checks' `openCard` and `reveal` (`browser/wheel.ts`) | `tool-well-colour`, `wheel-chain`, `wheel-chain-well`, `wheel-chain-chip` | Measured locally: 16, 40, 508 (12 skipped), 16 green |
 
 **The browser shards of a pull request skip their tests** (a fast pull request leaves them to the merge queue), so every
 Chrome count above was run on the worker's box, through the fleet test slice, against the production build; the merge
