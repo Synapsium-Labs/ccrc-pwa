@@ -40,6 +40,12 @@
 // release: a resumed `arms` on another release refuses `release-moved` (its pin, `quiz/arms-release.json`), and `report`
 // refuses `release-moved` when `arms` and `judge` ran on different releases. A resumed `arms` reuses a passed step 0b
 // result only when every build it probed is the fresh expected node's, and otherwise probes again before the next arm.
+// A failed step 0b result refuses pilot-failed on every later `arms`, except `arms --repilot` (quiz-pilot-checks ruling 5):
+// when no arm batch was ever planned on that --out, it keeps the failed result as `quiz/step0b/<mode>.failed.r<round>.json`,
+// pins the week to the release measured now and pilots again as the next round, on the week's own ledger and --budget. A
+// round that stopped before its result was written is resumed only on the release it was pinned to, else it refuses
+// `repilot-release-moved`. When to ask for it is the unattended runner's decision, never this file's: passed by hand, the
+// flag is a permission and decides nothing (no cap, no same-release rule).
 //
 // Where it writes and what it spends (F7). Its files go under --out, the driver's --out rule (prepareOut: outside any git
 // tree, 0700, the driver's marker) plus this file's own marker beside it, written only into a directory it has just made:
@@ -88,7 +94,7 @@ const PREFIX = 'ccrc history-quiz-single';
 // ── the words, the kinds and the paths ──────────────────────────────────────────────────────────────────────────────
 /** This file's own refusal words, beside the driver's DRIVER_REASONS: `in-session` (CLAUDECODE is set: the quiz is the
  *  operator's, never a session's) and `release-moved` (one week's arms ran on one release, and its judge on the same). */
-export const QUIZ_SINGLE_REASONS = Object.freeze(['in-session', 'release-moved']);
+export const QUIZ_SINGLE_REASONS = Object.freeze(['in-session', 'release-moved', 'repilot-release-moved']);
 /** A refusal in one of QUIZ_SINGLE_REASONS' words. */
 export class QuizSingleRefusal extends Error {
   /** @param {string} word  @param {string} detail */
@@ -146,6 +152,7 @@ export const FLAG_SPECS = Object.freeze({
   out: 'string', account: 'string', budget: 'int', 'settings-mode': 'string', 'writer-model': 'string', 'judge-model': 'string',
   'arm-model': 'string', target: 'int', setup: 'string', 'setup-sha256': 'string', sourced: 'string', 'sourced-sha256': 'string',
   frozen: 'string', 'frozen-sha256': 'string', 'arms-summary': 'string', 'arms-summary-sha256': 'string', judged: 'string', 'judged-sha256': 'string',
+  repilot: 'bool',
 });
 const SETUP_IN = ['setup', 'setup-sha256'];
 const FROZEN_IN = ['frozen', 'frozen-sha256'];
@@ -155,7 +162,7 @@ const FORM_FLAGS = Object.freeze({
   source: { required: ['out', ...SETUP_IN], optional: [] },
   freeze: { required: ['out', ...SETUP_IN, 'sourced', 'sourced-sha256'], optional: [] },
   marker: { required: FROZEN_IN, optional: [] },
-  arms: { required: ['out', ...SETUP_IN, ...FROZEN_IN], optional: [] },
+  arms: { required: ['out', ...SETUP_IN, ...FROZEN_IN], optional: ['repilot'] },
   judge: { required: ['out', ...SETUP_IN, ...FROZEN_IN, 'arms-summary', 'arms-summary-sha256'], optional: [] },
   report: { required: ['out', ...SETUP_IN, ...FROZEN_IN, 'arms-summary', 'arms-summary-sha256', 'judged', 'judged-sha256'], optional: [] },
 });
@@ -563,23 +570,42 @@ export async function markerCommand(flags) {
 // ── arms: step 0b's probes first, then the treatment arm ────────────────────────────────────────────────────────────
 /** One week's release pin: written by the first `arms` on this --out, and a later `arms` on another release refuses. */
 function pinArmsRelease(out, setupSha256, release) {
-  const read = readPlain(path.join(out, RELEASE_PIN_FILE), OUT_JSON_CAP);
-  if (read.state === 'absent') {
+  const pin = armsPinOf(out, setupSha256);
+  if (pin.state === 'absent') {
     ensurePlainDir(out, SECTION);
-    writePlain(out, RELEASE_PIN_FILE, `${canonicalJson({ kind: RELEASE_PIN_KIND, v: 1, setup_sha256: setupSha256, ccrc_release: release })}\n`);
+    writePlain(out, RELEASE_PIN_FILE, releasePinText(setupSha256, release, 0));
     return;
   }
+  const p = pin.value;
+  if (p.ccrc_release !== release) throw new QuizSingleRefusal('release-moved', `this week's arms ran on ${p.ccrc_release}, this node now runs ${release}: run the week again on a fresh --out`);
+}
+
+/** The release pin's bytes, the one composer of them (fix round 1, F3). The pin has two write sites, for two acts:
+ *  pinArmsRelease writes it at the week's first `arms` and verifies it at every later one, and repilotPrepare replaces it on
+ *  purpose after a failed pilot, for the round it starts. `round` is the step 0b round the pin was written for (0 at the
+ *  first start); a pin written before it existed reads as round 0. Pure.
+ *  @param {string} setupSha256  @param {string} release  @param {number} round  @returns {string} */
+export function releasePinText(setupSha256, release, round) {
+  if (!Number.isSafeInteger(round) || round < 0) throw new TypeError(`releasePinText: round ${String(round)}`);
+  return `${canonicalJson({ kind: RELEASE_PIN_KIND, v: 1, setup_sha256: setupSha256, ccrc_release: release, round })}\n`;
+}
+/** This --out's release pin: `absent`, or its parsed `value` when it is this setup's pin (its kind and setup sha); any other
+ *  file refuses out-refused. Both write sites read the pin through it first, so neither replaces a pin that is not this run's. */
+function armsPinOf(out, setupSha256) {
+  const read = readPlain(path.join(out, RELEASE_PIN_FILE), OUT_JSON_CAP);
+  if (read.state === 'absent') return { state: 'absent' };
   let p = null;
   try { p = read.state === 'bytes' ? JSON.parse(read.bytes.toString('utf8')) : null; } catch { p = null; }
   if (!plainObject(p) || p.kind !== RELEASE_PIN_KIND || p.setup_sha256 !== setupSha256) refuse('out-refused', `${RELEASE_PIN_FILE} is not this run's pin`);
-  if (p.ccrc_release !== release) throw new QuizSingleRefusal('release-moved', `this week's arms ran on ${p.ccrc_release}, this node now runs ${release}: run the week again on a fresh --out`);
+  return { state: 'value', value: p, round: Number.isSafeInteger(p.round) && p.round >= 0 ? p.round : 0 };
 }
 
 /** Step 0b's probes (OQ1 as restated; W2-D57, W2-D58): the box run (the turn bound, persistence) and the treatment-arm
  *  probe runs (each taught spelling, the three denials, the Agent call), every arm run's init showing exactly its tools, no
  *  MCP server, no plugin and the ccrc-history skill. Every check must pass (step0bVerdictOf, fail-closed). The result is
  *  written whatever it shows; a failure refuses `pilot-failed` before any arm spawns. A result already here for this
- *  setup is read: failed, the week needs a fresh --out; passed, it is reused only when every build it probed is the
+ *  setup is read: failed, the week needs a fresh --out, unless `arms --repilot` (repilotPrepare) asked for it to be piloted
+ *  again as the next round; passed, it is reused only when every build it probed is the
  *  fresh expected node's, and on any other build step 0b runs again, over it, before the next arm (the coordinator's
  *  ruling on review 2409's F4: no arm runs on a build step 0b never probed). With no arm left to run (c.reprobe false,
  *  every question settled) a passed result is reused whatever build it probed: nothing runs on the new build, and the
@@ -587,13 +613,16 @@ function pinArmsRelease(out, setupSha256, release) {
  *  (step0bRoundName), so a resumed probe only ever reuses finished runs of its own build (review 2422's F4-a). */
 async function step0bOf(c) {
   const rel = step0bRel(c.settingsMode);
-  const have = readPlain(path.join(c.out, rel), OUT_JSON_CAP);
+  const have = step0bResultOf(c.out, rel, c.setupSha256);
   let round = 0;
-  if (have.state === 'bytes') {
-    let r = null;
-    try { r = JSON.parse(have.bytes.toString('utf8')); } catch { r = null; }
-    if (!plainObject(r) || r.kind !== STEP0B_KIND || r.setup_sha256 !== c.setupSha256 || !Array.isArray(r.batches)) {
-      refuse('out-refused', `${rel} is not this run's step 0b result`);
+  if (have.state === 'value') {
+    const r = have.value;
+    if (r.passed !== true && c.repilot === true) {
+      // `arms --repilot` (quiz-pilot-checks ruling 5): the failed result was kept beside it by repilotPrepare and the release
+      // pin moved; the pilot runs again as the next round, and its result replaces this one.
+      round = roundOf(r) + 1;
+      process.stderr.write(`${PREFIX}: step 0b failed here in round ${roundOf(r)}: --repilot probes it again as round ${round}\n`);
+      return step0bRound(c, rel, round);
     }
     if (r.passed !== true) refuse('pilot-failed', `${rel} records a failed step 0b: run the week again on a fresh --out`);
     const versions = r.batches.map((b) => b?.claude_code_version);
@@ -603,8 +632,60 @@ async function step0bOf(c) {
       return { rel, sha256: shaOfPlain(c.out, rel), versions };
     }
     process.stderr.write(`${PREFIX}: step 0b probed ${[...new Set(versions)].join(', ')}, this node runs ${c.expected.claude_code_version}: probing again\n`);
-    round = (Number.isSafeInteger(r.round) && r.round >= 0 ? r.round : 0) + 1;
-  } else if (have.state !== 'absent') refuse('out-refused', `${rel} is unreadable`);
+    round = roundOf(r) + 1;
+  }
+  return step0bRound(c, rel, round);
+}
+
+/** A step 0b result's round, 0 when it records none. Pure. */
+const roundOf = (r) => (Number.isSafeInteger(r.round) && r.round >= 0 ? r.round : 0);
+
+/** This --out's step 0b result for this setup: `absent`, or its parsed `value`; anything else refuses out-refused. */
+function step0bResultOf(out, rel, setupSha256) {
+  const have = readPlain(path.join(out, rel), OUT_JSON_CAP);
+  if (have.state === 'absent') return { state: 'absent' };
+  if (have.state !== 'bytes') refuse('out-refused', `${rel} is unreadable`);
+  let r = null;
+  try { r = JSON.parse(have.bytes.toString('utf8')); } catch { r = null; }
+  if (!plainObject(r) || r.kind !== STEP0B_KIND || r.setup_sha256 !== setupSha256 || !Array.isArray(r.batches)) {
+    refuse('out-refused', `${rel} is not this run's step 0b result`);
+  }
+  return { state: 'value', value: r, bytes: have.bytes };
+}
+
+/** The failed result `arms --repilot` keeps before it probes again: `quiz/step0b/<mode>.failed.r<round>.json`. Pure. */
+export const step0bFailedRel = (mode, round) => `${SECTION}/step0b/${mode}.failed.r${round}.json`;
+
+/** `arms --repilot` before the release pin is read (quiz-pilot-checks ruling 5). The flag permits the one thing a failed
+ *  pilot otherwise refuses, piloting this --out again; it decides nothing else: WHEN a week is piloted again (the release
+ *  moved, at most three pilots a week) is the unattended runner's decision (repilotOf), never this file's. With no failed
+ *  result here it does nothing, so a resumed re-pilot that already passed carries on as any arms does. With one, it refuses
+ *  out-refused when an arm batch was ever planned on this --out (the week's arms would span two releases). When the pin
+ *  already names the round after the failed one, that round is under way (it stopped before its result was written): on the
+ *  release installed now it is resumed as it stands, and on any other release it refuses repilot-release-moved, so one
+ *  pilot result never mixes two releases (fix round 1, F2). Otherwise it keeps the failed result beside the new one and
+ *  pins this week to the release measured now for the next round, so the pilot and every arm after it run on one release,
+ *  as pinArmsRelease requires. The spend ledger is this --out's, so the pilot's spend counts toward the week's one --budget. */
+function repilotPrepare(c) {
+  const rel = step0bRel(c.settingsMode);
+  const have = step0bResultOf(c.out, rel, c.setupSha256);
+  if (have.state !== 'value' || have.value.passed === true) return;
+  if (readArmManifests(c.out, SECTION).length > 0) refuse('out-refused', '--repilot: an arm batch was planned on this --out, so its week is never piloted again');
+  const pin = armsPinOf(c.out, c.setupSha256);
+  if (pin.state === 'absent') refuse('out-refused', `--repilot: no ${RELEASE_PIN_FILE} beside a failed step 0b`);
+  const next = roundOf(have.value) + 1;
+  if (pin.round > next) refuse('out-refused', `--repilot: ${RELEASE_PIN_FILE} names round ${pin.round}, past the next round ${next}`);
+  if (pin.round === next) {
+    if (pin.value.ccrc_release === c.release) return;   // the round under way, resumed on its own release
+    throw new QuizSingleRefusal('repilot-release-moved', `step 0b round ${next} is under way on ${pin.value.ccrc_release}, this node now runs ${c.release}: one pilot never spans two releases`);
+  }
+  ensurePlainDir(c.out, `${SECTION}/step0b`);
+  writePlain(c.out, step0bFailedRel(c.settingsMode, roundOf(have.value)), have.bytes);
+  writePlain(c.out, RELEASE_PIN_FILE, releasePinText(c.setupSha256, c.release, next));
+}
+
+/** One step 0b round on this --out: the box batch and the arm batches, the checks, the result written whatever it shows. */
+async function step0bRound(c, rel, round) {
   const { launch, out, model, settingsMode, lang, gate, claim, q, home } = c;
   // The driver's runBatch reuses a finished run of the same name rather than spawning it again, and a run's record names
   // no build: so every round, round 0 included, runs under its build and its round.
@@ -724,6 +805,7 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
       const startedMs = Date.now();
       const gate = batchGate({ out, home, accountId: launch.accountId, budget: s.budget, limits: s.limits });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
+      if (flags.repilot === true) repilotPrepare({ out, setupSha256: setup.sha256, settingsMode: s.settings_mode, release: expected.release_stamp });
       pinArmsRelease(out, setup.sha256, expected.release_stamp);
       const armed = armedWordsOf(home, ids);
       const ctx = {
@@ -736,7 +818,7 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
       settleAnswers(ctx, open);
       const step0b = await step0bOf({ setupSha256: setup.sha256, storeId, out, home, launch, gate, claim, expected, model: s.arm_model,
         settingsMode: s.settings_mode, lang: env.LANG, limits: s.limits, q: questions[0], cardCtx, transcript, timeoutMs: deps.timeoutMs,
-        reprobe: open.some((st) => st.next.length > 0) });
+        reprobe: open.some((st) => st.next.length > 0), repilot: flags.repilot === true });
       const run = { setupSha256: setup.sha256, frozenSha256: fz.sha256, budget: s.budget, startedMs, armed, step0b };
       let states;
       try {
