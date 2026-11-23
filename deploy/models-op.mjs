@@ -82,11 +82,11 @@ import {
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
   AdvanceInvalid, advanceIneligible, backfillAdvance, candidateFor, chooseCandidate, classWaits, clearEffortFallback,
-  clientWindowNotice, effortDroppedDetail, effortFallbacks, familyOf, heldBackOf, historyReason, parseAdvance,
-  reconcilePending, recordFailure, refreshRecord, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice,
-  unmeasuredMoves, withEffort,
+  clientWindowNotice, effortDroppedDetail, effortFallbacks, endHold, familyOf, heldBackOf, historyReason, holdEndEntry,
+  holdEndFor, codexHoldEnd, holdReading, parseAdvance, reconcilePending, recordFailure, refreshRecord, recordMove,
+  resolveEffort, revertHold, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves, withEffort,
 } from '../shared/model-advance.mjs';
-import { ANTHROPIC_OPS, anthropicArm } from './models-anthropic.mjs';
+import { ANTHROPIC_OPS, anthropicArm, anthropicLabels } from './models-anthropic.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
@@ -884,8 +884,8 @@ function revertOp(a, account, registry, catalogue, win) {
     if (e instanceof ModelEnvInvalid) return refuse(1, 'settings-unwritable', e.message);
     throw e;
   }
-  // THE BRAKE FIRST (D-5206), over any hold already standing: the act that set it last.
-  c.hold = { at: now(), by: 'revert' };
+  // THE BRAKE FIRST (D-5206), over any hold already standing: the act that set it last, naming what it left (`revertHold`).
+  c.hold = revertHold(c, from, to, now());
   const w0 = writeAdvance(a.id, adv);
   if (w0 !== null) return refuse(1, w0[0], w0[1]);
   const w1 = writeRegistry(a.id, validated);
@@ -1212,12 +1212,14 @@ function renderRefusal(registry, catalogue, windows) {
  *  on. An unseeded registry (deviation B-1, every class null) still gets the
  *  decision, `{ tokens: null, rule: 'none', unmeasured: [] }`: no key, as
  *  `materialise` writes no env block for it. `advance` is the lane's advance file (`advanceReport`). `labels` is each
- *  class's model and catalogue label (`laneClassModels`), null with no registry: the server's `models` op path reads
- *  the class labels from it, because that path receives no catalogue to derive them from (D-8693). */
+ *  class's model and catalogue label (`laneClassModels`); an Anthropic lane's come from its aliases file (`anthropicLabels`,
+ *  A4.1), and are null with no registry otherwise: the server's `models` op path reads the class labels from it, because
+ *  that path receives no catalogue to derive them from (D-8693). */
 function describe(account, registry, catalogue, reading) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);
   const windows = windowsOf(reading);
+  const advance = advanceReport(account.id), aliases = anthropic ? aliasesReport(account.id) : null;
   return {
     id: account.id,
     anthropic,
@@ -1230,10 +1232,11 @@ function describe(account, registry, catalogue, reading) {
     renderRefusal: renderRefusal(registry, catalogue, windows),
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
-    advance: advanceReport(account.id),
-    ...(anthropic ? { aliases: aliasesReport(account.id) } : {}),
-    labels: registry === null ? null : laneClassModels(registry, catalogue),
+    advance,
+    ...(anthropic ? { aliases } : {}),
+    labels: registry === null ? (anthropic ? anthropicLabels(aliases, advance) : null) : laneClassModels(registry, catalogue),
     windowNotices: windowNotices(account.id, registry, catalogue, windows),
+    revertHoldEnds: true,   // revert-ends-itself: a constant of the op (`holdEnds`); an older op omits it, read as false
   };
 }
 
@@ -1772,7 +1775,7 @@ function lowerWindowsOp(a, account, registry, catalogue, reading) {
  *  model (`resolveEffort`, ranked by the old pin's row, D-5200; null: none)
  *  and `canaryEffort` the lowest level the new model lists (null: it lists
  *  none), both from `candidateFor`, which `advance-commit` re-checks with. A
- *  HELD class is reported with its candidate and `held: true`. A
+ *  HELD class is reported with its candidate and `held: true` until its hold ends (`holdEnds`). A
  *  class `chooseCandidate` blocks (`pin-grammar`, `shared-family`) has no
  *  candidate. A candidate on a lane whose windows file cannot be read is
  *  KEPT and blocked `windows-unreadable` (D-5193): the commit would abandon on
@@ -1798,8 +1801,9 @@ function advancePlanOp(a, account, registry, catalogue, win) {
       candidate: null, reason: null, blocked: null, effortTo: null, canaryEffort: null,
     };
     if (why !== null) return row;
-    Object.assign(row, candidateFor({ registry, catalogue, cls, family: stored,
-      missing: adv === null ? undefined : adv.classes[cls].missing, nowMs: Date.parse(now()) }));
+    const c = adv === null ? null : adv.classes[cls], nowMs = Date.parse(now());
+    Object.assign(row, candidateFor({ registry, catalogue, cls, family: stored, missing: c?.missing, nowMs }));
+    if (row.held && codexHoldEnd({ registry, catalogue, cls, c, choice: row, nowMs }).ends) row.held = false;
     if (row.candidate !== null && row.blocked === null && win.state === 'unreadable') {
       row.blocked = 'windows-unreadable';
     }
@@ -1836,7 +1840,7 @@ function advancePlanOp(a, account, registry, catalogue, win) {
  *    `windows-unreadable`  the measured windows cannot be read, so the env block
  *                          the move would write cannot be decided (a passed
  *                          canary; D-5193);
- *    `held`                a Hold landed during the canary: the Hold wins;
+ *    `held`                a hold that does not end on `--to` (`holdEndFor`; one that does is cleared with the move);
  *    `pin-moved`           the class no longer pins `--from` (a hand set-class,
  *                          or an overlapping refresh that moved it first);
  *    `candidate-changed`   the family rule no longer answers `--to`
@@ -1917,7 +1921,10 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     if (catalogue === null || catalogue.stale) return abandon('catalogue-stale');
     if (win.state === 'unreadable') return abandon('windows-unreadable');
   }
-  if (adv.classes[cls].hold !== null) return abandon('held');
+  const c = adv.classes[cls], nowMs = Date.parse(now());
+  const choice = candidateFor({ registry, catalogue, cls, family: c.family, missing: c.missing, nowMs });
+  const ended = holdEndFor({ registry, catalogue, cls, c, choice, to: a.to, nowMs });
+  if (ended !== null && !ended.ends) return abandon('held');
   if (registry.classes[cls] !== from) return abandon('pin-moved');
   /** One failed advance on record (D-5192), with what the
    *  canary answered, and `pending` as given (null: cleared). W1's
@@ -1933,8 +1940,6 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     return answer('failed', { reason, push: f.isNew, ...extra });
   };
   if (a.canary === 'failed') return fail(historyReason(a.reason ?? '') || 'the canary failed', 'failed');
-  const choice = candidateFor({ registry, catalogue, cls, family: adv.classes[cls].family,
-    missing: adv.classes[cls].missing, nowMs: Date.parse(now()) });
   if (choice.blocked !== null || choice.candidate !== a.to) return abandon('candidate-changed');
 
   // 4. The moved registry, its effort resolved against the old pin's row
@@ -1959,7 +1964,7 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
   const at = now();
   // `cause` (D-8384): why the family rule chose `--to`, carried onto the entry the intent becomes, a recovered
   // one included, so a retirement to an older model reads differently from an advance.
-  const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at, cause: choice.reason };
+  const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at, cause: choice.reason, ...(ended ? { endsHold: true } : {}) };
   let w = writeAdvance(a.id, { ...adv, pending: intent });
   if (w !== null) return refuse(1, w[0], w[1]);
   settled = true;
@@ -1988,11 +1993,13 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
       'passed', { restored: true });
   }
 
-  // 10. The commit: previous with its effort, the ok entry, no intent.
+  // 10. The commit: previous with its effort, the ok entry, no intent, and an ended hold cleared (revert-ends-itself).
   adv = recordMove({ ...adv, pending: null,
     classes: { ...adv.classes, [cls]: { ...adv.classes[cls], previous: { model: from, effort: effortFrom } } } },
   cls, { at, how: 'advance', from, to: a.to, ok: true, canary: 'passed',
-    ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }), cause: choice.reason });
+    ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }), cause: choice.reason,
+    ...holdEndEntry(ended, from, a.to) });
+  if (ended) adv = endHold(adv, cls, at);
   w = writeAdvance(a.id, adv);
   // A history that could not be written leaves the intent on disk: the next
   // locked writer records the move as landed. The class DID move. So this
@@ -2165,18 +2172,16 @@ function sessionsBehindOf(id, ctx, advance, registry) {
  *     `advance-file-invalid`), when that file cannot be read (its moves are unknown), else those `sessionsBehindOf` could not read. With no advance file nothing has moved, so
  *     no session is read. A row that is not `exec.kind: "codex"` is `lane-not-codex-kind` and nothing more
  *     (D-5198): it never advances.
- *   - Per class: `chooseCandidate`'s `pin-grammar` and `shared-family`; a HELD class with a candidate is
- *     `heldBehind`, with `reason`, one of `CANDIDATE_REASONS` (the words a successful advance records as its
- *     `cause`, D-8384; `retired` names a fallback that may be older than the pin),
- *     never `heldBack`, because the hold stopped its retries (D-5221); an unheld class whose
- *     newest entry `heldBackOf` names is `heldBack`, with the step that failed; and the windows file blocks the lane
- *     once when some unheld class has a candidate and that file cannot be read. */
+ *   - Per class: `chooseCandidate`'s `pin-grammar` and `shared-family`; a HELD class is `holdsWaiting`, or `heldBehind`
+ *     once its hold's end has come (`holdReading`; `reason`, one of `CANDIDATE_REASONS`, D-8384), and is then retried like
+ *     an unheld class (D-5221 only while a hold stands); a class whose newest entry `heldBackOf` names is `heldBack`; and
+ *     the windows file blocks the lane once when some class able to move has a candidate and that file cannot be read. */
 function laneHealth(acc, ctx) {
   const id = acc.id;
   const cat = readCatalogue(id);
   const reg = readRegistry(id, cat.err !== undefined ? null : cat.catalogue);
   if (reg.err === undefined && reg.invalid === undefined && reg.registry === null) return null;
-  const lane = { id, anthropic: false, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
+  const lane = { id, anthropic: false, heldBack: [], heldBehind: [], holdsWaiting: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
   const block = (cls, cause, detail) => { lane.blocked.push({ class: cls, cause, detail }); };
   const lockWhy = lockUnwritable(ctx.lockTemplate.replace('{id}', id));
   if (lockWhy !== null) block(null, 'lock-unwritable', lockWhy);
@@ -2230,12 +2235,10 @@ function laneHealth(acc, ctx) {
       block(cls, 'shared-family',
         `family ${fam} is followed by ${[cls, ...others].join(' and ')}, and its newest model is already another class's pin`);
     }
-    if (c !== null && c.hold !== null) {
-      if (choice.candidate !== null) {
-        lane.heldBehind.push({ class: cls, pin, newer: choice.candidate, reason: choice.reason, hold: c.hold });
-      }
-      continue;
-    }
+    const held = c === null || c.hold === null ? null
+      : holdReading({ registry, catalogue: cat.catalogue, cls, c, choice, nowMs: ctx.nowMs });
+    if (held?.waiting !== undefined) { lane.holdsWaiting.push(held.waiting); continue; }
+    if (held !== null) lane.heldBehind.push(held.behind);
     if (choice.candidate !== null && choice.blocked === null) waiting = true;
     if (c === null) continue;
     const back = heldBackOf(c, choice.candidate);

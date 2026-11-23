@@ -1,6 +1,8 @@
 // Programme model-class-advance, wave R4 (plan Task 19's POST as re-planned, D-8686, D-8687, D-5229): `POST /api/models/:lane`
 // through `registerLaneModelsRoutes` on a bare Fastify and a fake `FleetIO`, plus the pure verdicts it applies
-// (`laneModelsAct.ts`). No file, no agent, no real `ccrc`: the real verb behind the real local arm is
+// (`laneModelsAct.ts`). The door takes Revert only, behind a fresh capability read (revert-holds-until-newer, D-8757):
+// every act here is preceded by a `show` whose answer carries `revertHoldEnds: true`, and the gate's own refusals are
+// `lane-models-revert-door.test.ts`'s. No file, no agent, no real `ccrc`: the real verbs behind the real local arm are
 // `lane-models-hold-race.test.ts`'s. Every lane and model id here is a stand-in.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -33,11 +35,11 @@ const CLASS_LABELS = laneClassModels(parseRegistry(REG), parseCatalogue(CAT));
 /** A real SENTENCE of the kind the verb prints: a path and a command. It must never reach the HTTP answer. */
 const DETAIL = "account \"lane-a\" has a problem at /home/someone/.ccrc/models/lane-a.advance.json; run 'ccrc models lane-a show'.";
 const SHOW = `${JSON.stringify({
-  ok: true, op: 'show', id: 'lane-a', anthropic: false, registry: REG, labels: CLASS_LABELS, windowNotices: [],
+  ok: true, op: 'show', id: 'lane-a', anthropic: false, registry: REG, labels: CLASS_LABELS, windowNotices: [], revertHoldEnds: true,
 })}\n`;
 const exited = (stdout: string, code = 0): ModelsAsked => ({ kind: 'exited', code, stdout });
-const holdDone = (changed: boolean, cls: ModelClass = C1): ModelsAsked =>
-  exited(`${JSON.stringify({ ok: true, op: 'hold', class: cls, changed, id: 'lane-a' })}\n`);
+const revertDone = (cls: ModelClass = C1): ModelsAsked =>
+  exited(`${JSON.stringify({ ok: true, op: 'revert', class: cls, id: 'lane-a' })}\n`);
 const refusal = (error: unknown, code = 1): ModelsAsked => exited(`${JSON.stringify({ ok: false, error, detail: DETAIL })}\n`, code);
 
 const spyWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -49,7 +51,8 @@ describe('POST /api/models/:lane', () => {
   beforeEach(() => { warn = spyWarn(); });
   afterEach(async () => { warn.mockRestore(); while (apps.length) await apps.pop()!.close(); });
 
-  /** `act` answers every writing action; `show` answers the fresh read. `events` is the order the io was asked in. */
+  /** `act` answers the writing action; `show` answers the capability read and the fresh read after the act. `events` is the
+   *  order the io was asked in. */
   async function rig(act: ModelsAsked | (() => Promise<ModelsAsked>), over: { hasLane?: (l: string) => boolean } = {}): Promise<Rig> {
     const base = testDeps(mkTmp('ccrc-lanemodels-post-'));
     const events: string[] = [];
@@ -66,7 +69,7 @@ describe('POST /api/models/:lane', () => {
     };
     const app = Fastify();
     registerLaneModelsRoutes(app, {
-      io, ccrcDir: base.cfg.ccrcDir, hasLane: over.hasLane ?? ((l) => l === 'lane-a'),
+      io, hasLane: over.hasLane ?? ((l) => l === 'lane-a'),
       actorOf: (req) => `device:${String(req.headers['x-test-device'] ?? 'unmeasured')}`,
     });
     apps.push(app);
@@ -80,29 +83,21 @@ describe('POST /api/models/:lane', () => {
   /** Only this door's lines: `testDeps`'s roster loader warns on its own. */
   const auditLines = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ccrc-server: models:'));
 
-  it('a hold that changed something: 200, the fresh read asked AFTER the act, no-store, one audit line', async () => {
-    const r = await rig(holdDone(true));
-    const res = await post(r, { action: 'hold', class: C1 });
+  it('a revert: 200, the capability read first and the fresh read asked AFTER the act, no-store, one audit line', async () => {
+    const r = await rig(revertDone());
+    const res = await post(r, { action: 'revert', class: C1 });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.json()).toEqual({
-      ok: true, lane: 'lane-a', action: 'hold', class: C1, changed: true, partial: false,
-      models: { kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', detail: null, pending: null, classes: null } },
+      ok: true, lane: 'lane-a', action: 'revert', class: C1, changed: null, partial: false,
+      models: {
+        kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', detail: null, pending: null, classes: null },
+        revertHoldEnds: true,
+      },
     });
-    expect(r.events, 'the act first, then the fresh read').toEqual(['hold', 'show']);
-    expect(r.calls[0]).toEqual(['lane-a', 'hold', C1]);
-    expect(auditLines()).toEqual([`ccrc-server: models: hold lane-a ${C1} by device:phone-a -> done`]);
-  });
-
-  it('a hold or release that found nothing to do is still a 200 done, changed false, and the audit says unchanged', async () => {
-    const r = await rig(holdDone(false));
-    const res = await post(r, { action: 'hold', class: C1 });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ changed: false, partial: false });
-    expect(auditLines()).toEqual([`ccrc-server: models: hold lane-a ${C1} by device:phone-a -> unchanged`]);
-    const s = await rig(exited(`${JSON.stringify({ ok: true, op: 'release', class: C0, changed: true, id: 'lane-a' })}\n`));
-    const res2 = await post(s, { action: 'release', class: C0 });
-    expect(res2.json()).toMatchObject({ action: 'release', class: C0, changed: true });
+    expect(r.events, 'the capability read, the act, then the fresh read').toEqual(['show', 'revert', 'show']);
+    expect(r.calls[1]).toEqual(['lane-a', 'revert', C1]);
+    expect(auditLines()).toEqual([`ccrc-server: models: revert lane-a ${C1} by device:phone-a -> done`]);
   });
 
   it('a revert is changed null, and one whose final write failed is partial (done, with a note the audit keeps)', async () => {
@@ -139,30 +134,30 @@ describe('POST /api/models/:lane', () => {
       expect(res.json()).toEqual({ ok: false, error, ...extra });
       expect(res.body, 'the verb\'s sentence crossed').not.toContain('/home/someone');
       expect(res.body).not.toContain('ccrc models');
-      expect(r.events, 'a fresh read followed a refusal').toEqual(['revert']);
+      expect(r.events, 'a fresh read followed a refusal').toEqual(['show', 'revert']);
       expect(auditLines()).toEqual([`ccrc-server: models: revert lane-a ${C1} by device:phone-a -> ${word}`]);
     });
 
     it('a timeout is never a success and never a plain failure: 502 outcome-unknown, not 504 and not 200', async () => {
       const r = await rig({ kind: 'timeout' });
-      const res = await post(r, { action: 'hold', class: C1 });
+      const res = await post(r, { action: 'revert', class: C1 });
       expect(res.statusCode).toBe(502);
       expect(res.json().error).toBe('outcome-unknown');
     });
 
     it('an io that rejects (a breach of the seam) reads as lost, and is audited', async () => {
       const r = await rig(() => Promise.reject(new Error('/home/someone exploded')));
-      const res = await post(r, { action: 'hold', class: C1 });
+      const res = await post(r, { action: 'revert', class: C1 });
       expect(res.statusCode).toBe(502);
       expect(res.json()).toEqual({ ok: false, error: 'outcome-unknown', cause: 'lost' });
       expect(res.body).not.toContain('exploded');
-      expect(auditLines()).toEqual([`ccrc-server: models: hold lane-a ${C1} by device:phone-a -> outcome-unknown lost`]);
+      expect(auditLines()).toEqual([`ccrc-server: models: revert lane-a ${C1} by device:phone-a -> outcome-unknown lost`]);
     });
   });
 
   describe('a verb that ran and printed anything off the grammar is outcome-unknown, cause unreadable', () => {
     const ok = (over: Record<string, unknown> = {}): string =>
-      `${JSON.stringify({ ok: true, op: 'hold', class: C1, changed: true, id: 'lane-a', ...over })}\n`;
+      `${JSON.stringify({ ok: true, op: 'revert', class: C1, id: 'lane-a', ...over })}\n`;
     it.each([
       ['exit 0 with a refusal body', refusal('no-previous', 0)],
       ['exit 1 with an ok body', exited(ok(), 1)],
@@ -177,13 +172,11 @@ describe('POST /api/models/:lane', () => {
       ['not JSON', exited('Traceback (most recent call last):\n')],
       ['an array', exited('[1]\n')],
       ['a bare value', exited('7\n')],
-      ['another op', exited(ok({ op: 'release' }))],
+      ['another op', exited(ok({ op: 'hold' }))],
       ['another class', exited(ok({ class: C0 }))],
       ['another lane', exited(ok({ id: 'lane-b' }))],
       ['ok not true', exited(ok({ ok: 'yes' }))],
-      ['no ok at all, at exit 0', exited(`${JSON.stringify({ op: 'hold', class: C1, changed: true, id: 'lane-a' })}\n`)],
-      ['changed missing on a hold', exited(ok({ changed: undefined }))],
-      ['changed not a boolean on a hold', exited(ok({ changed: 'yes' }))],
+      ['no ok at all, at exit 0', exited(`${JSON.stringify({ op: 'revert', class: C1, id: 'lane-a' })}\n`)],
       ['a refusal word that is not kebab (spaces)', refusal('lock busy')],
       ['a refusal word with a capital', refusal('Lock-Busy')],
       ['a refusal word that is a sentence', refusal(DETAIL)],
@@ -192,18 +185,18 @@ describe('POST /api/models/:lane', () => {
       ['a refusal with no word', exited('{"ok":false}\n', 1)],
     ] as const)('%s', async (_n, asked) => {
       const r = await rig(asked as ModelsAsked);
-      const res = await post(r, { action: 'hold', class: C1 });
+      const res = await post(r, { action: 'revert', class: C1 });
       expect(res.statusCode, res.body).toBe(502);
       expect(res.json()).toEqual({ ok: false, error: 'outcome-unknown', cause: 'unreadable' });
       expect(res.body).not.toContain('/home/someone');
-      expect(r.events, 'a fresh read followed an unreadable answer').toEqual(['hold']);
-      expect(auditLines()).toEqual([`ccrc-server: models: hold lane-a ${C1} by device:phone-a -> outcome-unknown unreadable`]);
+      expect(r.events, 'a fresh read followed an unreadable answer').toEqual(['show', 'revert']);
+      expect(auditLines()).toEqual([`ccrc-server: models: revert lane-a ${C1} by device:phone-a -> outcome-unknown unreadable`]);
     });
   });
 
   it('the audit line names the device the actor port gave, and never a session id or the cookie', async () => {
-    const r = await rig(holdDone(true));
-    await post(r, { action: 'hold', class: C1 });
+    const r = await rig(revertDone());
+    await post(r, { action: 'revert', class: C1 });
     const line = auditLines()[0]!;
     expect(line).toContain('by device:phone-a');
     expect(line).not.toContain('sid-0123456789abcdef');
@@ -213,7 +206,7 @@ describe('POST /api/models/:lane', () => {
 
   describe('nothing is asked of the op, and nothing audited, for a refused door', () => {
     it('a lane the roster does not hold is not-found, before the handler reads the parsed body', async () => {
-      const r = await rig(holdDone(true));
+      const r = await rig(revertDone());
       // the body is bad too: the lane is asked first, so the answer is not-found and not bad-request
       const res = await post(r, { action: 'nope', class: 'nope', extra: 1 }, 'lane-z');
       expect(res.statusCode).toBe(404);
@@ -223,12 +216,12 @@ describe('POST /api/models/:lane', () => {
     });
 
     it('a body Fastify cannot parse never reaches the handler, for any lane: its own 400 for bad JSON, its own 415 for another content type', async () => {
-      const r = await rig(holdDone(true));
+      const r = await rig(revertDone());
       for (const lane of ['lane-a', 'lane-z']) {
         const bad = await r.app.inject({ method: 'POST', url: `/api/models/${lane}`, headers: { 'content-type': 'application/json' }, payload: '{"action":' });
         expect(bad.statusCode, `${lane}: ${bad.body}`).toBe(400);
         expect(bad.json(), 'Fastify\'s own error, not this door\'s refusal word').toMatchObject({ code: 'FST_ERR_CTP_INVALID_JSON_BODY' });
-        const plain = await r.app.inject({ method: 'POST', url: `/api/models/${lane}`, headers: { 'content-type': 'application/octet-stream' }, payload: 'hold' });
+        const plain = await r.app.inject({ method: 'POST', url: `/api/models/${lane}`, headers: { 'content-type': 'application/octet-stream' }, payload: 'revert' });
         expect(plain.statusCode, `${lane}: ${plain.body}`).toBe(415);
       }
       expect(r.events).toEqual([]);
@@ -237,20 +230,24 @@ describe('POST /api/models/:lane', () => {
 
     it.each([
       ['no body', undefined, 'bad-body'],
-      ['an array', [{ action: 'hold', class: C1 }], 'bad-body'],
-      ['a string', 'hold', 'bad-body'],
-      ['an extra key', { action: 'hold', class: C1, force: true }, 'bad-body'],
-      ['an extra key and a bad class', { action: 'hold', class: 'nope', extra: 1 }, 'bad-body'],
+      ['an array', [{ action: 'revert', class: C1 }], 'bad-body'],
+      ['a string', 'revert', 'bad-body'],
+      ['an extra key', { action: 'revert', class: C1, force: true }, 'bad-body'],
+      ['an extra key and a bad class', { action: 'revert', class: 'nope', extra: 1 }, 'bad-body'],
+      ['an extra key and a hold', { action: 'hold', class: C1, extra: 1 }, 'bad-body'],
       ['an empty object (no action)', {}, 'bad-action'],
       ['an action that is no action', { action: 'drop', class: C1 }, 'bad-action'],
       ['show (the POST never shows)', { action: 'show' }, 'bad-action'],
       ['show with a class', { action: 'show', class: C1 }, 'bad-action'],
       ['an action that is not a string', { action: 5, class: C1 }, 'bad-action'],
-      ['no class', { action: 'hold' }, 'bad-class'],
-      ['a class that is no class', { action: 'hold', class: 'nope' }, 'bad-class'],
+      ['hold (an old console\'s; the shell and the agent keep it)', { action: 'hold', class: C1 }, 'bad-action'],
+      ['release (likewise)', { action: 'release', class: C1 }, 'bad-action'],
+      ['hold with no class', { action: 'hold' }, 'bad-action'],
+      ['no class', { action: 'revert' }, 'bad-class'],
+      ['a class that is no class', { action: 'revert', class: 'nope' }, 'bad-class'],
       ['a class that is not a string', { action: 'revert', class: 3 }, 'bad-class'],
     ] as const)('%s is 400 bad-request, why %s', async (_n, body, why) => {
-      const r = await rig(holdDone(true));
+      const r = await rig(revertDone());
       const res = await post(r, body);
       expect(res.statusCode, res.body).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request', why });
@@ -259,8 +256,8 @@ describe('POST /api/models/:lane', () => {
     });
 
     it('a lane the roster holds but the op cannot carry (a reserved word) is bad-lane, before any op', async () => {
-      const r = await rig(holdDone(true), { hasLane: () => true });
-      const res = await post(r, { action: 'hold', class: C1 }, 'litellm');
+      const r = await rig(revertDone(), { hasLane: () => true });
+      const res = await post(r, { action: 'revert', class: C1 }, 'litellm');
       expect(res.statusCode).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request', why: 'bad-lane' });
       expect(r.events).toEqual([]);
@@ -278,7 +275,7 @@ describe('the fresh read after the act never joins a show already in flight (F2,
   const STALE_REG = { ...REG, classes: { ...REG.classes, [C1]: 'model-6.1-delta' } };
   const showOf = (reg: typeof REG): string => `${JSON.stringify({
     ok: true, op: 'show', id: 'lane-a', anthropic: false, registry: reg, labels: laneClassModels(parseRegistry(reg), parseCatalogue(CAT)),
-    windowNotices: [],
+    windowNotices: [], revertHoldEnds: true,
   })}\n`;
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -291,38 +288,43 @@ describe('the fresh read after the act never joins a show already in flight (F2,
       ...base.io,
       models: (_lane, action) => {
         events.push(action);
-        if (action !== 'show') return Promise.resolve(holdDone(true));
+        if (action !== 'show') return Promise.resolve(revertDone());
         return new Promise<ModelsAsked>((resolve) => { shows.push(resolve); });
       },
     };
     const app = Fastify();
-    registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
+    registerLaneModelsRoutes(app, { io, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
     apps.push(app);
-    return { app, io, ccrcDir: base.cfg.ccrcDir, events, shows };
+    return { app, io, events, shows };
   }
 
   it('a show begun before the act is still running when the act settles: the POST\'s models come from a show begun AFTER the act', async () => {
     const t = handRig();
     // the GET's show, in flight and unresolved: it reads the old state
-    const get = readLaneModels(t.io, t.ccrcDir, 'lane-a');
+    const get = readLaneModels(t.io, 'lane-a');
     expect(t.events).toEqual(['show']);
     const posted = t.app.inject({
       method: 'POST', url: '/api/models/lane-a', headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify({ action: 'hold', class: C1 }),
+      payload: JSON.stringify({ action: 'revert', class: C1 }),
     });
+    // the capability read is a show of its own, never the GET's: it too is fresh
+    await sleep(25);
+    expect(t.events, 'the capability read began its own show').toEqual(['show', 'show']);
+    t.shows[1]!(exited(SHOW));
     // the act settles at once; give the route its ticks to start its own read
     await sleep(25);
-    expect(t.events.slice(0, 2), 'the act ran').toEqual(['show', 'hold']);
+    expect(t.events.slice(0, 3), 'the act ran').toEqual(['show', 'show', 'revert']);
     // the old show now finishes with the old state
     t.shows[0]!(exited(showOf(STALE_REG)));
     await sleep(25);
-    // the POST's read, if it is its own, is the second show; answer it with the state the act left
-    if (t.shows.length > 1) t.shows[1]!(exited(SHOW));
+    // the POST's read, if it is its own, is the third show; answer it with the state the act left
+    if (t.shows.length > 2) t.shows[2]!(exited(SHOW));
     const res = await posted;
     expect(res.statusCode, res.body).toBe(200);
-    expect(t.events, 'a second show begun after the act').toEqual(['show', 'hold', 'show']);
+    expect(t.events, 'a third show begun after the act').toEqual(['show', 'show', 'revert', 'show']);
     expect(res.json().models).toEqual({
       kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', detail: null, pending: null, classes: null },
+      revertHoldEnds: true,
     });
     // the GET still got the old state it asked for: it is not made to wait on the POST's
     expect(await get).toMatchObject({ kind: 'read', classes: { [C1]: { model: 'model-6.1-delta' } } });
@@ -330,8 +332,8 @@ describe('the fresh read after the act never joins a show already in flight (F2,
 
   it('CONTROL: two plain reads still share one show (the GET keeps coalescing)', async () => {
     const t = handRig();
-    const a = readLaneModels(t.io, t.ccrcDir, 'lane-a');
-    const b = readLaneModels(t.io, t.ccrcDir, 'lane-a');
+    const a = readLaneModels(t.io, 'lane-a');
+    const b = readLaneModels(t.io, 'lane-a');
     expect(t.events).toEqual(['show']);
     t.shows[0]!(exited(SHOW));
     expect(await a).toEqual(await b);
@@ -351,7 +353,7 @@ describe('the fresh read after the act never joins a show already in flight (F2,
     writeFileSync(state, 'old\n');
     writeFileSync(path.join(home, 'show-old.json'), showOf(STALE_REG));
     writeFileSync(path.join(home, 'show-new.json'), SHOW);
-    // `show` snapshots the state, then waits for `go.<n>` (n = its place in the order begun); `hold` writes the state.
+    // `show` snapshots the state, then waits for `go.<n>` (n = its place in the order begun); `revert` writes the state.
     writeFileSync(path.join(bin, 'ccrc'), [
       '#!/bin/sh',
       'case "$3" in',
@@ -360,46 +362,57 @@ describe('the fresh read after the act never joins a show already in flight (F2,
       `    snap=$(cat "${state}")`,
       `    while [ ! -e "${home}/go.$n" ]; do sleep 0.02; done`,
       `    cat "${home}/show-$snap.json" ;;`,
-      `  hold) echo new > "${state}"; echo '{"ok":true,"op":"hold","class":"${C1}","changed":true,"id":"lane-a"}' ;;`,
+      `  revert) echo new > "${state}"; echo '{"ok":true,"op":"revert","class":"${C1}","id":"lane-a"}' ;;`,
       'esac', '',
     ].join('\n'), { mode: 0o755 });
     const base = testDeps(home);
     const io = localIOFor(home);
     const app = Fastify();
-    registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
+    registerLaneModelsRoutes(app, { io, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
     apps.push(app);
-    const get = readLaneModels(io, base.cfg.ccrcDir, 'lane-a');
+    const get = readLaneModels(io, 'lane-a');
     await sleep(300);
     expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the GET\'s show began').toHaveLength(1);
     const posted = app.inject({
       method: 'POST', url: '/api/models/lane-a', headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify({ action: 'hold', class: C1 }),
+      payload: JSON.stringify({ action: 'revert', class: C1 }),
     });
     await sleep(500);
-    writeFileSync(path.join(home, 'go.1'), '');     // the old show finishes, having read `old`
+    expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the capability read began a show of its own').toHaveLength(2);
+    writeFileSync(path.join(home, 'go.1'), '');     // the GET's show finishes, having read `old`
     await sleep(300);
-    writeFileSync(path.join(home, 'go.2'), '');     // the POST's own show, if it began one, reads `new`
+    writeFileSync(path.join(home, 'go.2'), '');     // the capability read finishes, having read `old`: the act follows
+    await sleep(500);
+    expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the POST began its own show after the act').toHaveLength(3);
+    writeFileSync(path.join(home, 'go.3'), '');     // the POST's own show, begun after the act, reads `new`
     const res = await posted;
     expect(res.statusCode, res.body).toBe(200);
-    expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the POST began its own show').toHaveLength(2);
     expect(res.json().models.classes[C1].model, 'the POST answered with the model read AFTER the act (its own fresh show)').toBe('model-6.1-gamma');
     expect((await get).kind).toBe('read');
   }, 30_000);
 });
 
 describe('laneModelsAct (pure)', () => {
-  it('parseModelsActBody takes exactly {action, class}, in the builder\'s order: lane, action, class', () => {
-    expect(parseModelsActBody('lane-a', { action: 'hold', class: C1 })).toEqual({ ok: true, action: 'hold', cls: C1 });
-    expect(parseModelsActBody('lane-a', { class: C0, action: 'release' })).toEqual({ ok: true, action: 'release', cls: C0 });
+  it('parseModelsActBody takes exactly {action: revert, class}, in the builder\'s order: lane, action, class', () => {
     expect(parseModelsActBody('lane-a', { action: 'revert', class: C1 })).toEqual({ ok: true, action: 'revert', cls: C1 });
+    expect(parseModelsActBody('lane-a', { class: C0, action: 'revert' })).toEqual({ ok: true, action: 'revert', cls: C0 });
+    // hold, release and show are the shell's and the agent's verbs: bad-action, as `show` always was here
+    for (const action of ['hold', 'release', 'show']) {
+      expect(parseModelsActBody('lane-a', { action, class: C1 }), action).toEqual({ ok: false, why: 'bad-action' });
+      expect(parseModelsActBody('lane-a', { action }), action).toEqual({ ok: false, why: 'bad-action' });
+    }
     // the lane is judged before the action, the action before the class
     expect(parseModelsActBody('litellm', { action: 'nope', class: 'nope' })).toEqual({ ok: false, why: 'bad-lane' });
     expect(parseModelsActBody('litellm', { action: 'show' })).toEqual({ ok: false, why: 'bad-lane' });
+    expect(parseModelsActBody('litellm', { action: 'hold', class: C1 })).toEqual({ ok: false, why: 'bad-lane' });
     expect(parseModelsActBody('lane-a', { action: 'nope', class: 'nope' })).toEqual({ ok: false, why: 'bad-action' });
     expect(parseModelsActBody('lane-a', { action: 'show', class: 'nope' })).toEqual({ ok: false, why: 'bad-action' });
-    expect(parseModelsActBody('lane-a', { action: 'hold', class: 'nope' })).toEqual({ ok: false, why: 'bad-class' });
+    expect(parseModelsActBody('lane-a', { action: 'hold', class: 'nope' })).toEqual({ ok: false, why: 'bad-action' });
+    expect(parseModelsActBody('lane-a', { action: 'revert', class: 'nope' })).toEqual({ ok: false, why: 'bad-class' });
+    expect(parseModelsActBody('lane-a', { action: 'revert' })).toEqual({ ok: false, why: 'bad-class' });
+    expect(parseModelsActBody('lane-a', {})).toEqual({ ok: false, why: 'bad-action' });
     expect(parseModelsActBody('lane-a', null)).toEqual({ ok: false, why: 'bad-body' });
-    expect(parseModelsActBody('lane-a', { action: 'hold', class: C1, x: 1 })).toEqual({ ok: false, why: 'bad-body' });
+    expect(parseModelsActBody('lane-a', { action: 'revert', class: C1, x: 1 })).toEqual({ ok: false, why: 'bad-body' });
     // every word it can answer is in the one list
     expect([...MODELS_ACT_BODY_REFUSALS]).toEqual(['bad-body', 'bad-lane', 'bad-action', 'bad-class']);
   });
@@ -411,7 +424,7 @@ describe('laneModelsAct (pure)', () => {
     ];
     const seen = new Map<string, number>();
     for (const a of asked) {
-      const v = modelsActVerdict('lane-a', 'hold', C1, a);
+      const v = modelsActVerdict('lane-a', 'revert', C1, a);
       if (v.kind !== 'refuse') throw new Error('expected a refusal');
       seen.set(v.error, REFUSAL_STATUS[v.error]);
     }
@@ -420,17 +433,16 @@ describe('laneModelsAct (pure)', () => {
     });
   });
 
-  it('a revert is changed null and a hold or release carries the verb\'s boolean; partial only on a string advanceNote', () => {
+  it('a revert is changed null on the wire; partial only on a string advanceNote; a hold-shaped answer to a revert is unreadable', () => {
     const done = (over: Record<string, unknown>, op = 'revert'): ModelsAsked =>
       exited(`${JSON.stringify({ ok: true, op, class: C1, id: 'lane-a', ...over })}\n`);
     expect(modelsActVerdict('lane-a', 'revert', C1, done({}))).toEqual({ kind: 'done', changed: null, partial: false });
     expect(modelsActVerdict('lane-a', 'revert', C1, done({ advanceNote: 'x' }))).toEqual({ kind: 'done', changed: null, partial: true });
     expect(modelsActVerdict('lane-a', 'revert', C1, done({ advanceNote: 7 }))).toEqual({ kind: 'done', changed: null, partial: false });
-    expect(modelsActVerdict('lane-a', 'hold', C1, done({ changed: true }, 'hold'))).toEqual({ kind: 'done', changed: true, partial: false });
-    // an advanceNote is a revert's: a hold carrying one is not partial
-    expect(modelsActVerdict('lane-a', 'hold', C1, done({ changed: false, advanceNote: 'x' }, 'hold'))).toEqual({ kind: 'done', changed: false, partial: false });
-    expect(modelsActAuditWord({ kind: 'done', changed: false, partial: false })).toBe('unchanged');
+    expect(modelsActVerdict('lane-a', 'revert', C1, done({ changed: true }, 'hold')))
+      .toEqual({ kind: 'refuse', error: 'outcome-unknown', extra: { cause: 'unreadable' } });
     expect(modelsActAuditWord({ kind: 'done', changed: null, partial: false })).toBe('done');
+    expect(modelsActAuditWord({ kind: 'done', changed: null, partial: true })).toBe('done-partial');
   });
 });
 

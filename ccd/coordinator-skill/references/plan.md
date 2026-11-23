@@ -173,7 +173,8 @@ stop and tell the operator: it may need a fix in Linear, or a new Linear key) an
 
 When the operator starts a team's migration (its project row's "Reshape in Linear"), the team's Linear owner gets a mail
 `linear migration <n>: propose the map for team <TEAM>`. Read the team's open issues (`"$API" linear search`, or the
-issue reads), then place every open issue once, with its Linear id and identifier and one class: `leaf` (a ticket in a
+issue reads), then place every open issue once, by its identifier (`AAA-12`, as those reads show it) and one class:
+`leaf` (a ticket in a
 programme's epic: `target` names `programme` and `epic`, and optionally `checkpoint`, `ticketKey` and `kind`), `upkeep`
 (a ticket in the project's Upkeep epic), `programme`, `epic` or `checkpoint` (an issue that stood for that level: it is
 closed, related to the first ticket placed under it), `finished` (closed as done with its evidence: `target.pr` names the
@@ -183,9 +184,14 @@ merged pull request as `<owner>/<repo>#<number>`, or, when there is none, `targe
 
 ```bash
 "$API" plan map-propose <TEAM> --json - <<JSON
-{"entries":[{"issue":"<issue id>","identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"},{"issue":"<issue id>","identifier":"AAA-14","class":"finished","target":{"pr":"<owner>/<repo>#<number>"}}]}
+{"entries":[{"identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"identifier":"AAA-13","class":"upkeep"},{"identifier":"AAA-14","class":"finished","target":{"pr":"<owner>/<repo>#<number>"}}]}
 JSON
 ```
+
+ccrc matches each identifier, in any letter case, against the team's open issues it reads for this map, and stores the
+issue's Linear id and the identifier as Linear spells it; it never guesses, so a link or any other text is no identifier.
+The older form, an entry that also carries the issue's Linear id as `issue`, is still accepted, as in
+`{"entries":[{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"}]}`: its `issue` must be that identifier's own issue.
 
 A live programme declares its own plan first (its coordinator is mailed to `plan put` it); the map places issues onto
 those keys and never rewrites a plan. Only for a programme with no plan and no run that is not finished may the map
@@ -196,10 +202,13 @@ Linear before that. Issues the apply skipped because they changed reach you agai
 taken through inbound is held, and stays off it: while that follow-up map is still awaited, listing it is
 `map-incomplete`, and once the tick has shed it as the only skipped issue, no map is awaited and a map is refused
 `plan-bad-body`. Refusals:
-`not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing, listed twice, or not
-open), `map-rewrites-plan` (structure for a programme that has a plan or a live run), `plan-bad-body` (a target
-that does not exist, a successor that does not exist, a finished issue with no evidence, a leaf whose epic is in another
-team, a ticket key already used, or no migration waiting for a map), `team-ambiguous` (a migration of the team waits for
+`not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing; one listed twice, also
+once by its id and once by its identifier; an identifier that is not one of the open issues this map may place, because it
+is closed, in another team or workspace, already held by ccrc's plan, or not on a follow-up's list; or an identifier more
+than one of the issues read answers to), `map-rewrites-plan` (structure for a programme that has a plan or a live run),
+`plan-bad-body` (an `issue` id that is not its identifier's issue, a target that does not exist, a successor that does not
+exist, a finished issue with no evidence, a leaf whose epic is in another team, a ticket key already used, or no
+migration waiting for a map), `team-ambiguous` (a migration of the team waits for
 a map in more than one workspace whose owner you are, so ccrc cannot tell which this map is for: stop and tell the
 operator), and `unreachable` (ccrc could not measure something the map needs: the team's Linear owner, in a workspace whose owner you
 could be; a Linear key that serves the team; the team's open issues, read from Linear, all of them within the pages one
@@ -242,22 +251,53 @@ JSON
 ```
 
 `workspace` is optional: add `"workspace":"<Linear workspace id>"` only when the key exists in more than one connected
-workspace; without it, the one workspace that holds the key is recorded. Never put `byId` or `byUuid` in the
+workspace (the `team-ambiguous` refusal's detail names them by that id, up to eight, and counts the rest); without it,
+the one workspace that holds the key is recorded. Never put `byId` or `byUuid` in the
 body: the client adds the pane's own pair and refuses a body that names either. Each session keeps one suggestion per
 project: sending again replaces your earlier one. A project keeps at most eight suggestions, so yours can drop off when
 other sessions suggest, and setting the project's key clears them all. A suggestion is a candidate and never a
 link: it appears on the console's Project linking card, under the project, with the workspace and your reason, and the
 operator taps it, or the Overlord confirms it within its authority. The reason is shown in the console only, never written
-to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
-`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
-`team-unknown` (no connected workspace has that team, or the named workspace does not; the workspace the pair depends on was read), `not-configured` (no Linear workspace is connected: do not retry; tell the operator), `team-ambiguous` (no workspace named
-and the key is in more than one connected workspace: send it again with `workspace`), `not-a-coordinator` (the session claims
-no open run: only a programme's coordinator suggests), `run-unreadable` (the open run claimants could not be read: try again),
-`unavailable` (the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the operator), `write-failed` (the store write failed: try once more;
-if it is refused again, stop and tell the operator), `no-project`, `linear-text-public` and `bad-request` (a body with a key
-other than these, or a field missing or malformed: the project, the team key, a `workspace` that is present but not a Linear
-id, or a reason that is empty, over 280 characters (an emoji counts as two) or not one plain line; the detail names the
-field).
+to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`).
+
+**What the operator's save stores as the workspace.** The operator's write of a key decides the workspace beside it by one
+rule, so a suggestion's workspace is kept only as the write measures it:
+
+- A workspace named: it must hold the key, or the write is refused `team-unknown`, as it is when no workspace is connected;
+  a named workspace that cannot be read is `unavailable`, and nothing is written.
+- The workspace omitted with the unchanged key: the stored choice stays, a stored none included, and the Linear store is
+  not read.
+- The workspace omitted with a changed key: a stored workspace stays while it holds the new key, and is `unavailable`
+  while it cannot be read; otherwise the write goes on as with none named.
+- None named (omitted as above, or an explicit `null`, which reads the store with the unchanged key too): the one connected
+  workspace that holds the key is stored; two holders are `team-ambiguous`; a Linear store that cannot be read, or any
+  workspace the answer depends on that cannot be read while two readable ones do not already hold the key, is
+  `unavailable`, and nothing is written; a key no
+  connected workspace holds, every one read, or no workspace connected at all, is stored with none.
+- A row stored with no workspace keeps that none, with its evidence, when its unchanged key is sent back and one readable
+  workspace holds it, whether that workspace is named (even while another workspace cannot be read) or not (every
+  workspace read). Only two readable holders undo the keep.
+- A cleared key stores no workspace; a workspace named with no key is `team-unknown`.
+
+Refusals, each with what to do:
+
+- `bad-request`: a body with a key other than these, or a field missing or malformed: the project, the team key, a
+  `workspace` that is present but not a Linear id, or a reason that is empty, over 280 characters (an emoji counts as two)
+  or not one plain line. The detail names the field: fix it and send again.
+- `unavailable`: the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell
+  the operator.
+- `not-a-coordinator`: the session claims no open run: only a programme's coordinator suggests.
+- `run-unreadable`: the open run claimants could not be read: try again.
+- `team-set`: the project already has a key; a project whose key the operator cleared still takes suggestions.
+- `team-unknown`: no connected workspace has that team, or the named workspace does not; the workspace the pair depends on
+  was read. Check the key, and the workspace if you named one, before you send again.
+- `team-ambiguous`: no workspace named and the key is in more than one connected workspace: send it again with `workspace`
+  set to one of the workspaces the detail names.
+- `not-configured`: no Linear workspace is connected: do not retry; tell the operator.
+- `linear-text-public`: the reason names a ticket id or another name that may not be shown publicly: reword it and send
+  again.
+- `no-project`: ccrc has no row for that project: check the project's name.
+- `write-failed`: the store write failed: try once more; if it is refused again, stop and tell the operator.
 
 ## Keep the plan: the programme page shows what remains
 

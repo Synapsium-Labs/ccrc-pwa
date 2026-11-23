@@ -266,6 +266,12 @@ describe('S2: the plan and the dry run\'s report (spec §7.2, condition 4)', () 
     expect(p.close).toEqual([]);
     expect(p.report).toMatchObject({ closes: 0, failedCheck: 0, young: 0, closed: 0, named: 0 });
   });
+
+  it('B-P7: a qualifying agent quiet for 20 days is counted only in the middle band', () => {
+    const { close, report } = plan([row('a-middle', { openedAt: at(0), lastEventAt: at(20 * DAY) })], now);
+    expect(close).toEqual(['a-middle']);
+    expect(report.byKind.agent).toEqual({ days1to7: 0, days7to30: 1, days30plus: 0 });
+  });
 });
 
 // ── the rows the pass and the undo write ─────────────────────────────────────────────────────────────────────────────

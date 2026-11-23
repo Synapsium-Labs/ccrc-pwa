@@ -571,7 +571,8 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
     expect(flushedAfterRecord(calls)).toBe(true);
     expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body]))
       // The body no longer names the retired daily dial (D-7068).
-      .toEqual([['coord', '', null, 'caps changed', 'workers 3 → 5']]);
+      // D-8920: a fresh box is automatic at the seeded 3 (this rig measures no host), and 5 is an override.
+      .toEqual([['coord', '', null, 'caps changed', 'workers automatic (3, host unmeasured) → 5']]);
     expect(rec.pushes).toEqual([]);
     catchUpMatchesRing(rec);
   });

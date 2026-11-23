@@ -20,13 +20,13 @@
 // .curlrc.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { units, UNIT_NAME } from '../../agent/src/testbox/systemd.js';
 import { encodeSpec, type RunSpec } from '../../agent/src/testbox/spec.js';
 import {
-  BOOT_NODE, BOOT_TAG, makeBox, makeWorld, install, exec, nftState, REPO, releaseTree, run, sysCall, sysLog, treeOf, unitProps, UID, writeManifest,
-  type Box, type World,
+  BOOT_NODE, BOOT_TAG, makeBox, makeWorld, install, exec, gitShell, gitShellRequired, nftState, pushForced, REPO, releaseTree, run, sysCall, sysLog,
+  treeOf, unitProps, UID, writeManifest, type Box, type World,
 } from './testboxBoxFixture.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -35,6 +35,28 @@ removeTmpFixturesEachTest();
 const PKG = path.join(REPO, 'deploy', 'testbox');
 const SYSTEMD = path.join(PKG, 'systemd');
 const SPEC = path.join(REPO, 'docs', 'superpowers', 'specs', '2026-10-28-test-box-design.md');
+/** The real git-shell (git's exec path), the push user's login shell; null, with a notice, where this host has none. */
+const GIT_SHELL = gitShell('testbox-box-package');
+const PUSH_HOME = (b: Box): string => path.join(b.root, 'var', 'lib', 'ccrc-tb-push');
+const AUTHORIZED_KEYS = (b: Box): string => path.join(PUSH_HOME(b), '.ssh', 'authorized_keys');
+const INSTALLED_PUSH_COMMAND = (b: Box): string => path.join(b.tools, 'release', 'installed', 'deploy', 'testbox', 'git', 'push-command');
+/** The installed key's forced command (its `command=`), run as sshd runs it: `git-shell -c "<command>"` with HOME the
+ *  push user's home and SSH_ORIGINAL_COMMAND what the client asked for (D-8956). */
+function sshd(b: Box, original: string, input = ''): { status: number | null; stdout: string; stderr: string } {
+  const ak = readFileSync(AUTHORIZED_KEYS(b), 'utf8');
+  const m = /^restrict,command="([^"]*)" /.exec(ak);
+  expect(m, ak).not.toBeNull();
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: PUSH_HOME(b), LANG: 'C', LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', SSH_ORIGINAL_COMMAND: original,
+  };
+  const r = spawnSync(GIT_SHELL!, ['-c', m![1]!], { cwd: b.root, env, input, encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+const FETCH_REFUSED: [number, string] = [1, 'test box push: refused: only git-receive-pack \'<mirror>\' is accepted\n'];
+
+it.runIf(gitShellRequired())('git-shell stands beside git on CI\'s Linux, so the forced command\'s runs through it are not skipped (D-8956)', () => {
+  expect(GIT_SHELL).not.toBeNull();
+});
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 const unit = (n: string): string[] => unitProps(read(path.join(SYSTEMD, n)));
 
@@ -505,11 +527,38 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     ]);
   });
 
-  it('the push user\'s one key: restrict,command= the installed forced command and the repository table, the key without its comment', () => {
-    const ak = path.join(b.root, 'var', 'lib', 'ccrc-tb-push', '.ssh', 'authorized_keys');
-    expect(readFileSync(ak, 'utf8')).toBe(
-      `restrict,command="${path.join(b.tools, 'release', 'installed', 'deploy', 'testbox', 'git', 'push-command')} ${b.repos}" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureFixtureFixtureFixtureFixtureFixture0000\n`,
+  it('the push user\'s one key: restrict,command= the forced command by its git-shell-commands name and the repository table, the key without its comment (D-8956)', () => {
+    expect(readFileSync(AUTHORIZED_KEYS(b), 'utf8')).toBe(
+      `restrict,command="${pushForced(b.repos)}" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureFixtureFixtureFixtureFixtureFixture0000\n`,
     );
+    expect(pushForced(b.repos)).toBe(`push-command ${b.repos}`);
+  });
+
+  it('the push user\'s git-shell-commands: root\'s, 0755, holding push-command only, a link to the installed release\'s forced command (D-8956)', () => {
+    const cmds = path.join(PUSH_HOME(b), 'git-shell-commands');
+    expect(lines(b)).toContain(`install -d -m 0755 -o root -g root ${cmds}`);
+    expect((statSync(cmds).mode & 0o7777).toString(8)).toBe('755');
+    // A link through installed, so a tool sync's switch of installed moves the forced command with the hook and the units.
+    expect(treeOf(cmds)).toEqual([`push-command l ${INSTALLED_PUSH_COMMAND(b)}`]);
+    expect((statSync(path.join(cmds, 'push-command')).mode & 0o111)).not.toBe(0);
+  });
+
+  // sshd runs a forced command through the user's login shell: `<shell> -c "<command=>"`. git-shell refuses a command
+  // whose first word holds a slash, and runs a bare name from $HOME/git-shell-commands only, so the installed line is
+  // run here as sshd would, through the real git-shell (D-8956).
+  describe.skipIf(!GIT_SHELL)('the installed key\'s forced command, run as sshd runs it: through the real git-shell (D-8956)', () => {
+    it('a command the forced command refuses reaches the forced command, which refuses it (git-shell does not)', () => {
+      const r = sshd(b, "git-upload-pack '/x'");
+      expect(r.stderr).not.toContain('unrecognized command');
+      expect([r.status, r.stderr]).toEqual(FETCH_REFUSED);
+    });
+
+    it('git-receive-pack of the mirror the table lists runs receive-pack there (its ref advertisement, then a flush ends it)', () => {
+      const r = sshd(b, `git-receive-pack '${b.mirror}'`, '0000');
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('report-status');
+    });
   });
 
   it('the mirror: bare, core.sharedRepository=0664, group ccrc-tb-git, root\'s config, hooksPath the installed release\'s TB3 hook, fetched by the service only', () => {
@@ -560,6 +609,8 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     expect(firewallFindings(nft, FIREWALL.map((l) => l.replace('@@LISTEN_MATCH@@', 'ip daddr 127.0.0.9').replace('@@LISTEN_PORT@@', '7443')))).toEqual([]);
     expect(readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'egress'), 'utf8')).toBe([
       'github\tgithub.com', 'nodejs\tnodejs.org', 'chrome\tstorage.googleapis.com', 'registry\tregistry.npmjs.org', 'release\tgithub.com',
+      // a download from the release host is a redirect to an asset host: the row names it, or the tool sync's fetch is dropped
+      'release\trelease-assets.githubusercontent.com', 'release\tobjects.githubusercontent.com',
       'osmirror\tmirror.testbox.invalid', '',
     ].join('\n'));
   });
@@ -719,6 +770,17 @@ describe('the installer refuses a path or a user that would hand a system direct
     await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_REPOS=/etc'] }), `CCRC_TESTBOX_REPOS=/etc ${BELOW}`);
     await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_TOOLS_DIR=/usr/local'] }), `CCRC_TESTBOX_TOOLS_DIR=/usr/local ${BELOW}`);
     await refusedAt(makeBox(W, { boxLines: ['CCRC_TESTBOX_ROOT=/srv'] }), `CCRC_TESTBOX_ROOT=/srv ${BELOW}`);
+  });
+
+  it('a rows directory holding a quote or a backslash is refused: it is written into the push user\'s forced command, which authorized_keys and git-shell both read (D-8956)', async () => {
+    // Each value as the box file's reader takes it: one whole pair of the other quote around it. A backslash reaches the
+    // installer only through macOS's reader (inside '…'); the unit reader a box uses refuses every backslash itself.
+    const values: [string, string][] = [['/srv/a"b', '\'/srv/a"b\''], ['/srv/a\'b', '"/srv/a\'b"']];
+    if (process.platform === 'darwin') values.push(['/srv/a\\b', '\'/srv/a\\b\'']);
+    for (const [v, line] of values) {
+      await refusedAt(makeBox(W, { boxLines: [`CCRC_TESTBOX_REPOS=${line}`] }),
+        `CCRC_TESTBOX_REPOS=${v} holds a quote or a backslash, which the push user's forced command cannot carry (authorized_keys ends command= at a ", and git-shell reads quotes and backslashes)`);
+    }
   });
 
   it('a repository row whose mirror lies under /root, or directly under a base, is refused: its parent directory is made root\'s', async () => {
@@ -1115,6 +1177,65 @@ describe('the installer: --reapply from the installed tree applies a changed box
     expect(readFileSync(path.join(b.repos, 'project-a.json'), 'utf8')).toBe(readFileSync(b.rowFile, 'utf8'));
     const again = await reapply(b, ['--repos', row]);
     expect(again.stderr).toContain('nothing to do');
+  });
+
+  it('--reapply after a tool sync repairs a box installed before D-8956: the absolute-path key line becomes push-command with the same key, and the link is made', async () => {
+    const marker = readFileSync(markerOf(b), 'utf8');
+    const ak = readFileSync(AUTHORIZED_KEYS(b), 'utf8');
+    const key = ak.slice(ak.indexOf('" ') + 2);
+    const cmds = path.join(PUSH_HOME(b), 'git-shell-commands');
+    // The broken box: the old line, no git-shell-commands, and the marker naming the tag the sync switched away from.
+    writeFileSync(AUTHORIZED_KEYS(b), `restrict,command="${INSTALLED_PUSH_COMMAND(b)} ${b.repos}" ${key}`);
+    rmSync(cmds, { recursive: true, force: true });
+    writeFileSync(markerOf(b), marker.replace(BOOT_TAG, 'v0.0.2'));
+    try {
+      if (GIT_SHELL) expect(sshd(b, "git-upload-pack '/x'").stderr).toContain('unrecognized command');
+      const r = await reapply(b);
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(AUTHORIZED_KEYS(b), 'utf8')).toBe(`restrict,command="${pushForced(b.repos)}" ${key}`);
+      expect(treeOf(cmds)).toEqual([`push-command l ${INSTALLED_PUSH_COMMAND(b)}`]);
+      expect(readFileSync(markerOf(b), 'utf8')).toBe(marker);
+      if (GIT_SHELL) { const s = sshd(b, "git-upload-pack '/x'"); expect([s.status, s.stderr]).toEqual(FETCH_REFUSED); }
+    } finally {
+      writeFileSync(markerOf(b), marker);
+    }
+  });
+
+  it('--reapply --force replaces a git-shell-commands/push-command that names anything else: a stale link, a file, a link to a directory (D-8956)', async () => {
+    const pc = path.join(PUSH_HOME(b), 'git-shell-commands', 'push-command');
+    const elsewhere = mkTmp('ccrc-tb-pc-');
+    const stale: [string, () => void][] = [
+      ['a stale link', () => symlinkSync(path.join(elsewhere, 'gone'), pc)],
+      ['a file', () => writeFileSync(pc, '#!/bin/sh\nexit 0\n', { mode: 0o755 })],
+      ['a link to a directory', () => symlinkSync(elsewhere, pc)],
+    ];
+    for (const [what, plant] of stale) {
+      rmSync(pc, { force: true });
+      plant();
+      const r = await reapply(b, ['--force']);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(0);
+      expect(treeOf(path.dirname(pc)), what).toEqual([`push-command l ${INSTALLED_PUSH_COMMAND(b)}`]);
+      expect(readdirSync(elsewhere), what).toEqual([]);
+    }
+  });
+
+  it('--reapply fails, naming it, on a directory at push-command or push-command.new, and makes no link inside it (D-8956)', async () => {
+    const pc = path.join(PUSH_HOME(b), 'git-shell-commands', 'push-command');
+    try {
+      for (const at of [pc, `${pc}.new`]) {
+        rmSync(pc, { force: true });
+        mkdirSync(at);
+        const r = await reapply(b, ['--force']);
+        expect([r.code, r.stderr.trim().split('\n').at(-1)]).toEqual([1, `ccrc-testbox-install: failed: ${at} is a directory, not the forced command's link; remove it and run the installer again`]);
+        expect(readdirSync(at)).toEqual([]);
+        rmSync(at, { recursive: true });
+      }
+    } finally {
+      for (const at of [pc, `${pc}.new`]) rmSync(at, { recursive: true, force: true });
+      const r = await reapply(b, ['--force']);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    expect(treeOf(path.dirname(pc))).toEqual([`push-command l ${INSTALLED_PUSH_COMMAND(b)}`]);
   });
 
   it('takes no other argument: --release, --node, --distro and --push-key are the first install\'s', async () => {

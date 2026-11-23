@@ -226,7 +226,9 @@ export type TestboxToolVersions = { readonly [K in TestboxTool]: string };
 const ROW_DEPTH: Readonly<Record<TestboxTool, number>> = { node: 2, npm: 1, tmux: 1, git: 1, python3: 2, chrome: 1 };
 
 const VERSION = /^\d+(?:\.\d+)*[a-z]?$/;
-const isVersion = (s: unknown): s is string => typeof s === 'string' && s.length <= 64 && VERSION.test(s);
+/** A tool version as the frames carry one (`22.11.0`, `3.3a`), the shape's one definition: the frame readers below and
+ *  the box's reader of its own measured versions (`agent/src/testbox/tools.ts#parseMeasuredTools`) both ask it. */
+export const isVersion = (s: unknown): s is string => typeof s === 'string' && s.length <= 64 && VERSION.test(s);
 
 /** One tool's difference, in the fallback's words `<name> <local> vs <remote>`. */
 export interface TestboxVersionDiff { readonly tool: TestboxTool; readonly local: string; readonly remote: string }
@@ -545,6 +547,11 @@ function readProbes(v: unknown): TestboxProbes {
 }
 
 function readStatusAnswer(o: Obj): StatusAnswer {
+  // D-8912 (spec 2026-11-22-test-box-managed-node-design.md §5, the wire rule): this reader, like every reader of this
+  // family, refuses a whole answer for one field it does not name, so a released fleet agent refuses any answer that
+  // gains one. Nothing new rides the status answer: a managed box's measured tool versions are the VALUES of `tools`,
+  // and its node files, its drain and its ready fact are files on the box (`agent/src/testbox/boxFiles.ts`), never a
+  // field here. `agent/test/testbox-managed-node.test.ts` pins the released key set.
   // D-8290: `probes` is the one optional field: an older box, and a box that takes no probes, sends none.
   const withProbes = Object.prototype.hasOwnProperty.call(o, 'probes');
   const f = exact(o, 'status', withProbes ? [...STATUS_KEYS, 'probes'] : STATUS_KEYS);

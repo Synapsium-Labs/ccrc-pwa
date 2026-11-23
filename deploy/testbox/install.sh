@@ -208,6 +208,8 @@ read -r LISTEN_IP LISTEN_FAM < <(ip_of "$(k CCRC_TESTBOX_LISTEN)") || refuse "CC
 LISTEN_PORT=${TBK[CCRC_TESTBOX_LISTEN]##*:}
 read -r PROXY_IP PROXY_FAM < <(ip_of "$(k CCRC_TESTBOX_REGISTRY_PROXY)") || refuse "CCRC_TESTBOX_REGISTRY_PROXY=$(k CCRC_TESTBOX_REGISTRY_PROXY) does not name an IP address"
 
+# The hosts github.com redirects a release download to (the release row's, beside the release host itself).
+TBI_RELEASE_ASSET_HOSTS=(release-assets.githubusercontent.com objects.githubusercontent.com)
 host_of() { [[ $1 =~ ^[a-z][a-z0-9+.-]*://([^/:@]+@)?([^/:]+) ]] && printf '%s' "${BASH_REMATCH[2]}"; }
 EGRESS=()   # `<row><TAB><host>` lines, the names file's
 for n in $(k CCRC_TESTBOX_EGRESS_ALLOW); do
@@ -224,6 +226,13 @@ _tb_release_base || refuse "the release base: $TB_BOX_WHY"
 # KNOB is the value `_tb_release_base` has just read from the box file in file mode (D-7457).
 h=$(host_of "$KNOB") || refuse "CCRC_RELEASE_BASE_URL names no host"
 EGRESS+=("release"$'\t'"$h")
+# A release download from github.com is a redirect: the release's files are served from an asset host. The row names
+# that host too, or the tool sync's fetch of a later release is dropped by this firewall (measured on a real box: every
+# sync that changed the release failed at its first download, so a box never left the release it was installed with).
+# Two names, because the host changed once already and the older one still serves; both resolve to the same addresses.
+if [ "$h" = github.com ]; then
+  for a in "${TBI_RELEASE_ASSET_HOSTS[@]}"; do EGRESS+=("release"$'\t'"$a"); done
+fi
 if [ -n "$(k CCRC_TESTBOX_OS_MIRROR)" ]; then
   h=$(host_of "$(k CCRC_TESTBOX_OS_MIRROR)") || refuse "CCRC_TESTBOX_OS_MIRROR names no host"
   EGRESS+=("osmirror"$'\t'"$h")
@@ -407,10 +416,27 @@ for d in results logs out registry handover; do dir 0750 "$SVC" "$SVC" "$ROOT/$d
 for ((i = 1; i <= RUNS; i++)); do dir 0750 "$SVC" "$SVC" "$ROOT/out/$i"; done
 dir 0750 "$SVC" "$SVC" "$ROOT/out/install"
 
-# The push user's one key (spec §2.1): its forced command and the repository table it checks.
+# The push user's one key (spec §2.1): its forced command and the repository table it checks. sshd runs a forced
+# command through the login shell, `git-shell -c "<command>"`, and git-shell runs no command whose first word holds a
+# slash: it runs a bare name from $HOME/git-shell-commands only. So the forced command is named there, as push-command,
+# a link to the installed release's script through installed, so a tool sync's switch moves it with the hook and the
+# units; a copy would stay the older release's until the next --reapply (D-8956).
 dir 0755 root root "$SYSROOT/var/lib/$PUSH"
 dir 0755 root root "$SYSROOT/var/lib/$PUSH/.ssh"
-printf 'restrict,command="%s %s" %s\n' "$TREE/deploy/testbox/git/push-command" "$REPOS" "$PUSH_KEY" > "$WORK/authorized_keys"
+dir 0755 root root "$SYSROOT/var/lib/$PUSH/git-shell-commands"
+pc=$SYSROOT/var/lib/$PUSH/git-shell-commands/push-command
+if [ "$(readlink -- "$pc" 2>/dev/null)" != "$TREE/deploy/testbox/git/push-command" ]; then
+  # The swap replaces a link or a file. mv would move the new link into a directory, and follows a link to one, so a
+  # directory is refused by name and a link to one removed first (BSD mv has no -T, and the fixture box runs there too).
+  for p in "$pc" "$pc.new"; do
+    if [ -d "$p" ] && [ ! -L "$p" ]; then fail "$p is a directory, not the forced command's link; remove it and run the installer again"; fi
+  done
+  if [ -L "$pc" ] && [ -d "$pc" ]; then rm -f -- "$pc" || fail "cannot remove $pc"; fi
+  rm -f -- "$pc.new" || fail "cannot remove $pc.new"
+  ln -s "$TREE/deploy/testbox/git/push-command" "$pc.new" || fail "cannot link $pc"
+  mv -f -- "$pc.new" "$pc" || fail "cannot link $pc"
+fi
+printf 'restrict,command="push-command %s" %s\n' "$REPOS" "$PUSH_KEY" > "$WORK/authorized_keys"   # D-8956
 put 0644 "$WORK/authorized_keys" "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys"
 
 # The repository rows and their mirrors (spec §2.1 "The mirror"): a bare repository the service fetches into on its

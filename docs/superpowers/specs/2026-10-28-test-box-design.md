@@ -270,7 +270,10 @@ mirror's gets its own. The mirror URL is per repository (§4).
 
 **The push user and the create-only rule.** The push lands as `ccrc-tb-push` (config), a system user that exists only
 for this: its login shell is `git-shell`, and its one `authorized_keys` entry is
-`restrict,command="<forced-command script>" <the fleet host's push key>`. The forced command runs
+`restrict,command="push-command <repository table>" <the fleet host's push key>`. sshd runs a forced command through
+the login shell, and `git-shell` runs no command whose first word holds a slash, only a bare name from
+`$HOME/git-shell-commands`, so the forced-command script is named there: `git-shell-commands/push-command`, root's,
+a link to the installed release's script (D-8956). The forced command runs
 `git-receive-pack '<path>'` only when `SSH_ORIGINAL_COMMAND` is exactly that and `<path>` is a mirror the repository
 table lists, and exits non-zero on anything else. The mirror is `core.sharedRepository=0664` with group `ccrc-tb-git`
 (the service and the push user), so the service's fetch and `gc` can rewrite pushed objects; run users read the mirror

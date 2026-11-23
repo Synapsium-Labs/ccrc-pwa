@@ -769,6 +769,29 @@ describe('the advance file\'s wave 3 keys: missing and effortFallback', () => {
     }));
   });
 
+  // The reverse of the case above: a valid releasedHold never hides wave 3's own refusals on the same class.
+  it('refuses malformed missing alongside a valid releasedHold, with wave 3\'s own message and field', () => {
+    const a = example();
+    a.classes.opus.missing = { model: MISSING.model, since: 'not-a-time' };
+    a.classes.opus.releasedHold = { model: MISSING.model, at: AT };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.missing',
+      message: 'classes.opus.missing is not {"model": <id>, "since": <time>, "seen": <time>}.',
+    }));
+  });
+
+  it('refuses malformed effortFallback alongside a valid releasedHold, with wave 3\'s own message and field', () => {
+    const a = example();
+    a.classes.opus.effortFallback = { ...FALLBACK, to: null };
+    a.classes.opus.releasedHold = { model: MISSING.model, at: AT };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.effortFallback',
+      message: 'classes.opus.effortFallback is not {"at": <time>, "model": <id>, "from": <level>, "to": <level>}.',
+    }));
+  });
+
   it('a missing record of the first shape, with no seen, still reads (the rule restarts it, D-8838)', () => {
     const a = example();
     a.classes.opus.missing = { model: 'model-6.1-gamma', since: AT };

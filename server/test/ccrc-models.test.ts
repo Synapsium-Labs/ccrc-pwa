@@ -1362,7 +1362,9 @@ describe.skipIf(spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8'
       expect(r.code, r.stdout + r.stderr).toBe(0);
       return oneObject(r);
     };
-    /** X1 to X2 recorded and pushed, the class held at X2, the alias on to X3 under the hold, then the release. */
+    /** X1 to X2 recorded and pushed, the class held at X2, the alias on to X3 under the hold, then the release. The hold
+     *  is placed after the cache naming X3 was fetched, so that move rests on evidence older than the hold and does not
+     *  end it by itself (revert-ends-itself): what is pinned here is what a RELEASE settles. */
     const heldThenReleased = (): void => {
       fs.mkdirSync(join(home, '.cc-sessions'), { recursive: true });
       fs.writeFileSync(join(home, '.cc-sessions', 'notify.sh'),
@@ -1371,7 +1373,7 @@ describe.skipIf(spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8'
       expect(refresh('2026-11-16T06:00:00Z')).toEqual([]);
       plantCache('2026-11-16T12:00:00Z', X2);
       expect(refresh('2026-11-16T18:00:00Z')).toEqual([{ class: 'opus', from: X1, to: X2 }]);
-      expect(verb('hold', '2026-11-16T20:00:00Z')).toMatchObject({ op: 'hold', changed: true });
+      expect(verb('hold', '2026-11-17T03:00:00Z')).toMatchObject({ op: 'hold', changed: true });
       plantCache('2026-11-17T00:00:00Z', X3);
       expect(refresh('2026-11-17T06:00:00Z'), 'a held class records no move').toEqual([]);
       expect(verb('release', '2026-11-17T09:00:00Z')).toMatchObject({ op: 'release', changed: true });
@@ -1393,7 +1395,7 @@ describe.skipIf(spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8'
     it('a revert between the release and the refresh holds at X2, never X1', () => {
       heldThenReleased();
       expect(verb('revert', '2026-11-17T10:00:00Z')).toMatchObject({ op: 'revert', changed: true });
-      expect(opus()['hold']).toEqual({ at: '2026-11-17T10:00:00Z', by: 'revert', model: X2 });
+      expect(opus()['hold']).toEqual({ at: '2026-11-17T10:00:00Z', by: 'revert', model: X2, from: X3 });
       expect(opus().history).toHaveLength(1);
     });
   });

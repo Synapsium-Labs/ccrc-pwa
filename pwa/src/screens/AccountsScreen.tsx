@@ -54,7 +54,7 @@ import type { AccountPoolWire } from '../../../shared/poolrule';
 import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
 import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
 import { ModelsSheet } from '../accounts/ModelsSheet';
-import { MODELS_ACT } from '../accounts/modelsSheetWords';
+import { MODELS_ACT, modelsActOffered, modelsSheetAnthropic } from '../accounts/modelsSheetWords';
 import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
@@ -713,8 +713,10 @@ export function AccountsScreen(): ReactNode {
                       {SIGN_IN_AGAIN}
                     </Button>
                   )}
-                  {/* A Codex lane's Models (model-class-advance R4, Task 20): its classes, holds and Revert, in one sheet. */}
-                  {entry?.kind === 'codex' && (
+                  {/* A Codex or an Anthropic lane's Models (model-class-advance R4, Task 20; wave 9, Task A4.3): the sheet shows
+                      each lane's classes and holds, and offers Revert on a Codex or an Anthropic lane where the fleet box ends a
+                      revert's hold by itself. The roster's lane kind gates it (`modelsActOffered`). */}
+                  {modelsActOffered(entry) && (
                     <Button
                       variant="ghost" size="fit" disabled={!canAct}
                       aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
@@ -835,6 +837,7 @@ export function AccountsScreen(): ReactNode {
         <ModelsSheet
           key={`models-${modelling.gen}`}
           lane={modelling.id}
+          anthropic={modelsSheetAnthropic(roster.find((r) => r.id === modelling.id))}
           open
           onClose={() => setModelling(null)}
           offline={blocked}

@@ -30,7 +30,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs, { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource, stubContainedTool } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-tmuxsrv-'); });
@@ -285,6 +285,105 @@ describe('_spawn_start routes its session creation through the placement wrapper
     const body = h.sh('type _spawn_start');
     expect(body, 'a bare `tmux new-session` in _spawn_start places the server in the caller\'s cgroup — use _tmux_new_session')
       .not.toMatch(/(^|[^_\w])(?:tmux|_tmx) new-session|"\$\{_TMX_ARGV\[@\]\}" new-session/);   // through the socket lookup too (D-8270)
+  });
+});
+
+describe('the pane writer survives the scope path: systemd-run expands nothing in the pane command (D-8953)', () => {
+  // MEASURED ON A FLEET BOX, 2026-11-22: the user manager restarted, the tmux server died with it, and the first
+  // respawn took the scope path. systemd 254 added `--expand-environment=`, off for `--scope` there and on by default
+  // in a later release, so the v259 box replaced the writer's `${p%?.}` with nothing. The writer then exited 0 with an
+  // empty `p`, the parent's pending line stood for ever, and every child reclaim on the fleet held behind it. Before
+  // 254 `--scope` expanded nothing at all (systemd NEWS, 254), so no `--expand-environment` there, and no `$$`.
+  //
+  // FIXTURE HOME ONLY: a `systemd-run` stub that answers `--version` with $SDRUN_V, expands `${NAME}` (an unknown
+  // name to nothing, `$$` to `$`) as a v254+ scope does unless `--expand-environment=no`, refuses that option below
+  // 254, and execs the rest; and a `tmux` stub with no server whose `new-session` runs its command with `/bin/sh -c`.
+  const ID = 'lane-a-demo';
+  const SDRUN = `#!/bin/bash
+printf '%s\\n' "$*" >> "$HOME/systemd-run-calls"
+v=\${SDRUN_V:-259}
+[ "$1" = --version ] && { [ -n "\${SDRUN_SLEEP-}" ] && exec sleep "$SDRUN_SLEEP"; [ "$v" = unread ] && exit 1; printf 'systemd %s (%s-1)\\n+PAM\\n' "$v" "$v"; exit 0; }
+exp=1; (( v >= 254 )) || exp=0
+while [[ "\${1-}" == --* ]]; do
+  case "$1" in --expand-environment=no) (( v >= 254 )) || exit 1; exp=0 ;; --expand-environment*) exit 1 ;; esac; shift
+done
+xp() { local s=$1 o='' n; while [[ $s == *'$'* ]]; do o+=\${s%%'$'*}; s=\${s#*'$'}
+  if [[ $s == '$'* ]]; then o+='$'; s=\${s#'$'}; elif [[ $s == '{'*'}'* ]]; then n=\${s#'{'}; n=\${n%%'}'*}; s=\${s#*'}'}
+    [[ $n =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && o+=\${!n-}; else o+='$'; fi; done; printf '%s' "$o$s"; }
+if (( exp )); then a=(); for x in "$@"; do a+=("$(xp "$x")"); done; set -- "\${a[@]}"; fi
+exec "$@"
+`;
+  const TMUX = `#!/bin/bash
+printf '%s\\n' "$*" >> "$HOME/tmux-calls"
+case "$1" in list-sessions) exit 1 ;; new-session) for c in "$@"; do :; done; /bin/sh -c "$c"; exit 0 ;; esac
+exit 0
+`;
+  type Spawned = { field: string; state: string; cached: string; versionReads: number; scoped: string[]; ms: number };
+  // `steps` are shell lines run before each spawn in one process (a supervisor's), so a step can change what the
+  // stub answers between spawns; `pre` runs once, after ccd is sourced.
+  const spawnOnce = (v: string, times = 1, steps: string[] = [], pre = '', env: NodeJS.ProcessEnv = {}): Spawned => {
+    stubContainedTool(h.home, 'systemd-run', SDRUN);
+    stubContainedTool(h.home, 'tmux', TMUX);
+    const wd = fs.realpathSync(fs.mkdtempSync(path.join(h.home, 'wd-')));
+    const one = `_spawn_workdirid_pending ${ID} '${wd}'; `
+      + `_tmux_new_session -d -s cc-${ID} -x 220 -y 50 "cd '${wd}' && $(_plat_workdirid_pane "$REG" ${ID} '${wd}')true";`;
+    const body = Array.from({ length: times }, (_, i) => `${steps[i] ?? ''} ${one}`).join(' ');
+    const t0 = Date.now();
+    const [state, cached] = h.sh(`${pre} ${body} _ws_workdirid_read ${ID} '${wd}'; `
+      + `printf '%s|%s' "$_WS_WDID_STATE" "$_TMX_SDRUN_V"`, { SDRUN_V: v, ...env }).split('|');
+    const ms = Date.now() - t0;
+    const raw = fs.readFileSync(path.join(h.home, 'systemd-run-calls'), 'utf8').split('\n').filter(Boolean);
+    return {
+      field: fs.readFileSync(path.join(h.home, '.cc-sessions', `${ID}.workdirid`), 'utf8'),
+      state, cached, versionReads: raw.filter((l) => l === '--version').length, scoped: h.systemdRunCalls(), ms,
+    };
+  };
+
+  it('systemd 259 (expands by default): the pane records a valid v1 entry, never the pending line for ever', () => {
+    const r = spawnOnce('259');
+    expect(r.scoped[0], 'the CONTROL: the session was created through the scope').toContain('--unit=ccrc-tmux-server');
+    expect(r.field, 'the writer reached its printf').toMatch(/^v1\t[0-9]+:[0-9]+:/);
+    expect(r.state).toBe('valid');
+    expect(r.scoped[0]).toContain('--expand-environment=no');
+  });
+
+  it('systemd 252 (no option, no expansion under --scope): no option is passed, and the entry is valid', () => {
+    const r = spawnOnce('252');
+    expect(r.scoped[0]).toContain('--unit=ccrc-tmux-server');
+    expect(r.scoped[0], 'an option a pre-254 systemd-run refuses would only send it down the bare path')
+      .not.toContain('--expand-environment');
+    expect(r.state).toBe('valid');
+  });
+
+  it('a version that cannot be read passes the option: an old systemd-run refuses it and the bare path still records', () => {
+    const r = spawnOnce('unread');
+    expect(r.scoped[0]).toContain('--expand-environment=no');
+    expect(r.state).toBe('valid');
+  });
+
+  it('the version is read once per process, however many sessions the scope path creates', () => {
+    expect(spawnOnce('259', 2).versionReads).toBe(1);
+  });
+
+  it('a pre-254 answer is never kept: a systemd upgraded under a running supervisor is asked again', () => {
+    // A supervisor lives for weeks and spawns in-process. Had it kept 252, its next scope-path spawn after an
+    // in-place upgrade across the expansion default would pass no option, and the incident's pending line returns.
+    const r = spawnOnce('252', 2, ['', 'SDRUN_V=259;']);
+    expect(r.versionReads, 'the pre-254 answer was asked again at the second spawn').toBe(2);
+    expect(r.scoped[0]).not.toContain('--expand-environment');
+    expect(r.scoped[1], 'the second spawn, after the upgrade').toContain('--expand-environment=no');
+    expect(r.state).toBe('valid');
+    expect(r.cached).toBe('259');
+  });
+
+  it('the version read is bounded: a systemd-run that never answers costs the deadline, then passes the option', () => {
+    // The read runs on the slow path under the tmux-server lock, which serialises every supervisor in a mass
+    // respawn, so an unbounded hang would stall every spawn behind it. The stub's `--version` sleeps for 60 s.
+    const r = spawnOnce('259', 1, [], 'SUBSTRATE_PROBE_DEADLINE_S=1;', { SDRUN_SLEEP: '60', CCD_TIMEOUT_KILL_AFTER: '2' });
+    expect(r.ms, 'the deadline (1 s) plus its kill grace (2 s), never the stub\'s 60 s').toBeLessThan(20_000);
+    expect(r.cached).toBe('unread');
+    expect(r.scoped[0]).toContain('--expand-environment=no');
+    expect(r.state).toBe('valid');
   });
 });
 

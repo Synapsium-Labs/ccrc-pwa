@@ -156,15 +156,17 @@ export interface DiskNotice {
 
 const GIB = 1024 ** 3;
 
-/** A filesystem's used percent the way `df` reads it, the larger of bytes and inodes, whole points rounded down. */
-function usedPct(fs: DiskFilesystem): number {
+/** A filesystem's used percent the way `df` reads it, the larger of bytes and inodes, whole points rounded down. Exported
+ *  for the disk-lane stall alert's words (D-8955), so the two say one number. */
+export function usedPct(fs: DiskFilesystem): number {
   const used = Math.max(0, fs.sizeBytes - fs.freeBytes);
   const bytes = used + fs.availBytes > 0 ? (used * 100) / (used + fs.availBytes) : 0;
   const inodes = fs.files > 0 ? ((fs.files - fs.filesFree) * 100) / fs.files : 0;
   return Math.floor(Math.max(bytes, inodes) + 1e-9);
 }
 
-const gib = (bytes: number): string => {
+/** Bytes in GiB as the disk notices say them (exported for the stall alert, D-8955). */
+export const gib = (bytes: number): string => {
   const v = bytes / GIB;
   return v >= 1 ? `${Math.round(v)} GiB` : `${v.toFixed(1)} GiB`;
 };

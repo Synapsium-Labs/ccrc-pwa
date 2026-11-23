@@ -220,7 +220,7 @@ describe('the delegation frame: projected after a pass that ran, broadcast on a 
   it('W4-W6 (leases consume no run slot): the lease is in the store, and the cap counts no running run', async () => {
     const w = await leasedWorld();
     expect(w.coord.readDelegationProjection().leases).toHaveLength(1);
-    expect(capsMeasured(w.coord).usage.running).toBe(0);
+    expect(capsMeasured(w.coord, undefined).usage.running).toBe(0);
   });
 
   it('W4-W7: an unlisted registry, with no frame sent before, sends nothing', async () => {

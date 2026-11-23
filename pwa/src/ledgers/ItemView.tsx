@@ -63,7 +63,8 @@ import './ledgers.css';
 
 export interface ItemViewProps {
   readonly item: ItemWire;
-  /** Tick the item. `decide` and `value` pass the answer; `do` passes none. Rejects with the route's `ApiError` on a refusal. */
+  /** Tick the item. `decide` and `value` pass the answer; `do` passes its optional note when one was typed, and nothing
+   *  otherwise (D-8931). Rejects with the route's `ApiError` on a refusal. */
   readonly onTick: (answer?: string) => Promise<void>;
   readonly onDismiss: () => Promise<void>;
   /** The programme has an open run (`programmeIsLive`). When it has none no coordinator is waiting: a tick is refused
@@ -372,6 +373,12 @@ function History({ item, now, homeProject, itemHref }: {
 /** What joins a note to the choice inside the one `answer` string: the tick carries `{answer}` and no more, and the route
  *  takes any decide answer of 1 to `ANSWER_MAX` characters, so a note travels inside it (departure pl5a-note-in-answer). */
 const NOTE_JOIN = '\n\nNote: ';
+/** The label of the optional note, on a decide item (where it rides inside the answer, above) and on a do item (where it is
+ *  the whole answer, D-8931). */
+const NOTE_LABEL = 'Note to the coordinator (optional)';
+/** Under a do item's note: why the field is there, and what happens after the tick. A coordinator may ask for a note in the
+ *  item's steps, and a tick that could carry none was sent back every time (D-8931). */
+const DO_NOTE_HINT = 'Some items ask for one, such as who did each step and when. The coordinator checks the result itself and either closes the item or sends it back with what it found.';
 /** The radio value of "Your own answer"; an option's is `o<index>`, so no option's words can collide with it. */
 const OWN = 'own';
 const OWN_WORD = 'Your own answer';
@@ -429,11 +436,15 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
     : item.kind === 'value' ? typed.trim() : null;
   const noteText = note.trim();
   const noteCost = noteText === '' ? 0 : NOTE_JOIN.length + noteText.length;
-  const answer: string | null = choice === null ? null : decide && noteText !== '' ? `${choice}${NOTE_JOIN}${noteText}` : choice;
+  // A do item's note is its whole answer, and an empty one is no answer at all (D-8931); a decide's note is joined
+  // to its choice.
+  const answer: string | null = item.kind === 'do' ? (noteText === '' ? null : noteText)
+    : choice === null ? null : decide && noteText !== '' ? `${choice}${NOTE_JOIN}${noteText}` : choice;
   const tooLong = answer !== null && answer.length > ANSWER_MAX;
   const needsAnswer = decide || item.kind === 'value';
   // A decision is an option, or own text that is not empty: a note alone is not one (it would send the coordinator "Note: …" with no choice).
-  const ready = !needsAnswer || (choice !== null && choice !== '' && !tooLong);
+  // A do item needs nothing, so only a note past the limit holds it.
+  const ready = needsAnswer ? choice !== null && choice !== '' && !tooLong : !tooLong;
 
   const run = async (act: () => Promise<void>): Promise<void> => {
     // A saved copy sends nothing, whatever reached this (the buttons are disabled too).
@@ -478,7 +489,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
                          ]}
                          value={pick} onPick={setPick} />
           {pick === OWN && <Field label={OWN_WORD} value={own} onChange={setOwn} maxLength={ANSWER_MAX - noteCost} />}
-          <Field label="Note to the coordinator (optional)" value={note} onChange={setNote}
+          <Field label={NOTE_LABEL} value={note} onChange={setNote}
                  maxLength={Math.max(0, ANSWER_MAX - (choice?.length ?? 0) - NOTE_JOIN.length)} />
         </>
       )}
@@ -486,11 +497,11 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
         <Field label="Your value" value={typed} onChange={setTyped} maxLength={ANSWER_MAX}
                hint="An ordinary value: it is sent to the coordinator and may be written into the programme ledger." />
       )}
-      {mayTick && needsAnswer && answer !== null && (
-        <span className="wi-hint">{`${answer.length} of ${ANSWER_MAX} characters`}</span>
-      )}
       {mayTick && item.kind === 'do' && (
-        <p className="wi-hint">Nothing to fill in. The coordinator checks it itself and either closes the item or sends it back with what it found.</p>
+        <Field label={NOTE_LABEL} value={note} onChange={setNote} maxLength={ANSWER_MAX} hint={DO_NOTE_HINT} />
+      )}
+      {mayTick && answer !== null && (
+        <span className="wi-hint">{`${answer.length} of ${ANSWER_MAX} characters`}</span>
       )}
       {secretOpen && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} current={current} />}
       {checking && item.kind === 'secret' && saved !== null && <SecretState set={saved} />}
@@ -519,7 +530,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
         {acting && <ItemControls item={item} runs={runs} acts={acts} enabled={current} {...(onActed === undefined ? {} : { onActed })} />}
         {mayTick && (
           <Button variant="primary" size="fit" disabled={busy || !ready || !current}
-                  onClick={() => void run(() => (answer === null || !needsAnswer ? onTick() : onTick(answer)))}>Mark done</Button>
+                  onClick={() => void run(() => (answer === null ? onTick() : onTick(answer)))}>Mark done</Button>
         )}
         {ended && (
           <Button variant="ghost" size="fit" disabled={busy || !current} onClick={() => void run(onDismiss)}>Dismiss</Button>

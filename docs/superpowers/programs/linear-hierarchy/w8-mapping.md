@@ -34,10 +34,10 @@ The plan's "Deviations found" carries both entries in full. In short:
   a key two hold is refused `team-ambiguous` (the card points at its picker), and a key none holds is stored with none. An
   unreadable Linear store is `unavailable`, never `team-unknown` and never stored as none. A cleared key, and the stored key
   sent back with the workspace absent, read no store (`writeReadsStore`); the shipped card never sends null, so only a direct
-  API caller meets the null arm. A row stored with no workspace (before this wave's migration) whose key one connected
-  workspace holds already resolves there, so Save of the unchanged key, with that workspace or none, keeps the stored none: the
-  source, team name, evidence and time stay (the coordinator's ruling: no change of source). Another key or a workspace among
-  two holders is still the operator's decision.
+  API caller meets the null arm. With one readable holder, Save of an unchanged key naming that holder keeps a stored
+  empty workspace and its source, team name, evidence and time, even if another slot is unread. Omitting the workspace on
+  an unchanged key keeps the stored choice without a read. Explicit null does not: an unread relevant slot can return
+  `unavailable` without writing. A workspace named among two readable holders is still the operator's choice.
 - **The Linear proxy is unchanged.** It knows the caller's identity, not its project.
 - **Task 8.3 is off.** Its schema is an assumption until the live capture: `attachmentsForURL(url)` returning nodes of
   `issue { id identifier team { key } }`. A partial answer, where any workspace failed, is unmeasured.
@@ -369,8 +369,9 @@ slot with no teams.
   carries its fixed detail, decided there. `measuredPairRoute` beside `PairRoute` hands the operator's write the same
   measured route. `workspaceAfterWrite` decides as before, except its keep of a stored none (fix round 1, F1, below).
 - The suggest and confirm doors answer `unavailable` for an unread workspace and `not-configured` for none. The operator's
-  write answers `unavailable` when a slot the answer depends on cannot be read (it stored the key with none, or with the one
-  readable holder, before). With no workspace connected it keeps its answers, as the coordinator ruled: a named workspace is
+  write answers `unavailable` when a slot the answer depends on cannot be read. Before this change a named unread slot
+  returned `team-unknown`; with no workspace named, an unread slot could be treated as not holding the key. With no
+  workspace connected the write keeps its answers, as the coordinator ruled: a named workspace is
   `team-unknown`, and with none named the key is stored with none, because the console has no sentence for `not-configured`
   on that write.
 - An intended change on all three doors: a key one readable slot holds, while another slot is unreadable and no workspace is
@@ -393,8 +394,9 @@ Fix round 1 (review 3286, as the coordinator ruled):
   another slot unread (kept; measured red at the round's base), the named slot unread (`unavailable`).
 - F2: `team-unknown` says the workspace the pair depends on was read, not that every workspace was: for a named workspace
   the resolver reads that one alone (`policy.ts`, the Overlord skill's paragraph, the coordinator plan reference, this note).
-- F3: D-8808's sentence on the write gives its answers as ruled: `unavailable` for a named slot that cannot be read, and
-  with none named for any unread workspace unless two readable ones already hold the key; the no-workspace case unchanged.
+- F3: D-8808 records `unavailable` for a named slot that cannot be read and for an unpinned lookup that depends on an
+  unread slot. Omitting the workspace on a changed key still uses the stored workspace if that workspace holds the new
+  key; with no workspace connected the write keeps its earlier answers.
 - F4: the card's sentence for the write's `unavailable` names the keys or a workspace and says to try later, because an
   unread workspace stays unread until its key is checked. No new word; both pins measured red first.
 - F5: the sentence on commits above names the suggest door's exception.

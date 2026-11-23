@@ -10,7 +10,7 @@
 // input). It SPELLS NO CLASS WORD and no model id, in code or prose: the classes come from `CLASSES`, the family of an
 // id from `familyClassOf`, and every id from data.
 import { CLASSES, MODEL_ID_RE, familyClassOf } from './models.mjs';
-import { BEHIND_AFTER_MS, compareVersions, isAt, isoSeconds } from './model-advance.mjs';
+import { BEHIND_AFTER_MS, compareVersions, heldUnobserved, isAt, isoSeconds } from './model-advance.mjs';
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string' && v.length > 0;
@@ -48,12 +48,14 @@ function fetchedIso(v) {
 
 /** The row of one model: `efforts` is `[]` only when the row SAYS the model takes none (`thinking.type` "none"), the
  *  row's own list when it has one, and `null` when it carries no effort field at all. The two are never folded
- *  (D-8750). Throws a string naming the field when a field is present and unusable. */
+ *  (D-8750). `{row}`, or `{skip}` with the broken field and its reason. A skip carries `rowId` if the id was
+ *  valid, `null` if the id was unreadable, and no `rowId` if the string cannot name a valid target. */
 function readRow(m, f) {
-  if (!isObj(m)) throw new Error(`${f} is not an object`);
-  if (typeof m.id !== 'string') throw new Error(`${f}.id is not a string`);
+  const skip = (at, why, rowId) => ({ skip: { at, why, ...(rowId === undefined ? {} : { rowId }) } });
+  if (!isObj(m)) return skip(f, 'is not an object', null);
+  if (typeof m.id !== 'string') return skip(`${f}.id`, 'is not a string', null);
   const id = bareModelId(m.id);
-  if (!MODEL_ID_RE.test(id)) throw new Error(`${f}.id is not a model id`);
+  if (!MODEL_ID_RE.test(id)) return skip(`${f}.id`, 'is not a model id');
   const runtime = isObj(m.runtime) ? m.runtime : {};
   const thinking = isObj(m.thinking) ? m.thinking : {};
   let efforts = null;
@@ -62,23 +64,29 @@ function readRow(m, f) {
   let minVersion = null;
   if (m.min_claude_code_version !== undefined && m.min_claude_code_version !== null) {
     if (typeof m.min_claude_code_version !== 'string' || !VERSION_RE.test(m.min_claude_code_version)) {
-      throw new Error(`${f}.min_claude_code_version is not a version`);
+      return skip(`${f}.min_claude_code_version`, 'is not a version', id);
     }
     minVersion = m.min_claude_code_version;
   }
   return {
-    id,
-    label: isStr(m.name) ? m.name : null,
-    efforts,
-    defaultEffort: isStr(runtime.default_effort) ? runtime.default_effort : null,
-    minVersion,
+    row: {
+      id,
+      label: isStr(m.name) ? m.name : null,
+      efforts,
+      defaultEffort: isStr(runtime.default_effort) ? runtime.default_effort : null,
+      minVersion,
+    },
   };
 }
 
-/** `(json) => CacheReading`: one cache file's parsed JSON. `{format:'current', fetchedAt, aliasTargets, rows}` when it
- *  carries alias targets (a class its map does not name has a null target; a target with no row keeps the target and
- *  has no entry in `rows`), `{format:'older', fetchedAt}` when it does not (`fetchedAt` null when unreadable: the file
- *  is never a source), and `{format:'invalid', why}` for anything that is not a cache file or breaks a field. */
+/** `(json) => CacheReading`: one cache file's parsed JSON. `{format:'current', fetchedAt, aliasTargets, rows, skipped}`
+ *  when it carries alias targets (a class its map does not name has a null target; a target with no row keeps the
+ *  target and has no entry in `rows`), `{format:'older', fetchedAt}` when it does not (`fetchedAt` null when unreadable:
+ *  the file is never a source), and `{format:'invalid', why}` for anything that is not a cache file or breaks a field
+ *  of the FILE: not an object, no `catalog.config` object, a `fetchedAt` that is not a time, `models` not a list.
+ *  A field of ONE row or ONE class's target is read row by row (cache-row-skip): a row that breaks a field is left out
+ *  of `rows` along with any duplicate of its known id. A class whose target is not a model id has a null target.
+ *  Each bad row or target has an entry in `skipped` (targets first), so the resolver can tell a skip from absence. */
 export function parseCatalogueCache(json) {
   if (!isObj(json)) return { format: 'invalid', why: 'a catalogue cache is a JSON object' };
   if (!isObj(json.catalog) || !isObj(json.catalog.config)) {
@@ -88,28 +96,29 @@ export function parseCatalogueCache(json) {
   const fetchedAt = fetchedIso(json.fetchedAt);
   if (!isObj(config.provider_alias_targets)) return { format: 'older', fetchedAt };
   if (fetchedAt === null) return { format: 'invalid', why: 'fetchedAt is not a time' };
+  const models = config.models === undefined ? [] : config.models;
+  if (!Array.isArray(models)) return { format: 'invalid', why: 'models is not a list' };
   const targets = config.provider_alias_targets;
+  const skipped = [];
   const aliasTargets = {};
-  try {
-    for (const c of CLASSES) {
-      const entry = targets[c];
-      const raw = isObj(entry) ? entry.default : undefined;
-      if (raw === undefined || raw === null) { aliasTargets[c] = null; continue; }
-      const id = typeof raw === 'string' ? bareModelId(raw) : '';
-      if (!MODEL_ID_RE.test(id)) throw new Error(`provider_alias_targets.${c}.default is not a model id`);
-      aliasTargets[c] = id;
+  for (const c of CLASSES) {
+    const entry = targets[c];
+    const raw = isObj(entry) ? entry.default : undefined;
+    const id = typeof raw === 'string' ? bareModelId(raw) : '';
+    if (raw !== undefined && raw !== null && !MODEL_ID_RE.test(id)) {
+      skipped.push({ at: `provider_alias_targets.${c}.default`, why: 'is not a model id' });
     }
-    const rows = new Map();
-    const models = config.models === undefined ? [] : config.models;
-    if (!Array.isArray(models)) throw new Error('models is not a list');
-    models.forEach((m, i) => {
-      const row = readRow(m, `models[${i}]`);
-      if (!rows.has(row.id)) rows.set(row.id, row);
-    });
-    return { format: 'current', fetchedAt, aliasTargets, rows };
-  } catch (e) {
-    return { format: 'invalid', why: e instanceof Error ? e.message : String(e) };
+    aliasTargets[c] = MODEL_ID_RE.test(id) ? id : null;
   }
+  const rows = new Map();
+  models.forEach((m, i) => {
+    const read = readRow(m, `models[${i}]`);
+    if (read.skip !== undefined) skipped.push(read.skip);
+    else if (!rows.has(read.row.id)) rows.set(read.row.id, read.row);
+  });
+  // A duplicate cannot prove a minimum absent when another row for the same id could have hidden it.
+  for (const skip of skipped) if (typeof skip.rowId === 'string') rows.delete(skip.rowId);
+  return { format: 'current', fetchedAt, aliasTargets, rows, skipped };
 }
 
 /** `(readings) => CacheReading | null`: the newest `current` reading by `fetchedAt` (the first of equals), `null` when
@@ -134,14 +143,10 @@ export const ALIASES_VERSION = 1;
  *  the cache's `staleAt`, which lapses within the hour while Claude Code keeps launching over it. */
 export const CACHE_STALE_AFTER_MS = 604_800_000;
 
-/** `(evidenceAt, hold) => boolean`: whether a held class's id is UNOBSERVED against the hold standing now: a hold stands,
- *  and the id rests on no evidence or on evidence older than the hold. Such an id says nothing about where the alias
- *  went after the hold, so no reader names the class behind on it. The one rule: the resolver sets `unobserved` with
- *  it, and the health reading (`deploy/models-anthropic.mjs`) asks it again of the hold that stands at its read, since a
- *  `revert` writes a new hold without rewriting the aliases file. */
-export function heldUnobserved(evidenceAt, hold) {
-  return hold !== undefined && hold !== null && (evidenceAt === null || evidenceAt < hold.at);
-}
+/** The UNOBSERVED rule (`heldUnobserved`) lives in `./model-advance.mjs` since the revert-ends-itself follow-up, beside
+ *  the decider that ends a hold, which asks it too; it is re-exported here for every reader that imports it from this
+ *  module. */
+export { heldUnobserved };
 
 /** `(version) => number[] | null`: a dotted version as integers; null for anything else (an unreadable build). */
 function versionParts(v) {
@@ -179,18 +184,23 @@ function newestOwnReading(own) {
   return best;
 }
 
-/** The row of `id` as a plain object, and where it came from: the lane's own cache first (any own current file, the
- *  newest first), else the newest box cache that lists it. A box reading's targets are never read, only its rows. */
+/** With no readable row here, did a skipped row name this id or have no readable id at all? A string that cannot
+ *  name a valid target (or a skipped alias target, not a row) is irrelevant to this lookup. */
+const skippedRowFor = (cache, id) => !cache.rows.has(id)
+  && cache.skipped.some((s) => s.rowId === id || s.rowId === null);
+
+/** Prefer the newest readable own row, then the newest readable box row. If neither can provide one, distinguish
+ *  a genuinely absent row from a skip that may have hidden a build requirement. Box targets are never read. */
 function findRow(id, own, box) {
-  for (const r of currentsNewestFirst(own)) {
-    const row = r.rows.get(id);
-    if (row !== undefined) return { row: plainRow(row), from: 'own' };
+  let skipped = false;
+  for (const [readings, from] of [[own, 'own'], [box, 'box']]) {
+    for (const r of currentsNewestFirst(readings)) {
+      const row = r.rows.get(id);
+      if (row !== undefined) return { row: plainRow(row), from, skipped: false };
+      skipped ||= skippedRowFor(r, id);
+    }
   }
-  for (const r of currentsNewestFirst(box)) {
-    const row = r.rows.get(id);
-    if (row !== undefined) return { row: plainRow(row), from: 'box' };
-  }
-  return { row: null, from: null };
+  return { row: null, from: null, skipped };
 }
 const plainRow = (r) => ({ ...r, efforts: r.efforts === null ? null : [...r.efforts] });
 
@@ -236,8 +246,12 @@ export function resolveAliases({ own, box, launches, prior, holds, laneVersion, 
       if (seenAt === null || l.bornAt > seenAt) { seenId = l.id; seenAt = l.bornAt; }
     }
 
-    const target = ownCache === null ? null : ownCache.aliasTargets[c];
-    const cacheCand = target !== null && launchable(findRow(target, own, box).row, lane)
+    const rawTarget = ownCache === null ? null : ownCache.aliasTargets[c];
+    // The file that names the alias must not hide its target's minimum behind a skip. Other files can supply a
+    // readable row, but if all they have is a relevant skip, that is not proof that there was no minimum either.
+    const targetRow = rawTarget === null || skippedRowFor(ownCache, rawTarget) ? null : findRow(rawTarget, own, box);
+    const target = targetRow === null || targetRow.skipped ? null : rawTarget;
+    const cacheCand = target !== null && launchable(targetRow.row, lane)
       ? { id: target, at: ownCache.fetchedAt, source: 'cache' } : null;
     const useCand = seenId === null ? null : { id: seenId, at: seenAt, source: 'use' };
     // The newer wins; a tie goes to the cache.
@@ -390,37 +404,72 @@ export function serializeAliases(a) {
 
 // ── A SESSION BEHIND ITS CLASS'S ALIAS (Task A2.5) ──────────────────────────────────────────────────────────────────
 
+/** `(view, seen) => id | null`: the id a launch of the class lands on now, which a session of it is behind when it runs
+ *  another: the hold's `model` while a hold stands (none when the hold names none), else the alias's id when the lane's
+ *  build can launch it, and, under `seen`, only once a launch has been seen on it (spec §2.5.6's canary: the newest kept
+ *  launch reading IS the class's current id). */
+function aliasTargetOf(view, seen) {
+  if (view.hold !== null) return view.hold.model;
+  if (view.id === null || !view.launchable) return null;
+  return seen && view.seenId !== view.id ? null : view.id;
+}
+
+/** `(session, classes, {seen}) => {class, from, to} | null`: THE ONE test of whether a running session of an Anthropic lane
+ *  is on a model its class has left, AGE ASIDE (model-class follow-up typed-repick). Doctor's `aliasSessionBehind` asks it
+ *  with `seen: false` and adds its own time rules; the automatic roll (`server/src/coord/rollTarget.ts`) asks it with
+ *  `seen: true` and adds none. Pure. `session` is `{cls, model}`: the class of the session's routing record (null: none)
+ *  and its last main-loop model. `classes` is each class's `AliasClassView` (see the `.d.mts`). Behind means ALL of:
+ *   1. the session has a class, and the class a view;
+ *   2. the class has a target (`aliasTargetOf`);
+ *   3. the session's model, through `bareModelId`, is not that target;
+ *   4. that model belongs to the session's own class (`familyClassOf`) and is no other class's current or held id: a
+ *      session whose operator picked another class by hand is not behind. */
+export function aliasModelBehind(session, classes, { seen }) {
+  if (session.cls === null) return null;
+  const own = classes[session.cls];
+  if (own === null || own === undefined) return null;
+  const to = aliasTargetOf(own, seen);
+  if (to === null) return null;
+  const from = bareModelId(session.model);
+  if (from === to || familyClassOf(from) !== session.cls) return null;
+  for (const c of CLASSES) {
+    const other = classes[c];
+    if (c !== session.cls && other !== null && other !== undefined && (other.id === from || other.heldId === from)) return null;
+  }
+  return { class: session.cls, from, to };
+}
+
+/** An aliases file's class row as `aliasModelBehind` reads it, with the hold that stands on it (`undefined` or null: none). */
+const viewOfAliasClass = (k, hold) => ({
+  id: k.id,
+  launchable: k.unlaunchable === null,
+  seenId: k.seenId,
+  hold: hold === null || hold === undefined ? null : { model: typeof hold.model === 'string' ? hold.model : null },
+  heldId: k.heldRow === null ? null : k.heldRow.id,
+});
+
 /** `(session, cls, adv, lane, nowMs) => AliasBehind | null`: whether ONE running session of an Anthropic lane is still on
  *  a model its class has left (the Anthropic arm of `sessionBehind`, `shared/model-advance.mjs`, which needs a registry
  *  this lane has none of). Pure: it reads no file and no clock. `session.cls` is the class word of the session's routing
  *  record (the class ccd composed and served); `cls` is that class's row of the aliases file, `adv` its advance entry and
- *  `lane` the whole aliases file. Behind means ALL of:
- *   1. the session has a class (`session.cls` a class, and `cls` its row);
- *   2. the class's expected id: the hold's `model` while a hold stands, whatever `unobserved` says; else the aliases `id`,
- *      none when `id` is null or `unlaunchable` is set;
- *   3. the session's model, through `bareModelId`, is not that id;
- *   4. that model belongs to the session's own class (`familyClassOf`) and is no other class's current or held id: a
- *      session whose operator picked another class by hand is not behind;
+ *  `lane` the whole aliases file. Behind means `aliasModelBehind` (rules 1 to 4: the target is the hold's `model` while a
+ *  hold stands, whatever `unobserved` says; else the aliases `id`, none when `id` is null or `unlaunchable` is set; no
+ *  seen rule here) and:
  *   5. with a turn marker (`turnAtMs`), the render came strictly after the turn began; with none, the turn is the render;
  *   6. the move, `movedAt` (the hold's `at` while held, else the later of the class's `idSince` and its `releasedAt`), is
  *      at least `BEHIND_AFTER_MS` before `nowMs`, and the turn began strictly after it.
  *  Every time test is written as a comparison that HOLDS for evidence, negated, so a NaN fails it. */
 export function aliasSessionBehind(session, cls, adv, lane, nowMs) {
   if (session.cls === null || cls === null) return null;
+  const classes = {};
+  for (const c of CLASSES) classes[c] = c === session.cls ? viewOfAliasClass(cls, adv.hold) : viewOfAliasClass(lane.classes[c], null);
+  const b = aliasModelBehind(session, classes, { seen: false });
+  if (b === null) return null;
   const held = adv.hold !== null && adv.hold !== undefined;
-  if (held && typeof adv.hold.model !== 'string') return null;
-  const to = held ? adv.hold.model : (cls.unlaunchable !== null ? null : cls.id);
-  if (to === null) return null;
-  const from = bareModelId(session.model);
-  if (from === to || familyClassOf(from) !== session.cls) return null;
-  for (const c of CLASSES) {
-    const other = lane.classes[c];
-    if (c !== session.cls && (other.id === from || (other.heldRow !== null && other.heldRow.id === from))) return null;
-  }
   if (session.turnAtMs !== null && !(session.renderMs > session.turnAtMs)) return null;
   const turnMs = session.turnAtMs ?? session.renderMs;
   const since = held ? adv.hold.at : [cls.idSince, adv.releasedAt].filter(isAt).sort().pop();
   const movedMs = Date.parse(since);
   if (!(movedMs <= nowMs - BEHIND_AFTER_MS) || !(turnMs > movedMs)) return null;
-  return { class: session.cls, from, to, movedAt: since, turnAt: isoSeconds(turnMs), renderAt: isoSeconds(session.renderMs) };
+  return { ...b, movedAt: since, turnAt: isoSeconds(turnMs), renderAt: isoSeconds(session.renderMs) };
 }

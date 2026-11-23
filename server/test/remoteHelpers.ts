@@ -1,7 +1,8 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { startAgent, type AgentOpts, type RunningAgent } from '../../agent/src/server.js';
 import { connectFleet, type ConnectedFleet, type RemoteFleetConfig } from '../src/remote/client.js';
+import type { PeerSeams } from '../src/isolationFacts.js';
 import { mkTmp } from './tmpHelpers.js';
 
 /** Test-only helpers for the RemoteFleet client suite — boots a real
@@ -21,6 +22,25 @@ export function makeFixture(): RemoteFixture {
   return { home, projectsRoot };
 }
 
+/** The synthetic ids a booted agent reports (Overlord W1, the isolation word): `b` for a host that is not the server's.
+ *  No test reads the live host's machine id or boot id. */
+export const AGENT_MACHINE_ID = 'b'.repeat(32);
+export const AGENT_BOOT_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+/** A synthetic `/proc` and `/etc` holding the two ids, under the run's temp root, for an agent's `hostRoots`. */
+export function hostRootsFor(machine: string, boot: string): { procRoot: string; etcRoot: string; platform: string } {
+  const root = mkTmp('ccrc-remote-hostroots-');
+  mkdirSync(path.join(root, 'etc'), { recursive: true });
+  mkdirSync(path.join(root, 'proc/sys/kernel/random'), { recursive: true });
+  writeFileSync(path.join(root, 'etc/machine-id'), `${machine}\n`);
+  writeFileSync(path.join(root, 'proc/sys/kernel/random/boot_id'), `${boot}\n`);
+  return { procRoot: path.join(root, 'proc'), etcRoot: path.join(root, 'etc'), platform: 'linux' };
+}
+
+/** The client's peer measurement over nothing of the live host (Overlord W1, the isolation word): no interface
+ *  addresses, and socket tables that cannot be read, so a loopback peer reads `local` with its uid `unmeasured`. */
+export const TEST_PEER_SEAMS: PeerSeams = { interfaceAddresses: () => [], tables: () => 'unmeasured' };
+
 export async function bootAgent(fixture: RemoteFixture, extra: Partial<AgentOpts> = {}): Promise<RunningAgent> {
   return startAgent({
     host: '127.0.0.1',
@@ -32,6 +52,7 @@ export async function bootAgent(fixture: RemoteFixture, extra: Partial<AgentOpts
     // Overlord W1 (R10): the ready frame's `overlord-history` check reads the platform; Linux here, so every runner's real-agent
     // `ops` pins see one list.
     historySeams: { platform: 'linux' },
+    hostRoots: hostRootsFor(AGENT_MACHINE_ID, AGENT_BOOT_ID),
     ...extra,
   });
 }
@@ -47,6 +68,7 @@ export function connectToAgent(port: number, extra: Partial<RemoteFleetConfig> =
     reconnectMaxMs: 100,
     heartbeatMs: 60_000,
     requestTimeoutMs: 2_000,
+    peerSeams: TEST_PEER_SEAMS,
     ...extra,
   });
 }

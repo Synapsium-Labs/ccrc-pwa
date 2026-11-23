@@ -347,18 +347,57 @@
 .left-behind-keeps { display: grid; gap: calc(var(--pad-card) / 4); margin: 0; padding: 0; list-style: none; min-width: 0; }
 .left-behind-keeps > li { overflow-wrap: anywhere; }
 
-/* Security › Project linking (the linking standard, D-8147; plan Task 8's width table). Layout only: every word wears
-   `.settings-note` or inherits the card's ink, and the failure line is the page's amber note, so no colour is set here.
-   The card's body is a container, so the pane's width decides, not the window's. Under 480: a row stacks (name, key field
-   and Save on one line, visibility line then the full-width select, template line then the full-width button). From 480:
-   name, key and visibility on one line, the template cell under them. From 760: one grid line, name / key + Save /
-   visibility + select / template + button. The card keeps 960 px at most and is centred. A long name wraps. */
+/* Integrations › Project linking (the linking standard, D-8147; the compact list, D-8932). Layout
+   only: every word wears `.settings-note`, the page's amber note or inherits the card's ink, so no colour is set here.
+   The card's body is a container, so the pane's width decides, not the window's. The card keeps 960 px at most and is
+   centred. The counts are said once at its head. One list holds every row, a hairline between them:
+     - a listed row is one line (a native disclosure): under 600 its name leads and the team, the owner, the state and
+       the notes wrap after it; from 600 they sit in columns, so the list scans down each, with the flag and the notes
+       on a line under them. 600, not the body's 760: the refined skin's page column is 760, so its card never reaches
+       760 at any window width, and it would never get the columns. A long name wraps.
+     - a row that waits says each reason with the one control that settles it under it, then "More settings".
+     - a row's whole form, and what "More settings" shows: under 480 the cells stack (key field and Save on one line,
+       the visibility line then the full-width select, the template line then the full-width button). From 480: key and
+       visibility on one line, the template cell under them. From 760: key / visibility / template on one line.
+     - the group's button, then the unlinked rows: under 480 the name, then the key field, Save and "More settings" on
+       one line; from 480 all four on one line. */
 .linking-section { width: 100%; max-width: 960px; margin-inline: auto; min-width: 0; }
 .linking-card { container-type: inline-size; min-width: 0; }
-.linking-list { display: grid; gap: var(--pad-card); min-width: 0; margin: 0; padding: 0; list-style: none; }
-.linking-row { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
-.linking-row + .linking-row { padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); }
+.linking-counts { margin: 0 0 calc(var(--pad-card) / 2); overflow-wrap: anywhere; }
+.linking-list { display: grid; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.linking-list > li { min-width: 0; }
+.linking-list > li + li { border-top: 1px solid var(--edge-subtle); }
+/* A row of the shut group is `hidden`, and so is what "More settings" has not shown: the reset's `[hidden]` rule takes
+   both out of the layout whatever `display` a rule here gives them, and the browser suite measures that they take no room. */
 .linking-name { margin: 0; overflow-wrap: anywhere; font-weight: var(--weight-semibold); }
+/* The listed row's line fills the card (the fold's own summary is as wide as its words), so the whole line is the target.
+   Its chevron sits on the name's own line, wherever the rest wraps to: the summary aligns its two items by their first
+   baselines, and wraps so that one short line is still centred in the tap floor's height. */
+.linking-fold > .linking-sum { width: 100%; min-width: 0; flex-wrap: wrap; align-items: baseline; align-content: center; }
+.linking-line { display: flex; flex: 1 1 0; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-3); min-width: 0; padding-block: calc(var(--pad-card) / 4); }
+.linking-line > * { min-width: 0; overflow-wrap: anywhere; }
+.linking-line > .linking-name { flex: 1 0 100%; }
+.linking-extra { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-3); }
+.linking-extra > * { min-width: 0; overflow-wrap: anywhere; }
+/* The reasons a row waits, each with its control under it; a reason and a control keep a readable measure on a wide card. */
+.linking-decide { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0 0 calc(var(--pad-card) / 2); padding: 0; list-style: none; }
+.linking-slot { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; justify-items: start; }
+.linking-slot > * { min-width: 0; max-width: min(100%, 44rem); }
+.linking-slot > .linking-cell { width: 100%; }
+.linking-slot p { margin: 0; overflow-wrap: anywhere; }
+.linking-body { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; padding-bottom: calc(var(--pad-card) / 2); }
+/* An unlinked row: the name, then the key cell and "More settings" on one line. The key cell's column is capped, so a
+   line under the field (a cleared key's note, the workspace picker) wraps there and never squeezes the name out. */
+.linking-plain { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: calc(var(--pad-card) / 4) calc(var(--pad-card) / 2); align-items: baseline; min-width: 0; padding-block: calc(var(--pad-card) / 4); }
+.linking-plain > .linking-name { grid-column: 1 / -1; }
+.linking-group { display: grid; gap: calc(var(--pad-card) / 4); justify-items: start; padding-block: calc(var(--pad-card) / 4); }
+.linking-group > p { margin: 0; overflow-wrap: anywhere; }
+/* The group's button and "More settings" disclose what is under them, so they wear the fold's chevron, in their own ink:
+   right when shut, down when open. */
+.linking-group > button::before, .linking-rest::before { content: ""; flex: none; width: 0.4em; height: 0.4em; margin-inline-end: var(--sp-2); border-style: solid; border-width: 0 1.5px 1.5px 0; border-color: currentColor; transform: rotate(-45deg); }
+.linking-group > button[aria-expanded="true"]::before, .linking-rest[aria-expanded="true"]::before { transform: rotate(45deg); }
+.linking-rest { max-width: 100%; }
+.linking-fold > .linking-rest { margin-bottom: calc(var(--pad-card) / 2); }
 .linking-cell { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; align-content: start; }
 .linking-cell > * { min-width: 0; }
 .linking-cell p { margin: 0; overflow-wrap: anywhere; }
@@ -375,10 +414,12 @@
 .linking-hier { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .linking-hier .opt { min-width: 0; }
 .linking-state { align-content: start; }
+/* A coordinator select's "show" control: under the select, at its own width; a long count wraps. */
+.linking-more { max-width: 100%; justify-self: start; }
 /* D-8186: "Reshape in Linear" fills its cell on a phone and sits inline, at its own width, from a laptop's card up (Task 5.1's table). */
 .linking-reshape { width: 100%; max-width: 100%; }
 .linking-all { display: grid; gap: calc(var(--pad-card) / 2); margin-top: var(--pad-card); padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); min-width: 0; }
-.linking-all select, .linking-all button { width: 100%; max-width: 100%; }
+.linking-all select, .linking-all > .linking-all-act { width: 100%; max-width: 100%; }
 .linking-all p { margin: 0; overflow-wrap: anywhere; }
 .linking-stale { display: grid; gap: calc(var(--pad-card) / 2); justify-items: start; min-width: 0; margin-bottom: var(--pad-card); }
 .linking-stale p { margin: 0; overflow-wrap: anywhere; }
@@ -386,19 +427,34 @@
 .linking-result { min-width: 0; }
 .linking-result p { margin: 0; overflow-wrap: anywhere; }
 @container (min-width: 480px) {
-  .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
-  .linking-template, .linking-result, .linking-hier { grid-column: 1 / -1; }
-  .linking-hier { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
+  .linking-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
+  .linking-template, .linking-hier { grid-column: 1 / -1; }
+  .linking-hier { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
   /* A7: the owner select's value is a coordinator id, and its default option names the owner, whether it is live and, for an
-     inherited owner, the project it comes from: far wider than a third of the card. It takes the hierarchy cell's whole first
+     inherited owner, the project it comes from: far wider than half of the card. It takes the hierarchy cell's whole first
      line; the toggles and the state line share the line under it. */
   .linking-owner { grid-column: 1 / -1; }
+  /* An unlinked row is one line: its name, its key field and Save, and "More settings". */
+  .linking-plain { grid-template-columns: minmax(0, 1fr) fit-content(14rem) auto; }
+  .linking-plain > .linking-name { grid-column: auto; }
+  /* The select and the act share a line, in the page's order (the act follows the select there too, so Tab goes the way
+     the eye does); the "show" control, which follows both, takes the line under them. */
   .linking-all { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
-  .linking-all label, .linking-all p { grid-column: 1 / -1; }
-  .linking-all button { width: auto; }
+  .linking-all label, .linking-all p, .linking-all > .linking-more { grid-column: 1 / -1; }
+  .linking-all > .linking-all-act { width: auto; }
+}
+@container (min-width: 600px) {
+  /* The line in columns: name / team and how / owner / state, so the list scans down each. The flag and the notes take
+     the line under them, from the team's column on, so a row that has them keeps the same columns as one that has not. */
+  .linking-line { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1.1fr) minmax(0, 0.9fr); column-gap: var(--pad-card); }
+  .linking-line > .linking-name { grid-column: 1; }
+  .linking-sum-team { grid-column: 2; }
+  .linking-sum-owner { grid-column: 3; }
+  .linking-sum-state { grid-column: 4; }
+  .linking-extra { grid-column: 2 / -1; }
 }
 @container (min-width: 760px) {
-  .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); }
+  .linking-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); }
   .linking-reshape { width: auto; justify-self: start; }
   .linking-template { grid-column: auto; }
   .linking-hier { grid-column: 1 / -1; }

@@ -34,6 +34,44 @@ export function cleanupHeldByAct(
   return word === 'gone-unrecorded' && ccdWorkspace === 'absent' && fleetWorkspace === null ? 'forget' : 'recheck';
 }
 
+/** D-8955: one row's `entry-pending` episode as the roll's passes saw it. `since`: the first pass that saw it named.
+ *  `holds`: how many cleanup items it held at the last pass, every lane together. `freshAfter`: the latest earlier pass
+ *  after which a NEW read named it (it was newly named, or held more than before), or null when none was seen.
+ *
+ *  WHY FRESHNESS (review 3): an item is each held child's LATEST audit, not the registry now. A spawn writes `pending`
+ *  before its pane exists, so an audit in those few seconds names a healthy row, and that naming stands until that child
+ *  is asked again (minutes, or never while the cleanup is paused). A naming that appears between two passes came from a
+ *  read taken after the earlier one; the roll counts it only when that pass was past the spawn's window. */
+export interface EntryPendingEpisode {
+  readonly since: number;
+  readonly holds: number;
+  readonly freshAfter: number | null;
+}
+/** The episodes, and when the last pass that read a frame ran (null: none yet in this process). */
+export interface EntryPendingMemory {
+  readonly rows: ReadonlyMap<string, EntryPendingEpisode>;
+  readonly seenAt: number | null;
+}
+
+/** D-8955: the episodes after a pass at `now` over the cleanup lanes' latest items (`cleanupHeldBy`): a row still named
+ *  keeps its `since`, a row newly named takes `now`, and a row no item names any more (or names by another word first) is
+ *  dropped, so a later naming is a new episode. `null` items (no frame built yet) observe nothing and keep the memory. The
+ *  roll reads it (`entryPendingStuck`, `coord/rollTarget.ts`). */
+export function entryPendingEpisodesOf(
+  prev: EntryPendingMemory, items: readonly CleanupHeldByItem[] | null, now: number,
+): EntryPendingMemory {
+  if (items === null) return prev;
+  const rows = new Map<string, EntryPendingEpisode>();
+  for (const i of items) {
+    if (i.word !== 'entry-pending') continue;
+    const holds = i.holds.reclaim + i.holds.expire + i.holds.collect;
+    const was = prev.rows.get(i.rowId);
+    const newRead = was === undefined || holds > was.holds;
+    rows.set(i.rowId, { since: was?.since ?? now, holds, freshAfter: newRead && prev.seenAt !== null ? prev.seenAt : was?.freshAfter ?? null });
+  }
+  return { rows, seenAt: now };
+}
+
 /** The lane an audit document came from. */
 export type CleanupHeldByLane = 'reclaim' | 'expire' | 'collect';
 

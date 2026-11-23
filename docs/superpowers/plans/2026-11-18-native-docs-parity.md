@@ -480,7 +480,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
     - `review` adds no state of its own.
   - **Its limits, stated (amended 2026-11-22, review run 3292).** Making the shared field fully two-way would change the default layout's code, whose bytes stay identical to landing A's, so these are stated, not fixed:
     1. A document with nothing folded reads as unvisited. The default layout deletes the field when nothing is folded, so on the next visit `guided` applies its own first-visit layers (all folded for a long document, or when its layers choice is `guided`). A row pins it.
-    2. A layout's own fold write keeps only its own entries. The default layout's save, on a fold, a reveal or `beforematch`, drops entries only `guided` has.
+    2. The default layout's own fold write (a fold, a reveal or `beforematch`) keeps only its own entries, so it drops entries only `guided` has; `guided`'s write keeps the entries it does not own (narrowed 2026-11-22, review run 3336).
     3. `guided`'s reader-wide layers choice lives in the existing UI preference (`pref:ui`, key `layers`), and adds no field.
   - **What changes here:** §6's State line is amended in place.
   - The coordinator ruled it on 2026-11-22 (early). Issued to run 3249 in its block 8881 to 8883; 8882 and 8883 are unspent so far.

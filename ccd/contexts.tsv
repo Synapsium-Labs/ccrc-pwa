@@ -932,6 +932,10 @@ _ws_shed_asleep_why	C4
 _ws_shed_run	C4
 cmd_ws_shed_deps	C4
 _ws_shed_locked	C4
+_ws_collect_sysblock	C4
+_ws_collect_devmm	C4
+_ws_collect_dev_gone	C4
+_ws_collect_absence_dev	C4
 _pr_train_py	C4
 cmd_pr_train_prove	C4
 _ws_train_tried_get	C4

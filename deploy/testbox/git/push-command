@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # push-command — the push user's forced command (D-7405; spec §2.1 "The push user and the create-only rule").
 #
-#   authorized_keys: restrict,command="<release>/deploy/testbox/git/push-command <repository table directory>" <key>
+#   authorized_keys: restrict,command="push-command <repository table directory>" <key>
 #
+# sshd runs the forced command through the push user's login shell, git-shell, which runs a bare name from
+# $HOME/git-shell-commands only: the installer links git-shell-commands/push-command to this file (D-8956).
 # Runs `git-receive-pack '<path>'` only when SSH_ORIGINAL_COMMAND is exactly that and <path> is the mirrorPath of a
 # row of the repository table (CCRC_TESTBOX_REPOS: one shared/testbox.ts parseRepoRow-shaped JSON file per
 # repository, `<name>.json`). Anything else, a fetch included, exits non-zero and runs nothing. The mirror's
