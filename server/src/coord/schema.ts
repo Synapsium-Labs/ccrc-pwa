@@ -4277,6 +4277,8 @@ export const MIGRATIONS: readonly string[] = [
   // before merge (it must print 119 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  // Since run 3538 the status row's `account` is the week's account when the week's folder records one, else the setup's.
+  // The SQL comment on that column says "the setup's account id": it is stored text of this frozen entry, so it stays.
   `
   CREATE TABLE continuity_quiz_status (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -4285,7 +4287,7 @@ export const MIGRATIONS: readonly string[] = [
     outcome     TEXT NOT NULL,         -- ok | waiting | refused | failed
     word        TEXT,                  -- the stop's word, or NULL
     detail      TEXT,                  -- one line, or NULL
-    account     TEXT,                  -- the week's account id when recorded, else the setup's; NULL before setup
+    account     TEXT,                  -- the setup's account id, or NULL before setup
     at          INTEGER NOT NULL,      -- wall ms of the tick (the runner's)
     receivedAt  INTEGER NOT NULL,      -- wall ms the server stored it
     mailedKey   TEXT,                  -- '<week> <word>' the coordinator was last mailed for, or NULL

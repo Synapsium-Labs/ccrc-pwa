@@ -489,7 +489,7 @@ describe('quizStatusMailOf (L1: when a tick wakes the coordinator)', () => {
   });
 });
 
-describe('quizWaitingStreakOf (L1: the setup account\'s waiting streak, F9)', () => {
+describe('quizWaitingStreakOf (L1: the waiting streak on the week\'s account, F9)', () => {
   const t = (over: Partial<LaneArmQuizTick> = {}): LaneArmQuizTick => ({ ...(tick({ outcome: 'waiting', word: 'no-room' }) as unknown as LaneArmQuizTick), ...over });
   it('starts on a waiting tick, keeps its first week, and ends on any other outcome', () => {
     expect(quizWaitingStreakOf({ status: t(), waitingSince: null, goneMailedKey: null, coordinator: 'lane-a' })).toEqual({ waitingSince: '2026-W48', goneKey: null, mail: null });
