@@ -1257,6 +1257,85 @@ describe('run 3538: arms and judge run on the week\'s account, recorded in the w
     expect(json(recPath(w.out)).account).toBe(GEN);
   });
 
+  // fix round 1 (review 3545 F3): the record is on disk before the --version spawn, the week's first
+  it('the record stands before the --version spawn: a --version that fails leaves it', async () => {
+    const w = await week();
+    addGen(w.home);
+    rmSync(join(w.home, STUB_VERSION));   // the stub then prints no version line
+    const r = await run(w.home, w.argv(['--account', GEN]), FAKE);
+    expect(r.refusal?.word).toBe('version-unmeasured');
+    expect(readFileSync(recPath(w.out), 'utf8')).toBe(QS.weekAccountText(w.s.sha, GEN));
+    expect(genRuns(w.home), 'CONTROL: nothing past --version ran').toEqual([]);
+  });
+
+  it('the record stands before the --version spawn: a run killed while --version runs leaves it', async () => {
+    const w = await week();
+    addGen(w.home);
+    // the week's launcher holds its --version run open and says so, so the driver can be killed there
+    const launcher = join(w.home, '.local', 'bin', GEN);
+    const held = readFileSync(launcher, 'utf8').replace("if (argv[0] === '--version') {",
+      "if (argv[0] === '--version') { fs.writeFileSync(at('version.pid'), String(process.pid)); await new Promise((r) => setTimeout(r, 30000));");
+    expect(held, 'fixture: the --version line was found').not.toBe(readFileSync(launcher, 'utf8'));
+    writeFileSync(launcher, held, { mode: 0o700 });
+    const wrapper = join(mkTmp('ccrc-qs-wrap-'), 'run.mjs');
+    writeFileSync(wrapper, `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});
+const deps = {
+  recheck: async (_rs, es) => new Map(es.map((e) => [e.qid, { ok: true, boundaryEntryId: 0, cut: { qid: e.qid } }])),
+  payloads: (_rs, _id, _q, cut) => ({ state: 'payloads', plain: 'fixture payload ' + cut.qid + '\\n', carded: ${JSON.stringify(`${CARD}\n\nfixture payload `)} + cut.qid + '\\n', card: { state: 'card', line: ${JSON.stringify(CARD)} } }),
+};
+process.exitCode = await m.main(process.argv.slice(2), { HOME: process.env.HOME, LANG: process.env.LANG }, deps);
+`);
+    const child = spawn(process.execPath, ['--no-warnings', wrapper, ...w.argv(['--account', GEN])],
+      { cwd: w.home, env: { ...scrubbedEnv(process.env), HOME: w.home } as NodeJS.ProcessEnv, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (b: Buffer) => { stderr += b.toString('utf8'); });
+    const closed = new Promise<{ signal: string | null }>((resolve) => child.on('close', (_s, signal) => resolve({ signal })));
+    const pidFile = join(w.home, 'version.pid');
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(pidFile) && child.exitCode === null && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    try {
+      expect(existsSync(pidFile), `fixture: the --version run started (${stderr})`).toBe(true);
+      child.kill('SIGKILL');
+      expect((await closed).signal).toBe('SIGKILL');
+      expect(readFileSync(recPath(w.out), 'utf8'), 'a week killed at its first spawn is a spawned week on its account').toBe(QS.weekAccountText(w.s.sha, GEN));
+    } finally {
+      child.kill('SIGKILL');
+      if (existsSync(pidFile)) { try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ } }
+    }
+  }, 60_000);
+
+  // fix round 1 (review 3545 F1): only an admitted account becomes the week's record, so the runner can try the next one
+  it('an account admission refuses is never recorded: no --out, no record, nothing spawned', async () => {
+    const w = await week();
+    addGen(w.home);
+    rmSync(join(w.home, CRED_DIR, 'gen-b.env'));   // its declared credentials file absent: admission refuses it
+    const r = await run(w.home, w.argv(['--account', GEN]), FAKE);
+    expect(r.refusal?.word).toBe('account-refused');
+    expect(existsSync(w.out)).toBe(false);
+    expect(existsSync(recPath(w.out))).toBe(false);
+    expect([runs(w.home), genRuns(w.home)]).toEqual([[], []]);
+  });
+
+  // fix round 1 (review 3545 F2): every spawn's gate reads the week's account's row, not the setup's
+  it('the spawn gate reads the week\'s account\'s row: it rising past the threshold after admission stops the run, the setup\'s row low', async () => {
+    const w = await week();
+    addGen(w.home);
+    const genRow = join(w.home, '.cc-limits', `${GEN}.json`);
+    const deps: R = { ...FAKE, recheck: async (rs: unknown, es: R[]): Promise<Map<string, R>> => {
+      if (es.length > 1) {   // the arms' preflight of its whole batch, after admission and step 0b, before any question spawns
+        const nowS = Math.floor(Date.now() / 1000);
+        writeFileSync(genRow, JSON.stringify({ five: 90, seven: 90, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+      }
+      return (FAKE.recheck as (a: unknown, b: R[]) => Promise<Map<string, R>>)(rs, es);
+    } };
+    const r = await run(w.home, w.argv(['--account', GEN]), deps);
+    expect(r.refusal?.word).toBe('limits-threshold');
+    expect(json(genRow).seven, 'CONTROL: the week\'s row was raised').toBe(90);
+    expect(json(join(w.home, '.cc-limits', 'up-a.json')).seven, 'CONTROL: the setup\'s row stayed low').toBe(10);
+    expect(genRuns(w.home).filter((x) => typeof x.stdin === 'string' && x.stdin.startsWith(`${CARD}\n\nfixture payload `)), 'no question spawned').toEqual([]);
+    expect(json(recPath(w.out)).account).toBe(GEN);
+  });
+
   it('the gate reads the week\'s account\'s own row: no row there stops the act before --out, whatever the setup\'s row says', async () => {
     const w = await week();
     addGen(w.home, null);
