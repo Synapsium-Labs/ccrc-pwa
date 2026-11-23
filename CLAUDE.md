@@ -477,7 +477,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   **You take your own number — nobody issues it** (self-assigned since 2026-11-23, spec
   `2026-11-23-deviation-numbers-self-assigned-design.md`). `git fetch origin main`, then `cd server && npm run
   next-deviation -- <count>`: it prints `max(highest + 1, 10000)` onward, the highest being the highest `D-N`
-  DEFINED on `origin/main` in any file under `docs/superpowers/plans/`, `programs/` or `specs/`, with no server
+  DEFINED on `origin/main` in any `.md` file under `docs/superpowers/plans/`, `programs/` or `specs/`, with no server
   and no token. Take and DEFINE IN THE SAME COMMIT; until then a deviation is `D-TBD-<slug>`, which
   `dtbd.test.ts` refuses to land. 10000 is the cut-over, clear of every number the allocator issued, not a guard:
   nothing reds a low number. **A collision is caught, not prevented:** two branches in flight will often take the

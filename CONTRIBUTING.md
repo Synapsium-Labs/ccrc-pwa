@@ -92,7 +92,7 @@ cd server && npm run next-deviation -- <count>
 ```
 
 The helper prints `max(highest + 1, 10000)` onward, where the highest is the highest `D-N`
-defined on `origin/main` in any file under `docs/superpowers/plans/`, `programs/` or `specs/`.
+defined on `origin/main` in any `.md` file under `docs/superpowers/plans/`, `programs/` or `specs/`.
 **Take and define in the same commit**; until then the entry is `D-TBD-<slug>`, which CI
 refuses to land. The server allocator (`POST /api/ledger/deviations`) retired on 2026-11-23.
 

@@ -203,4 +203,4 @@ it('the CLI exits 2 and names --ref when the ref does not resolve', () => { /* s
 
 ## Deviations found
 
-(none yet)
+- **D-10000** — The spec and this plan said `npm run next-deviation` (in `server/`) in the coordinator and worker skills and in `PEER_ETIQUETTE`, which works only in ccrc: the skills install into every rostered home, and `PEER_ETIQUETTE` is served to sessions in any project. They now state the project-generic rule (the highest `D-N` defined in the project's plans, notes and specs on `origin/main`, plus one, from 10000) and name the helper as how ccrc computes it (Task 4 fix round 1).

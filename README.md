@@ -6084,7 +6084,7 @@ invited reply, never a mail to oneself), one per mail, recorded in `mail.answers
 **Deviation numbers are self-assigned.** Plans record their departures as numbered `D-N` entries in one
 global, monotonic namespace, and since 2026-11-23 the author takes the number, with no server and no token:
 `git fetch origin main`, then `cd server && npm run next-deviation -- <count>`, which prints
-`max(highest + 1, 10000)` onward, the highest being the highest `D-N` defined on `origin/main` in any file
+`max(highest + 1, 10000)` onward, the highest being the highest `D-N` defined on `origin/main` in any `.md` file
 under `docs/superpowers/plans/`, `programs/` or `specs/` (`server/scripts/next-deviation.ts`, reading with the
 guards' own `definitionsIn`; `SELF_ASSIGNED_ERA` in `server/src/coord/ledger.ts`). A coordinator names the
 numbers it takes in the brief (coordinator clause 10), and a worker takes its own the same way (worker clause

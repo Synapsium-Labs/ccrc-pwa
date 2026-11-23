@@ -10002,7 +10002,7 @@ export const PEER_ETIQUETTE = [
   'Discovery is GET /api/peers?of=<your id> — the peers you cannot see from your own session list are the ones this route exists for.',
   'History is GET /api/lifecycle. Read each row’s own lifecycle, never its archive stamp — the stamp is reported verbatim and decides nothing.',
   'Peer mail is human-timescale: a busy peer reads it when it next idles, and losing a race is learned from the 409 you are already reading, never from mail.',
-  'Take a deviation number with npm run next-deviation in server/, after git fetch origin main; a collision is caught at merge and the second to land renumbers.',
+  'Take a deviation number as the highest D-N defined in the project’s plans, notes and specs on origin/main, plus one, from 10000 (in ccrc, npm run next-deviation in server/ prints it); a collision is caught at merge and the second to land renumbers.',
 ] as const;
 
 /**

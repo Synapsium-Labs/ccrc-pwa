@@ -95,9 +95,11 @@ controls wave scope and requirements. `ledgerAbsPath` names only the programme
 ledger. Paths, not payloads: the 8 KB ceiling is unchanged.
 
 **Deviations found during a foreign-repo wave are numbered in the HOME
-project** — `npm run next-deviation` run in the home project's checkout — and
-defined in the home plan, because that is where the plan lives. The helper
-reads whichever checkout it runs in and cannot cross-check it, so this one is
+project** — the highest `D-N` defined in the home project's plans, notes and
+specs on its `origin/main`, plus one, from 10000 (when the home project is ccrc,
+`npm run next-deviation` in its `server/` prints it) — and defined in the home
+plan, because that is where the plan lives. Nothing can tell which project's
+tree the number was read from, so this one is
 discipline rather than a mechanism, which is exactly why it is written down.
 
 **Address the worker as `toId: 'worker'` with this run's `runId`**, and the
