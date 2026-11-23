@@ -3236,8 +3236,7 @@ export class FleetWatcher {
       else void nudge.catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
-      void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
-      void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
+      // sweepLedgerFloor / sweepLedgerReconcile no longer run: numbers are self-assigned (docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md); PR 2 deletes them.
       void this.sweepDrift(registryRead.listed ? registryRead.names : null).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the DELEGATION lane (wave 3, Task 13) is a sibling at the census's own cadence, on this tick's

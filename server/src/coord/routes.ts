@@ -25,14 +25,11 @@ import { decideRoute, parseRouteRequest } from './route.js';
 import { CAPS_FEED_TITLE, capAutomaticNotice, capNowWord, decideCaps } from './caps.js';
 import type { CoordCapNow } from '../../../shared/runCap.js';
 import { tx } from './db.js';
-import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { landingViewOf } from './landingLine.js';
 import { landingReadView } from './landingReadView.js';
 import { landingCommandOf, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
 import { actLandingWrite } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
-import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
-import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
 import { parseRunFind } from './runFind.js';
 import { runRecordTrail } from './runRecord.js';
@@ -101,7 +98,7 @@ import {
   type ClaimsListAnswer, type ClaimTakeAnswer,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
   parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
-  LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
+  LEDGER_STALE_MS, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, transitionsFor, IDLE_RUN_STATES,
   isRegistryId, isSessionIdShape, routeEventDetail,
@@ -731,15 +728,6 @@ export function registerCoordRoutes(
     { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
       childReclaim: childReclaimPort(deps, coord) },
     runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillStuck, ...extra })));
-
-  // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
-  // allocator's MAX(file, db) recovery, held here and handed into
-  // `allocateDeviations` per call — `log` is a parameter of that store
-  // method, not a constructor field, for the same reason `dueDeliveries`
-  // takes `replayMs` from its caller. Rooted at `cfg.home`, never a bare
-  // `defaultLedgerLogPath()`, so a fixture-homed test server appends beside
-  // its own coord.db instead of into the live home's ledger.
-  const ledgerLog = new LedgerLog(defaultLedgerLogPath(deps.cfg.home));
 
   /**
    * The box-token gate (fix, review findings 3/10/27): `POST /api/runs`,
@@ -4351,140 +4339,16 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/ledger/deviations` — the allocator (D13). Box-token gated: the
-   * coordinator allocates the program's whole block AT RUN-OPEN (clause 10),
-   * so a wave in flight never calls this; a worker that cannot reach it MUST
-   * NOT invent a number (inventing is the root cause — bb47c9e, 30 files, 394
-   * D-ref lines rewritten under merge pressure) and writes `D-TBD-<slug>`,
-   * which `dtbd.test.ts` turns into a red suite on any diff that tries to
-   * land one.
-   *
-   * The append-to-file-FIRST, commit-SECOND ordering lives inside
-   * `allocateDeviations` (`ledgerlog.ts`): recovery is MAX(file, db), so a
-   * number is SKIPPED, never reissued — a gap costs nothing (the ledger is
-   * prose, parsed by nothing); a reissue costs the incident. Until
-   * `sweepLedgerFloor` has seeded the project, allocation SEEDS IT HERE (wave
-   * 2, F2) and only then answers `409 not-seeded` — `openCoordDb`'s "refuse to
-   * start rather than open empty", one level up.
-   *
-   * No `coordMutex`, still — but the reason has NARROWED, so read it rather
-   * than reusing it. There IS now an await on this path (the synchronous floor
-   * seed), and it sits BETWEEN two `allocate()` calls rather than inside one:
-   * each call is still a single synchronous store transaction with nothing
-   * awaited inside it, which is the property that mattered. What the seed adds
-   * between them is idempotent by construction — `raiseLedgerFloor` only ever
-   * raises — so a racing writer costs a retry, never a wrong number. The
-   * PRIMARY KEY (project, n) backstop firing under a future refactor that loses
-   * that transaction is retried 3x in-request (spec §3) and then thrown loudly.
-   *
-   * The wire `floor` is the NEXT FREE number — the landed `AllocatedBlock`
-   * carries the SEEDED floor, which allocation never moves (the next block
-   * derives from MAX(file, db)), so this route derives next-free from the
-   * block it just minted: the numbers are contiguous, so it is the last + 1.
+   * `POST /api/ledger/deviations` — RETIRED: deviation numbers are self-assigned
+   * (docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md).
+   * The box-token check stays (the EXEMPT row and the census stay true until
+   * PR 2 deletes the route); the answer is 410 and nothing is written.
    */
   app.post('/api/ledger/deviations', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/ledger/deviations')) return;
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { project, count, title, byId } = body;
-    if (typeof project !== 'string' || project.trim() === '' ||
-        typeof count !== 'number' ||
-        typeof title !== 'string' || title.trim() === '' ||
-        !(byId === undefined || typeof byId === 'string')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'project/title strings, count a number, byId a string when given' });
-    }
-    // The one field the allocator writes ONCE PER NUMBER: `LedgerLog.append`
-    // repeats the full title on every line of the block, so an uncapped title
-    // multiplies by count (<= LEDGER_ALLOC_MAX) into an append-only file
-    // nothing deletes from. UTF-8 BYTES, measured before the trim the store
-    // call applies, and the same 413 arm as the claims intent cap — refuse,
-    // never truncate.
-    if (Buffer.byteLength(title, 'utf8') > LEDGER_TITLE_MAX_BYTES) {
-      return reply.code(413).send({ ok: false, error: 'oversize', limit: LEDGER_TITLE_MAX_BYTES,
-        detail: `title exceeds ${LEDGER_TITLE_MAX_BYTES} bytes — the log writes it once per allocated number` });
-    }
-
-    // 3x in-request retry on a THROWN constraint violation (spec §3): the
-    // PRIMARY KEY (project, n) backstop is loud by design, and a transient
-    // loser re-reads MAX(file, db) on the next attempt and lands on fresh
-    // numbers. Anything still throwing after three attempts propagates as
-    // the 500 it is — an unreadable ledger log is in that class deliberately
-    // (`maxAllocated` throws rather than reading an unreadable file as
-    // empty, because "empty" is exactly the reissue the file prevents).
-    const allocate = () => {
-      for (let attempt = 1; ; attempt++) {
-        try {
-          return coord.allocateDeviations({ project: project.trim(), count,
-            title: title.trim(), allocatedTo: byId ?? '', runId: null,
-            now: Date.now() }, ledgerLog);
-        } catch (err) {
-          if (attempt >= 3) throw err;
-        }
-      }
-    };
-    // SYNCHRONOUS SEED (wave 2, F2 — spec section 4 item 2). Allocate FIRST,
-    // and reach for the filesystem only once the allocator has said the one
-    // thing a seed can answer.
-    //
-    // That ordering is not an optimisation. `decideAllocation` checks
-    // `bad-count` BEFORE `not-seeded` deliberately, so a caller with both
-    // defects learns the one it can fix this instant; seeding up front would
-    // spend a document walk on a request that could never have been served,
-    // and avoiding that would mean a second copy of the count predicate here
-    // in L4 — where the decision does not belong.
-    let r = allocate();
-    let seedFailure: FloorMeasurement | null = null;
-    if (!r.ok && r.why === 'not-seeded') {
-      const m = await measureLedgerFloor(
-        { io: deps.io, projectsRoot: deps.cfg.projectsRoot }, project.trim());
-      if (m.ok) {
-        // `raiseLedgerFloor` only ever raises, in SQL rather than by caller
-        // discipline, so this is safe to run concurrently and repeatedly: a
-        // racing sweep that got there first simply wins.
-        coord.raiseLedgerFloor(project.trim(), m.scan.floor, m.scan.evidence, Date.now());
-        r = allocate();
-      } else {
-        seedFailure = m;
-      }
-    }
-    if (r.ok) {
-      const numbers = [...r.allocation.numbers];
-      return reply.code(201).send({ ok: true, numbers,
-        floor: numbers[numbers.length - 1]! + 1 });
-    }
-    switch (r.why) {
-      case 'not-seeded':
-        // TWO conditions, two sentences, because an operator acts on them
-        // differently: one is a box to fix, the other is a plan to write.
-        //
-        // The ternary's polarity is deliberate. `seedFailure` is null in
-        // exactly two cases — the seed was never attempted (unreachable on this
-        // arm, since `not-seeded` is what triggers it), or the seed SUCCEEDED
-        // and the retry still refused, which is a lost race and about which
-        // "could not be measured" is the honest thing to say. Defaulting the
-        // other way would claim a completed measurement that may never have
-        // run.
-        return reply.code(409).send({ ok: false, error: 'not-seeded',
-          detail: seedFailure !== null && seedFailure.why === 'no-refs'
-            ? `no floor for ${project.trim()} — its docs/superpowers plans and specs were read ` +
-              'and name no D-<n> at all, so there is nothing to seed from; the allocator fails ' +
-              'shut rather than minting from a guess (D13)'
-            : `no floor for ${project.trim()} — it could not be measured (the docs tree would ` +
-              'not list, a file would not read, or the walk ran out of budget), so nothing was ' +
-              'proven either way; the allocator fails shut rather than minting from a guess (D13)' });
-      case 'bad-count':
-        return reply.code(400).send({ ok: false, error: 'bad-request',
-          detail: `count is an integer 1..${LEDGER_ALLOC_MAX} — a bigger block is likelier ` +
-            'a caller bug than a program (decideAllocation, ledger.ts)' });
-      default: {
-        const _exhaustive: never = r;
-        return reply.code(500).send({ ok: false, error: 'internal',
-          why: (_exhaustive as { why: string }).why });
-      }
-    }
+    return reply.code(410).send({ ok: false, error: 'retired',
+      detail: 'deviation numbers are self-assigned: cd server && npm run next-deviation -- <count>' });
   });
 
   /**

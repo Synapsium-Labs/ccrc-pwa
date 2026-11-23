@@ -9,14 +9,13 @@
 // collide, so a stale entry cannot quietly mask a new one.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { crossTreeCollisions, definitionsIn, floorFromScan, selfAssignedCollisions,
+import { crossTreeCollisions, definitionsIn, selfAssignedCollisions,
          LEDGER_ALLOCATOR_ERA, type Definition } from '../src/coord/ledger.js';
 import { readDefinitionFilesAt } from '../scripts/next-deviation.js';
-import { LEDGER_SEED_GAP } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -103,71 +102,9 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
   });
 });
 
-// D13's other exposure: `sweepLedgerFloor` feeds docs/superpowers/{plans,specs}
-// of each registry project to `floorFromScan`, and THIS repo is one of those
-// projects — its own tracked docs are live seed input on the fleet. A fixture
-// ref written contiguously (a 'D-' + '<n>' token with n far above the ledger)
-// anywhere the scan can see would seed the first live floor thousands of
-// numbers high, PERMANENTLY: the floor only ever rises. Fixture refs are
-// therefore spelled split in tracked text — `D-${2611}` in test source,
-// prefix-less numbers in plan prose — and this scan is the refusal that keeps
-// it that way. It runs the REAL floorFromScan over the WHOLE tracked tree
-// (163 ms measured, so no need to scope down to the sweep's own {plans,specs}
-// classes — the wider net also guards test/source fixtures, which poison the
-// live FLOOR: one contiguous ref seeds it thousands of numbers high, and it
-// only rises).
-describe('the floor seed reads THIS tree (D13 — fixtures must not poison it)', () => {
-  const trackedFiles = (): { path: string; text: string }[] =>
-    execSync('git ls-files -z', { cwd: ROOT, maxBuffer: 1 << 22 })
-      .toString('utf8').split('\0').filter(Boolean).sort()
-      .map((f) => ({ path: f, text: readFileSync(path.join(ROOT, f), 'utf8') }));
-
-  // Definition-SHAPED line prefixes, deliberately looser than ENTRY: this repo's
-  // ledgers hold entries spelled `- **D-190** (Task 1): the session-id
-  // pattern shipped …` — colon, no em-dash — which ENTRY cannot see. For a MAX
-  // the prefix alone is enough: it reads the number a heading/bullet line
-  // DEFINES, whatever its subject punctuation.
-  //
-  // THE EXEMPLAR THIS COMMENT FIRST GAVE WAS REFUTED (D-1329, whose retraction
-  // reached `server/src/coord/ledger.ts` and not this file). It named build 9b;
-  // measured, that plan's D-211 entry is the EM-DASH form and the plan holds zero
-  // ENTRY-blind entries — a claim the corpus table below already refuted, and
-  // passed while refuting. The line break in the quoted spelling above is
-  // deliberate: the contiguous string is a needle in that table, and this repo's
-  // own plans are part of the corpus it scans.
-  // COLON-FORM EXEMPLAR: 2026-08-23-stage5-oss-polish.md
-  const DEFINED = /^(?:#{2,4} |- \*\*)D-(\d+)\b/;
-  const definedMax = (): number => {
-    let max = 0;
-    for (const f of readdirSync(PLANS).filter((n) => n.endsWith('.md'))) {
-      if (LEGACY_PER_PLAN_LEDGERS.has(f)) continue;
-      for (const line of readFileSync(path.join(PLANS, f), 'utf8').split('\n')) {
-        const m = DEFINED.exec(line);
-        if (m) max = Math.max(max, Number(m[1]!));
-      }
-    }
-    return max;
-  };
-
-  it('floorFromScan over the real tracked tree seeds from the ledger high-water, not a fixture', () => {
-    // The expectation is DERIVED, not hand-kept: the high-water is the max n
-    // across the plans' own Deviations definition lines (`definedMax`), so
-    // this pin moves with each allocation on its own. The floor assertion
-    // therefore also insists every tracked ref is LEDGERED — a source ref to
-    // an allocated-but-unentered number reds here until its entry lands,
-    // which is the direction the ledger discipline points anyway.
-    const highWater = definedMax();
-    expect(highWater,
-      `the definition-derived high-water is ${highWater} — too low to be this tree's ledger`)
-      .toBeGreaterThanOrEqual(215);
-    const scan = floorFromScan(trackedFiles());
-    expect(scan, 'the tree seeds — an empty scan here means the docs moved').not.toBeNull();
-    expect(scan!.floor,
-      `a tracked file names a global D-ref above the ledger high-water D-${highWater} ` +
-      `(${scan!.evidence}) — spell a fixture SPLIT ('D-' + '9876'), never contiguous, ` +
-      `or the first live seed lands there forever`).toBe(highWater + LEDGER_SEED_GAP);
-  });
-});
+// The case "floorFromScan over the real tracked tree seeds from the ledger high-water" is removed: the allocator
+// is retired and the floor issues nothing (docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md).
+// COLON-FORM EXEMPLAR: 2026-08-23-stage5-oss-polish.md (the marker the exemplar test below reads, kept here)
 
 describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)', () => {
   // The reconciliation record (docs/superpowers/specs/
@@ -700,7 +637,6 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     const REQUIRED = [
       'es.length >= 100',
       'new Set(es.map((e) => e.file)).size >= 8',
-      'highWater >= 215',
       'here.length >= 50',
       'there.length >= 50',
       'definitionsIn(here).length >= 300',

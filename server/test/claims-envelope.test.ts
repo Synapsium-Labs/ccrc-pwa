@@ -176,7 +176,8 @@ describe('ClaimRefuseCode, producer direction', () => {
     // The scanner in mail-routes.test.ts holds tokens -> declared; this holds
     // declared -> produced, so the union cannot grow a member no route sends.
     const src = readFileSync(path.resolve(here, '..', 'src', 'coord', 'routes.ts'), 'utf8');
-    for (const code of CLAIM_REFUSE_CODES) {
+    // 'not-seeded' lost its only producer when the allocator route retired (self-assigned numbers, PR 1); PR 2 removes the code.
+    for (const code of CLAIM_REFUSE_CODES.filter((c) => c !== 'not-seeded')) {
       expect(src, `${code} has no producer in coord/routes.ts`).toContain(`'${code}'`);
     }
   });

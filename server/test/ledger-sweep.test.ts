@@ -434,3 +434,10 @@ describe('what `landed` is allowed to claim', () => {
       'the landing docstring is still attached to ledgerProjects').not.toMatch(/allocated -> landed/);
   });
 });
+
+describe('the tick no longer dispatches the ledger sweeps (numbers are self-assigned, PR 1)', () => {
+  it('watch.ts calls neither sweepLedgerFloor nor sweepLedgerReconcile from the tick', () => {
+    const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'watch.ts'), 'utf8');
+    expect(src).not.toMatch(/this\.sweepLedger(Floor|Reconcile)\(/);
+  });
+});
