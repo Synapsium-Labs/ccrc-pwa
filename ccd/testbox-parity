@@ -1,37 +1,66 @@
 #!/usr/bin/env bash
 # testbox-parity — the test box's parity check, test box spec §6 (D-7410, D-7416; TB14 runs it before OA-TB2 arms).
 #
-#   testbox-parity [--repo <path>] [--package <dir>] [--workers <n>] [--flaky <file>]... \
-#                  [--leg-deadline <seconds>] [--until <epoch seconds>] [--leg-kill <seconds>] \
+#   testbox-parity [--repo <path>] [--package <dir>] [--workers <n>] [--flaky <file>]... --sample-budget <seconds> \
+#                  [--leg-deadline <seconds>] [--queue-wait <seconds>] [--until <epoch seconds>] [--leg-kill <seconds>] \
 #                  [--recent <n>] [--fixtures] [--record <file> --repo-name <name> --release <tag> --tools-key <key> \
 #                   --fingerprint <fp> --box-sha256 <hex>] \
-#                  (--pr <number> | --rev <commit>)... -- <command> [<arg>...]
+#                  (--pr <number> | --rev <commit>)... -- <command> run
 #   testbox-parity --merge <fail 0|1> <release> <tools key> <fingerprint> <sha256> [<record file>...]
 #
-# SCOPE (test box connect spec §2.8, C8, C16). `--recent <n>` names the n most recent merged pull requests of the repository
-# (`gh pr list --state merged --limit <n> --json number,mergeCommit`), beside any `--pr` and `--rev`; at least one of the
-# three is needed. `--fixtures` adds the three fixtures of test box spec §6 (git state, socket, workers) as required legs:
-# each is a small vitest file written into the first worktree's package, run on both sides, and the lines it prints (the ones
-# that start `TP|`) must be byte-identical. `--record <file>` writes a TestboxParityRecord (shared/testbox-admin.ts) by a
-# temp file and a rename at 0600: `pass` only when every leg ran and agreed; the release, the tools key, the host key
-# fingerprint and the box file's sha256 are the caller's measurements and ride in unchanged.
+# SCOPE (test box connect spec §2.8, C8, C16). `--recent <n>` names the n pull requests merged most recently into the
+# repository's default branch (its clone's `origin/HEAD`, else `gh repo view`), newest `mergedAt` first, from one
+# `gh pr list --state merged --base <branch> --limit 50` (gh lists by creation, not by merge), beside any `--pr` and `--rev`;
+# at least one of the three is needed (`ccrc testbox-admin parity` passes `--recent 1`, D-8945). `--fixtures` adds the three
+# fixtures of test box spec §6 (git state, socket, workers) as required legs: three small vitest files written into the first
+# worktree's package and run together, once on each side, and the lines each prints (the ones that start `TP|<its name>|`)
+# must be byte-identical. `--record <file>` writes a TestboxParityRecord (shared/testbox-admin.ts) by a temp file and a rename
+# at 0600: `pass` only when every leg ran and agreed; the release, the tools key, the host key fingerprint and the box file's
+# sha256 are the caller's measurements and ride in unchanged. The count of test files compared is printed, not recorded: a
+# server older than the reader's optional `files` refuses a record that carries it, so the writer waits for a later release.
+#
+# THE SAMPLE, NEVER THE WHOLE SUITE (D-8945). A whole server suite is about 1,900 files and over three hours a leg at two
+# workers, which on a loaded fleet box is the very load that crashed the fleet; so each revision runs a sample of its
+# package's test files. The universe is what the package's own vitest would run: the tracked test files that
+# `<command less its last word run> list --filesOnly` names in the worktree (a bounded step, about a fifth of a second), so a
+# tracked test outside the package's include (an e2e directory) is never picked. The TP_SAMPLE rule below takes, in order:
+#   changed  — the test files the revision changed against its first parent, in hash order;
+#   flakes   — the known load flakes: `<package>/load-flakes.txt` at the revision (one package-relative path a line, `#`
+#              comments; never a symlink) and any `--flaky`; one that differs is re-run alone on both sides once, and that
+#              answer counts;
+#   spread   — the rest, ordered by the sha256 of the package-relative path, a fixed order no revision moves.
+# WITH CI's per-file times (the `testtimes` artifact of this repository's own `ci.yml` run on the default branch, fetched by
+# run id), every group obeys the same ceiling: a file CI measured over TP_SAMPLE_FILE_MAX_MS is never sampled, a changed test
+# or a flake among them included, and the summary line names each changed test and flake it left out. A changed test or a
+# flake with no time counts at that ceiling; a spread file with no time is never taken. The changed tests may use at most half
+# of `--sample-budget` seconds of CI time and at most TP_SAMPLE_CHANGED_MAX files, so the flakes and the spread always have the
+# other half; a file that would pass a limit is skipped and the fill goes on with the next, and the whole stops at
+# TP_SAMPLE_MAX files. WITHOUT times (none listed, none trusted, the gh calls failed, a malformed file, a repository whose CI
+# publishes none), nothing is priced, so the sample is small by count: at most TP_SAMPLE_UNTIMED_CHANGED changed tests and
+# TP_SAMPLE_UNTIMED_SPREAD spread files, and no flake, because the flake list is where the heavy files are. The times can only
+# reorder or leave out the repository's own test files, so a bad file fails closed. An empty sample fails the revision before
+# any leg runs, and a sampled file neither side reported differs (`not run`).
 #
 # For each merged PR (its merge commit, through `gh pr view`) or commit: a FRESH worktree at it, every package with a
-# lockfile installed from the lockfile alone (`npm ci`, the parity reference of spec §2.4), then the same command twice
-# on the same snapshot, both legs with the junit reporter on stdout and the same worker count (`--maxWorkers=<n>`,
+# lockfile installed from the lockfile alone (`npm ci`, the parity reference of spec §2.4), then the same command and the same
+# sample twice on the same snapshot, both legs with the tap-flat reporter on stdout and the same worker count (`--maxWorkers=<n>`,
 # `--workers`, default 2, the box's CCRC_TESTBOX_WORKERS default):
 #   local — `ccrc test --local` in the worktree's package directory: the slice and the queue, never the box;
 #   box   — the test box client, run directly (agent/dist/agent/src/testbox/client.js), so the leg runs before arming,
 #           with the switch off: the client never reads the switch marker, only the wrapper does.
 # It prints, per file, pass or fail on each side and each side's skipped tests (count and names), and says `agree` or
-# `DIFFERS`; a file named by `--flaky` (the known-load-flake list) that differs is re-run alone on both sides once, and
-# that answer counts. Exit 0 when every file agrees, 1 when one differs or a leg could not run, 2 on a usage error.
+# `DIFFERS`; a known load flake that differs is re-run alone on both sides once, and that answer counts. Exit 0 when every
+# file agrees, 1 when one differs or a leg could not run, 2 on a usage error.
 #
-# WHY JUNIT, NOT JSON (D-7561). The box's runner adds its own JSON reporter with `--outputFile.json=` in the run's
-# directory (agent/src/testbox/spec.ts#reporterArgv), and vitest writes every JSON reporter to that file, so a JSON
-# reporter of the session's never reaches stdout on the box; junit on stdout carries per-test skips on both sides.
+# WHY TAP-FLAT, NOT JSON OR JUNIT (D-7561, D-8946). The box's runner adds its own JSON reporter with `--outputFile.json=` in
+# the run's directory (agent/src/testbox/spec.ts#reporterArgv), and vitest writes every JSON reporter to that file, so a JSON
+# reporter of the session's never reaches stdout on the box. Junit was chosen for that, but vitest 5 writes junit to
+# `.vitest/junit/output.xml` under the package unless a file is named, so neither leg printed one and the comparison saw no
+# file at all (measured with vitest 5.0.5). tap-flat prints one line per test on stdout on both sides, with its file
+# (`ok <n> - <file> > <name>`, `not ok` for a failure, `# SKIP` or `# TODO` for a skip).
 #
-# A STEP'S BOUND (D-8899). A step is one lockfile install, or one leg: one run of one snapshot on one side.
+# A STEP'S BOUND (D-8899). A step is one lockfile install, one gh call of the times fetch, the test file listing, or one leg:
+# one run of one snapshot on one side.
 # `--leg-deadline <seconds>` bounds each step, and `--until <epoch seconds>` is the time after which the tool starts nothing
 # more: a step that begins near it gets only what is left. A step that has not ended at its bound is stopped (the platform
 # timeout shim, `_plat_timeout` of ccd/ccrc: TERM, and KILL `--leg-kill` seconds later, 2 to 8, the shim's range), said to
@@ -44,6 +73,11 @@
 # killed leaves 137 too. Without the flags a step has no bound, as before: an operator who runs the tool by hand can stop it
 # by hand. The shim's `timeout` puts a bounded step in a process group of its own, so a TERM to the tool (the admin verb's
 # cancel) is passed on by the tool itself: it signals the running step's `timeout`, which signals the step, and then exits.
+# THE QUEUE WAIT (D-8947). The local leg goes through `ccrc test`, and a run naming more than a few test files is heavy there:
+# it waits for one of the fleet's heavy-test slots before it starts. `--queue-wait <seconds>` is added to the local leg's
+# bound only (the verb's `parity/queue`), so a busy queue does not eat the run's own time. A local leg stopped while it was
+# still queued is said to have waited in the queue and never started: the fleet box was busy, which is no difference; one
+# that queued and then started says how long it waited.
 #
 # `--merge` is the other use: the one record of several rows' records, on stdout. `ccrc testbox-admin parity` runs the tool
 # once per repository row and merges here, so both writers of the record's shape are in this file. Its result is `fail`
@@ -66,7 +100,7 @@ PROG="testbox-parity"
 
 _tp_usage() {
   echo "$PROG: $*" >&2
-  echo "usage: testbox-parity [--repo <path>] [--package <dir>] [--workers <n>] [--flaky <file>]... [--leg-deadline <seconds>] [--until <epoch seconds>] [--leg-kill <seconds>] [--recent <n>] [--fixtures] [--record <file> ...] (--pr <n> | --rev <commit>)... -- <command> [<arg>...]" >&2
+  echo "usage: testbox-parity [--repo <path>] [--package <dir>] [--workers <n>] [--flaky <file>]... --sample-budget <seconds> [--leg-deadline <seconds>] [--queue-wait <seconds>] [--until <epoch seconds>] [--leg-kill <seconds>] [--recent <n>] [--fixtures] [--record <file> ...] (--pr <n> | --rev <commit>)... -- <command> run" >&2
   exit 2
 }
 # --merge: the rows' records as one record (moved here, unchanged, from `_tba_pr_merge` of ccd/ccrc-testbox-admin).
@@ -91,9 +125,10 @@ process.stdout.write(JSON.stringify({ v: 1, result, prs, fixtures, release, tool
 fi
 # `gh`, or the stand-in a test names (TP_GH): the tool never reaches GitHub in its own tests.
 _tp_gh() { if [ -n "${TP_GH:-}" ]; then "$TP_GH" "$@"; else gh "$@"; fi; }
+TP_GH_CMD="${TP_GH:-gh}"   # the same, as a command a bounded step can run (the shim's `timeout` cannot run a function)
 _tp_git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY git "$@"; }
 
-repo="$PWD" pkg=server workers=2 leg_s=0 leg_kill=0 until=0
+repo="$PWD" pkg=server workers=2 leg_s=0 leg_kill=0 until=0 budget=0 queue_s=0
 revs=() flaky=() recent=0 fixtures=0 record="" repo_name="" rec_release="" rec_tools="" rec_fp="" rec_sha=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -101,7 +136,9 @@ while [ $# -gt 0 ]; do
     --package) [ $# -ge 2 ] || _tp_usage "--package takes a directory"; pkg="$2"; shift 2 ;;
     --workers) [[ "${2:-}" =~ ^[1-9][0-9]?$ ]] || _tp_usage "--workers takes 1 to 99"; workers="$2"; shift 2 ;;
     --flaky) [ $# -ge 2 ] || _tp_usage "--flaky takes a file"; flaky+=("$2"); shift 2 ;;
+    --sample-budget) [[ "${2:-}" =~ ^[1-9][0-9]{0,3}$ ]] && [ "$2" -le 3600 ] || _tp_usage "--sample-budget takes 1 to 3600 seconds"; budget="$2"; shift 2 ;;
     --leg-deadline) [[ "${2:-}" =~ ^[1-9][0-9]{0,5}$ ]] || _tp_usage "--leg-deadline takes a whole number of seconds"; leg_s="$2"; shift 2 ;;
+    --queue-wait) [[ "${2:-}" =~ ^[1-9][0-9]{0,4}$ ]] || _tp_usage "--queue-wait takes a whole number of seconds"; queue_s="$2"; shift 2 ;;
     --leg-kill) [[ "${2:-}" =~ ^[2-8]$ ]] || _tp_usage "--leg-kill takes 2 to 8 seconds"; leg_kill="$2"; shift 2 ;;
     --until) [[ "${2:-}" =~ ^[1-9][0-9]{9,10}$ ]] || _tp_usage "--until takes a time in epoch seconds"; until="$2"; shift 2 ;;
     --pr) [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || _tp_usage "--pr takes a number"; revs+=("pr:$2"); shift 2 ;;
@@ -119,9 +156,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ $# -gt 0 ] || _tp_usage "missing command"
+# The command is a vitest run (`<head> run`): its head with `list --filesOnly` names the package's test files (THE SAMPLE).
+[ $# -ge 2 ] && [ "${!#}" = run ] || _tp_usage "the command must be a vitest run: <head> run"
+list_cmd=("${@:1:$#-1}" list --filesOnly)
 [ ${#revs[@]} -gt 0 ] || [ "$recent" -gt 0 ] || _tp_usage "name at least one --pr or --rev, or --recent"
+# The sample's CI-time budget is the caller's (the verb's table row `parity/sample`): this file holds no default for it.
+[ "$budget" -gt 0 ] || _tp_usage "missing --sample-budget (the CI seconds one revision's sample may add up to)"
 # A bound with no KILL behind it is no bound for a step that ignores TERM, and this file holds no default: the caller's table does.
 { [ "$leg_s" -eq 0 ] && [ "$until" -eq 0 ]; } || [ "$leg_kill" -gt 0 ] || _tp_usage "--leg-deadline and --until need --leg-kill"
+[ "$queue_s" -eq 0 ] || [ "$leg_s" -gt 0 ] || _tp_usage "--queue-wait needs --leg-deadline (it is added to the local leg's bound)"
 # The same rule, asked of this box: the shim sends the KILL only where the selected `timeout` is proved to take `-k`. Asked
 # here, in this shell, so every step's shell inherits the answer and asks nothing itself.
 if [ "$leg_kill" -gt 0 ]; then
@@ -133,7 +176,7 @@ if [ -n "$record" ]; then
     || _tp_usage "--record needs --repo-name, --release, --tools-key, --fingerprint and --box-sha256"
 fi
 [ -f "$TP_CLIENT" ] || { echo "$PROG: no test box client at $TP_CLIENT (build agent/ first)" >&2; exit 1; }
-cmd=("$@" --reporter=junit "--maxWorkers=$workers")
+cmd=("$@" --reporter=tap-flat "--maxWorkers=$workers")
 
 TP_TMP=$(mktemp -d "${TMPDIR:-/tmp}/testbox-parity.XXXXXX") || { echo "$PROG: no temporary directory" >&2; exit 1; }
 TP_WTS=()
@@ -144,27 +187,42 @@ _tp_cleanup() {
 }
 trap _tp_cleanup EXIT
 
-# The per-file comparison of two junit outputs: `<file>\t<local>\t<box>\t<local skipped>\t<box skipped>\t<verdict>`.
+# The per-file comparison of two legs' tap-flat output (their stdout): `<file>\t<local>\t<box>\t<local skipped>\t<box skipped>\t<verdict>`, over
+# every file either side reported and every file of the sample (the third file, one path a line): a sampled file neither side
+# reported is `DIFFERS (not run)`, so a leg pair that ran nothing never reads as an agreement.
 TP_COMPARE='
 const fs = require("fs");
 const read = (f) => {
   const out = new Map();
   const text = fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "";
-  for (const m of text.matchAll(/<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g)) {
-    const attr = (k) => (new RegExp(`\\b${k}="([^"]*)"`).exec(m[1]) || [])[1] || "";
-    const file = attr("classname"), name = attr("name"), body = m[3] || "";
+  // `ok <n> - <file> > <suite> > <test> # time=<t>`, `not ok ...` for a failure, `... # SKIP` or `# TODO` for a skip; a file that
+  // failed to load is one line with no ` > `. Colour escapes, if any, are removed first.
+  for (const line of text.replace(/\x1b\[[0-9;]*m/g, "").split("\n")) {
+    const m = /^(not )?ok [0-9]+ - (.*)$/.exec(line);
+    if (m === null) continue;
+    let rest = m[2];
+    const skip = / # (SKIP|TODO)\b.*$/.exec(rest);
+    rest = skip !== null ? rest.slice(0, skip.index) : rest.replace(/ # time=\S*$/, "");
+    const cut = rest.indexOf(" > ");
+    const file = cut < 0 ? rest : rest.slice(0, cut), name = cut < 0 ? "" : rest.slice(cut + 3);
     const e = out.get(file) || { fail: false, skipped: [] };
-    if (/<(failure|error)\b/.test(body)) e.fail = true;
-    if (/<skipped\b/.test(body)) e.skipped.push(name);
+    if (m[1] !== undefined) e.fail = true;
+    if (skip !== null) e.skipped.push(name);
     out.set(file, e);
   }
   return out;
 };
-// `node -e <script> <a> <b>`: the two files are argv[1] and argv[2].
+// `node -e <script> <a> <b> <sample>`: the two files are argv[1] and argv[2], the sample argv[3].
 const [a, b] = [read(process.argv[1]), read(process.argv[2])];
+const sample = fs.readFileSync(process.argv[3], "utf8").split("\n").filter(Boolean);
 let differ = 0;
-for (const f of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+for (const f of [...new Set([...a.keys(), ...b.keys(), ...sample])].sort()) {
   const x = a.get(f), y = b.get(f);
+  if (x === undefined && y === undefined) {
+    differ++;
+    process.stdout.write(`${f}\tabsent\tabsent\t-\t-\tDIFFERS (not run)\n`);
+    continue;
+  }
   const word = (e) => (e === undefined ? "absent" : e.fail ? "fail" : "pass");
   const sk = (e) => (e === undefined ? "-" : `${e.skipped.length}${e.skipped.length ? " (" + e.skipped.sort().join(", ") + ")" : ""}`);
   const same = word(x) === word(y) && sk(x) === sk(y);
@@ -174,19 +232,17 @@ for (const f of [...new Set([...a.keys(), ...b.keys()])].sort()) {
 process.exit(differ === 0 ? 0 : 1);
 '
 
-# One leg's junit, from its stdout: the <testsuites> document alone.
-_tp_junit() { awk '/<testsuites/{on=1} on{print} /<\/testsuites>/{on=0}' "$1"; }
 
-# `_tp_bound` -> TP_BOUND, the seconds the next step may take: `--leg-deadline`, cut to what is left before `--until`; 0 for
-# no bound. rc 1 when `--until` has passed: the step is not started.
+# `_tp_bound [<extra seconds>]` -> TP_BOUND, the seconds the next step may take: `--leg-deadline` (plus the extra, the local
+# leg's queue wait), cut to what is left before `--until`; 0 for no bound. rc 1 when `--until` has passed: the step is not started.
 TP_BOUND=0
 _tp_bound() {
   local left
-  TP_BOUND="$leg_s"
+  TP_BOUND="$leg_s"; [ "$leg_s" -eq 0 ] || TP_BOUND=$(( leg_s + ${1:-0} ))
   [ "$until" -gt 0 ] || return 0
   left=$(( until - $(date +%s) ))
   [ "$left" -gt 0 ] || return 1
-  if [ "$leg_s" -eq 0 ] || [ "$left" -lt "$leg_s" ]; then TP_BOUND="$left"; fi
+  if [ "$TP_BOUND" -eq 0 ] || [ "$left" -lt "$TP_BOUND" ]; then TP_BOUND="$left"; fi
 }
 # One step's command in <directory>, under TP_BOUND when there is one: the platform shim, with `--leg-kill` as its grace.
 # The step runs in a shell of its own beside the tool, which waits for it, so a TERM to the tool is acted on at once (the
@@ -208,39 +264,182 @@ _tp_overran() {   # <the step's exit status> <the seconds it ran>
   [ "$TP_BOUND" -gt 0 ] && [ "$2" -ge "$TP_BOUND" ] && { [ "$1" = 124 ] || [ "$1" = 137 ]; }
 }
 
-_tp_legs() {   # <worktree> <tag> <command>... -> $TP_TMP/<tag>.local.xml and .box.xml; 1 when a leg could not run
-  local wt="$1" tag="$2" v="" id="" text="" rc=0 side st t0
+_tp_legs() {   # <worktree> <tag> <command>... -> $TP_TMP/<tag>.local.out and .box.out; 1 when a leg could not run
+  local wt="$1" tag="$2" v="" id="" text="" rc=0 side st t0 extra waited
   shift 2
+  rm -f -- "$TP_TMP/$tag.verdict"   # a re-used tag (a flake's re-run) never reads an earlier leg's verdict
   for side in local box; do
-    : > "$TP_TMP/$tag.$side.out"
-    _tp_bound || { echo "$PROG: $tag: the $side leg did not run: the time given to this run is over (--until)" >&2; rc=1; continue; }
+    : > "$TP_TMP/$tag.$side.out"; : > "$TP_TMP/$tag.$side.err"
+    extra=0; [ "$side" = box ] || extra="$queue_s"   # only the local leg waits in the fleet's heavy-test queue
+    _tp_bound "$extra" || { echo "$PROG: $tag: the $side leg did not run: the time given to this run is over (--until)" >&2; rc=1; continue; }
     st=0 t0=$SECONDS
     if [ "$side" = local ]; then
       _tp_leg "$wt/$pkg" bash "$TP_HERE/ccrc-test" --local -- "$@" > "$TP_TMP/$tag.local.out" 2> "$TP_TMP/$tag.local.err" || st=$?
     else
       _tp_leg "$wt/$pkg" node "$TP_CLIENT" run --verdict "$TP_TMP/$tag.verdict" -- "$@" > "$TP_TMP/$tag.box.out" 2> "$TP_TMP/$tag.box.err" || st=$?
     fi
-    if _tp_overran "$st" $(( SECONDS - t0 )); then echo "$PROG: $tag: the $side leg did not end within ${TP_BOUND}s and was stopped" >&2; rc=1; fi
+    # `ccrc test`'s own lines (ccd/ccrc-test#_tacquire): `queued: ...` once when it waits, `slot <i> is free after <n>s; starting`.
+    waited=$(sed -n 's/^ccrc test: slot [0-9]* is free after \([0-9]*\)s; starting$/\1/p' "$TP_TMP/$tag.$side.err" | head -n 1)
+    if _tp_overran "$st" $(( SECONDS - t0 )); then
+      if [ -z "$waited" ] && grep -q '^ccrc test: queued: ' "$TP_TMP/$tag.$side.err"; then
+        echo "$PROG: $tag: the $side leg waited in the fleet's heavy-test queue for its whole ${TP_BOUND}s and never started: the fleet box was busy, which is no difference; run parity again when it is quieter" >&2
+      else
+        echo "$PROG: $tag: the $side leg did not end within ${TP_BOUND}s and was stopped" >&2
+      fi
+      rc=1
+    fi
+    [ -z "$waited" ] || echo "$PROG: $tag: the $side leg waited ${waited}s in the fleet's heavy-test queue before it started" >&2
   done
   [ ! -f "$TP_TMP/$tag.verdict" ] || IFS=$'\t' read -r v id text < "$TP_TMP/$tag.verdict"
   if [ "$v" != remote ]; then
     echo "$PROG: $tag: the box leg did not run on the box (${text:-no verdict})" >&2; rc=1
   fi
-  _tp_junit "$TP_TMP/$tag.local.out" > "$TP_TMP/$tag.local.xml"
-  _tp_junit "$TP_TMP/$tag.box.out" > "$TP_TMP/$tag.box.xml"
   return "$rc"
 }
 
-_tp_compare() { node -e "$TP_COMPARE" "$1" "$2"; }
+_tp_compare() { node -e "$TP_COMPARE" "$1" "$2" "$3"; }   # <local stdout> <box stdout> <sample>
+
+# THE SAMPLE (D-8945): the tool's own facts, not settings. A file CI measured over the ceiling is never sampled (at two
+# workers on a loaded box it alone would take most of a leg); the sample is at most TP_SAMPLE_MAX files, of which at most
+# TP_SAMPLE_CHANGED_MAX are the revision's changed tests, using at most half the budget. With no per-file times nothing is
+# priced: at most TP_SAMPLE_UNTIMED_CHANGED changed tests and TP_SAMPLE_UNTIMED_SPREAD spread files, and no flake. Today's tree,
+# priced with the `testtimes` of 2026-11-22, puts its first eight spread files at 42 s of CI time.
+TP_SAMPLE_FILE_MAX_MS=30000
+TP_SAMPLE_MAX=64
+TP_SAMPLE_CHANGED_MAX=12
+TP_SAMPLE_UNTIMED_CHANGED=4
+TP_SAMPLE_UNTIMED_SPREAD=8
+# `node -e <script> <package> <universe> <listed> <changed> <flakes> <times|-> <budget s> <file max ms> <max> <changed max>
+# <untimed changed> <untimed spread>`: the universe and the changed list are `git ls-files -z` and `git diff --name-only -z`
+# output (paths from the repository root), the listed files vitest's `list --filesOnly` output (package-relative, one a line),
+# the flakes one package-relative path a line. The sample on stdout, one package-relative path a line, and one summary line on
+# stderr.
+TP_SAMPLE='
+const fs = require("fs");
+const crypto = require("crypto");
+const [pkg, uf, lf, cf, ff, tf, budgetS, fileMaxS, maxS, changedMaxS, uChangedS, uSpreadS] = process.argv.slice(1);
+const [budget, fileMax, max, changedMax, uChanged, uSpread] = [budgetS, fileMaxS, maxS, changedMaxS, uChangedS, uSpreadS].map(Number);
+const budgetMs = budget * 1000;
+const TEST = /\.(test|spec)\.(c|m)?[jt]sx?$/;
+const rel = (p) => (p.startsWith(pkg + "/") ? p.slice(pkg.length + 1) : null);
+// What vitest would run: a tracked test file the vitest of the package lists (its include), so an e2e file outside it is no pick.
+const runs = new Set(fs.readFileSync(lf, "utf8").replace(/\x1b\[[0-9;]*m/g, "").split("\n").map((l) => l.trim().replace(/^\.\//, "")));
+const listed = (f) => fs.readFileSync(f, "utf8").split("\0").map(rel).filter((p) => p !== null && TEST.test(p) && !/[\n\r]/.test(p));
+const universe = new Set(listed(uf).filter((p) => runs.has(p)));
+const hash = (p) => crypto.createHash("sha256").update(p).digest("hex");
+const byHash = (xs) => xs.map((p) => [hash(p), p]).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map((x) => x[1]);
+const changed = byHash([...new Set(listed(cf))].filter((p) => universe.has(p)));
+const flakes = [...new Set(fs.readFileSync(ff, "utf8").split("\n").map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#") && universe.has(l)))];
+// CI per-file times: a JSON object of path -> milliseconds, at most 1 MiB. Anything else is no times at all.
+let times = null;
+if (tf !== "-") {
+  try {
+    const st = fs.statSync(tf);
+    if (!st.isFile() || st.size > 1048576) throw new Error("size");
+    const o = JSON.parse(fs.readFileSync(tf, "utf8"));
+    if (typeof o !== "object" || o === null || Array.isArray(o)) throw new Error("shape");
+    for (const v of Object.values(o)) if (typeof v !== "number" || !Number.isFinite(v) || v < 0) throw new Error("value");
+    times = new Map(Object.entries(o));
+  } catch { times = null; }
+}
+const out = [], seen = new Set(), n = { changed: 0, flakes: 0, spread: 0 }, over = [];
+let ms = 0, changedMs = 0;
+// One file of one group: taken, or skipped, and the fill goes on with the next (no limit but the count ends the whole).
+const add = (p, group) => {
+  if (seen.has(p) || out.length >= max) return;
+  if (times === null) {
+    if (group === "flakes" || n[group] >= (group === "changed" ? uChanged : uSpread)) return;
+  } else {
+    if (group === "changed" && n.changed >= changedMax) return;
+    const t = times.get(pkg + "/" + p);
+    if (t === undefined && group === "spread") return;
+    if (t !== undefined && t > fileMax) { if (group !== "spread") over.push(p); return; }
+    const cost = t === undefined ? fileMax : t;
+    if (ms + cost > budgetMs || (group === "changed" && changedMs + cost > budgetMs / 2)) return;
+    ms += cost; if (group === "changed") changedMs += cost;
+  }
+  seen.add(p); out.push(p); n[group]++;
+};
+for (const p of changed) add(p, "changed");
+for (const p of flakes) add(p, "flakes");
+for (const p of byHash([...universe])) add(p, "spread");
+process.stdout.write(out.map((p) => p + "\n").join(""));
+const said = `sample: ${out.length} files (${n.changed} changed, ${n.flakes} known load flakes, ${n.spread} spread), `;
+process.stderr.write(said + (times !== null
+  ? `${Math.round(ms / 1000)} s of CI time` + (over.length ? `; left out, over the ${fileMax / 1000} s ceiling: ${over.join(", ")}` : "")
+  : `no per-file times: no known load flake, and at most ${uChanged} changed and ${uSpread} spread by count`) + "\n");
+'
+# The trusted `testtimes` artifact. The rule is `.github/ci/main-artifact.mjs`'s (`artifactCandidates`, `isTrustedRun`), and it is
+# copied here, LEGITIMATELY DIFFERENT by host: this runs on the fleet box, whose release tree ships no `.github/`
+# (deploy/build-release.sh's PATHSPEC), and it serves any repository row, so the branch is the row's default branch, not a
+# literal `main`. `server/test/testbox-parity.test.ts` holds the two rules' workflow path and events equal.
+# TP_TIMES_PICK, `node -e <script> <listing> <branch>`: the candidates judged on the artifact's own fields (named testtimes,
+# unexpired, on the branch, of this repository and not a fork), newest first, at most three, one run id a line; rc 1 when none.
+TP_TIMES_PICK='
+const fs = require("fs");
+try {
+  const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const ok = (j && Array.isArray(j.artifacts) ? j.artifacts : []).filter((a) => {
+    const w = a && a.workflow_run;
+    return a.name === "testtimes" && a.expired === false && w && w.head_branch === process.argv[2]
+      && Number.isSafeInteger(w.repository_id) && w.head_repository_id === w.repository_id && Number.isSafeInteger(w.id) && w.id > 0;
+  }).sort((a, b) => (b.created_at < a.created_at ? -1 : b.created_at > a.created_at ? 1 : b.id - a.id));
+  if (ok.length > 0) { process.stdout.write(ok.slice(0, 3).map((a) => a.workflow_run.id + " " + a.workflow_run.repository_id + "\n").join("")); process.exit(0); }
+} catch {}
+process.exit(1);
+'
+# TP_RUN_TRUSTED, `node -e <script> <run> <branch> <repository id>`: the run is this repository's own `ci.yml` run on the branch,
+# from an event only a merge or a maintainer can cause. rc 0 when it is.
+TP_RUN_TRUSTED='
+const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+const TRUSTED_EVENTS = ["push", "schedule", "workflow_dispatch"];
+try {
+  const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const id = Number(process.argv[3]);
+  if (r && r.path === CI_WORKFLOW_PATH && r.head_branch === process.argv[2] && TRUSTED_EVENTS.includes(r.event)
+    && r.repository && r.repository.id === id && r.head_repository && r.head_repository.id === id) process.exit(0);
+} catch {}
+process.exit(1);
+'
+# `_tp_times` -> TP_TIMES, the path of CI's per-file times of the default branch (TP_BRANCH), or `-`, fetched once a run: the
+# times price files, so one branch's serve every revision. Each gh call is a bounded step, and any failure only means "no times".
+# A download always names its run: with no run id gh lists every artifact of the repository, which is slow and has answered
+# HTTP 500.
+TP_TIMES="-" TP_TIMES_ASKED=0
+_tp_times() {
+  local dir="$TP_TMP/times" id rid
+  [ "$TP_TIMES_ASKED" = 0 ] || return 0
+  TP_TIMES_ASKED=1
+  [ -n "$TP_BRANCH" ] || return 0
+  _tp_bound && _tp_leg "$repo" "$TP_GH_CMD" api "repos/{owner}/{repo}/actions/artifacts?name=testtimes&per_page=10" > "$dir.list" 2>/dev/null </dev/null || return 0
+  node -e "$TP_TIMES_PICK" "$dir.list" "$TP_BRANCH" > "$dir.ids" 2>/dev/null || return 0
+  while read -r id rid; do
+    [[ "$id" =~ ^[1-9][0-9]{0,19}$ && "$rid" =~ ^[1-9][0-9]{0,19}$ ]] || continue
+    _tp_bound && _tp_leg "$repo" "$TP_GH_CMD" api "repos/{owner}/{repo}/actions/runs/$id" > "$dir.run" 2>/dev/null </dev/null || continue
+    node -e "$TP_RUN_TRUSTED" "$dir.run" "$TP_BRANCH" "$rid" || continue
+    _tp_bound && _tp_leg "$repo" "$TP_GH_CMD" run download "$id" -n testtimes -D "$dir" >/dev/null 2>&1 </dev/null || return 0
+    [ ! -f "$dir/testtimes.json" ] || TP_TIMES="$dir/testtimes.json"
+    return 0
+  done < "$dir.ids"
+}
+
+# The repository's default branch: its clone's `origin/HEAD`, else what gh says. Empty when neither answers.
+TP_BRANCH=$(_tp_git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) && TP_BRANCH="${TP_BRANCH#origin/}" \
+  || TP_BRANCH=$(cd "$repo" && _tp_gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null </dev/null) || TP_BRANCH=""
+[[ "$TP_BRANCH" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || TP_BRANCH=""
 
 total=0
+files_total=0   # the test files compared on both sides, over every pull request leg (printed, not yet recorded)
 rec_prs=()   # "<number> <rev>" of every pull request leg that resolved
 fx_names=() fx_results=()
 
-# --recent: the n most recent merged pull requests, number and merge commit, as `prr:<number>:<oid>` legs.
-if [ "$recent" -gt 0 ]; then
-  listed=$(cd "$repo" && _tp_gh pr list --state merged --limit "$recent" --json number,mergeCommit 2>/dev/null \
-    | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{for(const p of JSON.parse(s)){const o=p&&p.mergeCommit&&p.mergeCommit.oid;if(Number.isSafeInteger(p.number)&&p.number>0&&typeof o==="string"&&/^[0-9a-f]{40,64}$/.test(o))process.stdout.write(p.number+" "+o+"\n")}}catch{}})') || listed=""
+# --recent: the n pull requests merged most recently into the default branch, by `mergedAt` (gh lists by creation), as
+# `prr:<number>:<oid>` legs. With no default branch there is no such list.
+if [ "$recent" -gt 0 ] && [ -z "$TP_BRANCH" ]; then
+  echo "$PROG: the repository's default branch could not be read (no origin/HEAD, and gh repo view did not answer)" >&2; total=$((total + 1))
+elif [ "$recent" -gt 0 ]; then
+  listed=$(cd "$repo" && _tp_gh pr list --state merged --base "$TP_BRANCH" --limit 50 --json number,mergeCommit,mergedAt 2>/dev/null \
+    | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const ps=JSON.parse(s).filter((p)=>p&&Number.isSafeInteger(p.number)&&p.number>0&&p.mergeCommit&&typeof p.mergeCommit.oid==="string"&&/^[0-9a-f]{40,64}$/.test(p.mergeCommit.oid)&&typeof p.mergedAt==="string"&&p.mergedAt!=="");ps.sort((a,b)=>(b.mergedAt<a.mergedAt?-1:b.mergedAt>a.mergedAt?1:b.number-a.number));for(const p of ps.slice(0,Number(process.argv[1])))process.stdout.write(p.number+" "+p.mergeCommit.oid+"\n")}catch{}})' "$recent") || listed=""
   if [ -z "$listed" ]; then
     echo "$PROG: no merged pull request was listed (is gh signed in, and does the repository have any?)" >&2; total=$((total + 1))
   else
@@ -306,36 +505,69 @@ EOF
 _tp_lines() {   # <leg stdout> -> its TP lines on stdout
   sed "s/$(printf '\033')\[[0-9;]*m//g" "$1" 2>/dev/null | grep '^TP|' || :
 }
-_tp_fixture() {   # <worktree> <name> <command>... -> 0 iff both sides ran and printed the same lines, at least one
-  local wt="$1" name="$2" f="testbox-parity-fixture-$2.test.mjs" cfg="testbox-parity-fixture.config.mjs" tag="fx-$2" ok=0
-  shift 2
-  _tp_fixture_src "$name" > "$wt/$pkg/$f"
+# The three fixtures, in ONE leg pair: the three files and their config written into the worktree's package, one run on each
+# side naming all three, then each side's `TP|` lines split by their `TP|<name>|` prefix and compared per fixture. A fixture's
+# lines keep their own order (its test logs them one after another); the fixtures' lines may interleave, which the split
+# undoes. A fixture with no line on a side fails. -> fx_names, fx_results, one entry per fixture.
+_tp_fixtures() {   # <worktree> <command>...
+  local wt="$1" cfg="testbox-parity-fixture.config.mjs" tag="fx" name f side ran=0 ok files=()
+  shift
+  for name in git-state socket workers; do
+    f="testbox-parity-fixture-$name.test.mjs"; _tp_fixture_src "$name" > "$wt/$pkg/$f"; files+=("$f")
+  done
   # The package's own vitest config only includes its own test directory (and extension), so a fixture beside it would
-  # match nothing and vitest would exit with "No test files found". The fixture runs under a config of its own that
+  # match nothing and vitest would exit with "No test files found". The fixtures run under a config of their own that
   # includes exactly the fixture files at the package root.
   printf "export default { test: { include: ['testbox-parity-fixture-*.test.mjs'] } };\n" > "$wt/$pkg/$cfg"
-  if _tp_legs "$wt" "$tag" "$@" --config "$cfg" "$f"; then
-    _tp_lines "$TP_TMP/$tag.local.out" > "$TP_TMP/$tag.local.lines"
-    _tp_lines "$TP_TMP/$tag.box.out" > "$TP_TMP/$tag.box.lines"
-    [ -s "$TP_TMP/$tag.local.lines" ] && cmp -s "$TP_TMP/$tag.local.lines" "$TP_TMP/$tag.box.lines" && ok=1
-  fi
-  rm -f -- "${wt:?}/${pkg:?}/${f:?}" "${wt:?}/${pkg:?}/${cfg:?}"
-  fx_names+=("$name")
-  if [ "$ok" = 1 ]; then fx_results+=(pass); printf 'fixture %s: byte-identical on both sides\n' "$name"
-  else
-    fx_results+=(fail); printf 'fixture %s: DIFFERS (or a leg could not run)\n' "$name"; total=$((total + 1))
-    # What each side printed, so a difference names itself (no `TP|` line on a side: that leg's last stdout and stderr
-    # lines, control bytes made visible, so an escape or a prefix in front of a TP line shows itself).
-    local side
+  _tp_legs "$wt" "$tag" "$@" --config "$cfg" "${files[@]}" && ran=1
+  for side in local box; do _tp_lines "$TP_TMP/$tag.$side.out" > "$TP_TMP/$tag.$side.lines"; done
+  for f in "${files[@]}" "$cfg"; do rm -f -- "${wt:?}/${pkg:?}/${f:?}"; done
+  for name in git-state socket workers; do
     for side in local box; do
-      if [ -s "$TP_TMP/$tag.$side.lines" ]; then sed "s/^/$PROG: fixture $name: $side: /" "$TP_TMP/$tag.$side.lines" >&2
-      else
-        echo "$PROG: fixture $name: $side: no TP line" >&2
-        tail -n 15 "$TP_TMP/$tag.$side.out" 2>/dev/null | cat -v | sed "s/^/$PROG: fixture $name: $side stdout: /" >&2 || :
-        tail -n 15 "$TP_TMP/$tag.$side.err" 2>/dev/null | cat -v | sed "s/^/$PROG: fixture $name: $side stderr: /" >&2 || :
-      fi
+      awk -v p="TP|$name|" 'index($0, p) == 1' "$TP_TMP/$tag.$side.lines" > "$TP_TMP/$tag.$name.$side.lines"
     done
+    ok=0
+    [ "$ran" = 1 ] && [ -s "$TP_TMP/$tag.$name.local.lines" ] && cmp -s "$TP_TMP/$tag.$name.local.lines" "$TP_TMP/$tag.$name.box.lines" && ok=1
+    fx_names+=("$name")
+    if [ "$ok" = 1 ]; then fx_results+=(pass); printf 'fixture %s: byte-identical on both sides\n' "$name"
+    else
+      fx_results+=(fail); printf 'fixture %s: DIFFERS (or a leg could not run)\n' "$name"; total=$((total + 1))
+      # What each side printed, so a difference names itself (no `TP|` line on a side: that leg's last stdout and stderr
+      # lines, control bytes made visible, so an escape or a prefix in front of a TP line shows itself).
+      for side in local box; do
+        if [ -s "$TP_TMP/$tag.$name.$side.lines" ]; then sed "s/^/$PROG: fixture $name: $side: /" "$TP_TMP/$tag.$name.$side.lines" >&2
+        else
+          echo "$PROG: fixture $name: $side: no TP line" >&2
+          tail -n 15 "$TP_TMP/$tag.$side.out" 2>/dev/null | cat -v | sed "s/^/$PROG: fixture $name: $side stdout: /" >&2 || :
+          tail -n 15 "$TP_TMP/$tag.$side.err" 2>/dev/null | cat -v | sed "s/^/$PROG: fixture $name: $side stderr: /" >&2 || :
+        fi
+      done
+    fi
+  done
+}
+
+# `_tp_sample <worktree> <tag>` -> $TP_TMP/<tag>.sample, the revision's sample (D-8945), and its known flakes in
+# TP_LEG_FLAKY. rc 1 when the rule could not run, or the package's vitest could not list its test files (a bounded step).
+TP_LEG_FLAKY=()
+_tp_sample() {
+  local wt="$1" tag="$2" l
+  _tp_git -C "$wt" ls-files -z -- "$pkg/" > "$TP_TMP/$tag.universe" 2>/dev/null || return 1
+  _tp_bound && _tp_leg "$wt/$pkg" "${list_cmd[@]}" > "$TP_TMP/$tag.listed" 2> "$TP_TMP/$tag.listed.err" </dev/null \
+    || { echo "$PROG: $tag: the package's vitest could not list its test files (${list_cmd[*]})" >&2; return 1; }
+  # A root commit has no first parent, and so no changed tests.
+  _tp_git -C "$wt" diff --name-only -z HEAD^1 HEAD -- "$pkg/" > "$TP_TMP/$tag.changed" 2>/dev/null || : > "$TP_TMP/$tag.changed"
+  TP_LEG_FLAKY=(${flaky[@]+"${flaky[@]}"})
+  if [ -f "$wt/$pkg/load-flakes.txt" ] && [ ! -L "$wt/$pkg/load-flakes.txt" ]; then
+    while IFS= read -r l || [ -n "$l" ]; do
+      l="${l%$'\r'}"; l="${l#"${l%%[![:space:]]*}"}"; l="${l%"${l##*[![:space:]]}"}"
+      case "$l" in ''|'#'*) ;; *) TP_LEG_FLAKY+=("$l") ;; esac
+    done < "$wt/$pkg/load-flakes.txt"
   fi
+  printf '%s\n' ${TP_LEG_FLAKY[@]+"${TP_LEG_FLAKY[@]}"} > "$TP_TMP/$tag.flakes"
+  _tp_times
+  node -e "$TP_SAMPLE" "$pkg" "$TP_TMP/$tag.universe" "$TP_TMP/$tag.listed" "$TP_TMP/$tag.changed" "$TP_TMP/$tag.flakes" "$TP_TIMES" \
+    "$budget" "$TP_SAMPLE_FILE_MAX_MS" "$TP_SAMPLE_MAX" "$TP_SAMPLE_CHANGED_MAX" "$TP_SAMPLE_UNTIMED_CHANGED" "$TP_SAMPLE_UNTIMED_SPREAD" \
+    > "$TP_TMP/$tag.sample"
 }
 
 fixtures_done=0
@@ -344,9 +576,10 @@ for r in ${revs[@]+"${revs[@]}"}; do
   case "${r%%:*}" in
     pr)
       num="${r#pr:}"
-      rev=$(cd "$repo" && _tp_gh pr view "$num" --json mergeCommit -q .mergeCommit.oid 2>/dev/null) && [ -n "$rev" ] \
+      rev=$(cd "$repo" && _tp_gh pr view "$num" --json mergeCommit -q .mergeCommit.oid 2>/dev/null) || rev=""
+      [[ "$rev" =~ ^[0-9a-f]{40,64}$ ]] \
         || { echo "$PROG: PR #$num: no merge commit (is it merged?)" >&2; total=$((total + 1)); continue; } ;;
-    prr) num="${r#prr:}"; num="${num%%:*}"; rev="${r##*:}" ;;
+    prr) rest="${r#prr:}"; num="${rest%%:*}"; rev="${rest#*:}" ;;
   esac
   _tp_bound || { echo "$PROG: $rev: not run: the time given to this run is over (--until)" >&2; total=$((total + 1)); continue; }
   tag="r${#TP_WTS[@]}"
@@ -362,26 +595,45 @@ for r in ${revs[@]+"${revs[@]}"}; do
   done
   echo "== $rev"
   [ -z "$num" ] || rec_prs+=("$num $rev")
-  _tp_legs "$wt" "$tag" "${cmd[@]}" || total=$((total + 1))
-  _tp_compare "$TP_TMP/$tag.local.xml" "$TP_TMP/$tag.box.xml" > "$TP_TMP/$tag.cmp"
-  while IFS=$'\t' read -r f a b sa sb word; do
-    if [ "$word" = DIFFERS ]; then
-      for k in ${flaky[@]+"${flaky[@]}"}; do
-        [ "$k" = "$f" ] || continue
-        # A known-load flake: re-run alone on both sides, once; that answer counts.
-        if _tp_legs "$wt" "$tag.alone" "$@" "$f" --reporter=junit "--maxWorkers=$workers" \
-          && _tp_compare "$TP_TMP/$tag.alone.local.xml" "$TP_TMP/$tag.alone.box.xml" > "$TP_TMP/$tag.alone.cmp"; then
-          word="agree (re-run alone)"
-        fi
-      done
-    fi
-    [ "$word" = DIFFERS ] && total=$((total + 1))
-    printf '%s: local %s, box %s; skipped local %s, box %s; %s\n' "$f" "$a" "$b" "$sa" "$sb" "$word"
-  done < "$TP_TMP/$tag.cmp"
+  sample=()
+  if _tp_sample "$wt" "$tag"; then
+    while IFS= read -r f; do [ -z "$f" ] || sample+=("$f"); done < "$TP_TMP/$tag.sample"
+  else
+    echo "$PROG: $rev: the sample could not be chosen" >&2
+  fi
+  if [ "${#sample[@]}" -eq 0 ]; then
+    # Never the whole suite: a leg with no file named would run every test of the package.
+    echo "$PROG: $rev: no test file to compare, so no leg ran" >&2; total=$((total + 1))
+  else
+    _tp_legs "$wt" "$tag" "${cmd[@]}" "${sample[@]}" || total=$((total + 1))
+    _tp_compare "$TP_TMP/$tag.local.out" "$TP_TMP/$tag.box.out" "$TP_TMP/$tag.sample" > "$TP_TMP/$tag.cmp"
+    # Read whole before any re-run: a leg keeps the tool's stdin, so it must never be this list.
+    lines=()
+    while IFS= read -r l; do lines+=("$l"); done < "$TP_TMP/$tag.cmp"
+    files_total=$(( files_total + ${#lines[@]} ))
+    for l in ${lines[@]+"${lines[@]}"}; do
+      IFS=$'\t' read -r f a b sa sb word <<<"$l"
+      if [[ "$word" == DIFFERS* ]]; then
+        for k in ${TP_LEG_FLAKY[@]+"${TP_LEG_FLAKY[@]}"}; do
+          [ "$k" = "$f" ] || continue
+          # A known-load flake: re-run alone on both sides, once; that answer counts.
+          printf '%s\n' "$f" > "$TP_TMP/$tag.alone.sample"
+          if _tp_legs "$wt" "$tag.alone" "$@" "$f" --reporter=tap-flat "--maxWorkers=$workers" \
+            && _tp_compare "$TP_TMP/$tag.alone.local.out" "$TP_TMP/$tag.alone.box.out" "$TP_TMP/$tag.alone.sample" > "$TP_TMP/$tag.alone.cmp"; then
+            word="agree (re-run alone)"
+          fi
+          break
+        done
+      fi
+      [[ "$word" == DIFFERS* ]] && total=$((total + 1))
+      printf '%s: local %s, box %s; skipped local %s, box %s; %s\n' "$f" "$a" "$b" "$sa" "$sb" "$word"
+    done
+    echo "compared ${#lines[@]} test files on each side"
+  fi
   # The fixtures run once, in the first worktree that installed.
   if [ "$fixtures" = 1 ] && [ "$fixtures_done" = 0 ]; then
     fixtures_done=1
-    for fx in git-state socket workers; do _tp_fixture "$wt" "$fx" "$@" --reporter=verbose "--maxWorkers=$workers"; done
+    _tp_fixtures "$wt" "$@" --reporter=verbose "--maxWorkers=$workers"
   fi
 done
 if [ "$fixtures" = 1 ] && [ "$fixtures_done" = 0 ]; then
@@ -411,6 +663,8 @@ process.stdin.on("data", (c) => (s += c)).on("end", () => {
     && ( umask 077; cp -- "$TP_TMP/record.json" "$rtmp" ) && chmod 600 "$rtmp" && mv -f -- "$rtmp" "$record" \
     || { rm -f -- "${rtmp:?}"; echo "$PROG: cannot write $record" >&2; exit 1; }
 fi
+# The count is printed, never recorded yet: a server older than the reader's optional `files` refuses a record carrying it.
+echo "parity: compared $files_total test files on each side"
 if [ "$total" -eq 0 ]; then echo "parity: every file agrees"; exit 0; fi
 echo "parity: $total disagreement(s) or leg(s) that could not run"
 exit 1

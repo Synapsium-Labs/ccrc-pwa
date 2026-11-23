@@ -518,6 +518,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
             {record !== null && !running && (
               <ul className="testbox-checks" data-testbox="parity-record">
                 <li>{T.parityPrs(record.prs.length)}</li>
+                {record.files !== undefined && <li>{T.parityFiles(record.files)}</li>}
                 {record.fixtures.map((x) => <li key={x.name}>{T.fixtureWord(x.name, x.result)}</li>)}
               </ul>
             )}

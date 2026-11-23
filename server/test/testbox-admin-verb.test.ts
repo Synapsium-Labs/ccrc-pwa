@@ -732,8 +732,9 @@ describe.skipIf(!HAS_FLOCK)('the deadline table, the unit\'s ceiling and who hol
     const idleWait = bashTable().idleWait;
     expect(idleWait).toBe(21600);
     expect(ROWS['settings-box/idle']).toBe(idleWait + ROWS['settings-box']! + 120);
-    // parity's legs have the ceiling less the tail: one step stopped at its bound, and killed, still leaves a second full step
-    expect(ROWS['parity']! - ROWS['parity/tail']!).toBeGreaterThanOrEqual(2 * (ROWS['parity/leg']! + ROWS['parity/kill']!));
+    // parity's legs have the ceiling less the tail: one step stopped at its bound, and killed, still leaves a second full step,
+    // and the local leg's wait in the fleet's heavy-test queue on top (D-8947)
+    expect(ROWS['parity']! - ROWS['parity/tail']!).toBeGreaterThanOrEqual(2 * (ROWS['parity/leg']! + ROWS['parity/kill']!) + ROWS['parity/queue']!);
     // the tail: a leg stopped at the act's time is killed before the tool itself is stopped (half the tail later), and the tool is
     // killed before the unit's ceiling, which leaves the record the rest
     expect(ROWS['parity/kill']! * 2).toBeLessThan(ROWS['parity/tail']! / 2);
@@ -742,6 +743,15 @@ describe.skipIf(!HAS_FLOCK)('the deadline table, the unit\'s ceiling and who hol
     // its act together: the `settings-box/idle` row)
     for (const s of LONG) expect(ROWS[s], s).toBeLessThanOrEqual(3600);
     expect(ROWS['unit/stop']).toBeLessThanOrEqual(120);
+  });
+
+  it('the sample fits a leg: its CI-measured seconds at two workers, three times over for a loaded box, plus a minute to start (D-8947)', () => {
+    // `parity/sample` is the CI-time budget of one leg's sample (the parity tool's `--sample-budget`); `parity/leg` bounds that
+    // leg. A loaded fleet box runs about three times slower than a CI runner, and vitest takes about a minute to start there.
+    expect(ROWS['parity/sample']! / 2 * 3 + 60).toBeLessThanOrEqual(ROWS['parity/leg']!);
+    // the light check: a whole act of minutes, never the hours a full suite took, and a queue wait of minutes too
+    expect(ROWS['parity']).toBeLessThanOrEqual(1500);
+    expect(ROWS['parity/queue']).toBeLessThanOrEqual(ROWS['parity/leg']!);
   });
 
   it('every long sub\'s unit is started with its row as RuntimeMaxSec, and the state records the latest time the act can end', () => {

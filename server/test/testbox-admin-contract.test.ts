@@ -601,6 +601,31 @@ describe('the status reader', () => {
     expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, at: -1 })).ok).toBe(false);
     expect(readTestboxParityRecord('{').ok).toBe(false);
   });
+  // D-8945: the light check's record says how many test files it compared. An older record (a full-suite run) has no
+  // `files` and still reads; the field is set only when the record carries it.
+  it('the parity record\'s `files` is optional: an older record reads without it, and a present one is a whole number up to 100000', () => {
+    const old = readTestboxParityRecord(JSON.stringify(PARITY));
+    expect(old.ok && Object.hasOwn(old.value, 'files')).toBe(false);
+    expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: 54 }))).toEqual({ ok: true, value: { ...PARITY, files: 54 } });
+    expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: 0 }))).toEqual({ ok: true, value: { ...PARITY, files: 0 } });
+    expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: 100_000 })).ok).toBe(true);
+    for (const bad of [-1, 1.5, '3', null, 100_001, true]) {
+      expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: bad })).ok, String(bad)).toBe(false);
+    }
+  });
+  it('a status whose parity record carries `files` reads, and the gate gives it the same verdict as one without', () => {
+    const cur = { fingerprint: FP, boxFileSha256: SHA, stale: false };
+    const withFiles = read({ ...STATUS, parity: { ...PARITY, files: 54 } });
+    const without = read({ ...STATUS, parity: PARITY });
+    expect(withFiles.ok && without.ok).toBe(true);
+    if (!withFiles.ok || !without.ok) return;
+    expect(withFiles.value.parity?.files).toBe(54);
+    expect(without.value.parity && Object.hasOwn(without.value.parity, 'files')).toBe(false);
+    expect(parityArmable(withFiles.value.parity, cur)).toBe(parityArmable(without.value.parity, cur));
+    expect(parityArmable(withFiles.value.parity, cur)).toBe(true);
+    const failing = { ...PARITY, result: 'fail' as const };
+    expect(parityArmable({ ...failing, files: 54 }, cur)).toBe(parityArmable(failing, cur));
+  });
 });
 
 describe('the parity gate', () => {
@@ -664,7 +689,7 @@ describe('the deadline table, the busy holder and the status\'s latest end (D-88
 
   it('a sub is long exactly when the table gives it a ceiling, and every row is a whole number of seconds', () => {
     for (const s of SUBS) expect(Object.hasOwn(ROWS, s), s).toBe(TESTBOX_ADMIN_SUBS[s].long);
-    expect(Object.keys(ROWS).filter((k) => k.includes('/')).sort()).toEqual(['parity/kill', 'parity/leg', 'parity/tail', 'settings-box/idle', 'unit/stop']);
+    expect(Object.keys(ROWS).filter((k) => k.includes('/')).sort()).toEqual(['parity/kill', 'parity/leg', 'parity/queue', 'parity/sample', 'parity/tail', 'settings-box/idle', 'unit/stop']);
     for (const [k, v] of Object.entries(ROWS)) expect(Number.isSafeInteger(v) && v > 0, k).toBe(true);
     expect(Object.isFrozen(TESTBOX_ADMIN_DEADLINE_S)).toBe(true);
     expect(ROWS['parity/leg']).toBeLessThan(ROWS['parity']! - ROWS['parity/tail']!);
