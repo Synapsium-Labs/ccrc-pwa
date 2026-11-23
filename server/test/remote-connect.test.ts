@@ -9,7 +9,8 @@ import type { RunningAgent } from '../../agent/src/server.js';
 import { connectFleet, FleetClient, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
 import { LinkNotSentError } from '../src/remote/errors.js';
 import { MAX_CAP_WORDS } from '../../shared/api.js';
-import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+import { AGENT_BOOT_ID, AGENT_MACHINE_ID, TEST_PEER_SEAMS, TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+import { hostDigest } from '../../shared/host-identity.mjs';
 
 describe('connectFleet — connection lifecycle', () => {
   let agent: RunningAgent | undefined;
@@ -59,6 +60,11 @@ describe('connectFleet — connection lifecycle', () => {
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
         authorityWitness: { kind: 'nothing' },
         agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'models', 'testbox-capture', 'witness', 'overlord-history'],
+        // Overlord W1, the isolation word: the report of the booted agent's synthetic ids under the bearer, and the peer
+        // measured over the test seams (loopback is local; the tables are unreadable there, so the uid is unmeasured).
+        hostReport: { uid: process.getuid?.() ?? 'unmeasured', machine: hostDigest(TOKEN, 'machine', AGENT_MACHINE_ID), boot: hostDigest(TOKEN, 'boot', AGENT_BOOT_ID) },
+        peer: { locality: 'local', uid: 'unmeasured' },
+        readySerial: 1,
       }),
       { timeout: 3000 });
   });
@@ -219,7 +225,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -268,7 +274,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const canary = ['CANARY', 'client', String(process.pid)].join('-');
@@ -315,7 +321,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -348,7 +354,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -383,6 +389,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${port}`,
       token: TOKEN,
       heartbeatMs: 60_000,
@@ -419,7 +426,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -460,14 +467,14 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
 
   it('an absent ccdVerbs field (older agent) is recorded as null, never []', async () => {
     server = await fakeReadyAgent({});
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toBeNull();
   });
 
   it('a malformed ccdVerbs (non-string elements) is discarded as null, never trusted partially', async () => {
     server = await fakeReadyAgent({ ccdVerbs: [1, 2, 3] });
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toBeNull();
   });
@@ -477,7 +484,7 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
   it('a ready frame with no ccdVerbs resets: null after a list stood', async () => {
     let readies = 0;
     server = await fakeReadyAgent(() => (++readies === 1 ? { ccdVerbs: ['start', 'ws-audit'] } : {}));
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.ccdVerbs).toEqual(['start', 'ws-audit']), { timeout: 3000 });
     fleet.client.ws?.close();
     await vi.waitFor(() => expect(readies).toBe(2), { timeout: 5000 });
@@ -487,7 +494,7 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
 
   it('a real empty array is recorded as [], distinct from the null "no evidence" case', async () => {
     server = await fakeReadyAgent({ ccdVerbs: [] });
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toEqual([]);
   });
@@ -506,7 +513,7 @@ describe('FleetClient.onReady — rosterFp keeps "no evidence" apart from a real
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -555,7 +562,7 @@ describe('FleetClient.onReady — build is re-validated at the wire, never trust
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -611,6 +618,7 @@ describe('FleetClient.onReady — build is re-validated at the wire, never trust
     let extra: Record<string, unknown> = { build: { ...STAMP } };
     server = await fakeReadyAgent(() => extra);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
       reconnectMinMs: 30, reconnectMaxMs: 100,
     });
@@ -639,7 +647,7 @@ describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -703,6 +711,7 @@ describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never
     let extra: Record<string, unknown> = { observedEpoch: 43 };
     server = await fakeReadyAgent(() => extra);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
       reconnectMinMs: 30, reconnectMaxMs: 100,
     });
@@ -800,7 +809,7 @@ describe('FleetClient.onReady — ops is read through readReadyOps, on every rea
 
   const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
     server = await fakeReadyAgent(extra);
-    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    const f = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
     return f;
   };
@@ -827,6 +836,7 @@ describe('FleetClient.onReady — ops is read through readReadyOps, on every rea
     let extra: Record<string, unknown> = { ops: ['update'] };
     server = await fakeReadyAgent(() => extra);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
       reconnectMinMs: 30, reconnectMaxMs: 100,
     });
@@ -953,6 +963,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
 
   it('no ready link at the call: LinkNotSentError(disconnected), nothing left pending', async () => {
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
     });
     const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
@@ -965,7 +976,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
   it('a signal already aborted: LinkNotSentError(aborted), no frame ever reaches the server', async () => {
     const l = await listen();
     wss = l.server;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
@@ -979,7 +990,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
   it('a synchronous send throw: LinkNotSentError(the thrown message), and the registration above is undone', async () => {
     const l = await listen();
     wss = l.server;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const socket = (fleet.client as unknown as { socket: WebSocket }).socket;
@@ -1075,6 +1086,7 @@ describe('FleetClient.request — what never reached the link is a LinkNotSentEr
       const l = await listen();
       wss = l.server;
       fleet = connectFleet({
+        peerSeams: TEST_PEER_SEAMS,
         url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
       });
       await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
@@ -1131,7 +1143,7 @@ describe('FleetClient — the connect deadline bounds socket creation → ready'
 
   it('abandons an upgrade the peer never answers and dials again', async () => {
     const peer = await silentTcp();
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
     expect(fleet.state.connected).toBe(false);
     expect(fleet.state.downSince).not.toBeNull();
@@ -1139,14 +1151,14 @@ describe('FleetClient — the connect deadline bounds socket creation → ready'
 
   it('abandons an open socket whose hello never gets a ready and dials again', async () => {
     const peer = await wsAgent(false);
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
     expect(fleet.state.connected).toBe(false);
   });
 
   it('never fires once ready arrived in time: no terminate, no second connection', async () => {
     const peer = await wsAgent(true);
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
     expect(fleet.state.connected).toBe(true);
@@ -1155,10 +1167,133 @@ describe('FleetClient — the connect deadline bounds socket creation → ready'
 
   it('close() during a pending connect leaves no timer to dial again', async () => {
     const peer = await silentTcp();
-    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
     await vi.waitFor(() => expect(peer.accepted()).toBe(1), { timeout: 3000 });
     await fleet.close();
     await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
     expect(peer.accepted()).toBe(1);
+  });
+});
+
+describe('FleetClient.onReady — the host report and the peer (Overlord W1, the isolation word)', () => {
+  // The one reader of `frame.host` and the one measurement of the link's peer, both on every ready (plan Task 2). A fake
+  // agent stands in for an older or broken one; the peer is measured over synthetic tables built from the fake's own view
+  // of the connection, never the live host's.
+  let wss: WebSocketServer | undefined;
+  let fleet: ConnectedFleet | undefined;
+  const lines: string[] = [];
+  const DIGEST = 'c'.repeat(64);
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (wss) await new Promise<void>((res) => { for (const c of wss!.clients) c.terminate(); wss!.close(() => res()); });
+    wss = undefined;
+    vi.restoreAllMocks();
+    for (const line of lines.splice(0)) {
+      expect(line).not.toMatch(/[0-9a-f]{64}/);
+      expect(line).not.toContain(AGENT_MACHINE_ID);
+      expect(line).not.toContain('127.0.0.1');
+    }
+  });
+
+  const spyConsole = (): void => {
+    for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const) {
+      vi.spyOn(console, m).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    }
+  };
+
+  /** A fake agent answering every hello with `ready` plus `extra()`; `sendReady()` re-sends one on the live socket. */
+  const fake = async (extra: () => Record<string, unknown>): Promise<{ port: number; sendReady(): void; clientPort(): number }> => {
+    let live: WebSocket | null = null;
+    let clientPort = 0;
+    const ready = (): void => { live?.send(JSON.stringify({ t: 'ready', v: 1, ...extra() })); };
+    wss = await new Promise<WebSocketServer>((resolve) => { const s: WebSocketServer = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => { resolve(s); }); });
+    wss.on('connection', (ws, req) => {
+      live = ws;
+      clientPort = req.socket.remotePort ?? 0;
+      ws.on('message', (raw) => { if ((JSON.parse(raw.toString()) as { t?: unknown }).t === 'hello') ready(); });
+    });
+    const address = wss.address();
+    return { port: typeof address === 'object' && address !== null ? address.port : 0, sendReady: ready, clientPort: () => clientPort };
+  };
+  const connect = (port: number, peerSeams = TEST_PEER_SEAMS): ConnectedFleet => connectFleet({
+    url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 30, reconnectMaxMs: 100, peerSeams,
+  });
+
+  it("stores a ready without host as 'absent', and the peer measured on its socket", async () => {
+    spyConsole();
+    const f = await fake(() => ({}));
+    fleet = connect(f.port);
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.hostReport).toBe('absent');
+    expect(fleet.state.peer).toEqual({ locality: 'local', uid: 'unmeasured' });
+    expect(fleet.state.readySerial).toBe(1);
+  });
+
+  it('a client given no peer seams measures no peer: it reads unmeasured and never reads the live host', async () => {
+    spyConsole();
+    const f = await fake(() => ({}));
+    // Over loopback, any measurement would read `local`: `unmeasured` here means nothing was measured (review F7).
+    fleet = connectFleet({ url: `ws://127.0.0.1:${f.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 30, reconnectMaxMs: 100 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.peer).toEqual({ locality: 'unmeasured', uid: 'unmeasured' });
+  });
+
+  it("stores a malformed host as 'malformed' and logs one line with no digest in it, once per change", async () => {
+    spyConsole();
+    let host: unknown = { uid: 1, machine: DIGEST.slice(1), boot: DIGEST };
+    const f = await fake(() => ({ host }));
+    fleet = connect(f.port);
+    await vi.waitFor(() => expect(fleet!.state.hostReport).toBe('malformed'), { timeout: 3000 });
+    const malformedLines = (): string[] => lines.filter((l) => l.includes('host report is malformed'));
+    expect(malformedLines()).toEqual(["ccrc-server: agent link: the agent's host report is malformed"]);
+    f.sendReady();
+    await vi.waitFor(() => expect(fleet!.state.readySerial).toBe(2), { timeout: 3000 });
+    expect(malformedLines()).toHaveLength(1);
+    host = { uid: 1, machine: DIGEST, boot: DIGEST };
+    f.sendReady();
+    await vi.waitFor(() => expect(fleet!.state.hostReport).toEqual({ uid: 1, machine: DIGEST, boot: DIGEST }), { timeout: 3000 });
+    host = 'garbage';
+    f.sendReady();
+    await vi.waitFor(() => expect(fleet!.state.hostReport).toBe('malformed'), { timeout: 3000 });
+    expect(malformedLines()).toHaveLength(2);
+  });
+
+  it("a reconnect to an agent that omits the field resets it to 'absent'", async () => {
+    spyConsole();
+    let extra: Record<string, unknown> = { host: { uid: 1, machine: DIGEST, boot: 'unmeasured' } };
+    const f = await fake(() => extra);
+    fleet = connect(f.port);
+    await vi.waitFor(() => expect(fleet!.state.hostReport).toEqual({ uid: 1, machine: DIGEST, boot: 'unmeasured' }), { timeout: 3000 });
+    extra = {};
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.hostReport).toBe('absent'), { timeout: 3000 });
+  });
+
+  it('a second ready on one socket re-measures the peer, on that socket', async () => {
+    spyConsole();
+    let uid = 2000;
+    let f: Awaited<ReturnType<typeof fake>> | undefined;
+    const hex = (n: number): string => n.toString(16).toUpperCase().padStart(4, '0');
+    const seams = {
+      interfaceAddresses: () => [],
+      // The agent's row: its local port is the fake agent's, its remote port the client's own, as the fake saw it.
+      tables: () => [`  sl  local_address rem_address   st\n   0: 0100007F:${hex(f!.port)} 0100007F:${hex(f!.clientPort())} 01 00000000:00000000 00:00000000 00000000  ${uid}        0 1 1\n`],
+    };
+    f = await fake(() => ({}));
+    fleet = connect(f.port, seams);
+    await vi.waitFor(() => expect(fleet!.state.peer).toEqual({ locality: 'local', uid: 2000 }), { timeout: 3000 });
+    uid = 3000;
+    f.sendReady();
+    await vi.waitFor(() => expect(fleet!.state.peer).toEqual({ locality: 'local', uid: 3000 }), { timeout: 3000 });
+    expect(fleet.state.readySerial).toBe(2);
+    // A reconnect is a new socket with a new client port: the peer is measured on it, never on the first one.
+    const before = f.clientPort();
+    uid = 4000;
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.readySerial).toBe(3), { timeout: 3000 });
+    expect(f.clientPort()).not.toBe(before);
+    expect(fleet.state.peer).toEqual({ locality: 'local', uid: 4000 });
   });
 });

@@ -254,6 +254,21 @@ describe('the migration proposal (D-8186)', () => {
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
   });
 
+  it('a follow-up map takes the skipped issue by its identifier alone, and refuses a moved one as not open (D-8186)', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2')]);
+    r.issues.get(U(102))!.title = 'Edited by a person after the map';
+    await r.until(() => r.stateOf(id) === 'applied');
+    const open = await r.mig.readOpen('AAA', WS.a.id);
+    if (!open.ok) throw new Error('read');
+    const target = { programme: SLUG, epic: 'e1', checkpoint: 'c1' };
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [{ identifier: 'AAA-1', class: 'leaf', target: { ...target, ticketKey: 'k1b' } }, { identifier: 'AAA-2', class: 'leaf', target: { ...target, ticketKey: 'k2' } }] }, open))
+      .toMatchObject({ ok: false, word: 'map-incomplete', detail: 'not-open:AAA-1' });
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [{ identifier: 'AAA-2', class: 'leaf', target: { ...target, ticketKey: 'k2' } }] }, open)).toMatchObject({ ok: true, migrationId: id });
+    expect(r.plan.migrationById(id)!.map!.entries).toEqual([{ issue: U(102), identifier: 'AAA-2', class: 'leaf', target: { ...target, ticketKey: 'k2' } }]);
+  });
+
   it('a returned follow-up puts its issues back on the skipped list', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);

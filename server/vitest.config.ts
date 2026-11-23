@@ -104,7 +104,10 @@ export default defineConfig({
     // Git's repository-redirecting variables (GIT_DIR and friends) are removed from the runner's own environment
     // FIRST, in the main process and again in every worker, so a fixture `git init` can never reach the checkout the
     // runner was started from; see test/scrub-git-env.mjs. Pinned by test/git-env-scrub.test.ts.
+    // D-8920: the test box is not the fleet host. In every worker the box's memory is unmeasurable, so no
+    // rig derives a run cap (or records one in the feed) from the machine that happens to run the suite; see
+    // test/host-size.setup.mjs. Pinned by test/host-pressure.test.ts.
     globalSetup: ['test/git-env.setup.mjs', 'test/run-tmp.globalsetup.mjs', 'test/proc-leak.globalsetup.mjs'],
-    setupFiles: ['test/git-env.setup.mjs'],
+    setupFiles: ['test/git-env.setup.mjs', 'test/host-size.setup.mjs'],
   },
 });

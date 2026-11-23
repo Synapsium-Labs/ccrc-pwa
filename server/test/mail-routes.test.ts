@@ -58,6 +58,8 @@ import {
 import { isServiceClass } from '../../shared/portfolio.js';
 import { isApprovalCensusWord } from '../../shared/approval-census.js';
 import { BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
+import { CAP_BOUNDS } from '../../shared/runCap.js';
+import { HOST_UNMEASURED_WHYS } from '../../shared/pressure.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -1299,6 +1301,11 @@ describe('the rejection table is total, in both directions', () => {
         // reasons that raise an item (`'not-captured'`, ...). A word decides whether an item is raised, never a `refused` or
         // `reject.code`. Admitted through L0's list, `BUILD_UNTRUSTED_REASONS` (D-8289), never NOT_CODES.
         || (BUILD_UNTRUSTED_REASONS as readonly string[]).includes(tok)
+        // THE DERIVED RUN CAP (D-8920): `coord/caps.ts` names the term that set the cap (`'session-limit'`)
+        // and why a host has no size (`'read-failed'`), and `coord/dispatch.ts` the reason for a host nobody read
+        // (`'no-reading'`), as literals. A word rides the caps view's `capNow.derived`, never a `refused` or `reject.code`.
+        // Admitted through L0's lists, `CAP_BOUNDS` and `HOST_UNMEASURED_WHYS`, each derived from its type, never NOT_CODES.
+        || (CAP_BOUNDS as readonly string[]).includes(tok) || (HOST_UNMEASURED_WHYS as readonly string[]).includes(tok)
         // The door registry's own keys identify routes only there; another quoting file needs its own guard.
         || isOverlordDoorWordHere(tok, outsideDoors)
         // Actor issuer literals in coordination are stored in the schema, not mail or run refusal codes.

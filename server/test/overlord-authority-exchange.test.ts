@@ -11,7 +11,8 @@ import { OverlordAuthorityJournal, overlordAuthorityFileAt } from '../src/coord/
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot } from '../src/coord/overlordAuthorityGuard.js';
 import { OverlordAuthorityExchange, type ExchangeAnswer } from '../src/coord/overlordAuthorityExchange.js';
 import type { WitnessLink, WitnessLinkAnswer } from '../src/coord/overlordAuthorityWitnessLink.js';
-import type { HostRelation } from '../src/coord/overlordAuthorityWitness.js';
+import { makeIsolationReader } from '../src/isolationFacts.js';
+import type { AgentHostRelation } from '../../shared/isolation.js';
 import { PRIVACY_HEAD_UNWIRED, type PrivacyHeadRead } from '../src/coord/privacyJournalHead.js';
 import type { ReadyWitness } from '../../shared/agent-protocol.js';
 import type { WitnessTuple } from '../../shared/authorityWitness.js';
@@ -30,14 +31,14 @@ const D = (c: string): string => c.repeat(64);
 interface Rig {
   db: DatabaseSync; journal: OverlordAuthorityJournal; guard: OverlordAuthorityGuard; ex: OverlordAuthorityExchange;
   warns: string[]; privacy: { now: PrivacyHeadRead };
-  agent: { held: ReadyWitness | undefined; host: HostRelation; sends: WitnessTuple[]; next: (o: WitnessTuple) => Promise<WitnessLinkAnswer> };
+  agent: { held: ReadyWitness | undefined; host: AgentHostRelation; sends: WitnessTuple[]; next: (o: WitnessTuple) => Promise<WitnessLinkAnswer> };
   append(m: OverlordAuthorityMove): void;
   offer(): WitnessTuple;
   /** The server's own offer, as a witness from `boot` that holds `over` instead. */
   held(over: Partial<WitnessTuple>, boot?: string): WitnessTuple;
 }
 
-function rig(opts: { agent?: boolean } = {}): Rig {
+function rig(opts: { agent?: boolean; relationOf?: () => AgentHostRelation } = {}): Rig {
   const dir = mkTmp('ccrc-overlord-exchange-');
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   for (const n of ['CREATE TABLE overlord_authority_head', 'CREATE TABLE overlord_designation', 'CREATE TABLE overlord_ladder', 'CREATE TABLE decision_rows']) db.exec(find(n));
@@ -51,7 +52,7 @@ function rig(opts: { agent?: boolean } = {}): Rig {
   const agent: Rig['agent'] = { held: undefined, host: 'other-host', sends: [], next: async () => ({ kind: 'no-op' }) };
   const link: WitnessLink = { send: (o) => { agent.sends.push(o); return agent.next(o); } };
   const ex = new OverlordAuthorityExchange({
-    journal, guard, privacy: { read: () => privacy.now }, boot: BOOT, relationOf: () => agent.host, warn: (l) => warns.push(l),
+    journal, guard, privacy: { read: () => privacy.now }, boot: BOOT, relationOf: opts.relationOf ?? (() => agent.host), warn: (l) => warns.push(l),
     committedRows: () => db.isTransaction ? { kind: 'unmeasured' } : journal.readRows(db),
     agent: opts.agent === false ? null : { held: () => agent.held, link },
   });
@@ -102,6 +103,23 @@ describe('an agent', () => {
       expect(r.guard.state()).toEqual({ kind: 'coherent' });
       expect(r.ex.noWitnessSinceBoot()).toBe('standing');
     }
+  });
+  it('does not count a matching tuple from a connected agent whose off-volume relation the Isolation reader cannot prove', async () => {
+    const state = { connected: true, hostReport: 'absent', peer: { locality: 'not-local', uid: 'unmeasured' } } as const;
+    const isolation = makeIsolationReader('remote', {
+      facts: { uid: 1000, initialNamespace: true, overflowUid: 65534, holdings: [] },
+      ids: { machine: 'unmeasured', boot: 'unmeasured' },
+    }, null, state);
+    const relationOf = () => isolation.relationOf(isolation.linkOf(state));
+    expect(relationOf()).toBe('unmeasured');
+    const r = rig({ relationOf });
+    r.append(WIDEN);
+    r.agent.held = { kind: 'tuple', tuple: r.held({ told: { operatorRung: 'chat', latches: [] } }) };
+    await r.ex.exchangeAgent();
+    expect(r.agent.sends).toHaveLength(1);
+    expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+    expect(r.ex.heldFor(1)).toBe('not-yet');
+    expect(r.ex.told()).toEqual({ kind: 'measured', told: null });
   });
   it('on another host, from an earlier boot, lifts it', async () => {
     const r = rig();
@@ -283,7 +301,7 @@ describe('an unmeasured privacy head', () => {
     r.privacy.now = { kind: 'unmeasured', why: 'unreadable' };
     r.ex.exchangeConsole('dev-a', t);
     expect(r.guard.state()).toEqual({ kind: 'unmeasured', why: 'privacy-head' });
-    expect(r.ex.epoch()).toEqual({ kind: 'unmeasured', why: expect.any(String) });
+    expect(r.ex.epoch(r.journal.readVerified())).toEqual({ kind: 'unmeasured', why: expect.any(String) });
     expect(r.ex.heldFor(1)).toBe('unmeasured');
   });
 });
@@ -317,7 +335,7 @@ describe('the reads', () => {
   it('epoch() is the server\'s total, and highest() is the maximum over every source, any host, 0/0 with none', async () => {
     const r = rig();
     r.append(WIDEN);
-    expect(r.ex.epoch()).toEqual({ kind: 'measured', n: 1 });
+    expect(r.ex.epoch(r.journal.readVerified())).toEqual({ kind: 'measured', n: 1 });
     expect(r.ex.highest()).toEqual({ kind: 'measured', epoch: 0, restoreGeneration: 0 });
     const o = r.offer();
     r.agent.host = 'same-host';

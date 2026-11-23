@@ -3,7 +3,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
 import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import { UPDATE_OP_DETAIL_MAX } from '../../shared/agent-protocol.js';
-import { TOKEN } from './remoteHelpers.js';
+import { TEST_PEER_SEAMS, TOKEN } from './remoteHelpers.js';
 import { parsedFile, symbolOf } from './scan/symbols.js';
 
 // D-7507 (ARCH-05): the agent link's two error classes, `AgentOpError` (D-3373, D-3391) and `LinkNotSentError`
@@ -74,7 +74,7 @@ describe('what a FleetClient request rejects with (D-7507)', () => {
   });
 
   it('no ready link at the call: a LinkNotSentError whose message is disconnected', async () => {
-    fleet = connectFleet({ url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
     const e = await rejection(fleet.client.request({ t: 'req', op: 'caps' }));
     expect(e).toBeInstanceOf(LinkNotSentError);
     expect(e).toBeInstanceOf(Error);
@@ -85,7 +85,7 @@ describe('what a FleetClient request rejects with (D-7507)', () => {
   it("an agent ResErr: an AgentOpError carrying the agent's word and its detail, cut to UPDATE_OP_DETAIL_MAX", async () => {
     const agent = await fakeAgent(() => ({ ok: false, err: 'spawn-failed', detail: 'y'.repeat(UPDATE_OP_DETAIL_MAX + 50) }));
     wss = agent.wss;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     const e = await rejection(fleet.client.request({ t: 'req', op: 'update', tag: 'v0.0.9' }));
     expect(e).toBeInstanceOf(AgentOpError);
@@ -97,7 +97,7 @@ describe('what a FleetClient request rejects with (D-7507)', () => {
   it('an agent ResErr with no detail: an AgentOpError whose detail is null', async () => {
     const agent = await fakeAgent(() => ({ ok: false, err: 'busy' }));
     wss = agent.wss;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     const e = await rejection(fleet.client.request({ t: 'req', op: 'update', tag: 'v0.0.9' }));
     expect(e).toBeInstanceOf(AgentOpError);
@@ -125,12 +125,12 @@ describe('the link error classes have one definition, in remote/errors.ts (D-750
   });
 
   it('(i) what FleetClient throws is instanceof the classes imported from remote/errors.js', async () => {
-    fleet = connectFleet({ url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
     expect(await rejection(fleet.client.request({ t: 'req', op: 'caps' }))).toBeInstanceOf(LinkNotSentError);
     await fleet.close();
     const agent = await fakeAgent(() => ({ ok: false, err: 'busy' }));
     wss = agent.wss;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(await rejection(fleet.client.request({ t: 'req', op: 'update', tag: 'v0.0.9' }))).toBeInstanceOf(AgentOpError);
   });

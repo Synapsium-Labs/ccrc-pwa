@@ -11,6 +11,7 @@
 import type { AuthorityView } from './overlordAuthority.js';
 import type { PrivacyHeadRead } from './privacyJournalHead.js';
 import type { Rung } from '../../../shared/overlord-ladder.js';
+import type { AgentHostRelation } from '../../../shared/isolation.js';
 import {
   parseWitnessTuple, WITNESS_RUNGS, type WitnessHead, type WitnessRung, type WitnessTold, type WitnessTuple,
 } from '../../../shared/authorityWitness.js';
@@ -51,7 +52,7 @@ export function authorityEpoch(view: AuthorityView, authoritySequence: number, p
 // ── The verdict ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Where a witness lives against the server's volume (question 10); `console` is a signed-in console, which counts. */
-export type HostRelation = 'other-host' | 'same-host' | 'unmeasured' | 'console';
+export type HostRelation = AgentHostRelation | 'console';
 
 export interface ServerWitnessFacts {
   epoch: AuthorityEpoch;

@@ -8,7 +8,7 @@
 // was alive and the host was stalling it, which is what a registry flap under a thrash looks like. Any other stall is
 // `link-down`, exactly as before. An agent that predates the op, or a kernel with no PSI, is never a stall: it is
 // `unmeasured`, and the link is judged by `linkUp` alone.
-import { PSI_CRITICAL_FULL_PCT, PSI_WARN_FULL_PCT, worstFull, type HostPressureHealth, type HostPsi, type PressureLink } from '../../shared/pressure.js';
+import { PSI_CRITICAL_FULL_PCT, PSI_WARN_FULL_PCT, worstFull, type HostMachineReading, type HostPressureHealth, type HostPsi, type PressureLink } from '../../shared/pressure.js';
 
 /** The lane's clock: one read every ten seconds, so the last reading before a stall is at most that old. */
 export const PRESSURE_SWEEP_MS = 10_000;
@@ -25,9 +25,46 @@ export interface PressureState {
   unansweredAt: number | null;
   /** When the ask still out was sent, or null. */
   inflightSince: number | null;
+  /** D-8920: the host's size from the last answer that carried one, or why there is none. Held apart
+   *  from `last` on purpose: a size is not evidence that ages, so an unanswered ask, a stale PSI reading or an answer
+   *  with no size leaves it standing (`machineAfter`). */
+  machine: HostMachineReading;
 }
 
-export const EMPTY_PRESSURE: PressureState = { last: null, unansweredAt: null, inflightSince: null };
+export const EMPTY_PRESSURE: PressureState = {
+  last: null, unansweredAt: null, inflightSince: null, machine: { kind: 'unmeasured', why: 'no-reading' },
+};
+
+/** D-8920: the size the lane holds after one answer, and THE ONE READER of `MeasuredPressure.machine`.
+ *  - A measured size replaces whatever is held.
+ *  - An answer with none KEEPS a held size: the automatic run cap is derived from this, and a cap that fell back to the
+ *    stored number whenever one ask was slow would move in the middle of an incident.
+ *  - With no size held, the answer's reason replaces the held one, except `no-reading` (nothing answered: a link blip),
+ *    which never erases a reason an answer gave (`agent-older`, `read-failed`).
+ *  `undefined` is an answerer that knows no size, which is `agent-older`. */
+export function machineAfter(held: HostMachineReading, answered: HostMachineReading | undefined): HostMachineReading {
+  const got: HostMachineReading = answered ?? { kind: 'unmeasured', why: 'agent-older' };
+  if (got.kind === 'measured') return got;
+  if (held.kind === 'measured') return held;
+  return got.why === 'no-reading' ? held : got;
+}
+
+/** D-8920: the host's size as the run cap's decider takes it (`coord/caps.ts#deriveCap`). No freshness
+ *  rule, unlike `memoryReadingOf`: see `PressureState.machine`. */
+export function machineReadingOf(s: PressureState): HostMachineReading {
+  return s.machine;
+}
+
+/** D-8920: whether the lane asks now. Every `PRESSURE_SWEEP_MS`, as before, with ONE exception: while no
+ *  answer has said anything about the host's size (`no-reading`: the first ask went out before the agent link was
+ *  ready, or was rejected), it asks again on the next tick. Until a size lands the run cap is the stored number, so a
+ *  server that waited out the ten seconds after every restart would enforce a cap nobody derived for that long. An
+ *  answered reason (`agent-older`, `read-failed`) waits the full interval: asking faster changes nothing. */
+export function pressureAskDue(s: PressureState, lastSweep: number, at: number): boolean {
+  if (lastSweep === 0) return true;
+  if (s.machine.kind === 'unmeasured' && s.machine.why === 'no-reading') return true;
+  return at - lastSweep >= PRESSURE_SWEEP_MS;
+}
 
 /** The level one reading carries. */
 export function pressureLevelOf(psi: HostPsi): 'ok' | 'warn' | 'critical' {

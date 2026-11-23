@@ -114,7 +114,10 @@ describe('the table itself', () => {
   });
   it('the rows on landing include the ratify and designation C Settings doors already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear', 'witness', 'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
+      'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear', 'witness',
+      // Confirm the restore (authority journal C): the guard's state, and the door.
+      'restore-read', 'restore-confirm',
+      'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
       'card', 'card-record', 'notes-write', 'notes-read', 'handover', 'probe-read', 'probe-answer',
       // D-8809: the Overlord's team link, the first Overlord door of class `other`.
       'link-team',
@@ -192,7 +195,8 @@ describe('every operator door that writes records its actor through the identity
 
   it('there are admin operator rows to check (a zero would make the rest vacuous), and read rows are not among them', () => {
     expect(adminRows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'model', 'account-set', 'rung', 'pause', 'latch-clear', 'portfolio-rank', 'goals-ratify', 'private-names-write',
+      'designate', 'retire', 'model', 'account-set', 'rung', 'pause', 'latch-clear', 'restore-confirm', 'portfolio-rank', 'goals-ratify',
+      'private-names-write',
     ]);
     for (const [k, r] of rows) if (r.group === 'operator' && r.verbClass === 'view') expect(adminRows.map(([x]) => x), k).not.toContain(k);
   });

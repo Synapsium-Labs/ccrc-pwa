@@ -1,7 +1,7 @@
 // The epic page and the Upkeep page (Linear hierarchy design §11.2 and §7.6, D-8184; plan Task 5.3). Neutral fixtures:
 // `project-a`, `prog-a`, `KEY-123`, `owner/repo`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { EpicView, CheckpointView, TicketView } from '../../shared/plan';
 import type { ProjectRow } from '../../shared/api';
 import { EPIC_TEXT, dayWords, notClosedWords } from '../src/ledgers/epicWords';
@@ -14,6 +14,7 @@ import { runStateWord } from '../src/fleet/runWords';
 import type { RunSummary } from '../../shared/api';
 import { ApiError } from '../src/lib/apiError';
 import { epicPath, matchRoute, runPath, upkeepPath } from '../src/lib/routes';
+import { navigate } from '../src/lib/router';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); useFleetStore.setState({ runs: [] }); });
 
@@ -183,6 +184,16 @@ describe('the Upkeep page', () => {
     render(<UpkeepScreen project="project-a" />);
     await screen.findByText('Fix the thing');
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it('Back goes to Settings, Integrations, where the Project linking row that opened it is (D-8932)', async () => {
+    projects(null);
+    vi.spyOn(api, 'upkeep').mockResolvedValue({ ok: true, epic: null, notClosed: [] });
+    render(<UpkeepScreen project="project-a" />);
+    fireEvent.click(screen.getByRole('button', { name: EPIC_TEXT.backSettings }));
+    expect(window.location.pathname).toBe('/settings/integrations');
+    expect(matchRoute(window.location.pathname)?.route.id).toBe('settings-integrations');
+    navigate('/');
   });
 
   it('a close with no stamp draws no date, and a stamp the clock cannot place never throws', async () => {

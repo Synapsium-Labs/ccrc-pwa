@@ -8,10 +8,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 import type { CurrentFleetIdentity } from '../src/fleetidentity.js';
 import { connectFleet, FleetClient, type ConnectedFleet } from '../src/remote/client.js';
+import { TEST_PEER_SEAMS } from './remoteHelpers.js';
 
 const U1 = '0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0';
 /** Fast reconnects, and no heartbeat inside a case. */
-const FAST = { token: 'unused', reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000, requestTimeoutMs: 2_000 };
+const FAST = { token: 'unused', reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000, requestTimeoutMs: 2_000, peerSeams: TEST_PEER_SEAMS };
 const AWAITING_1: CurrentFleetIdentity = { kind: 'unmeasured', connectionEpoch: 1, why: 'awaiting-inventory' };
 
 /** Answers every hello with a bare ready, on every connection. */
@@ -116,6 +117,6 @@ describe('ready and close invalidate before any listener runs (§5.2)', () => {
     await vi.waitFor(() => expect(c.state.connected).toBe(true), { timeout: 3000 });
     // The epoch is the cell's, never a FleetState field: remote-connect.test.ts pins that object whole.
     expect(Object.keys(c.state).sort())
-      .toEqual(['agentOps', 'authorityWitness', 'build', 'ccdVerbs', 'connected', 'downSince', 'observedEpoch', 'rosterFp']);
+      .toEqual(['agentOps', 'authorityWitness', 'build', 'ccdVerbs', 'connected', 'downSince', 'hostReport', 'observedEpoch', 'peer', 'readySerial', 'rosterFp']);
   });
 });

@@ -49,6 +49,7 @@ import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-la
 import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
 import type { LadderWrite } from './overlordLadderStore.js';
 import type { OverlordAuthorityExchange } from './overlordAuthorityExchange.js';
+import type { OverlordRestoreState } from './overlordRestoreState.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -106,6 +107,9 @@ export interface OverlordRouteDeps {
   /** The authority witness exchange's console arm (Overlord W1 authority journal, Task 6). Absent (a test, a script): the witness door answers 503. */
   readonly exchange?: Pick<OverlordAuthorityExchange, 'exchangeConsole'>;
   readonly consoleFacts?: (req: FastifyRequest) => { readonly armed: boolean; readonly device: string | null };
+  /** Confirm the restore (authority journal C, `overlordRestoreState.ts`): its one transaction and the guard's state. Absent (a test
+   *  server, a script): both of its doors answer `unavailable` after the gate. */
+  readonly restore?: Pick<OverlordRestoreState, 'confirm' | 'authority'>;
   /** The authority journal (`AuthorityAppender`), handed to the writers that append. */
   readonly journal: AuthorityAppender;
   readonly body: OverlordBody;
@@ -556,6 +560,28 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       if (!r.changed) return { ok: true, changed: false, ...answer };
       const written = await writeEach(v.bodies, (id) => body.writeSet(id, { poolset: v.poolset, acctorder: v.acctorder }));
       return { ok: true, changed: true, journalled: r.journalled, ...answer, route: routeOf(written), written };
+    });
+  });
+  // ── Confirm the restore (authority journal C, plan Task 8; spec §7.6, §11.2) ─────────────────────────────────────────
+  // The read answers the guard's state (the banner's), behind the gate with no step-up. The door is the operator's, behind the
+  // step-up, on the coordination serialiser; `OverlordRestoreState.confirm` runs its one transaction and decides nothing here:
+  // every refusal word is its answer's. A binding it cleared owes its body's stop, drained as the retire door drains it.
+  const NO_RESTORE = 'this server has no authority journal';
+  app.get('/api/overlord/restore', async (req, reply) => {
+    if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+    if (deps.restore === undefined) return refuseRoute(reply, 'unavailable', { detail: NO_RESTORE });
+    return { ok: true, authority: deps.restore.authority() };
+  });
+  app.post('/api/overlord/restore/confirm', async (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null, stepUp: true });
+    if (!g.pass) return reply;
+    const actor = deps.identity.operator(g.actor);
+    return deps.serial(async () => {
+      if (deps.restore === undefined) return refuseRoute(reply, 'unavailable', { detail: NO_RESTORE });
+      const a = deps.restore.confirm(actor, `restore-confirm-${deps.entropy.hex(16)}`, deps.clock.wall());
+      if (!a.ok) return refuseRoute(reply, a.refusal, { detail: a.detail });
+      if (!a.changed || a.owed.length === 0) return a;
+      return { ...a, ...(await drainOwedStops(deps, a.owed)) };
     });
   });
 }

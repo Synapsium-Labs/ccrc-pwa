@@ -7,6 +7,7 @@ import {
 import { compareReleaseTags } from '../../shared/semver.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import type { ReadyWitness } from '../../shared/agent-protocol.js';
+import type { HostReport, PeerFacts } from '../../shared/isolation.js';
 import type { CoordStore } from './coord/store.js';
 import { buildInfoOfRow } from './update/inventory.js';
 
@@ -154,6 +155,17 @@ export interface FleetState {
    *  (it holds none). Handshake cadence, a sample at connect; the `witness` op's answer is the fresher read. OPTIONAL for
    *  `agentOps`' reason: an omitted key reads `undefined`, "no ready yet". */
   authorityWitness?: ReadyWitness;
+  /** Overlord W1, the isolation word (§7.4): what the agent's ready frame said of its host, through its one reader
+   *  `readHostReport` — the report, `'absent'` (an older agent) or `'malformed'`. Optional for `observedEpoch`'s reason:
+   *  `undefined` is "no ready yet", which the decider reads as `no-agent`, the honest answer for every fixture that
+   *  predates it. Never serialized: no route returns this object. */
+  hostReport?: HostReport | 'absent' | 'malformed';
+  /** The link's peer as the server measured it on the socket that delivered the ready (`measurePeer`); `undefined`
+   *  before any ready. The address is never kept. */
+  peer?: PeerFacts;
+  /** How many readies this link has had since boot, the key epoch of the renewal readings' carrier (`wakingHostKey`):
+   *  two carriers compare only under one ready. `undefined` before any ready. */
+  readySerial?: number;
 }
 
 /** One answer about `ccd caps`, as its source gives it. `'ready'` is the agent's ready frame: what it carries is the

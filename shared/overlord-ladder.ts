@@ -66,9 +66,18 @@ export const LADDER_CAUSE_MAP = {
     kind: 'condition', effect: { kind: 'server-words' }, notice: 'none',
     spec: 'the operator\'s rung is above the highest rung whose word the server holds (the W2 route plan, RV8)',
   },
+  'shared-user': {
+    kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
+    spec: '`server-isolation` is `shared-user` or `unmeasured` (Table 7.5a, §7.4)',
+  },
   'unwitnessed-third': {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'push',
     spec: 'the third unwitnessed write in a day (Table 7.5a)',
+  },
+  // Raised by the renewal readings (plan w1-renewal-readings.md Task 6) on a live Overlord step from `probing` to `degraded`.
+  'probes-failed-twice': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
+    spec: 'probes failed twice after a renewal (Table 7.5a)',
   },
   'restore-detected': {
     kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',

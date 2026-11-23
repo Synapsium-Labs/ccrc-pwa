@@ -3,7 +3,8 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
-import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { CoordCapsWrite } from '../../../shared/runCap';
 import type { ArchiveAnswer, CallView, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsVersion, GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
@@ -952,8 +953,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  — the first may well have stored the value — and the control says
      *  "unconfirmed" for the one rather than reporting the other. The safe
      *  reading of "no answer" is stated here, at the call, as that helper's own
-     *  docstring requires. */
-    setCoordCaps: (next: Partial<CoordCaps>) =>
+     *  docstring requires.
+     *
+     *  D-8920: `{ maxConcurrentWorkers }` is the operator's OVERRIDE of the cap the server derives from
+     *  the fleet host, and `{ mode: 'automatic' }` clears it. The second is sent only to a server whose view carried
+     *  `capNow`: an older one knows no `mode` and would refuse the body as asking for nothing. */
+    setCoordCaps: (next: CoordCapsWrite) =>
       postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
     /** `GET /api/coord/review-cap/:id` (D-6910): a work run's review-cap ask, composed by the refusal's own helper, with
      *  when it was raised and lifted. `LiftCapSheet` reads it on open. Session-gated when armed; no box token. */
@@ -1041,10 +1046,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
      *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
     laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
-    /** `POST /api/models/:lane` (model-class-advance R4): Hold, Release or Revert one class on the lane. Unknown on purpose:
-     *  the Models sheet's readers (`accounts/modelsSheetWords.ts`) read the 200 and a refusal's body. `postJson`, so a
-     *  non-2xx rejects with `ApiError` and the sheet never moves a row before the server's answer. */
-    laneModelsAct: (lane: string, body: { action: 'hold' | 'release' | 'revert'; class: string }) =>
+    /** `POST /api/models/:lane` (model-class-advance R4; revert-holds-until-newer, D-8757): Revert one class on the lane, and
+     *  nothing else: the server refuses a hold or a release (`bad-action`), and refuses a revert where its own fresh read of
+     *  the lane does not prove the fleet box ends the hold by itself. Unknown on purpose: the Models sheet's readers
+     *  (`accounts/modelsSheetWords.ts`) read the 200 and a refusal's body. `postJson`, so a non-2xx rejects with `ApiError` and
+     *  the sheet never moves a row before the server's answer. */
+    laneModelsAct: (lane: string, body: { action: 'revert'; class: string }) =>
       postJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, body),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
@@ -1158,9 +1165,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  opened by its number after it left the Recently cleared window still opens, read-only. `unknown-item` (404) for a number
      *  no item has, or one the operator was never shown. Session-gated when armed. */
     item: (id: number) => getJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}`),
-    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
-     *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
-     *  `ApiError` like every non-2xx, and the item is unchanged. */
+    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides for a `decide` or a `value` item,
+     *  and for a `do` item ticked with its optional note (D-8931); a `do` item ticked with none sends no body at
+     *  all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an `ApiError` like every non-2xx, and the
+     *  item is unchanged. */
     tickItem: (id: number, answer?: string) =>
       postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
     /** `POST /api/calls/:id/seen` (D-8126): the operator's Seen on a big call, idempotent. A refusal (`not-big`, `unknown-call`)
@@ -1210,6 +1218,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
     /** `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one; a refusal rejects with its `ApiError`. */
     cancelSessionTimer: (id: string, timerId: number) => postJson<unknown>(`${sid(id)}/timers/${timerId}/cancel`),
+    /** `GET /api/overlord/restore` (authority journal C): the authority guard's state; `RestoreBanner`'s `readAuthority` reads it. */
+    overlordRestore: () => getJson<unknown>('/api/overlord/restore'),
+    /** `POST /api/overlord/restore/confirm`: Confirm the restore, behind the step-up; a refusal rejects with its `ApiError`. */
+    confirmRestore: () => postJson<unknown>('/api/overlord/restore/confirm'),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

@@ -21,6 +21,9 @@ import type { SpawnPty } from '../pty.js';
 import { createRunner } from './runner.js';
 import { createIo } from './io.js';
 import { createSpawnPty } from './pty.js';
+import { readHostReport } from '../../../shared/isolation.js';
+import { measurePeer, type PeerSeams } from '../isolationFacts.js';
+import type { Socket } from 'node:net';
 import { AgentOpError, LinkNotSentError } from './errors.js';
 
 /**
@@ -46,6 +49,10 @@ export interface RemoteFleetConfig {
    *  clock over TCP connect, the upgrade and the hello (wave 27, D-6514; #1160's name, D-6724). Default 15000. A test
    *  seam like the fields around it; the composition root passes only `url` and `token`. */
   connectTimeoutMs?: number;
+  /** The peer measurement's two host reads (Overlord W1, the isolation word). The composition root passes the real ones
+   *  (`realPeerSeams`) and a test passes synthetic ones; without them no peer is measured and it reads `unmeasured`, so
+   *  a client a test builds never reads the live host. */
+  peerSeams?: PeerSeams;
   /** initial reconnect delay. Default 1000. */
   reconnectMinMs?: number;
   /** reconnect delay ceiling (doubles each failed attempt up to this). Default 30000. */
@@ -58,7 +65,7 @@ export interface RemoteFleetConfig {
   onRoundTrip?: (op: string, ms: number) => void;
 }
 
-type ResolvedConfig = Required<Omit<RemoteFleetConfig, 'onRoundTrip'>> & Pick<RemoteFleetConfig, 'onRoundTrip'>;
+type ResolvedConfig = Required<Omit<RemoteFleetConfig, 'onRoundTrip' | 'peerSeams'>> & Pick<RemoteFleetConfig, 'onRoundTrip' | 'peerSeams'>;
 
 // Re-exported so callers can obtain the connected client and its state type
 // from one remote boundary. `refreshcaps.ts` and its test import `FleetState`
@@ -197,6 +204,7 @@ export class FleetClient {
       reconnectMaxMs: cfg.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS,
       requestTimeoutMs: cfg.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       onRoundTrip: cfg.onRoundTrip,
+      peerSeams: cfg.peerSeams,
     };
     this.backoffMs = this.cfg.reconnectMinMs;
   }
@@ -381,18 +389,22 @@ export class FleetClient {
       return;
     }
     this.socket = ws;
+    // The socket under this attempt's WebSocket, from the client's public `upgrade` event, kept in a closure local to this
+    // attempt (plan F11): the ready handler measures the peer on the socket that delivered the ready, never another one.
+    let sock: Socket | null = null;
+    ws.on('upgrade', (res) => { sock = res.socket; });
     this.armConnectDeadline(ws);
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
-    ws.on('message', (raw) => this.onMessage(ws, raw));
+    ws.on('message', (raw) => this.onMessage(ws, raw, sock));
     ws.on('close', (code, reason) => this.onClose(ws, code, reason));
     ws.on('error', () => {
       // 'close' always follows 'error' for a ws socket — reconnect logic lives there.
     });
   }
 
-  private onMessage(ws: WebSocket, raw: WebSocket.RawData): void {
+  private onMessage(ws: WebSocket, raw: WebSocket.RawData, sock: Socket | null): void {
     if (ws !== this.socket) return; // stale listener from an already-replaced socket
     let msg: unknown;
     try {
@@ -403,7 +415,7 @@ export class FleetClient {
     if (!isRecord(msg)) return;
 
     if (msg.t === 'ready') {
-      this.onReady(msg);
+      this.onReady(msg, sock);
       return;
     }
     if (msg.t === 'pong') {
@@ -431,17 +443,20 @@ export class FleetClient {
     if (msg.t === 'tail') {
       const tailId = msg.tailId;
       if (typeof tailId !== 'number') return;
-      this.tailListeners.get(tailId)?.(msg as unknown as TailData | TailReset);
+      // A listener is called only once it is known to be a function: the id comes from the agent's frame.
+      const tail = this.tailListeners.get(tailId);
+      if (typeof tail === 'function') tail(msg as unknown as TailData | TailReset);
       return;
     }
     if (msg.t === 'pty') {
       const ptyId = msg.ptyId;
       if (typeof ptyId !== 'number') return;
-      this.ptyListeners.get(ptyId)?.(msg as unknown as PtyData | PtyExit);
+      const pty = this.ptyListeners.get(ptyId);
+      if (typeof pty === 'function') pty(msg as unknown as PtyData | PtyExit);
     }
   }
 
-  private onReady(frame: Record<string, unknown>): void {
+  private onReady(frame: Record<string, unknown>, sock: Socket | null): void {
     // Path-identity spec 2026-10-12 §5.2: FIRST. It comes before every field below and before `setState` and the
     // connect listeners that run synchronously at the end of this function, so every listener (index.ts's inventory
     // trigger among them) already reads the new epoch, with nothing measured under it.
@@ -527,6 +542,16 @@ export class FleetClient {
     this.state.agentOps = readReadyOps(frame.ops);
     // THE SINGLE READER of `frame.authorityWitness` (Overlord W1 Task 6), reset on EVERY ready: a downgraded agent reads `absent`.
     this.state.authorityWitness = readReadyWitness(frame.authorityWitness);
+    // THE SINGLE READER of `frame.host` (Overlord W1, the isolation word, §7.4), and the one place the link's peer is
+    // measured, on the socket that delivered this ready. Both are reset on every ready, a re-sent one included, so a
+    // reconnect to an older agent keeps nothing from before. Nothing here decides: `isolationWord` reads these facts.
+    const report = readHostReport(frame.host);
+    if (report === 'malformed' && this.state.hostReport !== 'malformed') {
+      console.warn("ccrc-server: agent link: the agent's host report is malformed");
+    }
+    this.state.hostReport = report;
+    this.state.peer = this.cfg.peerSeams === undefined ? { locality: 'unmeasured', uid: 'unmeasured' } : measurePeer(sock ?? {}, this.cfg.peerSeams);
+    this.state.readySerial = (this.state.readySerial ?? 0) + 1;
     // THE SINGLE READER of `frame.build` — the fleet host's own stamp, which
     // `buildAgreement` compares against this box's. Reset on every ready for
     // the same reason as `rosterFp`: a stamp kept from the previous connection

@@ -104,12 +104,45 @@ typechecks passed in all three packages. The server test-project typecheck excee
 result is unmeasured. A full suite was not run. The original red-first chronology for Tasks 5–7 remains partly unmeasured.
 Confirm and the measured agent relation are not wired or verified by this local round.
 
-## Seams with peers
+## Integration with landed Confirm, Isolation and Renewal
 
-- PR C (Confirm the restore) declares its consumer port `RestoreWitnessFacts` (`epoch()`, `highest()`, `offerNow()`, `told()`) with a
-  stand-in adapter; this PR's exchange answers those four reads in that shape. Whichever lands second wires the exchange in place of
-  the stand-in and deletes the stand-in's copy of the epoch formula.
-- The isolation word's per-link relation port (`AgentHostRelation`, `relationOf(linkOf(fleetState))`): until it lands, the exchange's
-  `relationOf` answers `unmeasured`, so no agent counts. Whichever lands second re-points `HostRelation` to `AgentHostRelation |
-  'console'` and the exchange's `relationOf` to the port.
-- Private store A's `PrivacyJournalHead`: wired in `index.ts` over the store's head and digest reads (plan question 11).
+- `confirm-requires-verified-bound`: ruling 10 preserves the landed Confirm policy. A readable malformed journal is a distinct
+  refusal and its bytes stay in place; line count bounds sequences, not epoch or generation. An unreadable journal remains
+  unmeasured. Verified history that reaches the committed head supplies an epoch and generation bound; a higher witness can raise
+  that bound, but cannot establish one by itself.
+- Confirm's `RestoreWitnessFacts` port now uses the real exchange, with no stand-in or duplicate epoch formula. Confirm gives
+  `epoch(file)` the exact verified snapshot used by its planner. Publication separately requires the file to agree with committed
+  rows; it does not attest trailing records or an open transaction.
+- The exchange reads the agent's relation through Isolation's `relationOf(linkOf(fleetState))`. W1 Isolation returns `same-host`
+  or `unmeasured`, never affirmative `other-host` proof. A matching tuple with an unproved relation did not lift boot confidence,
+  earn a holding receipt, or contribute `told` in the fixture with the real Isolation reader. No live agent evidence is claimed.
+- The ladder keeps both inputs and Renewal's `probes-failed-twice` latch. The approved three-file peer patch keeps the landed
+  gate and mutation pins and adds seven witness floors. The route census measured 298 declarations, 295 HTTP, 187 gated HTTP and
+  108 exempt HTTP. The schema matches the named main base byte for byte: the authority head is at `MIGRATIONS[80]` (`user_version`
+  80 → 81), with no new migration or change to `FLEET_PROTO = 1`.
+- Private store A's `PrivacyJournalHead` remains wired in `index.ts` over its head and digest reads (plan question 11).
+
+| Real-route fixture | Before wiring | After wiring |
+| --- | --- | --- |
+| Restore retains the witnessed narrowing | `full` | `chat` |
+| Restore raises the independently verified epoch bound | 5 | 6 |
+| Confirm withdraws boot confidence, even after a prior-boot witness at the new base | `lifted` | `standing` until restart |
+
+The route file went from 2 failed / 9 passed to 11 passed in the fleet test lane. The malformed and unreadable cases were already
+passing before wiring and still pass. The first integrated source check found two wrong type imports; the corrected source check
+passed in the lane. The test-project check then found a missing `shared-user` fixture input, and the ladder-read file found three
+Isolation-only cases that did not lift the unrelated witness condition. Both fixtures were corrected without changing policy;
+the test-project check exited 0 and ladder read went from 3 failed / 7 passed to 10 passed in the lane. This supersedes the prior
+local test-project measurement gap, not the record of its exit 137.
+
+| Focused evidence | Measured in the fleet test lane |
+| --- | --- |
+| Restore and witness | Confirm route 11, restore 55, generation 10, exchange 31 (including the Isolation fixture), witness policy 51, witness route 9, witness link 5 |
+| Journal and ladder | Journal 42, guard 19, restore latch 11, ladder policy 68, read 10, actor 25, route 42, seams 11 |
+| Censuses and schema | Auth gate 383, Overlord doors 29, box token 69, coordination rings 20, privacy journal 3, coordination DB 155, migration slots 2, mutation floors 307 |
+| Fleet and carrier | Fleet identity 6, fleet state 73, remote connect 81, Isolation facts 35, agent witness 17, models ops 40, Overlord history ops 22, test-box ops 22 |
+| Store, browser and guards | Message store 33, browser retention 21, browser client 10, carrier deny 20, selected request-op census 1 and rejection census 6 |
+| Typechecks | Server, agent and browser source; server test project |
+
+These are local measurements, not a full suite or CI results. The request-op and rejection censuses ran as selections within their
+files; the other cases in those two files were not measured by these runs.

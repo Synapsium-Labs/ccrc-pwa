@@ -65,6 +65,9 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   'latch-clear': operator('POST', '/api/overlord/latches/:cause/clear', OVERLORD, 'admin'),
   // The console's authority witness exchange (authority journal B, §7.6): the account gate with no step-up; it reads and offers.
   witness: operator('POST', '/api/overlord/witness', OVERLORD, 'view'),
+  // Confirm the restore (authority journal C): the guard's state for the banner, and the door behind the step-up.
+  'restore-read': operator('GET', '/api/overlord/restore', OVERLORD, 'view'),
+  'restore-confirm': operator('POST', '/api/overlord/restore/confirm', OVERLORD, 'admin'),
   'portfolio-rank': operator('POST', '/api/portfolio/rank', LEDGERS, 'admin'),
   'goals-ratify': operator('POST', '/api/programmes/:slug/goals/ratify', LEDGERS, 'admin'),
   'private-names-read': operator('GET', '/api/overlord/private-names', 'server/src/operatorModel/nameListRoutes.ts', 'view'),

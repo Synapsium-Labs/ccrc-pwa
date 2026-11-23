@@ -6,13 +6,13 @@ import type { ModelsAction, ModelsAsked, ReadFailure, TestboxAdminAsked, Testbox
 import type { TestboxAdminFields, TestboxAdminSub } from '../../shared/testbox-admin.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
-import { measureHeadroom, measurePressure } from '../../agent/src/pressure.js';
+import { measurePressure, measureSessions } from '../../agent/src/pressure.js';
 import { measureBackup } from '../../agent/src/backup.js';
 import type { BackupRead } from '../../shared/backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools } from '../../agent/src/testboxOp.js';
 import { makeModelsSpawn, modelsEnv, runModelsOp } from '../../agent/src/modelsop.js';
 import type { ModelClass } from '../../shared/models.js';
-import type { HostPsi } from '../../shared/pressure.js';
+import { readHostMachine, type HostMachineReading, type HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
@@ -325,10 +325,15 @@ export type MeasuredBackup =
   | { ok: true; read: BackupRead }
   | { ok: false; reason: 'unsupported' | 'unanswered' };
 
-/** The `pressure` reading as a seam answers it (#1170), or why there is none. */
+/** The `pressure` reading as a seam answers it (#1170), or why there is none. `machine` is the host's size
+ *  (D-8920) as its one reader answered it: measured, or unmeasured WITH ITS REASON, which an adapter
+ *  keeps (no ready frame yet, an agent with no size to give, a read that failed). It rides BOTH members, because a size
+ *  does not depend on the PSI: a box with no PSI (a local server on a Mac, an old kernel) still has memory and cores.
+ *  ABSENT is one condition only, an answerer that knows no size (a double written before the field): `agent-older` to
+ *  the lane, its one reader (`pressure.ts#machineAfter`). */
 export type MeasuredPressure =
-  | { ok: true; psi: HostPsi; headroomBytes?: number | null }
-  | { ok: false; reason: 'unsupported' | 'unanswered' };
+  | { ok: true; psi: HostPsi; headroomBytes?: number | null; machine?: HostMachineReading }
+  | { ok: false; reason: 'unsupported' | 'unanswered'; machine?: HostMachineReading };
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
@@ -554,8 +559,13 @@ export const localIO: FleetIO = {
 
   // The agent's own reader on this box's /proc (#1170): a box with no PSI (not Linux, or an old kernel) is
   // `unsupported`, never a stall, so a local fleet never reads its own missing /proc as host pressure.
+  // D-8920: in local mode this box IS the fleet host, so its own size is the machine's. Measured outside
+  // the PSI's `try` (it never throws), so the `unsupported` member carries it too; a size that could not be measured
+  // is `read-failed`, through the wire's own reader.
   pressureMeasured: async () => {
-    try { return { ok: true, psi: measurePressure(), headroomBytes: measureHeadroom() }; } catch { return { ok: false, reason: 'unsupported' }; }
+    const sessions = measureSessions();
+    const machine = readHostMachine({ machine: sessions.machine });
+    try { return { ok: true, psi: measurePressure(), headroomBytes: sessions.headroomBytes, machine }; } catch { return { ok: false, reason: 'unsupported', machine }; }
   },
 
   // The agent's own `backup` body on this box (D-7858): this process's `CCRC_BACKUP_STATE_DIR` (D-7859). It never throws.

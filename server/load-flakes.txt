@@ -1,0 +1,10 @@
+# The server's known load flakes: CLAUDE.md's "Known load flakes" list, one package-relative path a line (D-8945).
+# The test box's parity check (ccd/testbox-parity) samples those CI measured at 30 s or less (none when it has no CI
+# times), and re-runs one that differs alone, once, on both sides.
+# server/test/load-flakes-pin.test.ts keeps this file and CLAUDE.md's list equal.
+test/ccd-ws-gc.test.ts
+test/pr-sweep.test.ts
+test/session-hook.test.ts
+test/typecheck-tests.test.ts
+test/ccd-session-state.test.ts
+test/ccd-bounded-reads.test.ts

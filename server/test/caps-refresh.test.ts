@@ -4,7 +4,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
 import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
-import { bootAgent, connectToAgent, makeFixture, TOKEN, type RemoteFixture } from './remoteHelpers.js';
+import { TEST_PEER_SEAMS, bootAgent, connectToAgent, makeFixture, TOKEN, type RemoteFixture } from './remoteHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps, withFakeClock } from './helpers.js';
@@ -201,7 +201,7 @@ describe('caps() — a well-formed res with a malformed verbs field', () => {
 
   it('verbs is not an array at all — resolves null, never []', async () => {
     server = await fakeCapsAgent('nope');
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const result = await fleet.client.caps();
@@ -210,7 +210,7 @@ describe('caps() — a well-formed res with a malformed verbs field', () => {
 
   it('verbs is an array with non-string elements — resolves null, never []', async () => {
     server = await fakeCapsAgent([1, 2]);
-    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const result = await fleet.client.caps();

@@ -15,10 +15,12 @@
 // Departure `held-for-compares-authority-sequence`: `heldFor` asks `offVolumeHeld` with each holder's AUTHORITY head sequence in place
 // of its epoch (`offVolumeHolders`), because a record's own epoch also counts privacy records appended before it, which the server
 // cannot recover; the authority sequence is exact, and the digest check that made the verdict `consistent` proved the same chain.
-import type { OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
+import type { AuthorityFileRead, OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './overlordAuthorityGuard.js';
 import { authorityFold, type AuthorityView } from './overlordAuthority.js';
 import { authorityCoherence, type AuthorityRowsSeen } from './overlordAuthorityCoherence.js';
+import type { ConfirmPrivacyRead } from './overlordRestore.js';
+import type { AgentHostRelation } from '../../../shared/isolation.js';
 import {
   authorityEpoch, currentWitnessTuple, measuredWitnessFacts, narrowestTold, offVolumeHeld, offVolumeHolders, witnessVerdict,
   type AuthorityEpoch, type HostRelation, type ServerWitnessFacts, type WitnessHeld, type WitnessSourceAnswer, type WitnessVerdict,
@@ -45,8 +47,8 @@ export interface OverlordAuthorityExchangeDeps {
   boot: string;
   /** The fleet box's agent: what its ready frame held, and the link; null in `local` mode (no agent witness). */
   agent: { held(): ReadyWitness | undefined; link: WitnessLink } | null;
-  /** The agent link's host relation against this server's volume (question 10); `'unmeasured'` until the isolation word's port lands. */
-  relationOf: () => HostRelation;
+  /** The isolation reader's per-link relation against this server's volume (question 10). */
+  relationOf: () => AgentHostRelation;
   warn: (line: string) => void;
 }
 
@@ -228,10 +230,20 @@ export class OverlordAuthorityExchange {
     return offVolumeHeld(recordSequence, offVolumeHolders([...this.sources.values()], g.server.epoch.base));
   }
 
-  /** What Confirm's port (`RestoreWitnessFacts`, PR C) reads: the server's epoch. */
-  epoch(): { kind: 'measured'; n: number } | { kind: 'unmeasured'; why: string } {
-    const e: AuthorityEpoch = this.gather().server.epoch;
+  /** Confirm supplies its own file snapshot and checks that it reaches the committed head. Unlike publication, this read
+   *  can use verified records ahead of the head and runs inside Confirm's transaction. */
+  epoch(file: AuthorityFileRead): { kind: 'measured'; n: number } | { kind: 'unmeasured'; why: string } {
+    if (file.kind === 'malformed') return { kind: 'unmeasured', why: 'the authority journal is malformed' };
+    if (file.kind === 'unmeasured') return { kind: 'unmeasured', why: 'the authority journal could not be read' };
+    const records = file.kind === 'records' ? file.records : [];
+    const e: AuthorityEpoch = authorityEpoch(authorityFold(records), records.at(-1)?.sequence ?? 0, this.safePrivacy());
     return e === 'unmeasured' ? { kind: 'unmeasured', why: 'the epoch could not be measured' } : { kind: 'measured', n: e.total };
+  }
+
+  /** Confirm stores a privacy sequence only when a head exists. An unreadable head is not absence. */
+  privacy(): ConfirmPrivacyRead {
+    const p = this.safePrivacy();
+    return p.kind === 'unmeasured' ? p : { kind: 'measured', sequence: p.kind === 'head' ? p.sequence : null };
   }
 
   /** The highest epoch and restore generation any source answered with since boot, any host (0 and 0 with none). */

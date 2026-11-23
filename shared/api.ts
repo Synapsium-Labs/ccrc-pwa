@@ -18,6 +18,7 @@ import type { PerfHealth } from './perf.js';
 import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
+import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
@@ -8236,6 +8237,12 @@ export interface CoordCapsView {
    *  `null` (a box nobody has tuned) alike — which is why both are spelled out
    *  here rather than discovered then. */
   updatedAt?: number | null;
+  /** D-8920: THE CAP IN FORCE, and where it comes from (`shared/runCap.ts`, which holds the vocabulary and
+   *  the field's one reader, `readCapNow`). ADDITIVE: an older server omits it, and then the console shows
+   *  `caps.maxConcurrentWorkers` as before. It is on the VIEW, not on `CoordCaps`, for `updatedAt`'s reason: `CoordCaps`
+   *  is the stored number, which since this field is the operator's override when one stands and otherwise only the
+   *  number used while the host is unmeasured. */
+  capNow?: CoordCapNow;
 }
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The

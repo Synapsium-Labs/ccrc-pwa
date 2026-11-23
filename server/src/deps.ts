@@ -34,6 +34,7 @@ import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
 import type { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
+import type { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
@@ -53,6 +54,7 @@ import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
+import type { IsolationReader } from './isolationFacts.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
@@ -241,9 +243,15 @@ export interface Deps {
   /** The authority witness exchange (Overlord W1, Task 6), built in `index.ts` after the guard and the agent link: the console door's
    *  `exchange`, the watcher's `authorityWitness` lane's nudge, and PR C's Confirm reads. Absent (a test, a script): the door answers 503 and the lane does nothing. */
   overlordAuthorityExchange?: OverlordAuthorityExchange;
+  /** Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`), built
+   *  once in `index.ts` over the same journal and guard. Absent (a test, a script): the Confirm door answers `unavailable`. */
+  overlordRestore?: OverlordRestoreState;
   /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
   ladderWitness?: NarrowingWitness;
   ladderInputs?: LadderConditionInputs;
+  /** The isolation word's one reader (Overlord W1, §7.4, H28), built once in `index.ts` over the server's boot facts and the
+   *  live fleet state. Absent (a test, a script): the ladder's `shared-user` input reads `unmeasured: not-wired`, which caps. */
+  isolation?: IsolationReader;
   ladderServerCaps?: readonly string[];
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */

@@ -30,7 +30,7 @@ import {
 import { IN_FLIGHT_UPDATE_PHASES, inFlightReport } from '../../shared/api.js';
 import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
 import { AgentOpError } from '../src/remote/errors.js';
-import { TOKEN } from './remoteHelpers.js';
+import { TEST_PEER_SEAMS, TOKEN } from './remoteHelpers.js';
 
 describe('UPDATE_OP_ERRORS — the only words the update op refuses with', () => {
   it('is exactly the five words (D-3413 added `not-queued`), and the op and its --from word are what wave 4 spells', () => {
@@ -312,7 +312,7 @@ describe('AgentOpError — the one reader of ResErr.detail (D-3373)', () => {
   async function connect(answer: Parameters<typeof fakeAgent>[0]): Promise<ConnectedFleet> {
     const agent = await fakeAgent(answer);
     wss = agent.wss;
-    fleet = connectFleet({ url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    fleet = connectFleet({ peerSeams: TEST_PEER_SEAMS, url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     return fleet;
   }

@@ -7,14 +7,15 @@ import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import { raiseLatch, ladderRead } from '../src/coord/overlordLadderRead.js';
 import { effectiveRung } from '../src/coord/overlordLadder.js';
+import { LADDER_CAUSE_MAP } from '../../shared/overlord-ladder.js';
 import { applyRestoreInTx } from '../src/coord/overlordLadderStore.js';
 import { tx } from '../src/coord/db.js';
 import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
 import path from 'node:path';
 import { sources, ccrcRoot } from './single-definition/helpers.js';
 import { sqlWrites, tableRefSource } from './single-definition/sqlStatements.js';
-import { parseFile } from './scan/parse.js';
-import { writeFileSync } from 'node:fs';
+import { parseFile, parseSource, ts } from './scan/parse.js';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const causes = { 'restore-detected': { kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'push', spec: 'fixture' } } as const;
@@ -29,6 +30,33 @@ const changesRung = (sql: string): boolean => {
   const insert = insertColumns.exec(sql);
   return (insert !== null && (insert[2] === undefined || insert[2].split(',').some((col) => rungColumn.test(col)))) || assignRung.test(sql);
 };
+
+// The dependency is optional and fails closed, so a typecheck cannot prove either connection. Read source only.
+describe('ladder isolation wiring', () => {
+  it('assigns the reader before building the server with those deps', () => {
+    const source = readFileSync(path.join(ccrcRoot, 'server/src/index.ts'), 'utf8');
+    const statements = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true).statements.map((s) => s.getText());
+    const assignment = statements.findIndex((s) => /^deps\.isolation\s*=\s*wireIsolation\s*\(/.test(s));
+    const build = statements.findIndex((s) => /^const app\s*=\s*await buildServer\s*\(\s*deps\s*,/.test(s));
+    expect(assignment, 'index.ts assigns the isolation reader').toBeGreaterThanOrEqual(0);
+    expect(build, 'buildServer receives the assigned deps').toBeGreaterThan(assignment);
+  });
+
+  it('passes the reader into the ladder inputs in buildServer', () => {
+    const source = readFileSync(path.join(ccrcRoot, 'server/src/server.ts'), 'utf8');
+    const { calls, symbols } = parseSource(source, 'server.ts');
+    const build = symbols.find((s) => s.name === 'buildServer' && s.kind === 'function');
+    const inputs = calls.filter((c) => build && c.start > build.start && c.end < build.end
+      && c.boundTo === 'ladderDeps' && c.callee === 'ladderConditionInputs');
+    expect(inputs).toHaveLength(1);
+    const arg = inputs[0]!.argSpans[0];
+    const [statement] = ts.createSourceFile('inputs.ts', `const inputs = ${arg ? source.slice(arg.start, arg.end) : 'undefined'};`, ts.ScriptTarget.Latest, true).statements;
+    const object = statement && ts.isVariableStatement(statement) ? statement.declarationList.declarations[0]?.initializer : undefined;
+    const reader = object && ts.isObjectLiteralExpression(object) ? object.properties.find((p) => p.name?.getText() === 'isolation') : undefined;
+    expect(reader && ts.isPropertyAssignment(reader) ? reader.initializer.getText() : undefined,
+      'ladderConditionInputs receives deps.isolation').toBe('deps.isolation');
+  });
+});
 
 describe('ladder latch seam', () => {
   it('pins the two rung-value writers, not the sequence stamp', () => {
@@ -62,6 +90,12 @@ describe('ladder latch seam', () => {
     expect(effectiveRung(facts)).toMatchObject({ rung: 'off', binding: [{ cause: 'condition-a', known: true }] });
     expect(effectiveRung({ ...facts, conditions: [{ cause: 'condition-a', reading: 'lifted' }] })).toMatchObject({ rung: 'chat', binding: [{ cause: 'restore-detected', known: true }] });
   });
+  it("the isolation word's row is a condition capping advise with notice none, through the shipped table", () => {
+    const facts = { operatorRung: { kind: 'set', rung: 'full' }, latches: [], conditions: [{ cause: 'shared-user', reading: 'standing' }],
+      causeTable: LADDER_CAUSE_MAP, serverCaps: ['overlord-route-v1', 'overlord-answer-v1'] } as const;
+    expect(LADDER_CAUSE_MAP['shared-user']).toMatchObject({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none' });
+    expect(effectiveRung(facts)).toMatchObject({ rung: 'advise', binding: [{ cause: 'shared-user', kind: 'condition', cap: 'advise', known: true }] });
+  });
   it('Confirm stamps pending rows, preserves earlier records and adds the stricter side', () => {
     const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'advise', 'actor', 1, NULL, 'full', 1)");
@@ -79,7 +113,7 @@ describe('ladder latch seam', () => {
       { cause: 'latch-a', cap: 'chat', raiseSequence: 9 }, { cause: 'latch-b', cap: 'advise', raiseSequence: 3 }, { cause: 'latch-c', cap: 'chat', raiseSequence: 9 },
     ]);
     const coord = new CoordStore(db);
-    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, { heldFor: () => 'held' }, []);
+    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, { heldFor: () => 'held' }, []);
     expect(read).toMatchObject({ kind: 'measured', lastChange: { narrowing: { state: 'done' } } });
     db.close();
   });

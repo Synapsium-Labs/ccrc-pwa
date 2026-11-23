@@ -123,7 +123,7 @@ describe('characterization: the cap counts every dispatched run in an active sta
     const f = fixture();
     f.coord.setCaps({ maxConcurrentWorkers: 1 });
     f.holder('busy', 'demo-busy');
-    expect(capsMeasured(f.coord).overConcurrency).toEqual({ limit: 1, running: 1 });
+    expect(capsMeasured(f.coord, f.deps.hostMachine).overConcurrency).toEqual({ limit: 1, running: 1 });
     expect(await dispatchRun(f.deps, f.fresh(), 'go', undefined))
       .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 1, running: 1 });
   });
@@ -140,7 +140,7 @@ describe('characterization: the cap counts every dispatched run in an active sta
     const f = fixture();
     f.coord.setCaps({ maxConcurrentWorkers: 2 });
     f.holder('busy', 'demo-busy');
-    expect(capsMeasured(f.coord).overConcurrency).toBeNull();
+    expect(capsMeasured(f.coord, f.deps.hostMachine).overConcurrency).toBeNull();
     expect(await dispatchRun(f.deps, f.resume(), 'go', undefined)).toMatchObject({ ok: true, resumed: true });
   });
 
@@ -269,14 +269,14 @@ const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ runId: i + 1,
 const readingsOf = (...r: WorkerReading[]) => new Map(r.map((w, i) => [i + 1, w] as const));
 
 describe('capsReadingOf: shadow reports, only armed leaves runs out (D-8792)', () => {
-  const caps = { maxConcurrentWorkers: 2 };
+  const limit = 2;
   it('with no readings it is today\'s count, with no waiting', () => {
-    expect(capsReadingOf(caps, rows(2), null, false)).toEqual({ caps, usage: { running: 2 }, overConcurrency: { limit: 2, running: 2 } });
-    expect(capsReadingOf(caps, rows(2), null, true)).toEqual({ caps, usage: { running: 2 }, overConcurrency: { limit: 2, running: 2 } });
+    expect(capsReadingOf(limit, rows(2), null, false)).toEqual({ limit: 2, usage: { running: 2 }, overConcurrency: { limit: 2, running: 2 } });
+    expect(capsReadingOf(limit, rows(2), null, true)).toEqual({ limit: 2, usage: { running: 2 }, overConcurrency: { limit: 2, running: 2 } });
   });
 
   it('shadow: the waiting runs are reported and still counted; the refusal is today\'s', () => {
-    const r = capsReadingOf(caps, rows(2), readingsOf('waiting', 'gone'), false);
+    const r = capsReadingOf(limit, rows(2), readingsOf('waiting', 'gone'), false);
     expect(r.usage).toEqual({ running: 2, waiting: 2, workingOnly: false });
     expect(r.overConcurrency).toEqual({ limit: 2, running: 2 });
     expect(r.freedSlot).toBeNull();
@@ -286,27 +286,27 @@ describe('capsReadingOf: shadow reports, only armed leaves runs out (D-8792)', (
   });
 
   it('armed: waiting and gone are left out; busy, unmeasured and a run with no reading count', () => {
-    const out = capsReadingOf(caps, rows(2), readingsOf('waiting', 'gone'), true);
+    const out = capsReadingOf(limit, rows(2), readingsOf('waiting', 'gone'), true);
     expect(out).toMatchObject({ usage: { running: 2, waiting: 2, workingOnly: true }, overConcurrency: null, freedSlot: { limit: 2, running: 2 } });
     for (const kept of ['busy', 'unmeasured'] as const) {
-      const r = capsReadingOf(caps, rows(2), readingsOf('waiting', kept), true);
+      const r = capsReadingOf(limit, rows(2), readingsOf('waiting', kept), true);
       expect(r.usage.waiting, kept).toBe(1);
       expect(r.overConcurrency, kept).toBeNull();
     }
-    expect(capsReadingOf(caps, rows(3), readingsOf('waiting', 'gone'), true).overConcurrency).toBeNull();
-    expect(capsReadingOf(caps, rows(3), readingsOf('busy', 'unmeasured'), true).overConcurrency).toEqual({ limit: 2, running: 3 });
+    expect(capsReadingOf(limit, rows(3), readingsOf('waiting', 'gone'), true).overConcurrency).toBeNull();
+    expect(capsReadingOf(limit, rows(3), readingsOf('busy', 'unmeasured'), true).overConcurrency).toEqual({ limit: 2, running: 3 });
   });
 
   it('a freed slot is pending as data, and goes on only on the window\'s yes (review 2875 F3: no write from L1)', () => {
-    const freed = capsReadingOf(caps, rows(2), readingsOf('gone', 'busy'), true);
+    const freed = capsReadingOf(limit, rows(2), readingsOf('gone', 'busy'), true);
     expect(freedSlotPending(freed)).toBe(true);
     expect(capRefusalOf(freed, true)).toBeNull();
     expect(capRefusalOf(freed, false)).toEqual({ limit: 2, running: 2 });
     // Room under the cap, and a full cap of working workers: nothing is pending, so the window is never asked.
-    const room = capsReadingOf(caps, rows(1), readingsOf('gone'), true);
+    const room = capsReadingOf(limit, rows(1), readingsOf('gone'), true);
     expect(freedSlotPending(room)).toBe(false);
     expect(capRefusalOf(room, false)).toBeNull();
-    const full = capsReadingOf(caps, rows(2), readingsOf('busy', 'busy'), true);
+    const full = capsReadingOf(limit, rows(2), readingsOf('busy', 'busy'), true);
     expect(freedSlotPending(full)).toBe(false);
     expect(capRefusalOf(full, true)).toEqual({ limit: 2, running: 2 });
   });
@@ -330,12 +330,12 @@ describe('capsReadingOf: shadow reports, only armed leaves runs out (D-8792)', (
 
   it('the shadow line names the start, the numbers and each run left out, and only for a refusal arming would lift', () => {
     const r = readingsOf('waiting', 'gone', 'busy');
-    const shadow = capsReadingOf({ maxConcurrentWorkers: 3 }, rows(3), r, false);
+    const shadow = capsReadingOf(3, rows(3), r, false);
     expect(capShadowLine(shadow, 'dispatch of run 9', rows(3), r))
       .toBe('ccrc-server: cap-counts-working shadow: dispatch of run 9 refused at 3/3; armed, 2 left out would free a slot (run 1 waiting, run 2 gone)');
     const none = readingsOf('busy', 'busy', 'unmeasured');
-    expect(capShadowLine(capsReadingOf({ maxConcurrentWorkers: 3 }, rows(3), none, false), 'x', rows(3), none)).toBeNull();
-    expect(capShadowLine(capsReadingOf({ maxConcurrentWorkers: 3 }, rows(3), r, true), 'x', rows(3), r)).toBeNull();
+    expect(capShadowLine(capsReadingOf(3, rows(3), none, false), 'x', rows(3), none)).toBeNull();
+    expect(capShadowLine(capsReadingOf(3, rows(3), r, true), 'x', rows(3), r)).toBeNull();
   });
 });
 
@@ -511,7 +511,7 @@ describe('the dispatch door armed: a run holds a slot only while its worker work
   it('an asleep, stopped, dead or archived worker (gone) does not hold a slot', async () => {
     const f = atOneSlot({ workerFacts: factsPort(ASLEEP) });
     f.holder('a', 'demo-a', 3 * HOUR);
-    expect(capsMeasured(f.coord, await workerReadings(f.coord, f.deps.workerFacts), true))
+    expect(capsMeasured(f.coord, f.deps.hostMachine, await workerReadings(f.coord, f.deps.workerFacts), true))
       .toMatchObject({ overConcurrency: null, freedSlot: { limit: 1, running: 1 }, usage: { running: 1, waiting: 1, workingOnly: true } });
     expect(await dispatchRun(f.deps, f.resume(), 'go', undefined)).toMatchObject({ ok: true, resumed: true });
   });
@@ -600,9 +600,9 @@ describe('the dispatch door armed: a run holds a slot only while its worker work
     const readings = await workerReadings(f.coord, f.deps.workerFacts);
     f.holder('b', 'demo-b');
     f.coord.setCaps({ maxConcurrentWorkers: 2 });
-    expect(capsMeasured(f.coord, readings, true)).toMatchObject({ overConcurrency: null, usage: { waiting: 1 }, freedSlot: { limit: 2, running: 2 } });
+    expect(capsMeasured(f.coord, f.deps.hostMachine, readings, true)).toMatchObject({ overConcurrency: null, usage: { waiting: 1 }, freedSlot: { limit: 2, running: 2 } });
     f.coord.setCaps({ maxConcurrentWorkers: 1 });
-    expect(capsMeasured(f.coord, readings, true).overConcurrency).toEqual({ limit: 1, running: 1 });
+    expect(capsMeasured(f.coord, f.deps.hostMachine, readings, true).overConcurrency).toEqual({ limit: 1, running: 1 });
   });
 
   it('the counted rows are capsUsage\'s rows: a planned row and a row with dispatchedAt null are in neither', () => {
@@ -636,7 +636,7 @@ describe('the send-back door: a send-back to a sleeper is a resume only when arm
         f.coord.setCaps({ maxConcurrentWorkers: 1 });
         f.holder('busy', 'demo-busy');
         const id = f.parked(from);
-        expect(capsMeasured(f.coord, await workerReadings(f.coord, f.deps.workerFacts), true).overConcurrency).not.toBeNull();
+        expect(capsMeasured(f.coord, f.deps.hostMachine, await workerReadings(f.coord, f.deps.workerFacts), true).overConcurrency).not.toBeNull();
         expect((await sendBackCapCheck(f.coord, f.deps, id, 'working'))()).toBeNull();
       });
     }
