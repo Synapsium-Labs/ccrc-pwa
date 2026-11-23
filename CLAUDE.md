@@ -298,6 +298,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (thread passes, second reads, and `, exit <rc>` in the detail), so under load a case can fail as an unmeasured
   verdict whose detail says `the processes of this box could not be measured (/proc, exit 3)` (measured once, in a
   full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
+  other red is a real break, so re-run the file alone first. `ccd-collect-device-gone` (D-8948)
+  runs the real audit and verb end to end on Linux over a copied mount table and a planted block listing; its case C
+  audits a present leaf through the fresh rungs with the real in-use probe (`_ws_path_users`, a real `/proc` walk), one
+  of them with a real process standing in the leaf, at up to 120 s a case. Under load those cases fail as vitest's
+  `Test timed out in <n>ms`, or as an unmeasured `in-use` answer (`the walk of /proc did not finish within 10s`); any
   other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** is the FAST run (operator ruling 2026-10-28, replacing

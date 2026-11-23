@@ -42855,6 +42855,18 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # device the witness records (`_ws_collect_root_dev`): a physical `~/.cc-tmp`
 # on another device, or one whose device cannot be read, is unmeasured
 # `device`, since an empty mount point is no proof that the leaf is gone.
+# ONE RELEASE (D-8948, `_ws_collect_absence_dev`): a
+# recorded device PROVEN gone from this box (`_ws_collect_dev_gone`: no mount,
+# no block device, and a block listing proven to be this box's own) can never
+# be matched again, so the id starts over: the absence is believed on the
+# device `~/.cc-tmp` stands on now, the token binds that device (`on=`), and
+# the document says `"recordedDevice":"gone"`. A device that is mounted,
+# attached as a block device or of major 0 keeps `device`, with the reason
+# after the sentence; one whose state could not be measured is unmeasured
+# `identity`. A quarantine record on a gone device whose slot stands empty
+# resumes as `restart` (`_ws_collect_resume_eval`): its empty slot and the
+# record are cleared, the witness is kept, and nothing is removed on the
+# record's word.
 # Then a slot of the id that no record names is the operator's
 # (`quarantine-kept`, and the witness stays beside it), and a quarantine that
 # is a link or not a directory, or whose slots cannot be listed, is unmeasured
@@ -42894,14 +42906,14 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # document, which the server reads as a failed audit and retries: it fails closed.
 _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
 _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
-_WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+_WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_DEVGONE=''
 _WS_COLLECT_RECORDS=()
 
 _ws_collect_reset() {   # -> every answer the collector's evaluation sets, cleared: no earlier read is ever printed
   REAP_VERDICT=''; REAP_DETAIL=''; REAP_TOKEN=''
   _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
   _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
-  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_ASIDE=''
+  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_ASIDE=''; _WS_COLLECT_DEVGONE=''
   _WS_COLLECT_WITNESS=''; _WS_COLLECT_LDEV=''; _WS_COLLECT_LINO=''; _WS_COLLECT_LBTIME=''
   _WS_COLLECT_RECORDS=()
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
@@ -43010,10 +43022,11 @@ _ws_collect_slots_of() {   # id -> 0 with _WS_QSLOTS = the path of every quarant
   return 0
 }
 
-_WS_ROOTDEV_WHY=''
+_WS_ROOTDEV_WHY=''; _WS_ROOTDEV_HAVE=''
 _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on device dev (decimal, as a witness and a
   #                             record spell it); 1 when it is on another; 2 when its device could not be read — 1 and
-  #                             2 with _WS_ROOTDEV_WHY, naming the path, the device read there and the one `what` carries
+  #                             2 with _WS_ROOTDEV_WHY, naming the path, the device read there and the one `what` carries;
+  #                             0 and 1 with _WS_ROOTDEV_HAVE, the device it is on ('' on 2)
   # AN ABSENCE NEEDS THE RECORDED DEVICE (spec §5.10): with `~/.cc-tmp`'s volume
   # missing and its mount point standing empty, every leaf and slot under it
   # reads absent. So an arm that would act on an absence — the witness-only
@@ -43021,8 +43034,12 @@ _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on dev
   # `~/.cc-tmp` (`_ws_collect_qpath`, never made) is on the device the witness
   # or the record carries. A `~/.cc-tmp` that cannot be resolved, PROVEN absent
   # included, has no device to read: 2. Reads only.
+  # ITS 1 IS NOT ALWAYS THE END (D-8948): the two arms of the collector's evaluation ask
+  # through `_ws_collect_absence_dev`, which releases a recorded device PROVEN gone from this box
+  # (`_ws_collect_dev_gone`) so that the id starts over. The reclaim tail's witness drop and the box-move release's M4
+  # ask this function alone, and read its three answers as they always did.
   local want="${1-}" what="${2-}" root have
-  _WS_ROOTDEV_WHY=''
+  _WS_ROOTDEV_WHY=''; _WS_ROOTDEV_HAVE=''
   _ws_collect_qpath \
     || { _WS_ROOTDEV_WHY="$_WS_QPATH_WHY, so its device was never compared with device $want that $what carries"; return 2; }
   root="${_WS_QPATH%/.ccd-quarantine}"
@@ -43030,11 +43047,13 @@ _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on dev
     || { _WS_ROOTDEV_WHY="$what carries no device, so the device of $root was never compared with it"; return 2; }
   have=$(_plat_devino "$root" 2>/dev/null) && [[ "$have" =~ ^[0-9]+:[0-9]+$ ]] \
     || { _WS_ROOTDEV_WHY="the device of $root could not be read, so it was never compared with device $want that $what carries"; return 2; }
-  have="${have%%:*}"
+  have="${have%%:*}"; _WS_ROOTDEV_HAVE="$have"
   [[ "$have" == "$want" ]] && return 0
   _WS_ROOTDEV_WHY="$root is on device $have, not on device $want that $what carries — a mount point on another device is never read as the leaf's absence"
   return 1
 }
+
+# @ccd-lib:devgone — a recorded device that is GONE from this box (D-8948): the block listing's seam (`_ws_collect_sysblock`), the decode (`_ws_collect_devmm`), the one owner of "gone" (`_ws_collect_dev_gone`) and the one composer the absence arms ask (`_ws_collect_absence_dev`) live in ccd/lib/disk-retention.sh
 
 _ws_collect_leaf_owned() { [[ -O "${1-}" ]]; }   # path -> 0 when this user owns it (M3's owner half): a seam a test can answer
 _WS_MOVED_HOST_WHY=''
@@ -43135,9 +43154,12 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     # silence (the resume arm does not ask `_ws_collect_slots_of`: a record
     # names its own slot there).
     # FIRST, the absence is believed only on the device the witness carries:
-    # an empty mount point is no proof that the leaf is gone.
-    _ws_collect_root_dev "$_WS_WIT_DEV" "$wof" \
-      || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
+    # an empty mount point is no proof that the leaf is gone. A witness whose
+    # device is PROVEN gone from this box (rc 3: a box moved, or restored onto
+    # other storage) starts over instead: the absence is believed on the
+    # device `~/.cc-tmp` stands on now, and the token below binds that device
+    # (`on=`), so it is never the same-device token (`_ws_collect_absence_dev`).
+    _ws_collect_absence_dev "$_WS_WIT_DEV" "$wof" || (( $? == 3 )) || return 1
     _WS_COLLECT_LEAF=absent
     # This arm lists the quarantine's slots, so a quarantine that is a link or
     # not a directory, or whose slots cannot be listed, answers unmeasured
@@ -43149,7 +43171,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
       || { _ws_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
     _ws_collect_paused || return 1
     REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
-      "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
+      "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT" ${_WS_COLLECT_DEVGONE:+"on=$_WS_COLLECT_DEVGONE"})
     [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
       || { REAP_TOKEN=''; _ws_collect_unmeasured token "the collection token of $id could not be minted"; return 1; }
     REAP_VERDICT=collectable
@@ -43235,7 +43257,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
 }
 
 _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collectable` with REAP_TOKEN and
-  #                                _WS_COLLECT_PHASE (`unmoved`, `moved` or `removed`), a word, or `unmeasured`.
+  #                                _WS_COLLECT_PHASE (`unmoved`, `moved`, `removed` or `restart`), a word, or `unmeasured`.
   #                                The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only, and never the tree's walk.
   # THE PHASE IS READ OFF THE DISK, never off the journal: `moved` — the
   # record's directory stands in its slot (`<slot>/leaf`, the record's dev, ino
@@ -43243,7 +43265,13 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # id and the slot holds nothing; `removed` — it stands at neither (the slot's
   # leaf was removed, or the restore and a later tail took it), which is believed
   # only while the physical `~/.cc-tmp` is on the device the record carries
-  # (`_ws_collect_root_dev`: an empty mount point proves nothing). The slot is
+  # (`_ws_collect_root_dev`: an empty mount point proves nothing); `restart` —
+  # the slot STANDS EMPTY and the record's device is PROVEN gone from this box
+  # (`_ws_collect_absence_dev`, D-8948: a box moved, or
+  # restored onto other storage; a slot that does not stand stays `device`),
+  # so the record is believed about nothing,
+  # whatever stands at the id: the verb clears the empty slot and the record,
+  # KEEPS the witness, and the id is audited afresh. The slot is
   # never read from the record: Task 4's reader DERIVES it from the record's
   # name, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<record name>` (the record
   # body carries no slot path), and the slot may hold `leaf` and nothing else.
@@ -43330,9 +43358,19 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
     absent:match) phase=unmoved ;;
     *)          # NEITHER PLACE holds it, which is believed only on the device
                 # the record carries (`moved` and `unmoved` prove it by identity).
-                _ws_collect_root_dev "$_WS_QREC_PDEV" "the quarantine record $name" \
-                  || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
-                phase=removed ;;
+                # A record whose device is PROVEN gone from this box (rc 3)
+                # is believed about nothing: `restart`, whatever stands at the
+                # id, never `removed`, whose order would drop the witness on
+                # the record's word (`_ws_collect_absence_dev`).
+                # ONLY A SLOT STANDING EMPTY licenses the restart: a slot that
+                # does not stand is also what a volume attached but not active
+                # shows (its device-mapper node, and so its number, gone until
+                # it is), and the record may name a leaf waiting in its slot
+                # there; dropping it would leave that slot recordless, the
+                # terminal `quarantine-kept`, when the volume came back.
+                _ws_collect_absence_dev "$_WS_QREC_PDEV" "the quarantine record $name" || (( $? == 3 )) || return 1
+                phase=removed; [[ -z "$_WS_COLLECT_DEVGONE" ]] || phase=restart
+                [[ "$phase" != restart || -d "$slot" ]] || { _WS_COLLECT_DEVGONE=''; _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again (device $_WS_QREC_PDEV is gone from this box, but the slot $slot does not stand, as it would not on a volume not mounted here, so the record is not restarted)"; return 1; } ;;
   esac
   _WS_COLLECT_PHASE="$phase"
   # THE REGISTRY, asked only now: a retaken original path is TERMINAL above,
@@ -43358,10 +43396,12 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # still encoded: the verb hands that list to the removal as the checkouts it
   # accepts, so a record whose list changed is another consent. The witness is
   # NOT an input: the record is the resume's authority. A record a released
-  # leaf left binds its `leaf=` too (Task R4); any other mints today's token.
+  # leaf left binds its `leaf=` too (Task R4), and a `restart` binds the device
+  # `~/.cc-tmp` stands on now (`on=`, D-8948); any
+  # other mints today's token.
   REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-resume "id=$id" "record=$name" "phase=$phase" "slot=$slot" \
     "dev=$_WS_QREC_DEV" "ino=$_WS_QREC_INO" "btime=$_WS_QREC_BTIME" "run=${_WS_QREC_RUN-}" "at=${_WS_QREC_AT-}" \
-    "pre=${_WS_QREC_TOKEN-}" "checkouts=${_WS_QREC_CHECKOUTS-}" ${_WS_QREC_LEAF:+"leaf=$_WS_QREC_LEAF"})
+    "pre=${_WS_QREC_TOKEN-}" "checkouts=${_WS_QREC_CHECKOUTS-}" ${_WS_QREC_LEAF:+"leaf=$_WS_QREC_LEAF"} ${_WS_COLLECT_DEVGONE:+"on=$_WS_COLLECT_DEVGONE"})
   [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
     || { REAP_TOKEN=''; _ws_collect_unmeasured token "the resume token of $id could not be minted"; return 1; }
   REAP_VERDICT=collectable
@@ -43649,6 +43689,9 @@ _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line
   # A leaf released after a box move (Task R4), or a record that names one, says so whatever a later rung answered;
   # the key is absent otherwise.
   [[ "${_WS_COLLECT_WITNESS-}" != moved-host ]] || printf '"witness":"moved-host",'
+  # An absence believed although its witness or record names another device, because that device is PROVEN gone from
+  # this box (D-8948), says so whatever a later rung answered; the key is absent otherwise.
+  [[ -z "${_WS_COLLECT_DEVGONE-}" ]] || printf '"recordedDevice":"gone",'
   if [[ "$REAP_VERDICT" == collectable ]]; then
     printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"
     return 0
@@ -43992,7 +44035,7 @@ _ws_collect_witness_only() {   # id surface actor reason — a witness whose lea
   local id="$1" surface="$2" actor="$3" reason="$4" lctx
   lctx=$(_lc_tx)
   _lc_intent collect "$id" "$lctx" verb ws-collect \
-    detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id: dropping its witness")" \
+    detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id: dropping its witness${_WS_COLLECT_DEVGONE:+, whose device ${_WS_WIT_DEV-} is gone from this box}")" \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   _ws_collect_witness_cad "$id" "${_WS_WIT_DEV-}" "${_WS_WIT_INO-}" "${_WS_WIT_BTIME-}" "${_WS_WIT_RUN-}" "${_WS_WIT_AT-}" \
     || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "nothing was removed: the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY")"; return 1; }
@@ -44326,21 +44369,27 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
       _ws_collect_gap moved "$id" "$slot"
       _ws_collect_after_move "$id" "$rec" "$orig" "$lctx" "$name" "$surface" "$actor" "$reason"
       return ;;
-    unmoved)
+    unmoved|restart)
       # THE MOVE NEVER HAPPENED (or was undone): the leaf stands at its path and
       # the slot holds nothing. The slot and the record are cleared, the witness
       # is KEPT, and the answer is `state-changed`: the leaf is audited afresh
       # (ruling T6 OPEN10).
+      # `restart` IS THE SAME ACT for another reason (D-8948):
+      # the record names a device PROVEN gone from this box, so nothing it says
+      # is believed. Nothing at the id is touched or looked at here; what stands
+      # there is the fresh rungs' to judge, every one of them, on the next audit.
+      local rdid="record $name: $orig never left, or came back" rsaid="record $name described a collection whose move never happened or was undone" rheld="the leaf never left $orig"
+      [[ "${_WS_COLLECT_PHASE-}" != restart ]] || { rdid="record $name names device ${_WS_QREC_PDEV-}, which is gone from this box: $id starts over"; rsaid="record $name names device ${_WS_QREC_PDEV-}, which is gone from this box, so nothing it says of $id is believed and $id starts over"; rheld="record $name names a device gone from this box"; }
       _lc_intent collect "$id" "$lctx" verb ws-collect meas.resumed "$name" \
-        detail "$(_ws_leaf_why_line "record $name: $orig never left, or came back")" \
+        detail "$(_ws_leaf_why_line "$rdid")" \
         dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
       if _ws_collect_unwind "$slot" "$rec"; then
         _ws_collect_refused "$id" "$lctx" state-changed \
-          "nothing was removed, the slot and the record were cleared, and $id stands with its witness to be audited afresh: record $name described a collection whose move never happened or was undone" \
+          "nothing was removed, the slot and the record were cleared, and $id stands with its witness to be audited afresh: $rsaid" \
           "$surface" "$actor" "$reason"
         return 0
       fi
-      _ws_collect_keep "$id" "$rec" "$lctx" "the leaf never left $orig, but its slot or the record could not be cleared"
+      _ws_collect_keep "$id" "$rec" "$lctx" "$rheld, but its slot or the record could not be cleared"
       return 1 ;;
     removed)
       # THE REMOVAL HAD FINISHED before the run stopped: the order resumes from
@@ -44493,7 +44542,8 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   # `ws-audit --collect` runs (`_ws_collect_fork`): where a record stands, the
   # record, its slot's leaf and the phase read off the disk; else the registry
   # and the witness, then, beside a leaf PROVEN absent, the physical
-  # `~/.cc-tmp`'s device against the witness's and the id's recordless slots;
+  # `~/.cc-tmp`'s device against the witness's (or the proof that the
+  # witness's device is gone from this box) and the id's recordless slots;
   # beside a present leaf, the quarantine (read-only), the id's recordless
   # slots, the leaf's identity and owner write, the idle floor, the tree's
   # newest ctime and count, the probe, the checkouts and the row rule — all

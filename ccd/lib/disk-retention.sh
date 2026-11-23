@@ -1826,3 +1826,111 @@ _ws_shed_locked() {   # -> rungs 2b to 11, under the caller's reap lock (the cal
 # SHED-DEPS-V1. `cmd_caps` echoes `shed-deps-v1` and `ws-shed-deps`: this box has the verb above, in one ccd inode. The
 # server composes it only behind that word (`ccdCan(state, 'wsShedDeps')`).
 # ── end deps-shed ──────────────────────────────────────────────────────────────── DEPSSHED-END ──
+
+# @ccd-lib:devgone
+# ── a recorded device that is GONE from this box (D-8948) ── DEVGONE-BEGIN ──
+# The collector believes an ABSENCE only on the device its witness or its quarantine record carries
+# (`_ws_collect_root_dev`, spec §5.10): an unmounted volume's empty mount point must never read as "the leaf is gone".
+# A box that was moved, or restored onto other storage, keeps records that name a device it will never have again, so
+# that refusal never healed there. These functions are the release: ONE owner of "this device is gone from this box"
+# (`_ws_collect_dev_gone`) and ONE composer of the answer an absence arm reads (`_ws_collect_absence_dev`, the owner's
+# only caller). The reclaim tail's witness drop and the box-move release's M4 still ask `_ws_collect_root_dev` alone.
+#
+# WHAT "GONE" LICENSES IS SMALL, and it deletes nothing: a witness whose leaf is PROVEN absent is compared and dropped,
+# and a quarantine record whose slot STANDS EMPTY is restarted (`restart`: the empty slot and the record cleared, the
+# witness KEPT, the id audited afresh). A record whose slot does not stand is never restarted: that is also what a
+# volume not mounted here shows, and the record may name a leaf waiting in its slot there (`_ws_collect_resume_eval`). A directory that stands at the path is taken only by the fresh rungs, every one
+# of them, on its own identity as measured then (the box-move release, `_ws_collect_moved_host`). No witness is
+# written: it keeps its one writer (`_ws_tmproot_witness_write`).
+#
+# A NUMBER IS NOT A FILE SYSTEM'S NAME. A device mapper or a software RAID can number the same file system differently
+# after a reboot. When its old number is free, the record reads gone and the absence is then believed on the device
+# the temp area stands on NOW, which is that same file system: correct. When another device took the old number, or it
+# is of major 0, the answer stays `device`. A wrong "gone" needs the recorded number to have no block entry while its
+# volume can come back, with the temp area standing on its bare mount point: a volume detached whole, or one attached
+# but not active, whose device-mapper or md node exists only while it is (a closed encrypted volume, an inactive
+# logical volume, a removed map). Its cost is a dropped witness, never a removal and never a record: a witness's leaf
+# returns unwitnessed, for the loose arm's own proofs, and a recordless slot on that volume, which the absent arm
+# lists from the temp area as it stands now, leaves every listing (the loose census skips the quarantine). A stabler identity beside the number in NEW records is a follow-up: both parsers are
+# anchored at the line's end, so an older ccd would read a new field as malformed.
+#
+# BOUNDED: the owner makes one identity walk (`WS_RECLAIM_WALK_S`), and only on the two arms that act on an absence,
+# which run no other bounded probe; the fresh rungs of a present leaf never reach it, so `ws-audit`'s runner row holds.
+
+# THE SEAM, as `_ws_collect_mountinfo` is the mount table's: a test names a fake listing, and the box answers its own.
+# The kernel lists every block device there as `<major>:<minor>`, mounted or not. THE ASSUMPTION G4 rests on: a device
+# of major other than 0 that carries a file system is a block device. The known exception is UBIFS, whose `s_dev` is
+# its UBI volume's CHARACTER device (`/sys/dev/char`): an attached, unmounted UBIFS volume reads gone, at the cost above.
+_ws_collect_sysblock() { printf '%s' /sys/dev/block; }
+
+_ws_collect_devmm() {   # st_dev -> prints `<major>:<minor>` of a decimal st_dev of 1 to 18 digits, in Linux's (glibc's)
+  #                        layout, as a mount table and the block listing spell a device; 1, printing nothing, otherwise
+  # LEGITIMATELY DIFFERENT from the identity walk's decode (python's `os.major`/`os.minor`): the walk is another process
+  # and decodes only a device it stats or finds in the table, so naming the listing's entries would need a new request
+  # kind in a walk this release does not edit. 18 digits keeps bash's signed 64-bit arithmetic exact; a longer number
+  # is never proven gone (the safe direction). `ccd-collect-device-gone.test.ts` pins the two against each other on Linux.
+  [[ "${1-}" =~ ^[0-9]{1,18}$ ]] || return 1
+  printf '%d:%d' $(( (10#$1 >> 8 & 0xfff) | (10#$1 >> 32 & ~0xfff) )) $(( (10#$1 & 0xff) | (10#$1 >> 12 & 0xffffff00) ))
+}
+
+_WS_DEVGONE_WHY=''
+_ws_collect_dev_gone() {   # recorded-st_dev area-st_dev -> 0 the recorded device is PROVEN gone from this box; 1 it is
+  #                           still here, or can never be proven gone; 2 that could not be measured — 1 and 2 with
+  #                           _WS_DEVGONE_WHY. `area-st_dev` is the device the physical ~/.cc-tmp stands on now.
+  # THE ONE OWNER OF "GONE". Gone means ALL of:
+  #   G1  this box keeps a mount table (Darwin keeps none: 1, asking nothing);
+  #   G2  the mount table has no line for the device: the rows rung's own parser (a `D` request to
+  #       `_ws_reclaim_idwalk`) through the one seam (`_ws_collect_mountinfo`). `mounted` and `anon` (major 0, which
+  #       no table and no listing has to show) are 1; a table that cannot be read, is empty or holds a line that is
+  #       no mount is 2;
+  #   G3  THE CONTROL: the block listing shows a device this box certainly has, the one the temp area stands on, or,
+  #       that being of major 0, any block device at all. A listing that is missing, is no directory, cannot be
+  #       searched or is not this box's own would otherwise read every device as gone. That is a fact of the box (a
+  #       /sys hidden or another namespace's), not of load, so it is 1, never 2: the answer keeps today's `device`,
+  #       which the lane lists at once, rather than a load-sensitive `identity` retried on every pass;
+  #   G4  the listing has no entry for the device (`_ws_reclaim_absent`, so a dangling link is an entry, and an
+  #       entry that could not be looked at is 2). An entry is a volume attached but mounted nowhere, the case the
+  #       device rule exists for: 1.
+  # Reads only.
+  local want="${1-}" have="${2-}" mi sb wm hm ans rc shows; local -a ctl=()
+  _WS_DEVGONE_WHY=''
+  [[ "$CCD_OS" != darwin ]] || { _WS_DEVGONE_WHY="this box keeps no mount table, so no recorded device is ever proven gone from it"; return 1; }
+  wm=$(_ws_collect_devmm "$want") || { _WS_DEVGONE_WHY="'$want' is no device number of 1 to 18 digits, so it is never proven gone from this box"; return 1; }
+  mi=$(_ws_collect_mountinfo)
+  [[ -n "$mi" ]] || { _WS_DEVGONE_WHY="the mount table's seam names no mount table, so whether this box mounts device $want was never asked"; return 2; }
+  _ws_reclaim_idwalk "$mi" < <(printf 'D\t0\t%s\0' "$want") \
+    || { _WS_DEVGONE_WHY="whether this box mounts device $want was never asked: $_WS_IDWALK_WHY"; return 2; }
+  ans="${_WS_IDWALK_OUT%%$'\n'*}"; ans="${ans#D 0 }"
+  [[ "$ans" != anon ]] || { _WS_DEVGONE_WHY="device $want is of major 0, which no mount table and no block listing has to show, so it is never proven gone from this box"; return 1; }
+  [[ "$ans" != mounted ]] || { _WS_DEVGONE_WHY="this box mounts device $want ($wm)"; return 1; }
+  [[ "$ans" == absent ]] || { _WS_DEVGONE_WHY="whether this box mounts device $want could not be read from $mi (${ans#un })"; return 2; }
+  sb=$(_ws_collect_sysblock); hm=$(_ws_collect_devmm "$have") || hm=''
+  ctl=("$sb/$hm"); shows="the temp area's own device ${hm:-(which could not be read)}"
+  [[ "$hm" != 0:* ]] || { ctl=("$sb"/[0-9]*:[0-9]*); shows="any block device (the temp area's own, $hm, is of major 0)"; }
+  [[ -n "$hm" ]] && [[ -e "${ctl[0]-}" || -L "${ctl[0]-}" ]] \
+    || { _WS_DEVGONE_WHY="the block-device listing $sb does not show $shows, so it is not read as this box's listing and device $want is not proven gone"; return 1; }
+  _ws_reclaim_absent "$sb/$wm"; rc=$?
+  (( rc != 1 )) || { _WS_DEVGONE_WHY="this box still has device $want as a block device ($sb/$wm stands), mounted or not"; return 1; }
+  (( rc == 0 )) || { _WS_DEVGONE_WHY="whether this box has device $want as a block device could not be looked at: $_WS_ABSENT_WHY"; return 2; }
+}
+
+_ws_collect_absence_dev() {   # dev what -> 0 the physical ~/.cc-tmp is on device dev (as `_ws_collect_root_dev` answers
+  #                              it): the absence is believed; 3 it is on another device and dev is PROVEN gone from
+  #                              this box (_WS_COLLECT_DEVGONE = the device it stands on now): the id starts over; 1
+  #                              with the answer set — unmeasured `device` (its device could not be read, or dev is
+  #                              still on this box or can never be proven gone, a block listing that fails its
+  #                              control included: today's sentence, then the owner's reason) or unmeasured `identity`
+  #                              (the mount table or a listing entry could not be read)
+  # THE ONE COMPOSER, and the owner's only caller: the fresh arm's absent leaf and the resume's empty slot ask it, so
+  # both answer one fact in one set of words. `identity` is the word the box-move release answers for the same
+  # unreadable mount table.
+  local dev="${1-}" what="${2-}" rc
+  _ws_collect_root_dev "$dev" "$what"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc == 1 )) || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
+  _ws_collect_dev_gone "$dev" "$_WS_ROOTDEV_HAVE"; rc=$?
+  (( rc != 0 )) || { _WS_COLLECT_DEVGONE="$_WS_ROOTDEV_HAVE"; return 3; }
+  (( rc == 1 )) || { _ws_collect_unmeasured identity "whether device $dev that $what carries is still on this box could not be measured ($_WS_DEVGONE_WHY): nothing is dropped, and the next pass asks again"; return 1; }
+  _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again ($_WS_DEVGONE_WHY)"
+}
+# ── end a recorded device that is gone ───────────────────────────────────────────────── DEVGONE-END ──
