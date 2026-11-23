@@ -144,11 +144,8 @@ export interface TeamConfirmAnswer {
 /** `POST /api/projects/:project/linking`: the operator's write. */
 export interface LinkingWriteBody {
   teamKey: string | null; override: LinkingOverride | null;
-  /** D-8808: the workspace id the key lives in; the server decides what it stores (`workspaceAfterWrite`, which states every case).
-   *  Named: it must hold the key. Omitted with the unchanged key: the stored choice, with no read. Omitted with a changed key: a
-   *  stored workspace while it holds the new key, else as null. Null: the one connected workspace that holds the key (the
-   *  unchanged key keeps a stored none), a slot the answer depends on unread `unavailable` (nothing written), a key none holds
-   *  stored with none. */
+  /** D-8808: workspace selection is decided by `server/src/linking/policy.ts#workspaceAfterWrite`.
+   *  See `ccd/coordinator-skill/references/plan.md` (linking suggest) for the cases. */
   workspace?: string | null;
 }
 

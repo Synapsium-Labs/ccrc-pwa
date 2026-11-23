@@ -426,6 +426,8 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
     const p = paragraph();
     const after = p.slice(p.indexOf("the door's own refusals are these."));
     const starts = [...after.matchAll(/`([a-z-]+)`: /g)];
+    const words = starts.map((m) => m[1]);
+    expect(words, 'the paragraph lists a refusal more than once').toEqual([...new Set(words)]);
     return new Map(starts.map((m, i) => [m[1]!, after.slice(m.index! + m[0].length, starts[i + 1]?.index ?? after.length).trim()]));
   };
 
