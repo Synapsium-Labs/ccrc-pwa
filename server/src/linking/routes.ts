@@ -200,7 +200,7 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     // The pair through the live store (`teamPairVerdict`, final review I2): a named workspace must hold the key; with none named,
     // the one workspace that holds it is stored, and a key two connected workspaces hold is `team-ambiguous` (never stored with none).
     // Measured: a workspace the pair depends on that cannot be read is `unavailable`, no workspace connected `not-configured`.
-    const pair = teamPairVerdict(measuredProjectTeam(measuredTeamRoutes(store), { teamKey: s.team, workspaceId: s.workspace ?? null }));
+    const pair = teamPairVerdict(measuredProjectTeam(measuredTeamRoutes(store), { teamKey: s.team, workspaceId: s.workspace ?? null }), 'suggest');
     if (!pair.ok) return refuseSuggest(reply, pair.error, { detail: pair.detail });
     const team = routableTeams(store).find((t) => t.key === s.team && t.workspaceId === pair.workspaceId);
     if (team === undefined) return refuseSuggest(reply, 'team-unknown');
@@ -269,7 +269,7 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
         try { linear = await opts.readLinearStore(); } catch { linear = null; }
       }
       if (linear === null || linear.kind !== 'listed') return refuseConfirm(reply, 'unavailable', { detail: 'the Linear store could not be read' });
-      const pair = teamPairVerdict(measuredProjectTeam(measuredTeamRoutes(linear), { teamKey: chosen.key, workspaceId: chosen.workspaceId ?? null }));
+      const pair = teamPairVerdict(measuredProjectTeam(measuredTeamRoutes(linear), { teamKey: chosen.key, workspaceId: chosen.workspaceId ?? null }), 'confirm');
       if (!pair.ok) return refuseConfirm(reply, pair.error, { detail: pair.detail });
       const at = now();
       const call = callBodyOf(overlordLinkCallBody(c.project, chosen, candidates), at);

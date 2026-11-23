@@ -251,8 +251,8 @@ JSON
 ```
 
 `workspace` is optional: add `"workspace":"<Linear workspace id>"` only when the key exists in more than one connected
-workspace (the `team-ambiguous` refusal's detail names each of them by that id); without it, the one workspace that holds
-the key is recorded. Never put `byId` or `byUuid` in the
+workspace (the `team-ambiguous` refusal's detail names them by that id, up to eight, and counts the rest); without it,
+the one workspace that holds the key is recorded. Never put `byId` or `byUuid` in the
 body: the client adds the pane's own pair and refuses a body that names either. Each session keeps one suggestion per
 project: sending again replaces your earlier one. A project keeps at most eight suggestions, so yours can drop off when
 other sessions suggest, and setting the project's key clears them all. A suggestion is a candidate and never a

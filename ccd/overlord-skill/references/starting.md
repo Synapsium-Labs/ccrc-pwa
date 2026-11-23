@@ -67,8 +67,9 @@ it in your decision brief, never by another route. After the gate, the door's ow
 project has a key or the operator decided it, so drop the candidate. `team-unknown`: its detail says which of two causes.
 Either the pair is not a current candidate, so there is nothing to confirm and you drop it; or the workspace the pair
 depends on was read and does not hold it now, and the candidate stays on the card, so leave it for the operator, name
-it in your brief, and do not retry it in a loop. `team-ambiguous`: two workspaces hold the key and the candidate names
-neither, so leave it for the operator and name in your brief the workspaces its detail names.
+it in your brief, and do not retry it in a loop. `team-ambiguous`: more than one workspace holds the key and the
+candidate names none of them, so leave it for the operator and name in your brief the workspaces its detail lists (up to
+eight, and a count of the rest).
 `no-project`: the server has no such project, so drop it. `unavailable`: the Linear store, or a workspace the pair depends
 on, could not be read, so try once more on a later turn, then tell the operator. `not-configured`: no Linear workspace is
 connected, so do not retry: leave the candidate for the operator and tell them in your brief that no workspace is connected.

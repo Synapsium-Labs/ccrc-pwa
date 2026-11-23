@@ -445,7 +445,7 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
 
   it('says where the workspace id comes from: the team-ambiguous refusal\'s detail (w8-suggest-workspace-id, D-8808)', () => {
     expect(suggestSection()).toContain('add `"workspace":"<Linear workspace id>"` only when the key exists in more than one connected '
-      + 'workspace (the `team-ambiguous` refusal\'s detail names each of them by that id)');
+      + 'workspace (the `team-ambiguous` refusal\'s detail names them by that id, up to eight, and counts the rest)');
   });
 
   it('says one suggestion each: a resend replaces the session\'s earlier one', () => {

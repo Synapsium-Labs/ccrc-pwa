@@ -135,15 +135,24 @@ export function confirmedCandidate(candidates: readonly TeamCandidateWire[], tea
 /** How many holding workspaces a `team-ambiguous` detail names; the rest are counted. */
 const AMBIGUOUS_HOLDERS_NAMED_MAX = 8;
 
+/** Which linking door a pair's verdict answers: `suggest` (`POST /api/linking/suggest`), which takes a resend naming a workspace,
+ *  or `confirm` (`POST /api/linking/confirm`), whose `team-ambiguous` comes only from a candidate stored with no workspace, which
+ *  no resend can name (review 3482 F1). */
+export type TeamPairDoor = 'suggest' | 'confirm';
+
 /** D-8808, D-8809: the `team-ambiguous` detail: each holder as `<workspace id> (<URL key>)`, or the bare id when it has no URL key
- *  (or one that cleans to nothing). The id is what a caller sends back as `workspace`. */
-function ambiguousDetail(holders: ReadonlyArray<{ workspaceId: string; urlKey: string | null }>): string {
+ *  (or one that cleans to nothing), at most `AMBIGUOUS_HOLDERS_NAMED_MAX`, then a count of the rest. At the suggest door the id is
+ *  what a caller sends back as `workspace`, so the detail says so; at the confirm door it only lists them (review 3482 F1). */
+function ambiguousDetail(holders: ReadonlyArray<{ workspaceId: string; urlKey: string | null }>, door: TeamPairDoor): string {
   const named = holders.slice(0, AMBIGUOUS_HOLDERS_NAMED_MAX).map((h) => {
     const key = cleanName(h.urlKey);
     return key === null ? h.workspaceId : `${h.workspaceId} (${key})`;
   });
   const more = holders.length - named.length;
-  return `more than one connected Linear workspace holds the key; send one of these as workspace: ${named.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
+  const lead = door === 'suggest'
+    ? 'more than one connected Linear workspace holds the key; send one of these as workspace: '
+    : 'more than one connected Linear workspace holds the key, and the candidate names none of them: ';
+  return `${lead}${named.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
 }
 
 /** D-8808 (final review I2, I3), D-8809: what a (key, workspace) pair's MEASURED route through the live Linear store
@@ -152,13 +161,14 @@ function ambiguousDetail(holders: ReadonlyArray<{ workspaceId: string; urlKey: s
  *  two connected workspaces hold with no workspace named (storing it with none would resolve nowhere); `not-configured` when no
  *  Linear workspace is connected at all; every other refusal `team-unknown` (every workspace the pair depends on was read, and none
  *  holds it: for a named workspace, that workspace alone). A refusal carries its `detail`, decided here: fixed, except that
- *  `team-ambiguous` names each holding workspace by the id the doors accept as `workspace` (its URL key beside it when it has one,
- *  cleaned: Linear's data), at most `AMBIGUOUS_HOLDERS_NAMED_MAX` of them, then a count of the rest. */
-export function teamPairVerdict(route: LinearRoute | { kind: 'unmeasured' }):
+ *  `team-ambiguous` names each holding workspace by its workspace id (its URL key beside it when it has one, cleaned: Linear's
+ *  data), at most `AMBIGUOUS_HOLDERS_NAMED_MAX` of them, then a count of the rest; `door` decides only that detail's lead: the
+ *  suggest door's tells the caller to send one as `workspace`, the confirm door's does not (`ambiguousDetail`). */
+export function teamPairVerdict(route: LinearRoute | { kind: 'unmeasured' }, door: TeamPairDoor):
   { ok: true; workspaceId: string } | { ok: false; error: 'team-unknown' | 'team-ambiguous' | 'unavailable' | 'not-configured'; detail: string } {
   if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId };
   if (route.kind === 'unmeasured') return { ok: false, error: 'unavailable', detail: 'a Linear workspace the pair depends on could not be read' };
-  if (route.word === 'team-ambiguous') return { ok: false, error: 'team-ambiguous', detail: ambiguousDetail(route.holders) };
+  if (route.word === 'team-ambiguous') return { ok: false, error: 'team-ambiguous', detail: ambiguousDetail(route.holders, door) };
   if (route.word === 'not-configured') return { ok: false, error: 'not-configured', detail: 'no Linear workspace is connected' };
   return { ok: false, error: 'team-unknown', detail: 'the pair is not held in the connected Linear workspaces now' };
 }

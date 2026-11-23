@@ -90,6 +90,17 @@ describe('the routing rule (spec §4.2), row by row', () => {
     }
   });
 
+  it('D-8808: the holders are sorted by workspace id, never by URL key (review 3482 F4)', () => {
+    // Id order and URL key order disagree here: by id the slot keyed `ws-z` comes first, by key it would come last.
+    const first = slot(WS_A, 'ws-z', ['AAA']);
+    const second = slot(WS_B, 'ws-m', ['AAA']);
+    const third = slot(WS_L, 'ws-a', ['AAA']);
+    for (const slots of [[third, second, first], [second, first, third], [first, third, second]]) {
+      const r = routeLinear(slots, byTeam('AAA'));
+      expect(r.kind === 'refused' && r.word === 'team-ambiguous' ? r.holders.map((h) => h.workspaceId) : r).toEqual([WS_A, WS_B, WS_L]);
+    }
+  });
+
   it('a team no slot holds: team-unknown at once', () => {
     expect(routeLinear([A, B], byTeam('ZZZ'))).toEqual({ kind: 'refused', word: 'team-unknown' });
     expect(routeLinear([A, B], issue('ZZZ'))).toEqual({ kind: 'refused', word: 'team-unknown' });
