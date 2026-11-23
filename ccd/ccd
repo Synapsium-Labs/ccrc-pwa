@@ -43994,7 +43994,7 @@ _ws_collect_witness_only() {   # id surface actor reason — a witness whose lea
   local id="$1" surface="$2" actor="$3" reason="$4" lctx
   lctx=$(_lc_tx)
   _lc_intent collect "$id" "$lctx" verb ws-collect \
-    detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id${_WS_COLLECT_DEVGONE:+, and device ${_WS_WIT_DEV-} that its witness names is gone from this box}: dropping its witness")" \
+    detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id: dropping its witness${_WS_COLLECT_DEVGONE:+, whose device ${_WS_WIT_DEV-} is gone from this box}")" \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   _ws_collect_witness_cad "$id" "${_WS_WIT_DEV-}" "${_WS_WIT_INO-}" "${_WS_WIT_BTIME-}" "${_WS_WIT_RUN-}" "${_WS_WIT_AT-}" \
     || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "nothing was removed: the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY")"; return 1; }
