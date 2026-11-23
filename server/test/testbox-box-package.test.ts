@@ -1014,7 +1014,8 @@ describe('egress: the allowlist\'s names into the firewall\'s sets, in one trans
   it('its rows are the firewall\'s and the installer\'s', () => {
     const rows = /^ROWS=\(([^)]*)\)$/m.exec(read(EGRESS))?.[1]?.split(' ');
     expect(rows).toEqual(['github', 'registry', 'release', 'nodejs', 'chrome', 'osmirror']);
-    for (const r of rows ?? []) expect(read(path.join(PKG, 'install.sh')), r).toContain(`"${r}"$'\\t'`);
+    // The installer's egress names are a step of deploy/testbox/box-steps (`tbs_egress_names`), which it and the updater call.
+    for (const r of rows ?? []) expect(read(path.join(PKG, 'box-steps')), r).toContain(`"${r}"$'\\t'`);
   });
 });
 

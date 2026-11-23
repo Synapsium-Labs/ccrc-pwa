@@ -157,7 +157,8 @@ describe('(a) the installer renders the drop-ins from the box file, never a home
   it('mutation: an installer that reads the caller\'s home ccrc.env (BOX_ENV_FILE) renders the third value, and the row reds', async () => {
     const st = path.join(mkTmp('ccrc-tb-mut-a-'), 'staging');
     cpSync(W.staging, st, { recursive: true });
-    const f = path.join(st, 'deploy', 'testbox', 'install.sh');
+    // The installer's one reader of a box value, `k`, is in deploy/testbox/box-steps, which it sources.
+    const f = path.join(st, 'deploy', 'testbox', 'box-steps');
     const from = `k() { printf '%s' "\${TBK[$1]}"; }`;
     const text = readFileSync(f, 'utf8');
     expect(text.split(from).length, 'the mutation applies once').toBe(2);

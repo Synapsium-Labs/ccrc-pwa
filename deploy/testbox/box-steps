@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# The test box's install steps, as functions (D-8903; spec docs/superpowers/specs/2026-11-22-test-box-managed-node-design.md
+# §2.5 "Shared code", §9 PR 2; note docs/superpowers/programs/overlord/testbox-box-updater.md). Sourced, never run, by the
+# two callers that place a test box's system files from a release tree:
+#
+#   deploy/testbox/install.sh      the first install, --reapply and --unpair (D-7409), in its own phase order;
+#   deploy/testbox/bin/box-update  the update act's spine on the box (D-8903), in the order of spec §2.5.
+#
+# Each function is the installer's own code, moved here whole and unchanged, so a first install and an update check the
+# same values, place a release tree the same way and render the same files: one owner per rule (the refusals), one per
+# file (the units, the drop-ins, the polkit rule, the firewall file, the egress names, the push user's key, the
+# repository rows and their mirrors) and one per act on the system (a tree copied, given to root and placed; its
+# production dependencies; the firewall's load; the service's start). What a
+# caller does AROUND a step is its own: the order, what starts and stops, and what a refusal or a failure means. So the
+# caller declares five small functions before it calls a step, and this file defines none of them:
+#
+#   refuse <words>                       a rule is broken and nothing has been written: the caller ends;
+#   fail <words>                         a write or a system call failed: the caller ends;
+#   say <words>                          one line of progress;
+#   dir <mode> <owner> <group> <path>    a directory made, through `_sys`;
+#   put <mode> <src> <dst>               a root-owned file placed, through `_sys`.
+#
+# And the globals a step reads, which the caller sets: MODE (install, reapply or unpair), A_REPOS (the row files asked
+# for), A_KEY (the push key file a first install names), SYSROOT and ETC (from the box file's path), WORK (a temporary
+# directory), and TBK (ccd/testbox-knobs' table, loaded from the box file). Every system call goes through the one
+# seam, TB_SYS (empty on a box: the command runs as it is).
+# shellcheck disable=SC2034  # the names a step sets are read by the caller that sourced this file
+
+TBI_GIT_GROUP=ccrc-tb-git
+# A user name the box file names is an account this installer made, or none yet (`tbs_users_ok`): the installer marks
+# the accounts it makes with TBI_USER_MARK.
+TBI_USER_MARK='ccrc test box'
+_sys() { if [ -n "${TB_SYS:-}" ]; then "$TB_SYS" "$@"; else "$@"; fi; }
+_tbi_git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY GIT_CONFIG_NOSYSTEM=1 git "$@"; }
+k() { printf '%s' "${TBK[$1]}"; }
+
+ip_of() {   # <host:port> -> the host when it is an IP literal, and its family (4 or 6)
+  local h=${1%:*}
+  if [[ $h =~ ^\[([0-9A-Fa-f:.]+)\]$ ]]; then printf '%s 6\n' "${BASH_REMATCH[1]}"; return 0; fi
+  if [[ $h =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+    local o; for o in "${BASH_REMATCH[@]:1}"; do (( 10#$o <= 255 )) || return 1; done
+    printf '%s 4\n' "$h"; return 0
+  fi
+  return 1
+}
+host_of() { [[ $1 =~ ^[a-z][a-z0-9+.-]*://([^/:@]+@)?([^/:]+) ]] && printf '%s' "${BASH_REMATCH[2]}"; }
+row_field() {   # <json> <field> -> the one string member of that name (push-command's reading of mirrorPath)
+  local rest=${1#*\""$2"\"}
+  [[ $rest != "$1" && $rest != *\""$2"\"* ]] || return 1
+  [[ $rest =~ ^[[:space:]]*:[[:space:]]*\"([^\"\\]*)\" ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+have_user() { _sys getent passwd "$1" >/dev/null 2>&1; }
+have_group() { _sys getent group "$1" >/dev/null 2>&1; }
+user() {   # <name> <home> <shell> [--create-home]
+  have_user "$1" && return 0
+  _sys useradd --system --user-group --comment "$TBI_USER_MARK" --home-dir "$2" --shell "$3" ${4:+"$4"} "$1" || fail "cannot add the user $1"
+}
+render() {   # <template> <out>: the placeholders replaced
+  local t
+  t=$(cat -- "$1") || return 1
+  t=${t//@@TREE@@/$TREE}; t=${t//@@TOOLS@@/$TOOLS}; t=${t//@@ROOT@@/$ROOT}; t=${t//@@ETC@@/$ETC}
+  t=${t//@@SERVICE_USER@@/$SVC}; t=${t//@@LISTEN_PORT@@/$LISTEN_PORT}
+  if [ "$LISTEN_FAM" = 6 ]; then t=${t//@@LISTEN_MATCH@@/ip6 daddr $LISTEN_IP}; else t=${t//@@LISTEN_MATCH@@/ip daddr $LISTEN_IP}; fi
+  printf '%s\n' "$t" > "$2"
+}
+dropin() {   # <unit> <body>
+  dir 0755 root root "$UNITDIR/$1.d"
+  printf '# Written by deploy/testbox/install.sh from the box file (D-7451); a re-run of the installer rewrites it.\n%s\n' "$2" > "$WORK/dropin"
+  put 0644 "$WORK/dropin" "$UNITDIR/$1.d/50-ccrc-testbox.conf"
+}
+
+# Phase 1: a release tree's own per-file digests, through ccd/ccrc's platform wrapper (the check `_upd_fetch` makes
+# after its extraction): the first release is trusted on its transport checksum and this (D-7424).
+tbs_manifest() {   # <tree>
+  ( cd "$1" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"
+}
+
+# Phase 1: the three paths are absolute and pass the box policy. -> ROOT, REPOS, TOOLS, SVC, PUSH, PREFIX, RUNS, TREE.
+tbs_box_paths() {
+  for key in CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_TOOLS_DIR; do
+    case $(k "$key") in /*) ;; *) refuse "$key=$(k "$key") is not an absolute path (the installer has no reader's home)" ;; esac
+  done
+  # The paths made root's and the users named come from a file the card can change with no step-up: a path below a system
+  # directory, a token path that is not the service user's, and the same user twice are refused before anything is written
+  # (D-8166; ccd/testbox-knobs's `_tb_box_policy`).
+  _tb_box_policy "$SYSROOT" || refuse "$TB_POLICY_WHY"
+  ROOT=$(k CCRC_TESTBOX_ROOT) REPOS=$(k CCRC_TESTBOX_REPOS) TOOLS=$(k CCRC_TESTBOX_TOOLS_DIR)
+  SVC=$(k CCRC_TESTBOX_SERVICE_USER) PUSH=$(k CCRC_TESTBOX_PUSH_USER) PREFIX=$(k CCRC_TESTBOX_RUN_USER_PREFIX) RUNS=$(k CCRC_TESTBOX_RUNS)
+  TREE=$TOOLS/release/installed
+}
+
+# The service token's path: the service reads it from its own home when the setting is `~/`-relative. -> TOKEN (empty
+# when the setting is). After `tbs_box_paths`, which names the service user.
+tbs_token_path() {
+  TOKEN=$(k CCRC_TESTBOX_SERVICE_TOKEN_FILE)
+  # shellcheck disable=SC2088  # the setting's literal `~/` prefix, not a shell tilde
+  case $TOKEN in '~/'*) TOKEN=$SYSROOT/var/lib/$SVC/${TOKEN#'~/'} ;; esac
+}
+
+# Phase 1: the listen address and the registry proxy are IP literals. -> LISTEN_IP, LISTEN_FAM, LISTEN_PORT, PROXY_IP, PROXY_FAM.
+tbs_addresses() {
+  [ -n "$(k CCRC_TESTBOX_LISTEN)" ] || refuse "CCRC_TESTBOX_LISTEN is not set: the service listens on the tailnet address only"
+  read -r LISTEN_IP LISTEN_FAM < <(ip_of "$(k CCRC_TESTBOX_LISTEN)") || refuse "CCRC_TESTBOX_LISTEN=$(k CCRC_TESTBOX_LISTEN) does not name an IP address"
+  LISTEN_PORT=${TBK[CCRC_TESTBOX_LISTEN]##*:}
+  read -r PROXY_IP PROXY_FAM < <(ip_of "$(k CCRC_TESTBOX_REGISTRY_PROXY)") || refuse "CCRC_TESTBOX_REGISTRY_PROXY=$(k CCRC_TESTBOX_REGISTRY_PROXY) does not name an IP address"
+}
+
+# Phase 1: every egress name is a row of spec §2.0's table. -> EGRESS, the names file's lines, each once.
+TBS_RELEASE_ASSET_HOSTS=(release-assets.githubusercontent.com objects.githubusercontent.com)
+tbs_egress_names() {
+  EGRESS=()   # `<row><TAB><host>` lines, the names file's
+  for n in $(k CCRC_TESTBOX_EGRESS_ALLOW); do
+    case $n in
+      github.com) EGRESS+=("github"$'\t'"$n") ;;
+      nodejs.org) EGRESS+=("nodejs"$'\t'"$n") ;;
+      storage.googleapis.com) EGRESS+=("chrome"$'\t'"$n") ;;
+      *) refuse "CCRC_TESTBOX_EGRESS_ALLOW names $n, which is no row of spec §2.0's table" ;;
+    esac
+  done
+  h=$(host_of "$(k CCRC_TESTBOX_REGISTRY_UPSTREAM)") || refuse "CCRC_TESTBOX_REGISTRY_UPSTREAM names no host"
+  EGRESS+=("registry"$'\t'"$h")
+  _tb_release_base || refuse "the release base: $TB_BOX_WHY"
+  # KNOB is the value `_tb_release_base` has just read from the box file in file mode (D-7457).
+  h=$(host_of "$KNOB") || refuse "CCRC_RELEASE_BASE_URL names no host"
+  EGRESS+=("release"$'\t'"$h")
+  # A release download from github.com is a redirect: the release's files are served from an asset host. The row names
+  # that host too, or the tool sync's fetch of a later release is dropped by this firewall (measured on a real box:
+  # every sync that changed the release failed at its first download, so a box never left the release it was installed
+  # with). Two names, because the host changed once already and the older one still serves.
+  if [ "$h" = github.com ]; then
+    for a in "${TBS_RELEASE_ASSET_HOSTS[@]}"; do EGRESS+=("release"$'\t'"$a"); done
+  fi
+  if [ -n "$(k CCRC_TESTBOX_OS_MIRROR)" ]; then
+    h=$(host_of "$(k CCRC_TESTBOX_OS_MIRROR)") || refuse "CCRC_TESTBOX_OS_MIRROR names no host"
+    EGRESS+=("osmirror"$'\t'"$h")
+  else
+    # The distribution's own mirror: the hosts the box's package sources name.
+    while IFS= read -r l; do
+      for w in $l; do h=$(host_of "$w") && EGRESS+=("osmirror"$'\t'"$h"); done
+    done < <(cat -- "$SYSROOT/etc/apt/sources.list" "$SYSROOT"/etc/apt/sources.list.d/*.list "$SYSROOT"/etc/apt/sources.list.d/*.sources 2>/dev/null | grep -E '^[[:space:]]*(deb|URIs:)[[:space:]]' | grep -Eo '[a-z]+://[^[:space:]]+')
+  fi
+
+  # Each name once: package sources name one host on several lines (a release, its updates, its backports), and the
+  # egress resolver reads every line.
+  declare -A seen_egress=()
+  EGRESS_ONCE=()
+  for e in "${EGRESS[@]}"; do [ -n "${seen_egress[$e]:-}" ] || { seen_egress[$e]=1; EGRESS_ONCE+=("$e"); }; done
+  EGRESS=("${EGRESS_ONCE[@]}")
+}
+
+# Phase 1: the repository rows asked for (MODE reapply with none asked: the installed ones). -> ROW_NAMES, ROW_MIRRORS, ROW_URLS, ROW_FILES.
+tbs_rows() {
+  ROW_NAMES=() ROW_MIRRORS=() ROW_URLS=() ROW_FILES=()
+  if [ "$MODE" = reapply ] && [ "${#A_REPOS[@]}" -eq 0 ]; then
+    # No --repos: the rows already installed.
+    for f in "$REPOS"/*.json; do [ -e "$f" ] && A_REPOS+=("$f"); done
+    [ "${#A_REPOS[@]}" -gt 0 ] || refuse "no repository row is installed under $REPOS"
+  fi
+  for f in "${A_REPOS[@]}"; do
+    [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || refuse "--repos $f is not a readable regular file"
+    n=${f##*/}; n=${n%.json}
+    [[ ${f##*/} == "$n.json" && $n =~ ^[a-z0-9][a-z0-9._-]*$ ]] || refuse "--repos $f is not named <name>.json"
+    t=$(cat -- "$f") || refuse "cannot read $f"
+    [[ $t == *\"name\"*:*\""$n"\"* ]] || refuse "repository row $f does not name $n"
+    m=$(row_field "$t" mirrorPath) && [[ $m == /* && "/$m/" != */../* && "/$m/" != */./* ]] || refuse "repository row $n has no one absolute mirrorPath"
+    _tb_path_ok "$(dirname -- "$m")" "$SYSROOT" || refuse "repository row $n has a mirrorPath that is not below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox (its parent directory is made root's)"
+    u=$(row_field "$t" fetchUrl) && [[ $u =~ ^(https|ssh):// ]] || refuse "repository row $n has no one https or ssh fetchUrl"
+    case " ${ROW_NAMES[*]} " in *" $n "*) refuse "repository row $n is named twice" ;; esac
+    ROW_NAMES+=("$n"); ROW_MIRRORS+=("$m"); ROW_URLS+=("$u"); ROW_FILES+=("$f")
+  done
+}
+
+# Phase 1: the push user's key, the installed one (MODE reapply) or the one in the file A_KEY names. -> PUSH_KEY.
+tbs_push_key() {
+  if [ "$MODE" = reapply ]; then
+    # The key installed: the line after the forced command (the one `authorized_keys` line phase 5 writes).
+    PUSH_LINE=$(head -n 1 -- "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys" 2>/dev/null) || PUSH_LINE=''
+    [[ $PUSH_LINE =~ ^restrict,command=\"[^\"]*\"[[:space:]]+(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa)[[:space:]]+([A-Za-z0-9+/]+=*)([[:space:]].*)?$ ]] \
+      || refuse "the push user holds no installed key (the box is unpaired)"
+  else
+    PUSH_LINE=$(head -n 1 -- "$A_KEY" 2>/dev/null) || PUSH_LINE=''
+    [[ $PUSH_LINE =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa)[[:space:]]+([A-Za-z0-9+/]+=*)([[:space:]].*)?$ ]] \
+      || refuse "--push-key $A_KEY holds no public key line"
+  fi
+  PUSH_KEY="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+}
+
+# Phase 1: a user the box file names is one this installer made, or none yet.
+tbs_users_ok() {
+  # A user name the box file names is an account this installer made, or none yet: a name that is already an account of
+  # something else (root, a person, another service) is refused, because the name is written into the polkit rule, the box
+  # file's group, the token's owner and the run users' units. The installer marks the accounts it makes with TBI_USER_MARK.
+  for u in "$SVC" "$PUSH" "${PREFIX}install" $(for ((i = 1; i <= RUNS; i++)); do printf '%s%s ' "$PREFIX" "$i"; done); do
+    entry=$(_sys getent passwd "$u" 2>/dev/null) || continue
+    IFS=: read -r _ _ _ _ gecos _ <<<"$entry"
+    [ "$gecos" = "$TBI_USER_MARK" ] || refuse "the user $u already exists and this installer did not make it; name an account of the test box's own in the box file"
+  done
+}
+
+# Phase 1: the run root's filesystem is XFS with reflink=1.
+tbs_run_root_fs() {
+  # The run root's filesystem: XFS with reflink=1 (spec §2.2 "XFS, settled").
+  p=$ROOT; while [ ! -e "$p" ] && [ "$p" != / ]; do p=$(dirname -- "$p"); done
+  read -r fstype target < <(_sys findmnt -n -o FSTYPE,TARGET -T "$p" 2>/dev/null) || fstype=''
+  [ "$fstype" = xfs ] || refuse "CCRC_TESTBOX_ROOT=$ROOT is on ${fstype:-an unknown filesystem}, not XFS"
+  _sys xfs_info "$target" 2>/dev/null | grep -Eq '(^|[[:space:],])reflink=1([[:space:],]|$)' || refuse "CCRC_TESTBOX_ROOT=$ROOT is on XFS without reflink=1"
+}
+
+# Phase 1: the distribution release this box runs. -> os_id, os_ver.
+tbs_os_release() {
+  # The distribution release (D-7423).
+  osr="$SYSROOT/etc/os-release"; [ -f "$osr" ] || osr="$SYSROOT/usr/lib/os-release"
+  os_id='' os_ver=''
+  while IFS= read -r l; do
+    case $l in ID=*) os_id=${l#ID=}; os_id=${os_id//\"/} ;; VERSION_ID=*) os_ver=${l#VERSION_ID=}; os_ver=${os_ver//\"/} ;; esac
+  done < "$osr" 2>/dev/null
+}
+
+# Phase 2: a release tree copied to a staging path beside its place, with no group or other write.
+tbs_tree_copy() {   # <source tree> <staging path>
+  rm -rf -- "$2"
+  cp -RP -- "$1" "$2" || fail "cannot copy the staging tree"
+  chmod -R go-w "$2" || fail "cannot remove group and other write under $2"
+}
+
+# Phase 2: the copy given to root and placed in one rename.
+tbs_tree_place() {   # <staging path> <place>
+  _sys chown -R -h root:root "$1" || fail "cannot give $1 to root"
+  mv -- "$1" "$2" || fail "cannot place $2"
+}
+
+# Phase 2: every path of a placed tree is root's, and none is writable by group or other.
+tbs_tree_owned() {   # <place>
+  owner=$(_tb_box_owner_uid)
+  bad=$(find "$1" \( ! -user "$owner" -o -perm -g+w -o -perm -o+w \) ! -type l -print -quit 2>/dev/null)
+  [ -z "$bad" ] || fail "$bad is writable by someone other than root"
+}
+
+# Phase 4: a tree's server/ and agent/ production dependencies, under the node and npm the PATH prefix names, from
+# the registry named. --ignore-scripts leaves node-pty unbuilt; the test service never imports it.
+tbs_tree_deps() {   # <tree> <PATH prefix> <registry>
+  for pkg in server agent; do
+    [ -f "$1/$pkg/package.json" ] || continue
+    ( cd -- "$1/$pkg" && PATH="$2:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+        --registry="$3" ) >/dev/null || fail "npm ci --omit=dev --ignore-scripts failed in $1/$pkg"
+    chmod -R go-w "$1/$pkg" || fail "cannot remove group and other write under $1/$pkg"
+    _sys chown -R -h root:root "$1/$pkg" || fail "cannot give $1/$pkg to root"
+  done
+}
+
+# Phase 5: the users and groups, and the box file's group and mode.
+tbs_users() {
+  have_group "$TBI_GIT_GROUP" || _sys groupadd --system "$TBI_GIT_GROUP" || fail "cannot add the group $TBI_GIT_GROUP"
+  user "$SVC" "$SYSROOT/var/lib/$SVC" /usr/sbin/nologin --create-home
+  user "$PUSH" "$SYSROOT/var/lib/$PUSH" /usr/bin/git-shell
+  for ((i = 1; i <= RUNS; i++)); do user "$PREFIX$i" /nonexistent /usr/sbin/nologin; done
+  user "${PREFIX}install" /nonexistent /usr/sbin/nologin
+  _sys usermod -a -G "$TBI_GIT_GROUP" "$SVC" || fail "cannot add $SVC to $TBI_GIT_GROUP"
+  _sys usermod -a -G "$TBI_GIT_GROUP" "$PUSH" || fail "cannot add $PUSH to $TBI_GIT_GROUP"
+  # The box file: root's, the service user's group, 0640, so the run users cannot read it (D-7451). Never a value.
+  _sys chown "root:$SVC" "$BOXFILE" || fail "cannot give $BOXFILE to the service user's group"
+  _sys chmod 0640 "$BOXFILE" || fail "cannot set $BOXFILE's mode"
+}
+
+# Phase 5: the run root's directories.
+tbs_run_root_dirs() {
+  # CCRC_TESTBOX_ROOT (spec §2.2): root's where a run or an install must not write, the service's where it does.
+  dir 0755 root root "$ROOT"
+  for d in runs install pristine; do dir 0755 root root "$ROOT/$d"; done
+  for ((i = 1; i <= RUNS; i++)); do dir 0755 root root "$ROOT/runs/$i"; done
+  dir 0755 "$SVC" "$SVC" "$ROOT/specs"
+  for d in results logs out registry handover; do dir 0750 "$SVC" "$SVC" "$ROOT/$d"; done
+  for ((i = 1; i <= RUNS; i++)); do dir 0750 "$SVC" "$SVC" "$ROOT/out/$i"; done
+  dir 0750 "$SVC" "$SVC" "$ROOT/out/install"
+}
+
+# Phase 5: the push user's one authorized_keys line, and the forced command's link in git-shell-commands.
+tbs_push_key_install() {
+  # The push user's one key (spec §2.1): its forced command and the repository table it checks. sshd runs a forced
+  # command through the login shell, `git-shell -c "<command>"`, and git-shell runs no command whose first word holds a
+  # slash: it runs a bare name from $HOME/git-shell-commands only. So the forced command is named there, as push-command,
+  # a link to the installed release's script through installed, so a tool sync's switch moves it with the hook and the
+  # units; a copy would stay the older release's until the next --reapply (D-8956).
+  dir 0755 root root "$SYSROOT/var/lib/$PUSH"
+  dir 0755 root root "$SYSROOT/var/lib/$PUSH/.ssh"
+  dir 0755 root root "$SYSROOT/var/lib/$PUSH/git-shell-commands"
+  pc=$SYSROOT/var/lib/$PUSH/git-shell-commands/push-command
+  if [ "$(readlink -- "$pc" 2>/dev/null)" != "$TREE/deploy/testbox/git/push-command" ]; then
+    # The swap replaces a link or a file. mv would move the new link into a directory, and follows a link to one, so a
+    # directory is refused by name and a link to one removed first (BSD mv has no -T, and the fixture box runs there too).
+    for p in "$pc" "$pc.new"; do
+      if [ -d "$p" ] && [ ! -L "$p" ]; then fail "$p is a directory, not the forced command's link; remove it and run the installer again"; fi
+    done
+    if [ -L "$pc" ] && [ -d "$pc" ]; then rm -f -- "$pc" || fail "cannot remove $pc"; fi
+    rm -f -- "$pc.new" || fail "cannot remove $pc.new"
+    ln -s "$TREE/deploy/testbox/git/push-command" "$pc.new" || fail "cannot link $pc"
+    mv -f -- "$pc.new" "$pc" || fail "cannot link $pc"
+  fi
+  printf 'restrict,command="push-command %s" %s\n' "$REPOS" "$PUSH_KEY" > "$WORK/authorized_keys"   # D-8956
+  put 0644 "$WORK/authorized_keys" "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys"
+}
+
+# Phase 5: the repository rows and their mirrors.
+tbs_rows_install() {
+  # The repository rows and their mirrors (spec §2.1 "The mirror"): a bare repository the service fetches into on its
+  # timer (nothing is fetched here), group ccrc-tb-git and core.sharedRepository=0664 so the push user's pushes and the
+  # service's fetch and gc share it; its config and its hooks directory (the installed release's deploy/testbox/git,
+  # TB3's hook) are root's.
+  dir 0755 root root "$REPOS"
+  for i in "${!ROW_NAMES[@]}"; do
+    [ "${ROW_FILES[$i]}" -ef "$REPOS/${ROW_NAMES[$i]}.json" ] || put 0644 "${ROW_FILES[$i]}" "$REPOS/${ROW_NAMES[$i]}.json"
+    m=${ROW_MIRRORS[$i]}
+    dir 0755 root root "$(dirname -- "$m")"
+    if [ ! -d "$m" ]; then _tbi_git init -q --bare --shared=0664 "$m" >/dev/null || fail "cannot make the mirror $m"; fi
+    for kv in "core.sharedRepository=0664" "core.hooksPath=$TREE/deploy/testbox/git" "remote.origin.url=${ROW_URLS[$i]}" \
+      "remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*"; do
+      # By the file, never `-C "$m"`: on a second run the mirror is the service user's, and git refuses to open a repository
+      # another user owns, so every re-run that reached this phase failed here.
+      _tbi_git config --file "$m/config" "${kv%%=*}" "${kv#*=}" || fail "cannot configure the mirror $m (${kv%%=*})"
+    done
+    _sys chown -R "$SVC:$TBI_GIT_GROUP" "$m" || fail "cannot give the mirror $m to $SVC"
+    _sys chown root:root "$m/config" || fail "cannot give $m/config to root"
+    _sys chmod 0644 "$m/config" || fail "cannot set $m/config's mode"
+    # Group-writable for the lock files git makes beside config, and sticky, so no group member can replace a file it
+    # does not own there: root's config stays root's (D-7568).
+    _sys chmod 3775 "$m" || fail "cannot set $m's mode"
+  done
+}
+
+# Phase 5: the units and their drop-ins, the firewall's load step and the network units' drop-ins. -> UNITDIR, FIREWALL.
+tbs_units() {
+  # The units, with the installed tree's and the tools directory's absolute paths, and their drop-ins from the box file.
+  UNITDIR=$SYSROOT/etc/systemd/system
+  dir 0755 root root "$UNITDIR"
+  for f in "$TREE"/deploy/testbox/systemd/*; do
+    render "$f" "$WORK/unit" || fail "cannot render $f"
+    put 0644 "$WORK/unit" "$UNITDIR/${f##*/}"
+  done
+  if [ "$PROXY_FAM" = 6 ]; then proxy_net="$PROXY_IP/128"; else proxy_net="$PROXY_IP/32"; fi
+  max=$(k CCRC_TESTBOX_UNIT_MAX)
+  dropin ccrc-testbox.service $'[Service]\n'"User=$SVC"$'\n'"Group=$SVC"
+  dropin ccrc-testbox-prepare@.service $'[Service]\n'"User=$PREFIX%i"$'\n'"IPAddressAllow=$proxy_net"$'\n'"RuntimeMaxSec=$max"
+  dropin ccrc-testbox-run@.service $'[Service]\n'"User=$PREFIX%i"$'\n'"RuntimeMaxSec=$max"
+  dropin ccrc-testbox-clean@.service $'[Service]\n'"RuntimeMaxSec=$max"
+  dropin ccrc-testbox-install.service $'[Service]\n'"User=${PREFIX}install"$'\n'"IPAddressAllow=$proxy_net"$'\n'"RuntimeMaxSec=$max"
+  caps=$'[Slice]\n'"MemoryMax=$(k CCRC_TESTBOX_RUN_MEMORY_MAX)"$'\n'"MemorySwapMax=$(k CCRC_TESTBOX_RUN_SWAP_MAX)"$'\n'"CPUQuota=$(k CCRC_TESTBOX_RUN_CPU_QUOTA)"
+  dropin ccrc-testbox-run-.slice "$caps"
+  dropin ccrc-testbox-install.slice "$caps"
+  # The firewall's one load step (deploy/testbox/bin/firewall): the file, then the running units' cgroups, then the
+  # address sets. On the root filesystem, so nftables.service can run it early in boot. nftables.service runs it after
+  # the distribution's own start and reload, each of which may begin with `flush ruleset`, and phase 6 runs it now.
+  FIREWALL=$SYSROOT/usr/local/sbin/ccrc-testbox-firewall
+  dir 0755 root root "$SYSROOT/usr/local/sbin"
+  put 0755 "$TREE/deploy/testbox/bin/firewall" "$FIREWALL"
+  dropin nftables.service $'[Service]\n'"ExecStartPost=$FIREWALL $ETC/ccrc-testbox.nft"$'\n'"ExecReload=$FIREWALL $ETC/ccrc-testbox.nft"
+  # The box's own network units, each matched by a cgroup set it adds itself to when it starts, after that load (D-7568).
+  INFRA=("tailscaled tailnet_cg" "systemd-resolved dns_cg" "systemd-timesyncd ntp_cg")
+  for u in "${INFRA[@]}"; do
+    dropin "${u% *}.service" $'[Unit]\nAfter=nftables.service\n[Service]\n'"NFTSet=cgroup:inet:ccrc_testbox:${u#* }"
+  done
+}
+
+# Phase 5: the polkit rule, the firewall file and the egress names.
+tbs_rule_firewall() {
+  RULEDIR=$SYSROOT/etc/polkit-1/rules.d
+  dir 0755 root root "$RULEDIR"
+  render "$TREE/deploy/testbox/polkit/50-ccrc-testbox.rules" "$WORK/rule" || fail "cannot render the polkit rule"
+  put 0644 "$WORK/rule" "$RULEDIR/50-ccrc-testbox.rules"
+  render "$TREE/deploy/testbox/nft/ccrc-testbox.nft" "$WORK/nft" || fail "cannot render the firewall"
+  put 0644 "$WORK/nft" "$ETC/ccrc-testbox.nft"
+  printf '%s\n' "${EGRESS[@]}" > "$WORK/egress"
+  put 0644 "$WORK/egress" "$ETC/egress"
+}
+
+# Phase 6: nftables.service enabled and started, then the firewall's load step.
+tbs_firewall_load() {
+  # nftables.service first: on a box where it is not running yet (Debian and Ubuntu ship it disabled), its start runs
+  # the distribution's file, which may flush the whole ruleset, and then the load step. Only after that does the load
+  # step run here (a second time on such a box, the only time on a box where nftables.service ran already), so the
+  # network units that run already are in their sets when the service starts, and no later start flushes them (D-7568).
+  _sys systemctl enable --now nftables.service || fail "cannot start nftables.service"
+  "$FIREWALL" "$ETC/ccrc-testbox.nft" || fail "the firewall's load failed: $ETC/ccrc-testbox.nft"
+}
+
+# Phase 6: the service and the egress timer enabled and started, and the egress sets filled. `first` on a box that
+# was never installed; `again` restarts a service that may be running.
+tbs_service_start() {   # <first|again>
+  if [ "$1" = first ]; then
+    _sys systemctl enable --now ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot start the test service"
+  else
+    # Enabled again here: a box that was unpaired (`--unpair` disables both) and paired anew keeps its marker, and must start at boot.
+    _sys systemctl enable ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot enable the test service"
+    _sys systemctl restart ccrc-testbox.service || fail "cannot restart the test service"
+    _sys systemctl start ccrc-testbox-egress.timer || fail "cannot start the egress timer"
+  fi
+  _sys systemctl start ccrc-testbox-egress.service || say "the egress sets were not all filled; ccrc-testbox-egress.timer tries again"
+}

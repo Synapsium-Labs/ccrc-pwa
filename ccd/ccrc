@@ -2448,6 +2448,7 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 # forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
+UPD_ACT_ID=""           # the act's id, set only by the test box's updater after it sources this file (D-8905); never taken from the environment
 UPD_SWEEP_WORD=""       # what `_upd_sweep` did (or `died: abandoned`, cmd_watchdog's close, D-5329), one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
@@ -23402,6 +23403,9 @@ _upd_phase() {
   # `ccrc doctor`'s update-sweep check reads it that way, and so does the server's
   # one reader of it (`sweepFrom`, D-8386), which puts it on `GET /api/updates`.
   [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
+  # The act's id (D-8905): a second additive key, written only by a caller that set UPD_ACT_ID (the test box's updater,
+  # which is handed one by the fleet host's driver). Absent in every other report; a reader matches two reports by it.
+  [ -z "${UPD_ACT_ID:-}" ] || sw+=",\"act\":$(_upd_json_str "$(_upd_redact "$UPD_ACT_ID")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"
   if [ -n "$now" ] \
@@ -24748,6 +24752,13 @@ _upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
   case "$role" in
     server|both) unit=ccrc.service ;;
     fleet)       unit=ccrc-agent.service ;;
+    # The test box's two arms (D-8903, D-8917; spec 2026-11-22-test-box-managed-node §2.7): `testbox`, and `testbox-legacy`
+    # for a release from before the box was a managed node. Its unit is a SYSTEM unit and its signals are files under
+    # the box's own root, which this file never names: the box's updater (deploy/testbox/bin/box-update) declares
+    # `_tb_gate_probe` before it calls `_upd_gate`. With no such function this is the refusal every other role meets.
+    testbox|testbox-legacy)
+      if declare -F _tb_gate_probe >/dev/null; then _tb_gate_probe "$role" "$want"; return $?; fi   # its status by name: a bare `return` in a signal handler is the status from before the handler in bash 5.2
+      UPD_GATE_WHY="no health gate is defined for role '$role'"; return 1 ;;
     *) UPD_GATE_WHY="no health gate is defined for role '$role'"; return 1 ;;
   esac
   if [ "$CCD_OS" = darwin ]; then   # the launchd arm: two pid samples, never systemctl
