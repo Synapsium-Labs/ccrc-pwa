@@ -4,8 +4,10 @@
 // half-typed server-side draft (409 draft-present), a small sheet shows that
 // draft and offers: Append anyway (draft precedes your text — both send
 // together), Replace draft (replaceDraft: true), or Cancel (the failed bubble
-// keeps its Retry/Discard).
-import { useEffect, useRef, useState } from 'react';
+// keeps its Retry/Discard). A long text paste enters the draft as a chip token (desktop-polish wave 169): the decision
+// is pasteChips.ts (L1), the row that acts on chips is PasteChipBar, and a send expands every token to its full text
+// before today's send rules run, unchanged.
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { AttachButton, AttachTray, Button, Icon, KeyHint, Sheet, Well } from '@ccrc/ui';
 import { PALETTE_KEYS } from '../command/CommandLayer';
@@ -15,6 +17,11 @@ import { api, sendErrorText } from '../lib/api';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
+import {
+  addChip, emptyChips, expandChip, expandDraft, liveChips, normalizePaste, reconcileEdit, removeChip, shouldChip,
+  tokenToRemove, type DraftEdit, type PasteChips,
+} from './pasteChips';
+import { PasteChipBar } from './PasteChipBar';
 import './chat.css';
 
 export interface ComposerProps {
@@ -84,6 +91,14 @@ export function Composer({
   askUp = false,
 }: ComposerProps): ReactNode {
   const [value, setValue] = useState('');
+  // Paste chips (wave 169). The table of pasted texts lives beside the draft, so it survives exactly where the draft
+  // does. A ref, not state: it changes only together with `value`, and the paste handler must register a chip before
+  // the browser's own `input` event for the token reaches `onChange`, inside the same call. `valueNow` is the draft as
+  // the last change left it, for the same reason (an `onChange` fired from inside a handler reads it before React
+  // re-renders). `caretTo` puts the caret back after a change the composer made itself.
+  const chips = useRef<PasteChips>(emptyChips());
+  const valueNow = useRef('');
+  const caretTo = useRef<number | null>(null);
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
   const [commands, setCommands] = useState<SlashCommand[] | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -93,12 +108,64 @@ export function Composer({
   const staged = useStagedImages(id ?? '');
   const [dropping, setDropping] = useState(false);
 
+  const put = (next: string, caret: number | null = null): void => {
+    valueNow.current = next;
+    caretTo.current = caret;
+    setValue(next);
+  };
+  const putEdit = (edit: DraftEdit): void => put(edit.value, edit.caret);
+
+  /** Every change to the field goes through here: a token the change broke is expanded back (`reconcileEdit`).
+   *  `placeCaret` is for a change the composer made itself; the browser already placed the caret after its own. */
+  const commit = (next: string, caret: number, placeCaret = false): void => {
+    const fixed = reconcileEdit(valueNow.current, next, caret, chips.current);
+    if (fixed !== null) putEdit(fixed);
+    else put(next, placeCaret ? caret : null);
+  };
+
+  /** Replace [start, end) of the field with `text` as the browser's own edit, so its undo history holds it, and
+   *  through `commit` where the browser cannot (no `execCommand`, as in jsdom). */
+  const replaceRange = (start: number, end: number, text: string): void => {
+    const el = box.current;
+    if (!el) return;
+    const before = el.value;
+    el.focus();
+    el.setSelectionRange(start, end);
+    let done = false;
+    try {
+      done = typeof document.execCommand === 'function'
+        && document.execCommand(text === '' ? 'delete' : 'insertText', false, text)
+        && el.value !== before;
+    } catch {
+      done = false;
+    }
+    if (!done) commit(before.slice(0, start) + text + before.slice(end), start + text.length, true);
+  };
+
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
-    if (id === undefined || disabled) return;
-    const files = clipboardFiles(e.clipboardData);
-    if (files.length === 0) return; // an ordinary text paste — leave it alone
+    if (disabled) return;
+    const files = id === undefined ? [] : clipboardFiles(e.clipboardData);
+    if (files.length > 0) {
+      e.preventDefault();
+      staged.add(files);
+      return;
+    }
+    const text = normalizePaste(e.clipboardData?.getData('text/plain') ?? '');
+    if (!shouldChip(text)) return; // an ordinary text paste — leave it alone
     e.preventDefault();
-    staged.add(files);
+    const el = e.currentTarget;
+    const added = addChip(chips.current, text);
+    chips.current = added.chips;
+    replaceRange(el.selectionStart, el.selectionEnd, added.token);
+  };
+
+  const expandPaste = (n: number): void => {
+    putEdit(expandChip(valueNow.current, n, chips.current));
+    box.current?.focus();
+  };
+  const removePaste = (n: number): void => {
+    putEdit(removeChip(valueNow.current, n, chips.current));
+    box.current?.focus();
   };
 
   // Lazily fetch the session's slash commands (built-ins + skills) the first
@@ -125,7 +192,7 @@ export function Composer({
   const matches = query !== null && commands ? filterCommands(commands, query) : [];
 
   const pickCommand = (name: string): void => {
-    setValue(`/${name} `);
+    put(`/${name} `);
     box.current?.focus();
   };
   // Draft conflicts already surfaced (or cancelled) — don't reopen the sheet
@@ -153,6 +220,13 @@ export function Composer({
     el.style.height = `${el.scrollHeight}px`;
   };
   useEffect(grow, [value]);
+  // The caret after a change the composer made itself (a chip expanded, removed or recovered), once React has written
+  // the value; the browser would otherwise leave it at the end.
+  useLayoutEffect(() => {
+    const at = caretTo.current;
+    caretTo.current = null;
+    if (at !== null && box.current && document.activeElement === box.current) box.current.setSelectionRange(at, at);
+  }, [value]);
 
   // Carries previewUrl, not just the path: the optimistic bubble renders the
   // same thumbnails the chips did, so chip -> pending -> confirmed never
@@ -160,15 +234,19 @@ export function Composer({
   const attachments = staged.images
     .filter((i) => i.state === 'staged')
     .map((i) => ({ path: i.path!, previewUrl: i.previewUrl }));
+  // The draft as it will be sent: every chip token replaced by its full text, byte for byte. Every send rule below
+  // reads this, never the tokens.
+  const expanded = expandDraft(value, chips.current);
+  const pasted = liveChips(value, chips.current);
   const canSend = !disabled && !staged.hasFailed && !staged.uploading
-    && (value.trim() !== '' || attachments.length > 0);
+    && (expanded.trim() !== '' || attachments.length > 0);
 
   // Stop in the send slot (W2 Task S7b; D-5471, inside D-5099's "Later"). While a turn runs and nothing is drafted,
   // the slot IS Stop. Anything drafted (a word or a staged image) returns the slot to Send, since sending during a
   // turn is unchanged, and keeps a quieter Stop beside it, so Stop is never more than one tap away. Both skins render
   // this composer, so both get it; the Escape key's interrupt stays `useEscapeInterrupt`'s.
   const stopping = busy && onInterrupt !== undefined;
-  const drafted = value.trim() !== '' || staged.images.length > 0;
+  const drafted = expanded.trim() !== '' || staged.images.length > 0;
   const sentAt = useRef(-Infinity);
   const stop = (): void => {
     if (Date.now() - sentAt.current < STOP_SETTLE_MS) return;
@@ -182,13 +260,14 @@ export function Composer({
     // defence for Enter, which calls `send()` directly. The sentence above the field (R93) is the surface's own and shows
     // while the card is up, not after a try.
     if (askUp) return;
-    const text = value.trim();
+    const text = expanded.trim();
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
     if (attachments.length > 0) onSend(text, { attachments });
     else onSend(text);
     sentAt.current = Date.now();
-    setValue('');
+    put('');
+    chips.current = emptyChips(); // a new draft numbers its chips from #1 again
     staged.release();
   };
 
@@ -246,6 +325,16 @@ export function Composer({
   }, [id]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      // Against a chip token, the key takes the whole token and its text, never one character of it.
+      const el = e.currentTarget;
+      const span = tokenToRemove(el.value, el.selectionStart, el.selectionEnd, e.key, chips.current);
+      if (span !== null) {
+        e.preventDefault();
+        replaceRange(span.start, span.end, '');
+      }
+      return;
+    }
     if (e.key !== 'Enter') return;
     if (finePointer) {
       // Enter sends. Any held modifier reverts to a newline — the same
@@ -331,6 +420,7 @@ export function Composer({
         </ul>
       )}
       <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
+      <PasteChipBar chips={pasted} onExpand={expandPaste} onRemove={removePaste} disabled={disabled} />
       {/* ABOVE the field (R93): the composer is at the foot of the pane, so a line here grows it upward and the field,
           Send and Stop stay where they were; below the field the same line pushed them up by its own height. */}
       {askUp && (
@@ -351,7 +441,7 @@ export function Composer({
           value={value}
           placeholder={placeholder}
           disabled={disabled}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => commit(e.target.value, e.target.selectionEnd)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />

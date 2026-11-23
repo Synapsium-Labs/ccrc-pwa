@@ -1,0 +1,83 @@
+/* The paste-chip row (desktop-polish wave 169), above the composer's field beside the attachment tray. Each chip is
+   self-grounded (--ink-on-well on --bg-well) so every descendant is measured against a ground it declares, in every
+   theme and both skins. A chip wraps to the next row rather than scrolling sideways, so at phone width the controls
+   stay in reach; the head of the pasted text is ellipsised, the number, line count and controls never are. */
+.paste-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  padding: 0;
+  list-style: none;
+}
+.paste-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 0 0 var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-well);
+  color: var(--ink-on-well);
+  font: var(--weight-medium) var(--fs-xs) / 1.2 var(--family-mono);
+  font-variant-numeric: tabular-nums;
+}
+.paste-chip-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.paste-chip-n,
+.paste-chip-lines {
+  flex: none;
+  white-space: nowrap;
+}
+.paste-chip-head {
+  min-width: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-regular);
+}
+.paste-chip-act,
+.paste-chip-remove {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-height: 32px;
+  min-width: 32px;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--bg-well);
+  color: var(--ink-on-well);
+  font: inherit;
+  cursor: pointer;
+}
+.paste-chip-act {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.paste-chip-act:hover:not(:disabled),
+.paste-chip-remove:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--ink-primary);
+}
+.paste-chip-act:disabled,
+.paste-chip-remove:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+/* Glass: the controls reach the 44px floor. */
+@media (pointer: coarse) {
+  .paste-chip-act,
+  .paste-chip-remove {
+    min-height: var(--tap-min);
+    min-width: var(--tap-min);
+  }
+}
