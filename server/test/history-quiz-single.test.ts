@@ -271,7 +271,7 @@ describe('Task 3: the module refuses inside a pane and inside a session before i
   });
 
   it('its words: the driver\'s, plus its own two, and only those', () => {
-    expect([...QS.QUIZ_SINGLE_REASONS]).toEqual(['in-session', 'release-moved']);
+    expect([...QS.QUIZ_SINGLE_REASONS]).toEqual(['in-session', 'release-moved', 'repilot-release-moved']);
     for (const w of QS.QUIZ_SINGLE_REASONS as string[]) expect(D.DRIVER_REASONS, w).not.toContain(w);
     expect(() => new QS.QuizSingleRefusal('in-pane', 'x')).toThrow(TypeError);
   });
@@ -954,6 +954,79 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
     expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/^--repilot: an arm batch was planned/) });
     expect(readFileSync(join(w.out, QS.RELEASE_PIN_FILE as string)).equals(pinBefore), 'the pin is untouched').toBe(true);
   });
+
+  // fix round 1, F3: both write sites compose the pin through releasePinText; each is held to the literal fields.
+  it('the pin each write site leaves is exactly the release pin\'s fields: the first start at round 0, a re-pilot at its round', async () => {
+    const w = await failedWeek();
+    const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+    expect(json(pinPath), 'the first start').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: 0 });
+    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, STAMP, 0));
+    plantStep0b(w.home, w.mode);
+    setRelease(w.home, 'v9.9.9');
+    expect((await run(w.home, w.argv(['--repilot']), FAKE)).refusal).toBeNull();
+    expect(json(pinPath), 'the re-pilot\'s replacement').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: 'v9.9.9', round: 1 });
+    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, 'v9.9.9', 1));
+  });
+
+  it('a pin that is not this setup\'s is never replaced: --repilot refuses out-refused (fix round 1, F3)', async () => {
+    const w = await failedWeek();
+    const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+    writeFileSync(pinPath, QS.releasePinText('0'.repeat(64), STAMP, 0) as string);
+    const before = readFileSync(pinPath);
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/is not this run's pin/) });
+    expect(readFileSync(pinPath).equals(before)).toBe(true);
+  });
+
+  // fix round 1, F2: a re-pilot round that stopped before its result was written resumes only on its own release.
+  /** A failed week whose re-pilot on v9.9.9 stopped (limits-threshold) after its box run, before any result was written. */
+  async function stoppedRepilot() {
+    const w = await failedWeek();
+    plantStep0b(w.home, w.mode);
+    setRelease(w.home, 'v9.9.9');
+    let cards = 0;
+    const limits = (pct: number): void => {
+      const nowS = Math.floor(Date.now() / 1000);
+      writeFileSync(join(w.home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: pct, seven: pct, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+    };
+    const trip: R = { ...FAKE, recheck: async (rs: unknown, es: R[]): Promise<Map<string, R>> => {
+      cards += 1;
+      if (cards === 2) limits(90);   // the card before the first arm batch: the next spawn's gate stops the round
+      return (FAKE.recheck as (a: unknown, b: R[]) => Promise<Map<string, R>>)(rs, es);
+    } };
+    const r = await run(w.home, w.argv(['--repilot']), trip);
+    expect(r.refusal?.word, 'fixture: the re-pilot round stopped').toBe('limits-threshold');
+    expect(json(resultPath(w)), 'fixture: no round 1 result yet').toMatchObject({ round: 0, passed: false });
+    expect(json(join(w.out, QS.RELEASE_PIN_FILE as string)), 'fixture: the pin names the round under way').toMatchObject({ ccrc_release: 'v9.9.9', round: 1 });
+    limits(10);
+    return w;
+  }
+
+  it('the round under way, resumed on its own release: it finishes as round 1 and the arms run', async () => {
+    const w = await stoppedRepilot();
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toBeNull();
+    expect(json(resultPath(w))).toMatchObject({ round: 1, passed: true });
+    expect(questionRuns(w.home).length).toBeGreaterThan(0);
+  });
+
+  for (const [why, tag] of [['forward to a newer release', 'v9.9.10'], ['back to the release that already failed', STAMP]] as Array<[string, string]>) {
+    it(`the round under way, resumed after the release moved ${why}: repilot-release-moved, the pin and the result untouched`, async () => {
+      const w = await stoppedRepilot();
+      const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+      const pin = readFileSync(pinPath);
+      const res = readFileSync(resultPath(w));
+      const before = runs(w.home).length;
+      setRelease(w.home, tag);
+      const r = await run(w.home, w.argv(['--repilot']), FAKE);
+      expect(r.refusal).toMatchObject({ word: 'repilot-release-moved', detail: expect.stringContaining('under way on v9.9.9') });
+      expect(readFileSync(pinPath).equals(pin), 'the pin').toBe(true);
+      expect(readFileSync(resultPath(w)).equals(res), 'the result').toBe(true);
+      expect(runs(w.home).length, 'nothing spawned past the version probe').toBeLessThanOrEqual(before + 1);
+      expect(questionRuns(w.home)).toEqual([]);
+    });
+  }
 
   it('--repilot is an arms flag only', async () => {
     const w = await week();

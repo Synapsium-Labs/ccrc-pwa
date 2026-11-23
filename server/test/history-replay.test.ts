@@ -19085,7 +19085,7 @@ b2t1Describe('W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure 
     const ok = { sessionId: 's', model: 'm', tools: ['Bash', 'Agent'], mcpServers: [], plugins: [], skills: ['ccrc-history'], slashCommands: [] };
     const all = (state: string): B2t1R => ({ tools: { state }, mcp: { state }, plugins: { state }, skill: { state } });
     // quiz-pilot-checks ruling 2: the plugins check also records what loaded (pluginsLoadedOf, pinned in
-    // history-step0b-pilot-checks.test.ts); these rows pin the states alone.
+    // quiz-pilot-checks block at the end of this file); these rows pin the states alone.
     const states = (c: B2t1R): B2t1R => ({ ...c, plugins: { state: c.plugins.state } });
     b2t1Expect(states(D21.initChecksOf([ok, { ...ok, skills: [{ name: 'ccrc-history', path: '/x' }] }], want))).toEqual(all('pass'));
     b2t1Expect(states(D21.initChecksOf([ok, null], want)), 'a run with no init event').toEqual(all('unmeasured'));
@@ -24781,6 +24781,15 @@ describe('ruling 1: the wire-name alias, one table row, on the reported side onl
     expect(QPC_D.armToolsOf(['--tools', 'Task,Bash']), 'armToolsOf reads the argv as written').toEqual(['Bash', 'Task']);
   });
 
+  it('every reported entry must be a string: anything else fails, the alias never makes it pass (fix round 1, A1)', () => {
+    expect(one(['Task', ['Bash']]), 'a nested list beside the alias').toBe('fail');
+    expect(one([['Agent'], ['Bash']]), 'nested lists that join to the grant (passed on main)').toBe('fail');
+    expect(one(['Agent', 7]), 'a number').toBe('fail');
+    expect(one([{ name: 'Agent' }, 'Bash']), 'an object').toBe('fail');
+    expect(one(['Task', null]), 'null').toBe('fail');
+    expect(one(['Task', 'Bash']), 'CONTROL: strings pass').toBe('pass');
+  });
+
   it('grantedToolNamesOf keeps every other value as it is, in order', () => {
     expect(QPC_D.grantedToolNamesOf(['Bash', 'Task', 7, null, 'Agent'])).toEqual(['Bash', 'Agent', 7, null, 'Agent']);
   });
@@ -24804,6 +24813,8 @@ describe('ruling 2: a plugins entry is the build\'s own only when both fields sa
       ['source not a string', { name: 'x', source: ['x@builtin'], path: 'builtin' }],
       ['path not the word', { name: 'x', source: 'x@builtin', path: 'Builtin' }],
       ['@builtin not at the end', { name: 'x', source: 'x@builtin-extra', path: 'builtin' }],
+      ['a second separator before the marker (fix round 1, A4)', { name: 'x', source: 'x@market-a@builtin', path: 'builtin' }],
+      ['no name before the marker', { name: 'x', source: '@builtin', path: 'builtin' }],
       ['a bare string', 'x@builtin'],
       ['null', null],
     ];
@@ -24864,6 +24875,34 @@ describe('ruling 3: the leftover\'s shape is recorded, the verdict is unchanged'
     mkdirSync(join(configDir, 'projects'), { recursive: true });
     expect(QPC_D.persistenceMeasured({ configDir, sessionId: 's', cwd: '/tmp/run-a' })).toEqual({ left: false, transcripts: [], project_dir: false });
     expect(QPC_D.persistenceMeasured({ configDir, sessionId: null, cwd: '/tmp/run-a' })).toEqual({ left: true, transcripts: [], project_dir: null, unmeasured: 'no-session-id' });
+  });
+
+  it.skipIf((process.getuid?.() ?? 1) === 0)('a read that fails inside the leftover is recorded unmeasured beside what was read, never a throw (fix round 1, A3)', () => {
+    const l = qpcLeftover({ subagents: true });
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    const sub = join(l.configDir, 'projects', slug, l.sessionId, 'subagents');
+    chmodSync(sub, 0o000);
+    try {
+      const got = QPC_D.persistenceMeasured(l);
+      expect(got.left).toBe(true);
+      expect(got.shape.unmeasured).toBe('EACCES');
+      expect(got.shape.entries.map((e: QpcR) => e.path)).toEqual([slug, `${slug}/${l.sessionId}`, `${slug}/${l.sessionId}/subagents`]);
+      expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+  });
+
+  it('a link in the leftover is recorded as a link and never followed (fix round 1, A3)', () => {
+    const l = qpcLeftover();
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    const elsewhere = mkTmp('ccrc-step0b-link-target-');
+    writeFileSync(join(elsewhere, 'agent-z.jsonl'), '');
+    mkdirSync(join(elsewhere, 'subagents'));
+    symlinkSync(elsewhere, join(l.configDir, 'projects', slug, l.sessionId, 'subagents'));
+    const got = QPC_D.persistenceMeasured(l);
+    expect(got.shape.entries.find((e: QpcR) => e.path === `${slug}/${l.sessionId}/subagents`)).toMatchObject({ kind: 'link' });
+    expect([got.shape.subagents_dir, got.shape.transcript_file], 'nothing behind the link is read').toEqual([false, false]);
   });
 
   it('the walk stops at its entry bound and says so', () => {

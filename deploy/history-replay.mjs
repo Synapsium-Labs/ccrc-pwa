@@ -7938,10 +7938,11 @@ export function grantedToolNamesOf(reported) {
   return reported.map((t) => (typeof t === 'string' && Object.hasOwn(WIRE_TOOL_ALIASES, t) ? WIRE_TOOL_ALIASES[t] : t));
 }
 /** A plugins entry's class (quiz-pilot-checks ruling 2): `build` only when the entry says by BOTH fields that it ships with
- *  the build, its `source` a string ending in `@builtin` and its `path` the word `builtin`; any other entry, one with a field
+ *  the build, its `source` a string of one name and one `@` before `builtin` (`x@builtin`, never `x@market@builtin`) and its
+ *  `path` the word `builtin`; any other entry, one with a field
  *  missing or not a string, and an entry that is not an object, is `other`. Pure.  @param {unknown} entry */
 export function pluginClassOf(entry) {
-  return plainObject(entry) && typeof entry.source === 'string' && entry.source.endsWith('@builtin') && entry.path === 'builtin' ? 'build' : 'other';
+  return plainObject(entry) && typeof entry.source === 'string' && /^[^@]+@builtin$/.test(entry.source) && entry.path === 'builtin' ? 'build' : 'other';
 }
 /** What one run's plugins list loaded, as the result records it: the count of each class, and each refused (`other`) entry's
  *  name and source, each the reported string or null when the entry carries no string there. null for a run with no init
@@ -7953,7 +7954,7 @@ export function pluginsLoadedOf(init) {
   return { build: init.plugins.length - refused.length, other: refused.length, refused: refused.map((p) => ({ name: str(p, 'name'), source: str(p, 'source') })) };
 }
 /** W2-D57's "the arm's init event" and W2-D58's init assertions, one check each over every arm run's init event: tools
- *  exactly `want` (the arm argv's, armToolsOf) once the reported names pass through WIRE_TOOL_ALIASES, no MCP server, no
+ *  exactly `want` (the arm argv's, armToolsOf) once the reported names, every one a string, pass through WIRE_TOOL_ALIASES, no MCP server, no
  *  plugin but the build's own (pluginClassOf), the ccrc-history skill listed (a string, or an object with that name). A run
  *  with no init event, or a field that is not a list, leaves that check unmeasured on that run (foldStates). The plugins
  *  check also records, per run in `inits` order, what loaded (pluginsLoadedOf). Pure.
@@ -7961,7 +7962,7 @@ export function pluginsLoadedOf(init) {
 export function initChecksOf(inits, want) {
   const over = (read) => ({ state: foldStates(inits.map((i) => (i === null ? 'unmeasured' : read(i)))) });
   return {
-    tools: over((i) => (i.tools === null ? 'unmeasured' : sameSet(grantedToolNamesOf(i.tools), want) ? 'pass' : 'fail')),
+    tools: over((i) => (i.tools === null ? 'unmeasured' : i.tools.every((t) => typeof t === 'string') && sameSet(grantedToolNamesOf(i.tools), want) ? 'pass' : 'fail')),
     mcp: over((i) => (i.mcpServers === null ? 'unmeasured' : i.mcpServers.length === 0 ? 'pass' : 'fail')),
     plugins: { ...over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.every((p) => pluginClassOf(p) === 'build') ? 'pass' : 'fail')),
       loaded: inits.map(pluginsLoadedOf) },
