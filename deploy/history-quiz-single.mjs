@@ -66,7 +66,14 @@
 // spawn (runBatch, measureClaudeVersion, step0bMechanics, openWriter, openJudge), so a signal stops every child's group and
 // every later stop check refuses `interrupted`. main does not reset the driver's stopping flag: one main runs per process.
 //
-// Its words: the driver's DRIVER_REASONS, through its refuse, plus QUIZ_SINGLE_REASONS, this file's own two. A refusal
+// The week's account (run 3538, the coordinator's ruling 3 of 2026-11-23). `arms` and `judge` take `--account`, the week's
+// account, which the unattended runner chooses each week (history-quiz-unattended.mjs's weekAccountOf); without it they take
+// the setup's, as before. The account is admitted exactly as setup admits one (admitNode) and gated on its own limits row at
+// every spawn (batchGate). The week's first `arms` records it in the week's folder (WEEK_ACCOUNT_FILE, the one writer,
+// before anything is spawned), and every later act given another account refuses `account-moved`; a week an older build
+// ran, with its release pin and no record, reads as the setup's account. The setup itself is never re-made.
+//
+// Its words: the driver's DRIVER_REASONS, through its refuse, plus QUIZ_SINGLE_REASONS, this file's own. A refusal
 // prints `ccrc history-quiz-single: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // Environment: main gets a by-name projection {HOME, TMUX_PANE, LANG, CLAUDECODE}; nothing here reads process.env whole.
 import { lstatSync, realpathSync } from 'node:fs';
@@ -94,7 +101,7 @@ const PREFIX = 'ccrc history-quiz-single';
 // ── the words, the kinds and the paths ──────────────────────────────────────────────────────────────────────────────
 /** This file's own refusal words, beside the driver's DRIVER_REASONS: `in-session` (CLAUDECODE is set: the quiz is the
  *  operator's, never a session's) and `release-moved` (one week's arms ran on one release, and its judge on the same). */
-export const QUIZ_SINGLE_REASONS = Object.freeze(['in-session', 'release-moved', 'repilot-release-moved']);
+export const QUIZ_SINGLE_REASONS = Object.freeze(['in-session', 'release-moved', 'repilot-release-moved', 'account-moved']);
 /** A refusal in one of QUIZ_SINGLE_REASONS' words. */
 export class QuizSingleRefusal extends Error {
   /** @param {string} word  @param {string} detail */
@@ -114,6 +121,7 @@ export const SUMMARY_KIND = 'ccrc-history-quiz-single-arms-summary';
 export const JUDGED_KIND = 'ccrc-history-quiz-single-judged';
 export const REPORT_KIND = 'ccrc-history-quiz-single-report';
 export const RELEASE_PIN_KIND = 'ccrc-history-quiz-single-arms-release';
+export const WEEK_ACCOUNT_KIND = 'ccrc-history-quiz-single-week-account';
 /** The marker beside the driver's own under every --out this file uses (shared/lifecycle.ts's history-quiz-single-out). */
 export const OUT_MARKER = '.ccrc-history-quiz-single';
 export const OUT_KIND = 'ccrc-history-quiz-single-out';
@@ -134,6 +142,8 @@ export const SETUP_FILE = 'setup.json';
 export const SECTION = 'quiz';
 export const SUMMARY_FILE = 'quiz/arms-summary.json';
 export const RELEASE_PIN_FILE = 'quiz/arms-release.json';
+/** The week's account (run 3538, ruling 3): written by the week's first `arms` before anything is spawned, never rewritten. */
+export const WEEK_ACCOUNT_FILE = 'quiz/week-account.json';
 export const JUDGE_MAP_REL = 'quiz/judge.map.json';
 export const JUDGED_FILE = 'quiz/judged.json';
 export const REPORT_FILE = 'single-report.json';
@@ -162,8 +172,8 @@ const FORM_FLAGS = Object.freeze({
   source: { required: ['out', ...SETUP_IN], optional: [] },
   freeze: { required: ['out', ...SETUP_IN, 'sourced', 'sourced-sha256'], optional: [] },
   marker: { required: FROZEN_IN, optional: [] },
-  arms: { required: ['out', ...SETUP_IN, ...FROZEN_IN], optional: ['repilot'] },
-  judge: { required: ['out', ...SETUP_IN, ...FROZEN_IN, 'arms-summary', 'arms-summary-sha256'], optional: [] },
+  arms: { required: ['out', ...SETUP_IN, ...FROZEN_IN], optional: ['repilot', 'account'] },
+  judge: { required: ['out', ...SETUP_IN, ...FROZEN_IN, 'arms-summary', 'arms-summary-sha256'], optional: ['account'] },
   report: { required: ['out', ...SETUP_IN, ...FROZEN_IN, 'arms-summary', 'arms-summary-sha256', 'judged', 'judged-sha256'], optional: [] },
 });
 export const SUBCOMMANDS = Object.freeze(Object.keys(FORM_FLAGS));
@@ -600,6 +610,48 @@ function armsPinOf(out, setupSha256) {
   return { state: 'value', value: p, round: Number.isSafeInteger(p.round) && p.round >= 0 ? p.round : 0 };
 }
 
+// ── the week's account (run 3538, the coordinator's ruling 3) ───────────────────────────────────────────────────────
+/** The week's account record's bytes, the one composer of them. Pure.  @param {string} setupSha256  @param {string} account */
+export function weekAccountText(setupSha256, account) {
+  if (typeof account !== 'string' || account === '') throw new TypeError(`weekAccountText: account ${JSON.stringify(account)}`);
+  return `${canonicalJson({ kind: WEEK_ACCOUNT_KIND, v: 1, setup_sha256: setupSha256, account })}\n`;
+}
+/** A week's account as its folder records it, the one reader (the runner asks it too, so it never throws):
+ *  `recorded` with the account; `recorded` with `older: true` and the setup's account for a week an older build ran (its
+ *  release pin stands and no record does: such a week ran on the setup's account); `none` when the week has spawned nothing
+ *  (neither file); `unreadable` with a detail for a record that is not a regular file or not this setup's.
+ *  @param {string} out  @param {string} setupSha256  @param {string} setupAccount */
+export function weekAccountOf(out, setupSha256, setupAccount) {
+  const read = readPlain(path.join(out, WEEK_ACCOUNT_FILE), OUT_JSON_CAP);
+  if (read.state === 'absent') {
+    return readPlain(path.join(out, RELEASE_PIN_FILE), OUT_JSON_CAP).state === 'absent' ? { state: 'none' }
+      : { state: 'recorded', account: setupAccount, older: true };
+  }
+  if (read.state !== 'bytes') return { state: 'unreadable', detail: `${WEEK_ACCOUNT_FILE} is ${read.why}${read.code === undefined ? '' : ` ${read.code}`}` };
+  let r = null;
+  try { r = JSON.parse(read.bytes.toString('utf8')); } catch { r = null; }
+  if (!plainObject(r) || r.kind !== WEEK_ACCOUNT_KIND || r.v !== 1 || r.setup_sha256 !== setupSha256 || typeof r.account !== 'string' || r.account === '') {
+    return { state: 'unreadable', detail: `${WEEK_ACCOUNT_FILE} is not this run's record` };
+  }
+  return { state: 'recorded', account: r.account, older: false };
+}
+/** The act's account against the week's record, before anything is spawned: the week's first `arms` writes the record (the
+ *  one writer), and every later act refuses `account-moved` when it was given another account than the record names. A
+ *  record it cannot read refuses `out-refused`. `judge` writes nothing: a week with no record reads as the setup's account. */
+function settleWeekAccount(out, setupSha256, setupAccount, account, { write }) {
+  const rec = weekAccountOf(out, setupSha256, setupAccount);
+  if (rec.state === 'unreadable') refuse('out-refused', rec.detail);
+  if (rec.state === 'none' && write) {
+    ensurePlainDir(out, SECTION);
+    writePlain(out, WEEK_ACCOUNT_FILE, weekAccountText(setupSha256, account));
+    return;
+  }
+  const recorded = rec.state === 'none' ? setupAccount : rec.account;
+  if (recorded !== account) {
+    throw new QuizSingleRefusal('account-moved', `this week ran on ${rec.state === 'recorded' && rec.older !== true ? 'the account its record names' : 'the setup\'s account'}, and this act was given another: a week never changes account`);
+  }
+}
+
 /** Step 0b's probes (OQ1 as restated; W2-D57, W2-D58): the box run (the turn bound, persistence) and the treatment-arm
  *  probe runs (each taught spelling, the three denials, the Agent call), every arm run's init showing exactly its tools, no
  *  MCP server, no plugin and the ccrc-history skill. Every check must pass (step0bVerdictOf, fail-closed). The result is
@@ -782,13 +834,14 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
   refuseUnusableInputs(home, flags.out, [['arm-model', s.arm_model]]);
   refuseArmModel(s.arm_model);
   refuseOutOfRangeValues({ budget: s.budget, budgetField: 'budget', limits: s.limits, quotas: null, batch: true, settings: { mode: s.settings_mode } });
+  const account = flags.account ?? s.account;   // the week's account (ruling 3); the setup's when not given
   const transcript = deps.syntheticTranscript ?? STEP0B_SYNTHETIC_TRANSCRIPT;
   const rs = openReplayStore(home);
   try {
     const storeId = rs.storeId;
     const fz = frozenOnNode(flags, storeId);
     const questions = fz.list.entries;
-    const { launch, roster } = admitNode(home, s);
+    const { launch, roster } = admitNode(home, { account, limits: s.limits });
     requireListed(home, storeId, fz.families);   // W2-D78 (i)
     const ids = [...new Set(questions.map((q) => q.ccrc_id))];
     refuseRecallOff(home, ids);   // W2-D78 (ii)
@@ -802,6 +855,7 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
     }
     const claim = claimOut(out);
     try {
+      settleWeekAccount(out, setup.sha256, s.account, account, { write: true });   // before the first spawn
       const startedMs = Date.now();
       const gate = batchGate({ out, home, accountId: launch.accountId, budget: s.budget, limits: s.limits });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
@@ -922,18 +976,20 @@ export async function judgeCommand(flags, env) {
   try {
     const storeId = rs.storeId;
     const fz = frozenOnNode(flags, storeId);
-    const { launch } = admitNode(home, s);
+    const account = flags.account ?? s.account;   // the week's account (ruling 3); the setup's when not given
+    const { launch } = admitNode(home, { account, limits: s.limits });
     const out = openOut(flags.out);
     const summary = loadSummary(flags, out, setup.sha256, fz.sha256);
     const claim = claimOut(out);
     try {
+      settleWeekAccount(out, setup.sha256, s.account, account, { write: false });
       const cap = judgeCapOf(out, s.budget);
       const map = judgeMapOf(s.seed, fz.list.entries, [TREATMENT_ARM]);
       pinOutBytes(out, JUDGE_MAP_REL, judgeMapText(SECTION, fz.sha256, map), 'judge-map');
       const picked = judgeItemsOf({ entries: fz.list.entries, answers: readArmAnswers(out, SECTION), arms: [TREATMENT_ARM], shaMinPrefix: s.labeller.sha_min_prefix });
       const jobs = judgeJobsAgreed({ items: picked.items, map, idx: rs.idx, freshIdx: pairIndexOf(rs.db, home) });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
-      const judge = await openJudge({ home, accountId: s.account, model: s.judge_model, settingsMode: s.settings_mode, rubricId: s.rubric_id,
+      const judge = await openJudge({ home, accountId: account, model: s.judge_model, settingsMode: s.settings_mode, rubricId: s.rubric_id,
         claim, budget: cap, limits: s.limits, expected, lang: env.LANG });
       const items = await judge.judge(SECTION, jobs);
       const count = (pred) => items.filter(pred).length;

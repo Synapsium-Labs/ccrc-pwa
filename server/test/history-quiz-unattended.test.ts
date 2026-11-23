@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as unMod from '../../deploy/history-quiz-unattended.mjs';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
 import * as drvMod from '../../deploy/history-replay.mjs';
@@ -75,6 +75,17 @@ const made = () => {
   if (!fs.existsSync(m)) fs.writeFileSync(m, '');
 };
 if (step.mkdir === true) made();
+// the week's account record (run 3538), as the real arms writes it before its first spawn, through the real composer; a
+// step that stands for a refusal before the real one's --out exists says noRecord
+if (sub === 'arms' && flag('account') !== null && step.noRecord !== true) {
+  made();
+  const rec = path.join(out, 'quiz', 'week-account.json');
+  if (!fs.existsSync(rec)) {
+    const qs = await import(${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../../deploy/history-quiz-single.mjs', import.meta.url))).href)});
+    fs.mkdirSync(path.dirname(rec), { recursive: true });
+    fs.writeFileSync(rec, qs.weekAccountText(flag('setup-sha256'), flag('account')));
+  }
+}
 // files the step writes as the real driver would (its release pin), then a stand-in for a hard kill after the driver's write:
 // the quiz root turns read-only, so the runner's save after the act fails
 for (const [f, text] of step.writes ?? []) fs.writeFileSync(f, text);
@@ -268,8 +279,8 @@ describe('a first run from nothing to confirmed', () => {
       ['freeze', '--out', S, '--setup', join(S, 'setup.json'), '--setup-sha256', shaSetup, '--sourced', join(S, 'quiz', 'sourced.json'), '--sourced-sha256', shaSourced],
       ['marker', '--frozen', join(S, 'quiz', 'frozen.json'), '--frozen-sha256', shaFrozen],
       ['marker', '--frozen', join(S, 'quiz', 'frozen.json'), '--frozen-sha256', shaFrozen],
-      ['arms', ...base],
-      ['judge', ...base, ...armsSummary],
+      ['arms', ...base, '--account', 'acct-c'],
+      ['judge', ...base, ...armsSummary, '--account', 'acct-c'],
       ['report', ...base, ...armsSummary, '--judged', join(W, 'quiz', 'judged.json'), '--judged-sha256', shaJudged],
     ]);
     expect(b.calls('driver').every((c) => c.execArgv.includes('--no-warnings'))).toBe(true);
@@ -451,7 +462,7 @@ describe('the account: eligibility, room and the weekly re-check', () => {
     return { b, account: (b.state() as R).setup.account as string };
   };
   for (const act of ['arms', 'judge']) {
-    it(`before ${act}: no room for the setup's account waits (no-room), spawns nothing, the week stays running`, async () => {
+    it(`before ${act}: no room for the week's account waits (no-room), spawns nothing, the week stays running and on its account`, async () => {
       const { b, account } = await stopAt(act);
       const n = b.calls().length;
       b.setLimits(account, { five: 10, seven: 90 });
@@ -1190,7 +1201,7 @@ describe('the operator\'s per-account lane kill switch (F5)', () => {
     expect((b.state() as R).setup.account).toBe('acct-b');
   });
   for (const act of ['arms', 'judge']) {
-    it(`before ${act}: the setup's account switched off waits account-disabled (not no-room), spawns nothing, and resumes when it is back on`, async () => {
+    it(`before ${act}: the week's account switched off waits account-disabled (not no-room), spawns nothing, and resumes when it is back on`, async () => {
       const b = mkBox();
       b.plan({ [act]: [REFUSE('interrupted')] });
       await b.tick();
@@ -1613,5 +1624,152 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     await b.tick({ now: NEXT_NOW });
     expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
     expect(armsCalls(b).map((c) => c.argv[c.argv.indexOf('--out') + 1])).toEqual([join(b.root, 'weeks', WEEK), join(b.root, 'weeks', NEXT_WEEK)]);
+  });
+});
+
+// ── run 3538: the week's account (the coordinator's rulings 2, 3 and 5 of 2026-11-23) ───────────────────────────────────
+describe('weekAccountChoiceOf: the pure choice of a week\'s account, as a table', () => {
+  const rec = (id: string, o: R = {}): R => ({ id, disabled: false, room: true, ...o });
+  const cand = (id: string, seven: number | null, word = 'limits-stale'): R => (seven === null ? { id, room: false, word } : { id, room: true, seven });
+  const rows: Array<[string, R, R]> = [
+    ['a recorded week stays on its account, though another has a lower weekly figure',
+      { recorded: rec('lane-b'), previous: 'lane-c', candidates: [cand('lane-c', 1)] }, { account: 'lane-b', why: 'recorded' }],
+    ['a recorded week whose account has no room waits, never moves',
+      { recorded: rec('lane-b', { room: false, word: 'limits-stale', detail: 'old 3601000' }), previous: 'lane-c', candidates: [cand('lane-c', 1)] },
+      { wait: 'no-room', detail: 'the week\'s account: limits-stale old 3601000' }],
+    ['a recorded week whose account is switched off waits account-disabled, room or not',
+      { recorded: rec('lane-b', { disabled: true }), previous: 'lane-b', candidates: [cand('lane-c', 1)] },
+      { wait: 'account-disabled', detail: 'the week\'s account is switched off by the operator\'s lane kill switch' }],
+    ['an unspawned week keeps the previous account when it has room, though another is lower',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-c', 1), cand('lane-b', 40)] }, { account: 'lane-b', why: 'previous' }],
+    ['an unspawned week does not keep a previous account without room: the lowest with room',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-b', null), cand('lane-c', 30), cand('lane-d', 20)] }, { account: 'lane-d', why: 'lowest' }],
+    ['ties go in roster order',
+      { recorded: null, previous: 'lane-x', candidates: [cand('lane-c', 20), cand('lane-d', 20)] }, { account: 'lane-c', why: 'lowest' }],
+    ['a previous account that is no candidate (switched off, or no longer eligible) is not kept',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-c', 30)] }, { account: 'lane-c', why: 'lowest' }],
+    ['no candidate with room: no-room, each candidate\'s word by position, no account named',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-b', null, 'limits-stale'), cand('lane-c', null, 'limits-threshold')] },
+      { wait: 'no-room', detail: '1: limits-stale, 2: limits-threshold' }],
+    ['no candidate at all: no-room',
+      { recorded: null, previous: 'lane-b', candidates: [] }, { wait: 'no-room', detail: 'the roster names no eligible account' }],
+  ];
+  it.each(rows)('%s', (_name, input, want) => {
+    expect(U.weekAccountChoiceOf(input)).toEqual(want);
+  });
+  it('it never answers an account without room, and never one outside the candidates for an unspawned week', () => {
+    for (const [, input, want] of rows) {
+      if (want.account === undefined || input.recorded !== null) continue;
+      const c = (input.candidates as R[]).find((x) => x.id === want.account);
+      expect(c?.room, JSON.stringify(input)).toBe(true);
+    }
+  });
+});
+
+describe('the runner runs each week on the week\'s account (run 3538)', () => {
+  const W = (b: Box, key = WEEK): string => join(b.root, 'weeks', key);
+  const recordOf = (b: Box, key = WEEK): R | null => {
+    const f = join(W(b, key), 'quiz', 'week-account.json');
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) as R : null;
+  };
+  const accountArg = (c: R): string | null => { const i = (c.argv as string[]).indexOf('--account'); return i < 0 ? null : c.argv[i + 1] as string; };
+  const spends = (b: Box): R[] => b.calls('driver').filter((c) => c.argv[0] === 'arms' || c.argv[0] === 'judge');
+
+  it('the field case: the setup\'s account went idle (no fresh row), so a new week runs on another account with room', async () => {
+    const b = mkBox();
+    await b.tick();
+    expect((b.state() as R).setup.account, 'CONTROL: setup took acct-b (a tie, roster order)').toBe('acct-b');
+    expect(recordOf(b)?.account, 'the first week recorded the setup\'s account').toBe('acct-b');
+    b.setLimits('acct-b', null);   // no row a status line refreshed: no room
+    await b.tick({ now: NEXT_NOW });
+    const next = spends(b).filter((c) => (c.argv as string[]).includes(W(b, NEXT_WEEK)));
+    expect(next.map((c) => [c.argv[0], accountArg(c)])).toEqual([['arms', 'acct-c'], ['judge', 'acct-c']]);
+    expect((b.state() as R).weeks[NEXT_WEEK].state).toBe('confirmed');
+    expect(recordOf(b, NEXT_WEEK)?.account).toBe('acct-c');
+    expect((b.state() as R).setup.account, 'the setup is never re-made').toBe('acct-b');
+    expect(subs(b).filter((s) => s === 'setup').length).toBe(1);
+  });
+
+  it('a new week keeps last week\'s account while it has room, though another has a lower weekly figure', async () => {
+    const b = mkBox();
+    b.setLimits('acct-b', null);
+    await b.tick();   // setup on acct-c, the only one with room; week one on acct-c
+    expect((b.state() as R).setup.account).toBe('acct-c');
+    b.setLimits('acct-b', { five: 10, seven: 1 });
+    b.setLimits('acct-c', { five: 10, seven: 40 });
+    await b.tick({ now: NEXT_NOW });
+    expect(spends(b).slice(-2).map(accountArg)).toEqual(['acct-c', 'acct-c']);
+  });
+
+  it('a week that has spawned stays on its account and waits, though another has room', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('interrupted')] });
+    await b.tick();
+    expect(recordOf(b)?.account).toBe('acct-b');
+    const n = b.calls().length;
+    b.setLimits('acct-b', { five: 10, seven: 95 });
+    await b.tick({ now: NOW + 3600_000 });
+    expect(b.calls().length, 'nothing spawned on acct-c').toBe(n);
+    expect((b.state() as R).last).toMatchObject({ act: 'arms', outcome: 'waiting', word: 'no-room' });
+  });
+
+  it('the kill switch: a switched-off previous account is not kept, and every candidate off is no-room with no spawn', async () => {
+    const b = mkBox();
+    await b.tick();
+    mkdirSync(join(b.home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(b.home, '.cc-sessions', 'acct-b-disabled'), '');
+    await b.tick({ now: NEXT_NOW });
+    expect(spends(b).slice(-2).map(accountArg), 'acct-b has room but is switched off').toEqual(['acct-c', 'acct-c']);
+    writeFileSync(join(b.home, '.cc-sessions', 'acct-c-disabled'), '');
+    const n = b.calls().length;
+    const third = NEXT_NOW + 7 * DAY;
+    await b.tick({ now: third });
+    expect(b.calls().length).toBe(n);
+    expect((b.state() as R).last).toMatchObject({ week: U.weekKeyOf(third), act: 'arms', outcome: 'waiting', word: 'no-room', detail: 'the roster names no eligible account' });
+  });
+
+  it('a week an older build ran (its release pin, no record) reads as the setup\'s account', async () => {
+    const b = mkBox();
+    b.plan({ arms: [{ ...REFUSE('interrupted'), noRecord: true, mkdir: true }] });
+    await b.tick();
+    mkdirSync(join(W(b), 'quiz'), { recursive: true });
+    writeFileSync(join(W(b), 'quiz', 'arms-release.json'), QS.releasePinText((b.state() as R).setup.setup_sha256, 'v1.0.1', 0) as string);
+    b.setLimits('acct-b', { five: 10, seven: 50 });
+    b.setLimits('acct-c', { five: 10, seven: 1 });
+    await b.tick({ now: NOW + 3600_000 });
+    expect(spends(b).slice(-2).map(accountArg)).toEqual(['acct-b', 'acct-b']);
+  });
+
+  it('an unreadable record refuses week-account-unreadable, spends nothing, and the week stays running', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('interrupted')] });
+    await b.tick();
+    writeFileSync(join(W(b), 'quiz', 'week-account.json'), '{"kind":"not this"}\n');
+    const n = b.calls().length;
+    await b.tick({ now: NOW + 3600_000 });
+    expect(b.calls().length).toBe(n);
+    const st = b.state() as R;
+    expect(st.last).toMatchObject({ act: 'arms', outcome: 'refused', word: 'week-account-unreadable' });
+    expect(st.weeks[WEEK].state).toBe('running');
+    expect(U.OWN_WORDS).toContain('week-account-unreadable');
+  });
+
+  it('the status posts the week\'s account when its folder records one, else the setup\'s', async () => {
+    const b = mkBox();
+    await b.tick();
+    const body = (): R => JSON.parse(b.calls('client').at(-1)!.stdin as string) as R;
+    expect(body().account).toBe('acct-b');
+    b.setLimits('acct-b', null);
+    await b.tick({ now: NEXT_NOW });
+    expect(body().account, 'the new week ran on acct-c').toBe('acct-c');
+  });
+
+  it('ruling 1 on the runner\'s own reading: an account whose row is marked with no five-hour window has room on its weekly figure', async () => {
+    const b = mkBox();
+    b.setLimits('acct-b', { five: null, seven: 10, fiveWindowMinutes: 0 });
+    b.setLimits('acct-c', { five: null, seven: 10 });   // no marker: five-null, still no room
+    await b.tick();
+    expect((b.state() as R).setup.account).toBe('acct-b');
+    expect(spends(b).map(accountArg)).toEqual(['acct-b', 'acct-b']);
   });
 });
