@@ -110,12 +110,15 @@ Each row edited one source line in place, ran the named tests, and restored the 
 - A revert now costs two `show`s (the capability read and the post-act read).
 - The post-Release window (D-8857): after a shell Release, an Anthropic Revert puts back the released hold's id when the
   alias has moved off it, not the read's `previous`. The released-hold evidence may outlast a refresh, when a Revert hold
-  stands at that refresh. It settles in one of three ways: a trustworthy refresh with no hold standing records the move
-  from the released id and clears it; a Revert's hold stands, which ends the evidence by itself being the hold; or
-  another Release replaces it. The act is correct and the read after it shows what happened; the read carries no release
-  evidence, so the Anthropic confirm and card predict no target (fix round 1). A repeat Anthropic Revert can refresh the
-  hold's timestamp without changing the model; it stays offered, because a real move remains possible while released-hold
-  evidence stands.
+  stands at that refresh. It is cleared when that hold ends. Other ways it goes, none of them exhaustive: a trustworthy
+  refresh with no hold standing records the move from the released id and clears it; a later Release replaces it; and the
+  first Revert after a Release that finds the alias unmoved clears it. No time and no manual remedy is promised. The act is
+  correct and the read after it shows what happened; the read carries no release evidence, so the Anthropic confirm and
+  card predict no target (fix round 1). On the current writers, the first Revert after a Release can pick the released id
+  when the alias has moved off it. A repeat Revert over the resulting Revert hold keeps that id and can refresh the hold's
+  timestamp; it cannot change the model. It stays offered because the sheet's read carries no release evidence, so the
+  sheet cannot tell a first Revert from a repeat, and eligibility is the unchanged one (a previous model, the capability
+  and the existing guards). No UI changed.
 - An older console reads the new refusal cause `revert-hold-ends` (501 `unsupported`) as its generic sentence that the fleet
   agent predates the act: the same remedy (update the fleet box), and nothing written.
 - An older console tapping Hold or Release on the new door is refused as a bad request (`bad-action`). It says nothing was
@@ -128,7 +131,8 @@ Each row edited one source line in place, ran the named tests, and restored the 
 ## What review 3493 measured
 
 Review 3493 read fix round 1's head (call 555) and is the evidence for the counts below. They are the reviewer's, not the
-worker's counts above, and not the old head's.
+worker's counts above, and not the old head's. The worker's own reported count at fix round 1's head was 259 unit
+passes; it is recorded here as that report only, with its file set unmeasured, and is a different set from 246 and 11.
 
 - **Unit and screen files:** 246 passes across `models`, `models-sheet-words`, `models-sheet` and `accounts-screen`.
 - **Browser:** 11 passes on the successful attempt (both Models sheet fixtures, headless).
@@ -138,15 +142,18 @@ worker's counts above, and not the old head's.
   |---|---|
   | the old Revert confirm wording | two intended reds |
   | the old card prediction ("A revert would put back …" on an Anthropic lane) | one red |
-  | the confirm call drops the support flag | one red |
-  | the screen's support flag forced false | the units stay green; the Anthropic browser case reds, 3 of 3 |
+  | the confirm call drops the Anthropic lane-kind flag (M3) | one red |
+  | the screen's Anthropic lane-kind flag forced false (M4) | the units stay green; the Anthropic browser case reds, 3 of 3 |
 
-  The last row shows where the proof sits: the units stay green when the screen's flag is forced false, and the
-  Anthropic browser case is what turns red.
+  M3 and M4 mutate the lane-kind flag (the lane's telemetry being Anthropic), not the fleet's literal-`true` support
+  capability. M4 shows where the screen's lane-kind wiring is proved: the units stay green when the screen's flag is
+  forced false, and the Anthropic browser case is what turns red. The support capability's own proof is the reader,
+  predicate and door rows above.
 - **Server proof carried, not rerun.** Review 3487 measured the door, the gate and the persisted-file assertions. Fix
   round 1 changed no server file, so that proof stands on byte-identical inputs and was not rerun.
-- **P6 is the withdrawal, not the Yes handler.** The row covers a confirm that is no longer eligible being withdrawn; the
-  defensive re-check in the Yes handler is unreachable behind the render guard and has no mutation row.
+- **P6 is the withdrawal announcement, not the Yes handler.** Per review 3493, losing the withdrawal announcement gives
+  one red while the render guard still removes the dialog, and disabling the defensive Yes re-check gives no red, since
+  the render guard makes it unreachable. This is historical measured evidence, not a rerun on this docs branch.
 - **Limits preserved,** unchanged by the review: the two-call race (the capability read and the act are two calls), the
   busy preflight one step earlier, and an older console's wording for the new refusals.
 

@@ -134,7 +134,7 @@ and acceptance.
 | - | doctor | release-lookup-pins | Pin the release lookup's library read with a stand-in library, and two text corrections (wave 3's fifth review) | #3216 | merged 2026-11-22 |
 | - | anthropic-arm | no-keys-transitive | Guard passive alias observation against indirect key senders (wave 8's third review) | #3219 | merged 2026-11-22 |
 | - | anthropic-arm | entry-comment-seven | The launcher's comment names its seven libraries, with the launcher's next change of substance | | with that change |
-| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10, run 3500: applied under the freeze holder's consent to the exact packet |
+| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10, run 3500: only as an exact packet the freeze holder has consented to |
 
 Order: waves 3 and 8 merged on 2026-11-22 (#3118, then #3122), and wave 9 built on both and merged that evening
 (#3221). Five follow-ups ran beside wave 9, each on files wave 9 did not hold, and all merged the same day. On
@@ -208,18 +208,21 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   continuous fresh sightings counted on the catalogue's own fetch times, with no shortcut by the clock; an Anthropic lane
   follows the resolved class alias with its model and effort, preserves a held id, and moves a running session by the
   existing idle relaunch, typing nothing, and the ledger makes no claim that belongs to the renewal programme (call 452);
-  doctor says what the files it reads show, not when the next refresh will act. The README's eight hunks are applied,
-  as the exact packet the holder of the README claim consented to.
+  doctor says what the files it reads show, not when the next refresh will act. The README changes only as an exact
+  packet the holder of the README claim has consented to.
   The corrected D-8751, the over-cap wording and the strong-timeout limit are in the Anthropic arm's plan (a
   correction under D-8751). The `ccrc-models` test's title was checked and not confirmed stale, so no test changed.
 - **The Models sheet and its door after #3246.** They offer Revert only, on a class with explicit literal-`true` support
   read fresh before the act; Hold and Release stay shell and agent verbs. The Anthropic copy predicts no target and the
-  Codex copy names it; the fresh read after the act is authoritative. D-8857: released-hold evidence can outlast a
-  refresh when a Revert's hold stands; it settles on a trustworthy refresh with no hold standing, by ending with the
-  Revert's hold, or by another Release replacing it, and a repeat Anthropic Revert may refresh the timestamp without
-  changing the model, so it stays offered. Review 3493's counts are in `model-class-advance/fu-revert-holds-until-newer.md`:
-  246 unit passes in four files, 11 browser passes on the successful attempt, and mutations restored green, distinct from the
-  worker's and the old head's counts. Server proof from review 3487 was carried on byte-identical inputs, not rerun. The
+  Codex copy names it; the fresh read after the act is authoritative. D-8857: released-hold evidence can survive a
+  refresh while a Revert's hold stands and is cleared when that hold ends. A trustworthy refresh with no hold standing,
+  a later Release, and the first Revert after a Release finding the alias unmoved are other ways it goes; the list is not
+  exhaustive, and no time or manual remedy is promised. With the current writers, the first Revert after a Release can
+  pick the released id when the alias has moved; a repeat Revert over the resulting Revert hold keeps that id and can
+  refresh the hold's timestamp, and the current eligibility rules (previous model, capability, the existing guards) are
+  unchanged. Review 3493's counts are in `model-class-advance/fu-revert-holds-until-newer.md`: 246 unit passes in four
+  files and 11 browser passes on the successful attempt, with mutations restored green. They are the independent
+  review's, distinct from the old head's counts and from the worker's own reported 259, whose file set is unmeasured. Server proof from review 3487 was carried on byte-identical inputs, not rerun. The
   two-call race, the busy preflight and an older console's wording stay recorded limits. Calls 469, 503, 527, 555 and 561
   hold: old holds need usable baseline evidence, a same-ID or effort-only successful Revert is skipped as model-changing
   history, the history scan does not cross episodes, the same write that records a move clears the hold, and the Codex
@@ -249,8 +252,7 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   waits for the grace below. The one step that can still choose an older model is the retirement of a pin the catalogue no longer lists.
   Wave 3 allows it only after six hours of continuous fresh catalogue sightings of that absence, timed by the
   catalogue's own fetch time and never by the wall clock, after a canary like any move. This explains the pinned
-  statement and does not rewrite it. The spec's §2.2 and §2.8 still describe the older rule until wave 10 corrects
-  them.
+  statement and does not rewrite it. The spec's §2.2 and §2.8 described the older rule until wave 10 corrected them.
 - **The catalogue's client version (2026-11-18).** A Codex-lane session reported its class on an older model of its
   family after a newer release. The lane's catalogue was fresh (read hourly, 24 runs a day, no failures) and did not
   list the newer model. `ccd/ccrc-models-probe` asked the Codex catalogue as client `0.160.0`, a constant since
@@ -285,7 +287,7 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
 - **Wave 7 leaves the README alone.** Another run's freeze holds `README.md`, and its holder declined wave 7's lines
   (the four Anthropic causes in the doctor section, the aliases file in the models section). They become a follow-up
   after that freeze lifts, named by wave 7's report. Wave 8 carries three exact README hunks under the holder's
-  written consent; the Anthropic causes in the doctor section stay wave 10's.
+  written consent; the Anthropic causes in the doctor section were wave 10's, and its README packet carries them.
 - **A parked thread no longer parks the programme (2026-11-21).** The coordinator skill's clause 21 changed that day.
   Wave 3 had been held to absorb `main` after wave 8 landed; with wave 8 waiting on the owner for an unknown time, wave 3
   went ahead alone. Neither wave imports the other's unmerged branch: the second to land absorbs the first from `main`.

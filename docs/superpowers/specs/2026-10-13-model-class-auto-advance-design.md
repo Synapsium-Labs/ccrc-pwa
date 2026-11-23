@@ -406,21 +406,21 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
   it today. Every spawn rewrites the routing record, and a class change drops the id, so the id is recorded again
   after either. A session with no routing record gets none, and a session with no recorded id is never pending. The
   step costs the tick no fork while nothing has changed.
-- **A model picked by hand is never typed over, and a move is typed at most once.** A move is typed only while a
-  fresh reading of the session shows the recorded id and its transcript holds no `/model` since the record's stamp
-  that ccd's own keystroke journal does not explain. When ccd types a move, acknowledged or not, or stands down for a
-  positive hand pick (a fresh reading of another id, or an unexplained `/model` since the stamp), it records the new
-  id in the routing record as picked, without moving the record's stamp, and a session whose picked id is the class's
-  current id is not pending. A session with no fresh reading is no hand pick: it waits for its next render, so it runs
-  at most one turn on the old model. A re-pick that lands is recorded from the session's next reading. One that does
-  not land leaves the session to its next spawn, and `model-sessions-behind` names it after a day. A newer id reopens
-  the session. The stood-down state costs the tick nothing. A changed id counts as pending on an Anthropic lane when
-  the class is not held, and on a Codex lane only under D11's fallback.
-- **The move is a re-pick of the alias row** in the `/model` picker, session-only, as ccd applies a class today
-  (`_route_type_model`). Whether a re-pick re-resolves the alias in a running session is unmeasured, so the
-  Anthropic plan's ccd wave measures it first, on a throwaway session (D-8748). If it does not, a running session moves at
-  its next relaunch, and `model-sessions-behind` names it with that remedy. Either way this closes a known leak: a
-  session resumed without `--model` came back on its old model.
+- **A running session moves by the existing idle relaunch, and nothing is typed (#3238, call 409).** This replaces the
+  typed re-pick the approved text described (see the history below). A running Anthropic session whose model is not its
+  class's current target becomes one more reason for the automatic roll (`ccd hibernate --roll`, decided in
+  `server/src/coord/rollTarget.ts`, with the shared predicate `aliasModelBehind`): once it is idle, it is relaunched, and
+  the same conversation resumes on the held id while the class is held, else on the class's resolved, launchable id. The
+  safeguards stand: the alias's id is a target only after a fresh launch has been seen on it (the canary above), a
+  session is behind only when its model is of its class's family and no other class's current or held id, a session with
+  no fresh reading or no routed class is never named, and an id is acted on once per target. A model picked by hand
+  in a running session is therefore never typed over, because nothing is typed. The relaunch moves the session; it is
+  not proof that a real release has moved a class on the fleet, which stays with the natural-move check, and any claim
+  about session renewal belongs to the renewal programme's evaluation.
+- **Superseded history: the typed re-pick.** The first design typed the move into the `/model` picker, at most once
+  per id, standing down for a hand pick, and measured first whether a re-pick re-resolves the alias in a running
+  session (D-8748). That measurement was never made, the plan's fallback recorded the id change without typing (D-8833),
+  and calls 176 and 409 dropped the typed arm; its `picked=` bound survives only as a field name.
 - **One push** per class move, in the Codex step's own line shape, through the same push (D-8751).
 
 #### 2.5.7 Holds at launch (D19, D24)
@@ -675,8 +675,9 @@ Each part ships with tests that go red when its guard is removed, measured, per 
     id the lane cannot launch, names no session.
   - The aliases file: an unreadable or invalid one is never written over; a move cut short between its two writes is
     recorded once.
-  - A model picked by hand in a running session is never typed over, a re-pick of a given id is typed at most once,
-    and a cache target with only an older kept launch reading types nothing.
+  - A running session behind its class's id is relaunched by the idle roll and nothing is typed: the alias's id is a
+    target only after a launch has been seen on it, a held id needs no launch, and a cache target with only an older
+    kept launch reading is not a target (#3238; the typed re-pick tests of the first design are superseded).
   - The canary by real use: no move before a marked launch reports the new id, and a move after one.
   - ccd's routing record with the model id: a newer id counts as pending on an Anthropic lane, and the readback
     compares the id.
@@ -773,7 +774,7 @@ Each part ships with tests that go red when its guard is removed, measured, per 
 
 ### Waiting on you
 
-Nothing from the owner. The two build and roster gates read in 2026-11-18 (the server box on v0.0.1259 or later, both
+No automatic advance needs anything from the owner, and no step below is a chore for them. The pinned definition of done and the owner-only safety boundaries (the box's reaping verbs, installing and rolling a build, account management) are unchanged; a correction to done-when 3 is proposed in the programme ledger, not applied. The two build and roster gates read in 2026-11-18 (the server box on v0.0.1259 or later, both
 Codex lanes marked as Codex lanes in its roster). Live checks the programme still owes, none of them a step for the
 owner: `moves-only-forward` measured on the fleet box once a release with wave 3 is installed there; the Models
 sheet's live acceptance once the build with #3246 is installed; the natural move at the next real model release (the
