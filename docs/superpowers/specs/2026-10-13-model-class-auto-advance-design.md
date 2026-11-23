@@ -410,7 +410,7 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
   stamp and the process start, as the readback holds it. Every spawn rewrites the routing record, and a class change
   drops the id, so the id is recorded again after either. A session with no routing record gets none. The step costs
   the tick no fork while nothing has changed. (The approved text had a pending id change and a readback that compared
-  ids; neither was built, and the idle relaunch below decides from the recorded id and the fresh reading instead.)
+  ids; neither was built.)
 - **A running session moves by the existing idle relaunch, and nothing is typed (#3238, call 409).** This replaces the
   typed re-pick the approved text described (see the history below). A running Anthropic session whose model is not its
   class's current target becomes one more reason for the automatic roll (`ccd hibernate --roll`, decided in
