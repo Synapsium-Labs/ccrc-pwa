@@ -54,17 +54,19 @@ the check makes that loud and cheap.
 ## What changes
 
 1. **The helper.** One command prints the next free numbers, so nobody counts by hand:
-   `node .github/ci/next-deviation.mjs [count]` reads `origin/main`'s definitions with the same `definitionsIn` the
-   guards use and prints `max(highest + 1, 10000)` onward. No network, no token. (Builder's call: a script beside
-   `ledger-guard.mjs`; `ccrc-api ledger next` may wrap it.)
-2. **The guard.** Widen the cross-tree check to `plans/`, `programs/` and `specs/`, and make it red on one
-   allocator-era number defined twice in one file as well as in two files. Each widening ships with a fixture that
-   goes red without it. The grandfathered sets are untouched (they may still only shrink). The failure messages in
+   `cd server && npm run next-deviation -- [count]` (a tsx script, `server/scripts/next-deviation.ts`, because the guards' reader is TypeScript) reads `origin/main`'s definitions with the same `definitionsIn` the
+   guards use and prints `max(highest + 1, 10000)` onward. No network, no token. (`ccrc-api ledger next` may wrap it later.)
+2. **The guard.** For numbers of 10000 and above, the cross-tree check reads `plans/`, `programs/` and `specs/`, and
+   reds one number defined twice in one file as well as in two files. Below 10000 the check stays exactly as it is:
+   measured on 2026-11-23, `main` holds 44 allocator-era numbers defined twice in one file and 43 restated across a
+   plan and a spec or note, all landed and harmless, so widening the old range would red `main` on day one. Each
+   widening ships with a fixture that goes red without it. The grandfathered sets are untouched (they may still only
+   shrink). The failure messages in
    `dtbd.test.ts` and `deviation-refs.test.ts` name the helper instead of `POST /api/ledger/deviations`.
 3. **The words.** Replace "you are ISSUED a number" with the rule above in CLAUDE.md's ledger bullet, CONTRIBUTING.md,
    README's allocator section, `shared/api.ts`'s brief sentence ("Never invent a deviation number…"), the coordinator
    skill's clause 10 and `references/peer-protocol.md`, `decision-procedure.md`, `cross-project.md` and
-   `wave-lifecycle-run-care.md`, and the reviewer skill's clause 6. The skills' clauses are pinned verbatim
+   `wave-lifecycle-run-care.md`, the worker skill's clause 11 and the reviewer skill's clause 6. The skills' clauses are pinned verbatim
    (`coordinator-skill.test.ts`, `reviewer-skill.test.ts`), and `ledger-instruction.test.ts` pins the three live
    instruction passages; each pin moves with its text in the same commit.
 4. **The allocator retires.** Remove `POST /api/ledger/deviations`, `GET /api/ledger`, the `ccrc-api ledger` verbs, the
