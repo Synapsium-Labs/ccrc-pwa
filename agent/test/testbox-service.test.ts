@@ -559,8 +559,9 @@ describe('fsprobe.ts: the reflink probe', () => {
   it('the probe writes in `out`, the service user\'s directory of the run root, never at the run root, which is root\'s', () => {
     expect(reflinkProbeDir('/srv/box')).toBe(path.join('/srv/box', 'out'));
     const here = path.dirname(fileURLToPath(import.meta.url));
-    // the installer makes the run root root's and `out` the service user's: the two facts the choice rests on
-    const installer = readFileSync(path.join(here, '..', '..', 'deploy', 'testbox', 'install.sh'), 'utf8');
+    // the installer makes the run root root's and `out` the service user's: the two facts the choice rests on. Its
+    // steps are the functions of deploy/testbox/box-steps since D-8903, which the box updater calls too.
+    const installer = readFileSync(path.join(here, '..', '..', 'deploy', 'testbox', 'box-steps'), 'utf8');
     expect(installer).toContain('dir 0755 root root "$ROOT"');
     expect(installer).toMatch(/for d in [a-z ]*\bout\b[a-z ]*; do dir 0750 "\$SVC" "\$SVC" "\$ROOT\/\$d"; done/);
     expect(readFileSync(path.join(here, '..', 'src', 'testbox', 'main.ts'), 'utf8')).toContain('reflinkProbe(reflinkProbeDir(cfg.root), short)');
