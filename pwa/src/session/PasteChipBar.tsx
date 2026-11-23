@@ -4,7 +4,7 @@
 // its text together. Ring L4: it renders what `liveChips` (pasteChips.ts, L1) listed and calls back, deciding nothing.
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
-import type { LiveChip } from './pasteChips';
+import { linesWord, type LiveChip } from './pasteChips';
 import './pasteChips.css';
 
 export interface PasteChipBarProps {
@@ -13,8 +13,6 @@ export interface PasteChipBarProps {
   onRemove: (n: number) => void;
   disabled?: boolean;
 }
-
-const linesWord = (lines: number): string => `${lines} ${lines === 1 ? 'line' : 'lines'}`;
 
 export function PasteChipBar({ chips, onExpand, onRemove, disabled = false }: PasteChipBarProps): ReactNode {
   if (chips.length === 0) return null;

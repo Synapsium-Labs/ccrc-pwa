@@ -4,9 +4,9 @@
 // half-typed server-side draft (409 draft-present), a small sheet shows that
 // draft and offers: Append anyway (draft precedes your text — both send
 // together), Replace draft (replaceDraft: true), or Cancel (the failed bubble
-// keeps its Retry/Discard). A long text paste enters the draft as a chip token (desktop-polish wave 169): the decision
-// is pasteChips.ts (L1), the row that acts on chips is PasteChipBar, and a send expands every token to its full text
-// before today's send rules run, unchanged.
+// keeps its Retry/Discard). A long text paste enters the draft as a chip label (desktop-polish wave 169): the decisions
+// are pasteChips.ts (L1), the row that acts on chips is PasteChipBar, every edit the composer makes is the browser's
+// own (`execCommand`), and a send expands every chip to its full text before today's send rules run, unchanged.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 import { AttachButton, AttachTray, Button, Icon, KeyHint, Sheet, Well } from '@ccrc/ui';
@@ -18,8 +18,8 @@ import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
 import {
-  addChip, emptyChips, expandChip, expandDraft, liveChips, normalizePaste, reconcileEdit, removeChip, shouldChip,
-  tokenToRemove, type DraftEdit, type PasteChips,
+  addChip, applyChange, emptyChips, emptyDraft, expandChip, expandDraft, liveChips, normalizePaste, planInput,
+  removeChip, selectionText, shouldChip, type ChangeHow, type Draft, type PasteChips, type Plan,
 } from './pasteChips';
 import { PasteChipBar } from './PasteChipBar';
 import './chat.css';
@@ -90,14 +90,18 @@ export function Composer({
   onInterrupt,
   askUp = false,
 }: ComposerProps): ReactNode {
-  const [value, setValue] = useState('');
-  // Paste chips (wave 169). The table of pasted texts lives beside the draft, so it survives exactly where the draft
-  // does. A ref, not state: it changes only together with `value`, and the paste handler must register a chip before
-  // the browser's own `input` event for the token reaches `onChange`, inside the same call. `valueNow` is the draft as
-  // the last change left it, for the same reason (an `onChange` fired from inside a handler reads it before React
-  // re-renders). `caretTo` puts the caret back after a change the composer made itself.
+  // Paste chips (wave 169). The draft is the field's value plus the chip occurrences in it (pasteChips.ts `Draft`):
+  // identity is where the composer put a label, never the label's text. `draftNow` mirrors the state for handlers that
+  // run inside one browser call (a paste's own `input` event reaches `onChange` before React re-renders). The table of
+  // pasted texts lives beside the draft, so it survives exactly where the draft does. `attachNext` names the chip whose
+  // label the composer's next native edit inserts and `editNext` the range it replaces, both read by that edit's own
+  // `input` event; `caretTo` places the caret after a change the browser did not make itself.
+  const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const value = draft.value;
+  const draftNow = useRef<Draft>(emptyDraft());
   const chips = useRef<PasteChips>(emptyChips());
-  const valueNow = useRef('');
+  const attachNext = useRef<number | null>(null);
+  const editNext = useRef<{ start: number; end: number } | null>(null);
   const caretTo = useRef<number | null>(null);
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
   const [commands, setCommands] = useState<SlashCommand[] | null>(null);
@@ -108,38 +112,46 @@ export function Composer({
   const staged = useStagedImages(id ?? '');
   const [dropping, setDropping] = useState(false);
 
-  const put = (next: string, caret: number | null = null): void => {
-    valueNow.current = next;
+  const put = (next: Draft, caret: number | null = null): void => {
+    draftNow.current = next;
     caretTo.current = caret;
-    setValue(next);
-  };
-  const putEdit = (edit: DraftEdit): void => put(edit.value, edit.caret);
-
-  /** Every change to the field goes through here: a token the change broke is expanded back (`reconcileEdit`).
-   *  `placeCaret` is for a change the composer made itself; the browser already placed the caret after its own. */
-  const commit = (next: string, caret: number, placeCaret = false): void => {
-    const fixed = reconcileEdit(valueNow.current, next, caret, chips.current);
-    if (fixed !== null) putEdit(fixed);
-    else put(next, placeCaret ? caret : null);
+    setDraft(next);
   };
 
-  /** Replace [start, end) of the field with `text` as the browser's own edit, so its undo history holds it, and
-   *  through `commit` where the browser cannot (no `execCommand`, as in jsdom). */
-  const replaceRange = (start: number, end: number, text: string): void => {
+  /** Every change to the field goes through here (`applyChange`): occurrences move with the edit, and a label the edit
+   *  broke anyway is repaired, the one change the composer writes without the browser's editing. */
+  const change = (next: string, caret: number, how: ChangeHow): void => {
+    const r = applyChange(draftNow.current, next, caret, chips.current, how);
+    put(r.draft, r.repair?.caret ?? null);
+  };
+
+  /** Perform a plan as the browser's own edit (`execCommand`), so its undo history holds it, with focus and the caret
+   *  where the browser leaves them. Where the browser cannot (no `execCommand`, as in jsdom), the same change goes
+   *  through `change` with the caret placed by hand. */
+  const perform = (plan: Plan, attach: number | null = null): void => {
     const el = box.current;
     if (!el) return;
     const before = el.value;
     el.focus();
-    el.setSelectionRange(start, end);
+    el.setSelectionRange(plan.start, plan.end);
+    attachNext.current = attach;
+    editNext.current = { start: plan.start, end: plan.end };
     let done = false;
     try {
       done = typeof document.execCommand === 'function'
-        && document.execCommand(text === '' ? 'delete' : 'insertText', false, text)
+        && document.execCommand(plan.text === '' ? 'delete' : 'insertText', false, plan.text)
         && el.value !== before;
     } catch {
       done = false;
     }
-    if (!done) commit(before.slice(0, start) + text + before.slice(end), start + text.length, true);
+    attachNext.current = null;
+    editNext.current = null;
+    if (done) return;
+    const caret = plan.start + plan.text.length;
+    change(before.slice(0, plan.start) + plan.text + before.slice(plan.end), caret, {
+      attach, edit: { start: plan.start, end: plan.end },
+    });
+    caretTo.current = caret;
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
@@ -150,22 +162,63 @@ export function Composer({
       staged.add(files);
       return;
     }
-    const text = normalizePaste(e.clipboardData?.getData('text/plain') ?? '');
-    if (!shouldChip(text)) return; // an ordinary text paste — leave it alone
-    e.preventDefault();
     const el = e.currentTarget;
-    const added = addChip(chips.current, text);
-    chips.current = added.chips;
-    replaceRange(el.selectionStart, el.selectionEnd, added.token);
+    const text = normalizePaste(e.clipboardData?.getData('text/plain') ?? '');
+    let insert = text;
+    let attach: number | null = null;
+    if (shouldChip(text)) {
+      const added = addChip(chips.current, text);
+      chips.current = added.chips;
+      insert = added.token;
+      attach = added.n;
+    }
+    // A short paste that touches no label is the browser's own, as it always was.
+    const plan = planInput(draftNow.current, el.selectionStart, el.selectionEnd, 'insertFromPaste', insert, chips.current)
+      ?? (attach === null ? null : { start: el.selectionStart, end: el.selectionEnd, text: insert });
+    if (plan === null) return;
+    e.preventDefault();
+    perform(plan, attach);
   };
 
+  /** Copy and cut give the clipboard a chip's full text, never its label (pasteChips.ts `selectionText`). */
+  const onCopy = (e: ClipboardEvent<HTMLTextAreaElement>, cut: boolean): void => {
+    const el = e.currentTarget;
+    const s0 = el.selectionStart;
+    const s1 = el.selectionEnd;
+    const text = selectionText(draftNow.current, s0, s1, chips.current);
+    if (text === null) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', text);
+    if (cut) perform(planInput(draftNow.current, s0, s1, 'deleteByCut', null, chips.current) ?? { start: s0, end: s1, text: '' });
+  };
+
+  // `beforeinput`, natively: React's synthetic one carries no `inputType`. An edit that would break a label is replaced,
+  // before it lands, by the plan `planInput` makes (a Backspace after a label removes all of it, a key typed inside one
+  // expands it). The listener reads the latest render's closure through a ref.
+  const beforeInput = useRef<(e: InputEvent) => void>(() => undefined);
+  beforeInput.current = (e: InputEvent): void => {
+    const el = box.current;
+    if (!el || draftNow.current.occ.length === 0) return;
+    const plan = planInput(draftNow.current, el.selectionStart, el.selectionEnd, e.inputType, e.data, chips.current);
+    if (plan === null) return;
+    e.preventDefault();
+    perform(plan);
+  };
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const listen = (e: Event): void => beforeInput.current(e as InputEvent);
+    el.addEventListener('beforeinput', listen);
+    return () => el.removeEventListener('beforeinput', listen);
+  }, []);
+
   const expandPaste = (n: number): void => {
-    putEdit(expandChip(valueNow.current, n, chips.current));
-    box.current?.focus();
+    const plan = expandChip(draftNow.current, n, chips.current);
+    if (plan !== null) perform(plan);
   };
   const removePaste = (n: number): void => {
-    putEdit(removeChip(valueNow.current, n, chips.current));
-    box.current?.focus();
+    const plan = removeChip(draftNow.current, n);
+    if (plan !== null) perform(plan);
   };
 
   // Lazily fetch the session's slash commands (built-ins + skills) the first
@@ -192,7 +245,7 @@ export function Composer({
   const matches = query !== null && commands ? filterCommands(commands, query) : [];
 
   const pickCommand = (name: string): void => {
-    put(`/${name} `);
+    put(emptyDraft(`/${name} `));
     box.current?.focus();
   };
   // Draft conflicts already surfaced (or cancelled) — don't reopen the sheet
@@ -236,8 +289,8 @@ export function Composer({
     .map((i) => ({ path: i.path!, previewUrl: i.previewUrl }));
   // The draft as it will be sent: every chip token replaced by its full text, byte for byte. Every send rule below
   // reads this, never the tokens.
-  const expanded = expandDraft(value, chips.current);
-  const pasted = liveChips(value, chips.current);
+  const expanded = expandDraft(draft, chips.current);
+  const pasted = liveChips(draft, chips.current);
   const canSend = !disabled && !staged.hasFailed && !staged.uploading
     && (expanded.trim() !== '' || attachments.length > 0);
 
@@ -266,7 +319,7 @@ export function Composer({
     if (attachments.length > 0) onSend(text, { attachments });
     else onSend(text);
     sentAt.current = Date.now();
-    put('');
+    put(emptyDraft());
     chips.current = emptyChips(); // a new draft numbers its chips from #1 again
     staged.release();
   };
@@ -325,16 +378,6 @@ export function Composer({
   }, [id]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.key === 'Backspace' || e.key === 'Delete') {
-      // Against a chip token, the key takes the whole token and its text, never one character of it.
-      const el = e.currentTarget;
-      const span = tokenToRemove(el.value, el.selectionStart, el.selectionEnd, e.key, chips.current);
-      if (span !== null) {
-        e.preventDefault();
-        replaceRange(span.start, span.end, '');
-      }
-      return;
-    }
     if (e.key !== 'Enter') return;
     if (finePointer) {
       // Enter sends. Any held modifier reverts to a newline — the same
@@ -441,7 +484,22 @@ export function Composer({
           value={value}
           placeholder={placeholder}
           disabled={disabled}
-          onChange={(e) => commit(e.target.value, e.target.selectionEnd)}
+          onChange={(e) => {
+            const inputType = (e.nativeEvent as InputEvent).inputType ?? '';
+            change(e.target.value, e.target.selectionEnd, {
+              attach: attachNext.current,
+              edit: editNext.current,
+              history: inputType.startsWith('history'),
+            });
+          }}
+          onCopy={(e) => onCopy(e, false)}
+          onDragStart={(e) => {
+            // A dragged selection holding a chip carries its full text, as a copy does.
+            const el = e.currentTarget;
+            const text = selectionText(draftNow.current, el.selectionStart, el.selectionEnd, chips.current);
+            if (text !== null) e.dataTransfer.setData('text/plain', text);
+          }}
+          onCut={(e) => onCopy(e, true)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />

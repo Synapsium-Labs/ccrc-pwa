@@ -1,8 +1,10 @@
 /* The paste-chip row (desktop-polish wave 169), above the composer's field beside the attachment tray. Each chip is
-   self-grounded (--ink-on-well on --bg-well) so every descendant is measured against a ground it declares, in every
-   theme and both skins. A chip wraps to the next row rather than scrolling sideways, so at phone width the controls
-   stay in reach; the head of the pasted text is ellipsised, the number, line count and controls never are. The two
-   controls are the design system's ghost Button, which carries its own ink, hover and 44px floor. */
+   grounded on --bg-raised with --ink-primary, the input bar's own pair and an audited one, because its two controls are
+   the design system's ghost Button, which draws --ink-primary on a transparent fill (--bg-hover when hovered): the
+   chip's ground is what that ink is read against. On --bg-well, which the light palettes keep dark, it measured 1.09:1
+   (review 3457 F1); the browser leg now measures the rendered pairs in every palette and state. A chip wraps to the
+   next row rather than scrolling sideways, so at phone width the controls stay in reach; the head of the pasted text
+   is ellipsised, the number, line count and controls never are. */
 .paste-chips {
   display: flex;
   flex-wrap: wrap;
@@ -20,8 +22,8 @@
   padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
-  background: var(--bg-well);
-  color: var(--ink-on-well);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
   font: var(--weight-medium) var(--fs-xs) / 1.2 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
