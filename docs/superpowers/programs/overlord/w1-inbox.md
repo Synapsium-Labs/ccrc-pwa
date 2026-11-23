@@ -88,6 +88,22 @@ The plan's own slugs are built as its "Deviations found" section states them: `r
 - `inbox-keeps-unknown-rows` (F5): `unsettledFacts` keeps every row not in a settled state, so a row in a state this build does
   not know stays in the inbox as a text-free `unknown` fact.
 
+## Absorb of main 5102a69aa3
+
+One merge of main at `5102a69aa3` (after #3208), on the coordinator's absorb request. Two paths conflicted, on counts only,
+and were resolved by hand, keeping both sides: main's restore doors and this piece's inbox doors.
+
+- `server/src/auth/gate.ts`: the gate stands in front of 297 routes (main 294, this piece 295, the merge base 292).
+- `server/test/auth-gate.test.ts`: main's comment for 297 is kept and the inbox line added. It now reads 300 routes, 300
+  scanned, 297 HTTP routes, 186 gated and 111 exempt.
+
+Re-derived from the merged tree and found already right, with no edit: the box-token census, `README.md`'s machine-lane count,
+the client's route table, the doors census, the run-session census and the four census suites of the inbox piece. One row was
+added: `mutation-floors.json`'s `server/src/coord/envelope.ts#fixedLineReplayOf` at floor 1, the exact bytes the isolation
+piece agreed to. The first full run of the floors file on this branch also caught mutant L4 in `sim/probeDoorSets.ts`, whose
+target line fix round 1 had changed (`covered: true` became `covered`). Its target text now follows the source, and it is
+killed again.
+
 ## Index changes this piece asks for
 
 As the plan's "Index changes" section lists them, with these measured notes:

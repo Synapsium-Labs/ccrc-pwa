@@ -1021,7 +1021,7 @@ const BOOK_OF_SET: MutantSet<ProbeDoorModule> = {
     { id: 'L8 the caller\'s word on coverage ignored', old: 'const covered = i.ledgerComplete ?? READ_LEDGER_COMPLETE;', new: 'const covered = READ_LEDGER_COMPLETE;' },
     { id: 'L9 a counted session always covered', old: 'const covered = i.ledgerComplete ?? READ_LEDGER_COMPLETE;', new: 'const covered = true;' },
     { id: 'L3 a count never asked read as zero', old: "if (i.reads === null) return { ok: false, detail: 'the read ledger was not asked' };", new: "if (i.reads === null) return { ok: true, value: { covered: true, reads: 0 } };" },
-    { id: 'L4 an unreadable count read as zero', old: "return i.reads.kind === 'measured' ? { ok: true, value: { covered: true, reads: i.reads.value } } : { ok: false, detail: i.reads.why };", new: "return { ok: true, value: { covered: true, reads: i.reads.kind === 'measured' ? i.reads.value : 0 } };" },
+    { id: 'L4 an unreadable count read as zero', old: "return i.reads.kind === 'measured' ? { ok: true, value: { covered, reads: i.reads.value } } : { ok: false, detail: i.reads.why };", new: "return { ok: true, value: { covered, reads: i.reads.kind === 'measured' ? i.reads.value : 0 } };" },
   ],
   suite: bookOfCases,
 };
