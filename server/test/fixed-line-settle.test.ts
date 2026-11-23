@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import * as envelope from '../src/coord/envelope.js';
 import { fixedLineReplayOf, mailNudgeOf } from '../src/coord/envelope.js';
 import { fixedLineReplayOfCases } from './sim/fixedLineMailSets.js';
-import { finishFixedLineAck, settleNudge } from '../src/operatorModel/nudgeLane.js';
+import { finishFixedLineAck, settleNudge, type NudgeLaneDeps } from '../src/operatorModel/nudgeLane.js';
 import { INBOX_WAKE_SUBJECT, renderInboxWakeBody } from '../../shared/overlordInbox.js';
 import { operatorMessageSubject } from '../../shared/operatorMessages.js';
 import { SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
@@ -24,17 +24,18 @@ const generic = mailNudgeOf(OVERLORD, { fromId: 'lane-b-project-a', subject: 'st
 const message = mailNudgeOf(OVERLORD, { fromId: 'operator', subject: operatorMessageSubject(7) }, designated, NOW);
 
 /** A delivery writer that is the one owner of a row's state: `outstanding` until an ack lands, then `acked`, and an ack of an acked
- *  row is refused as terminal, as `writeDeliveries` refuses it. */
+ *  row is refused as `already-acked`, the answer `CoordStore.markAcked` gives. Typed as the lane's own port, so a change to that
+ *  answer is a type error here. */
 function writer() {
   const state = new Map<number, 'outstanding' | 'acked'>();
   const acks: number[] = [];
   const warned: string[] = [];
-  const coord = {
+  const coord: NudgeLaneDeps['coord'] = {
     markAcked(id: number) {
       acks.push(id);
-      if (state.get(id) === 'acked') return { ok: false as const, why: 'terminal' };
+      if (state.get(id) === 'acked') return { ok: false, why: 'already-acked', state: 'acked' };
       state.set(id, 'acked');
-      return { ok: true as const };
+      return { ok: true, state: 'acked' };
     },
   };
   return { state, acks, warned, deps: { coord, now: NOW, warn: (l: string) => { warned.push(l); } } };
@@ -69,14 +70,14 @@ describe('a fixed line\'s settlement and its recovery', () => {
     expect(w.warned).toEqual([]);
   });
 
-  it('recovery is idempotent: a second finish of an already acked row is refused as terminal, logged, and changes nothing', () => {
+  it('recovery is idempotent: a second finish of an already acked row is refused as already acked, logged, and changes nothing', () => {
     const w = writer();
     w.state.set(43, 'outstanding');
     expect(finishFixedLineAck(w.deps, { id: 43, deliveredAt: NOW - 60_000 }, spot)).toBe(true);
     expect(finishFixedLineAck(w.deps, { id: 43, deliveredAt: NOW - 60_000 }, spot)).toBe(true);
     expect(w.state.get(43)).toBe('acked');
     expect(w.acks).toEqual([43, 43]);
-    expect(w.warned).toEqual(['ccrc-server: mail sweep: delivery 43: ack refused (terminal)']);
+    expect(w.warned).toEqual(['ccrc-server: mail sweep: delivery 43: ack refused (already-acked)']);
   });
 
   it('a replayed generic nudge or operator message is left to the pass, which types it as before', () => {
