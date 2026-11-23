@@ -81,6 +81,10 @@ describe('_timer_period_s: the spellings the shipped timers use', () => {
     ['OnUnitInactiveSec=15min', 900],
     ['OnUnitInactiveSec=90s', 90],
     ['OnUnitInactiveSec=1h', 3600],
+    // Run 3508: the weekly quiz's wall-clock slots, every <h> hours from midnight UTC, <h> dividing the day.
+    ['OnCalendar=*-*-* 00/6:17:00 UTC', 21600],
+    ['OnCalendar=*-*-* 00/1:00:00 UTC', 3600],
+    ['OnCalendar=*-*-* 00/12:59:59 UTC', 43200],
   ];
   for (const [line, seconds] of rows) {
     it(`\`${line}\` is ${seconds}`, () => expectPeriod(period(timer(line)), seconds));
@@ -93,6 +97,8 @@ describe('_timer_period_s: the spellings the shipped timers use', () => {
     if (u) return Number(u[1]) * { s: 1, min: 60, h: 3600 }[u[2] as 's' | 'min' | 'h'];
     const c = /^OnCalendar=\*:0\/(\d+)$/.exec(value);
     if (c) return Number(c[1]) * 60;
+    const h = /^OnCalendar=\*-\*-\* 00\/(\d+):\d\d:\d\d UTC$/.exec(value);
+    if (h) return Number(h[1]) * 3600;
     throw new Error(`no meaning for ${value}`);
   };
   for (const name of readdirSync(UNITS).filter((n) => n.endsWith('.timer')).sort()) {
@@ -152,6 +158,14 @@ describe('_timer_period_s: everything else is refused, rc 1, one line why, nothi
   it('`OnCalendar=*:0/15` is 900, a step that divides the hour', () => expectPeriod(period(timer('OnCalendar=*:0/15')), 900));
   it('`OnCalendar=*:0/7` is refused: its last gap of the hour is 4 minutes, not 7', () =>
     expectRefused(period(timer('OnCalendar=*:0/7'))));
+  // Run 3508: `00/<h>` fires at midnight and every <h> hours after it within the day, so the gap is one number only when <h>
+  // divides 24; a local-time spelling (no ` UTC`), another start hour or a seconds field past 59 is a spelling no file uses.
+  it('`OnCalendar=*-*-* 00/5:17:00 UTC` is refused: its last gap of the day is 4 hours, not 5', () =>
+    expectRefused(period(timer('OnCalendar=*-*-* 00/5:17:00 UTC'))));
+  for (const spelling of ['OnCalendar=*-*-* 00/6:17:00', 'OnCalendar=*-*-* 03/6:17:00 UTC', 'OnCalendar=*-*-* 00/6:17:60 UTC',
+    'OnCalendar=*-*-* 00/0:17:00 UTC', 'OnCalendar=*-*-* 00/06:17:00 UTC', 'OnCalendar=*-*-* 00/6:17 UTC']) {
+    it(`\`${spelling}\` is refused (a spelling no shipped file uses)`, () => expectRefused(period(timer(spelling))));
+  }
   for (const spelling of ['OnUnitActiveSec=0s', 'OnUnitActiveSec=015min', 'OnCalendar=*:0/0']) {
     it(`\`${spelling}\` is refused (no zero period, no leading zero)`, () => expectRefused(period(timer(spelling))));
   }
