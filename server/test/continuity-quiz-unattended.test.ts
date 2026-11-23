@@ -411,6 +411,9 @@ describe('POST /api/continuity/quiz-status (the unattended run\'s tick, box toke
     await wait('2026-W50', 5);
     expect(gone().map((m) => [m.toId, m.subject])).toEqual([['lane-a', `quiz-unattended-stopped 2026-W49 ${QUIZ_SETUP_ACCOUNT_GONE}`]]);
     expect(gone()[0]!.body).toContain('since 2026-W48');
+    // Run 3538: the account is the week's, so the mail asks whether any candidate has room and never advises a new setup.
+    expect(gone()[0]!.body).toContain('whether any candidate has room');
+    expect(gone()[0]!.body).not.toMatch(/never re-picked|a new setup/);
     // An ok tick ends the run; a new run of waiting weeks mails once more.
     await status(r, tick({ week: '2026-W50', at: 6 }));
     await wait('2026-W51', 7);
