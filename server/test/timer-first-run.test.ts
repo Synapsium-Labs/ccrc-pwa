@@ -112,6 +112,23 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
     expect(unit('ccd-land-probe.timer'), 'the timer no longer cites D-1981 where it states the anchor').toContain('D-1981');
   });
 
+  it('the weekly quiz fires on the wall clock, which no reload or restart can starve, and never at once on a deploy (run 3508)', () => {
+    // Measured on a fleet box: its `OnActiveSec=30min` was re-based to "now" at every reload of the user manager (timer.c's
+    // coldplug re-arms a monotonic elapse from the dead state, so its base is the reload's moment), and fleet sessions'
+    // own unit acts reload that manager every few minutes. The timer stood active for a day and never fired. An
+    // `OnCalendar=` elapse is computed from the last trigger, or from when the timer was armed, never from now.
+    const k = keys('ccd-quiz-weekly.timer');
+    expect(k.filter((l) => /^On[A-Za-z]+=/.test(l)), 'the quiz timer must carry exactly its one wall-clock line and no monotonic elapse')
+      .toEqual(['OnCalendar=*-*-* 00/6:17:00 UTC']);
+    // D-1981's reason, said for a calendar timer: `Persistent=true` fires a slot missed while the timer was not armed AT
+    // ONCE when it is armed, on top of the deploy's supervisor sweep.
+    expect(k.filter((l) => l.startsWith('Persistent=')), 'Persistent= would fire a missed slot at once on a deploy').toEqual([]);
+    // No second run started the moment a long one ends: the next slot is counted from the run's end (systemd 257+).
+    expect(k, 'the quiz timer lost DeferReactivation=, so a run spanning a slot is followed by another at once').toContain('DeferReactivation=yes');
+    expect(k.filter((l) => /^RandomizedDelaySec=/.test(l)), 'a random delay is re-rolled at every reload: none here').toEqual([]);
+    expect(unit('ccd-quiz-weekly.timer'), 'the timer no longer cites D-1981 where it argues against Persistent=').toContain('D-1981');
+  });
+
   it('every timer in deploy/systemd carries exactly one first-run anchor', () => {
     // The census, so a timer joining the others cannot arrive with no anchor
     // at all (first run then waits for OnUnitActiveSec from an activation that
@@ -132,7 +149,9 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
     // never opening two of the files it claims. Deriving closed both in one
     // move, and neither new timer needed an exception: both carry exactly one
     // `OnBootSec=`.
-    const CALENDAR = new Set(['ccrc-ddns.timer']);
+    // `ccd-quiz-weekly.timer` joined it in run 3508: a wall-clock timer, which reloads of the user manager cannot starve
+    // (the quiz case above pins why, and that it sets no `Persistent=`).
+    const CALENDAR = new Set(['ccrc-ddns.timer', 'ccd-quiz-weekly.timer']);
     const timers = readdirSync(SYSTEMD).filter((n) => n.endsWith('.timer')).sort();
     // ANTI-VACUITY: a `readdirSync` that suddenly answers nothing (a moved
     // directory, a renamed suffix) would make this loop green over an empty

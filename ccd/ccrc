@@ -1403,8 +1403,10 @@ _launchd_class() {
 # A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h`,
 # `OnUnitInactiveSec=<n>s|min|h` (the period counted from the END of the last
 # run, the graph sweep's since D-7876: the gap between a run's end and the next
-# start is the one number) or `OnCalendar=*:0/<n>` (every <n> minutes, <n>
-# dividing the hour, so the gap between firings is one number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# start is the one number), `OnCalendar=*:0/<n>` (every <n> minutes, <n>
+# dividing the hour, so the gap between firings is one number) or
+# `OnCalendar=*-*-* 00/<h>:<mm>:<ss> UTC` (every <h> hours from midnight UTC, <h>
+# dividing the day: the weekly quiz's slots since run 3508). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
 # `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
 # keys), each comment and each blank is IGNORED, never refused: they sit beside
 # the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
@@ -1429,8 +1431,10 @@ _timer_period_s() {   # <timer-file>
     esac
   elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
     echo $((BASH_REMATCH[1] * 60))
+  elif [[ "$hit" =~ ^OnCalendar=\*-\*-\*\ 00/([1-9][0-9]?):[0-5][0-9]:[0-5][0-9]\ UTC$ ]] && [ $((24 % BASH_REMATCH[1])) -eq 0 ]; then
+    echo $((BASH_REMATCH[1] * 3600))   # run 3508: every <h> hours of the day from midnight UTC; one gap only when <h> divides 24
   else
-    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h, OnCalendar=*:0/<n> or OnCalendar=*-*-* 00/<h>:<mm>:<ss> UTC" >&2; return 1
   fi
 }
 

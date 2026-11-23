@@ -3,7 +3,7 @@
 // docs/superpowers/programs/overlord/quiz-unattended.md, section 1; the operator's ruling of 2026-11-22 that supersedes the
 // one W0-28 condition "the driver runs by your hand").
 //
-// An L4 runner, the one act of `ccd-quiz-weekly.service` (a systemd user timer, every 6 h): `node --no-warnings
+// An L4 runner, the one act of `ccd-quiz-weekly.service` (a systemd user timer on the wall clock, four slots a day, run 3508): `node --no-warnings
 // ~/ccrc/deploy/history-quiz-unattended.mjs`, no arguments. Each tick it advances the quiz by as many acts as it can, in
 // order: the setup, the sourced and frozen questions and the headless marker text (once, ever), then this ISO week's arms,
 // judge and report, then `ccrc quiz-record --confirm`. It spawns the single-arm driver (`history-quiz-single.mjs`) exactly

@@ -1,16 +1,28 @@
-# ccd-quiz-weekly.timer - fires ccd-quiz-weekly.service: first thirty minutes after the timer is armed, then six hours
-# after the end of each run. The runner does the week's one act per tick (or nothing, when the week is already
-# confirmed), so the cadence only bounds how soon a stopped week is resumed.
+# ccd-quiz-weekly.timer - fires ccd-quiz-weekly.service on the wall clock, four times a day at 00:17, 06:17, 12:17 and
+# 18:17 UTC. The runner does the week's one act per tick (or nothing, when the week is already confirmed), so the cadence
+# only bounds how soon a stopped week is resumed: within six hours.
+#
+# WHY A WALL CLOCK, not `OnActiveSec=` plus `OnUnitInactiveSec=` (run 3508; docs/superpowers/programs/overlord/
+# quiz-weekly-repair.md): systemd re-bases an `OnActiveSec=` elapse to "now" whenever the timer is re-armed from the
+# dead state, and a daemon-reload re-arms every timer that way (timer.c's coldplug runs with the state still dead). Fleet
+# sessions' own unit acts reload the user manager every few minutes, so the thirty-minute first elapse was never reached
+# and the timer never fired. An `OnCalendar=` elapse is computed from the timer's last trigger (or, before the first, from
+# when it was armed), never from now, so no number of reloads or restarts can move it.
 [Unit]
-Description=Run the weekly replay quiz unattended, six hours after the last run ended
+Description=Run the weekly replay quiz unattended, four times a day on the wall clock
 [Timer]
-# `OnActiveSec=`, NOT `OnBootSec=`, for ccd-land-probe.timer's reason (D-1981): this timer is first armed by
-# an install or a deploy on a box that has been up for days, where a boot-relative elapse point is already past and the
-# first run would start AT ONCE, on top of the deploy's supervisor sweep. Thirty minutes lets the box settle first.
-OnActiveSec=30min
-# `OnUnitInactiveSec=`, NOT `OnUnitActiveSec=`: counted from the END of the last run, so a run that takes
-# hours never stacks a second one behind it, and a tick that finds nothing to do costs a six-hour wait, not a busy loop.
-OnUnitInactiveSec=6h
-AccuracySec=5min
+# The four slots. UTC, because the runner's weeks are ISO weeks in UTC: the Monday 00:17 slot opens a new week at once.
+# Minute 17, so the tick does not share the top of the hour with every other calendar job on the box.
+OnCalendar=*-*-* 00/6:17:00 UTC
+# NO `Persistent=`, deliberately, for ccd-land-probe.timer's reason (D-1981): with it, a timer armed or re-armed after a
+# missed slot (an install's or a deploy's `enable --now`, a box that was down) fires AT ONCE, on top of the deploy's
+# supervisor sweep. Without it a missed slot is simply skipped, and the next slot, at most six hours away, resumes the
+# week; that is the bound a stopped week was promised, so no catch-up is needed.
+# `DeferReactivation=` (systemd 257 and later): the next slot is counted from the END of the last run, so a run that
+# takes hours and spans a slot never has a second run started the moment it ends. An older systemd ignores the key with
+# a warning and starts one run at once behind a run that spanned a slot; the runner's week bound (one --budget a week)
+# and its lock hold either way.
+DeferReactivation=yes
+AccuracySec=1min
 [Install]
 WantedBy=timers.target
