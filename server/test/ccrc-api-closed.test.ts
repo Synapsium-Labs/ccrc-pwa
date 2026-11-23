@@ -176,7 +176,6 @@ describe('the corpora no longer invoke curl', () => {
       'landing.order',
       'landing.show',
       'leases.retain',
-      'ledger.allocate',
       'linear.comment',
       'linear.create',
       'linear.issue',

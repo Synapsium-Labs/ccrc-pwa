@@ -49,7 +49,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Review runs and a stall watch** | A finished wave is read by a separate reviewer session at one measured tip, and the coordinator rules on its report. A silent worker is asked, then its coordinator told, then you — each rung recorded before it is sent, and nothing sent until you arm it. |
 | **Claims are re-measured, never believed** | A worker reporting "wave done" is checked against the workspace branch tip and `.prhistory`, from the git refs on disk. |
 | **Mail between sessions** | Delivered only into an idle turn boundary, so a nudge never lands mid-thought. The body lives in a durable store; what arrives is one line. |
-| **Sessions that stay out of each other's way** | A session claims the paths it is about to edit, all or nothing, and a conflict names the holder to mail. A dispatched worker is denied `gh pr merge` — the coordinator lands work — and deviation numbers are issued by the server, never guessed. |
+| **Sessions that stay out of each other's way** | A session claims the paths it is about to edit, all or nothing, and a conflict names the holder to mail. A dispatched worker is denied `gh pr merge` — the coordinator lands work — and deviation numbers are taken with a helper from `origin/main`, never guessed. |
 | **Hook-first session state** | Each session reports its own state through a Claude Code hook; scraping the tmux pane is the ranked fallback, not the source. |
 | **A code graph for every tree** | graphify keeps an AST-derived knowledge graph fresh per git tree on the fleet host, and a ccrc session that searches a freshly graphed tree before querying it is turned back, at most three times (`touch ~/.ccrc/graph-gate-off` lifts the gate). |
 | **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or three minutes go by. |
@@ -4345,7 +4345,8 @@ token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack|inbox`, `peers list`, `lifecycle list`,
-`claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
+`claims list|take|release`, `ledger list|allocate` (`allocate` answers 410: the allocator retired),
+`landing show|entries|order`,
 `asks list|answer|release`, `goals show` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
@@ -4444,7 +4445,7 @@ what it cannot.
    project row carries a readiness badge (`✓ program-ready`, `✕ not ready`,
    `? readiness unknown`, or `· checking` before the server's first sweep), and
    under any verdict but ready it names the preconditions that do not hold —
-   the worker or coordinator skill, the deviation-ledger floor, the box token,
+   the worker or coordinator skill, the box token,
    the coordination database. The projected account is named *before* the tap:
    the project's own measured `placement` from `GET /api/projects`, which applies
    its pool tag, or, from an older server, `useProjectedHome` (which carries the
@@ -6080,24 +6081,22 @@ recipient acks one; `time`: when the oldest leaves the hour). An invited reply i
 `kind: answer` whose `inReplyTo` names the delivery of an unasked mail the recipient sent to the sender (never an
 invited reply, never a mail to oneself), one per mail, recorded in `mail.answersMail` and holding no slot.
 
-**The deviation ledger's allocator.** Plans record their departures as numbered `D-N` entries in one
-global, monotonic namespace, and the numbers are ISSUED, never looked up. `POST /api/ledger/deviations`
-(box token; `{project, count, title, byId?}`, `count` 1–100) mints a contiguous block — appended to
-`~/.ccrc/ledger-alloc.log` before it is committed to `coord.db`, so a crash can skip a number but
-never reissue one — and answers `201 {numbers, floor}`, `floor` being the next free number. The
-coordinator allocates its programme's block once, at run-open, and names it in every brief
-(coordinator clause 10); a worker never calls the allocator, and a session that cannot reach it
-writes `D-TBD-<slug>` and reports — `server/test/dtbd.test.ts` reds any tracked file that carries a
-concrete `D-TBD-` placeholder (the `<slug>` meta-form is exempt). A project's floor is seeded from
-prose — the highest `D-<n>` anywhere in its `docs/superpowers/{plans,specs}`, plus `LEDGER_SEED_GAP`
-(50) — by the watcher's sweep or on the first allocation, and only ever rises, so a number written
-without being issued still raises the floor and seals its band (`409 not-seeded` when there is
-nothing to seed from: the docs could not be read, or name no `D-<n>` at all).
-`GET /api/ledger?project=<p>` (box token) is the read: the floor (`null` means not seeded, never 0) —
-what the next allocation would mint, not a number anyone may take — and every allocation, one never
-landed after seven days marked `stale`. A number defined on two branches is caught before the
-merge: `git fetch origin main`, then
-`cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`.
+**Deviation numbers are self-assigned.** Plans record their departures as numbered `D-N` entries in one
+global, monotonic namespace, and since 2026-11-23 the author takes the number, with no server and no token:
+`git fetch origin main`, then `cd server && npm run next-deviation -- <count>`, which prints
+`max(highest + 1, 10000)` onward, the highest being the highest `D-N` defined on `origin/main` in any file
+under `docs/superpowers/plans/`, `programs/` or `specs/` (`server/scripts/next-deviation.ts`, reading with the
+guards' own `definitionsIn`; `SELF_ASSIGNED_ERA` in `server/src/coord/ledger.ts`). A coordinator names the
+numbers it takes in the brief (coordinator clause 10), and a worker takes its own the same way (worker clause
+11). Until a number is taken the entry is `D-TBD-<slug>`, and `server/test/dtbd.test.ts` reds any tracked
+file that carries a concrete `D-TBD-` placeholder (the `<slug>` meta-form is exempt). A collision is caught at
+merge, not prevented: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` (after the
+fetch) compares this branch's definitions against `origin/main`'s without merging and, for a number of 10000 or
+more, reds on one defined in two files or twice in one file across all three directories (below 10000 the
+older rule stands); the merge queue runs it on the merged result, and the one that lands second renumbers.
+The allocator retired the same day: `POST /api/ledger/deviations` still checks the box token, then answers
+`410 retired` naming the helper and writes nothing, and the watcher no longer runs the ledger sweeps.
+`GET /api/ledger?project=<p>` (box token) still reads the numbers it issued.
 
 **The stall watch.** A watcher lane, `sweepStalls` (every 60 s, its verdict the
 pure `server/src/coord/stall.ts`), looks at the worker of every active run. It

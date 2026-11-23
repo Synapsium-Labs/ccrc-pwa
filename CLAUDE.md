@@ -474,25 +474,21 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
   were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked
   text, measured).
-  **You are ISSUED a number — you never look one up.** `POST /api/ledger/deviations` MINTS a contiguous block,
-  and those are the only numbers you may define; allocate and DEFINE IN THE SAME ACT. It is box-token gated, so
-  a session that cannot reach it writes `D-TBD-<slug>` and reports (worker clause 11) rather than guessing.
-  `GET /api/ledger?project=` is the READ, and its `floor` is what the next POST would mint, not a number you
-  may take (a brief once said 1243 while the allocator said 1292, D-1293).
-  **WHAT THE FLOOR IS.** It is seeded from PROSE — the highest `D-<n>` token anywhere in this project's
-  `docs/superpowers/{plans,specs}`, a mere mention counting, plus `LEDGER_SEED_GAP` — and it ONLY EVER RISES
-  (`raiseLedgerFloor`'s `WHERE excluded.floor > ledger_floor.floor`; no lowering path exists). So every
-  publish-then-sweep burns `LEDGER_SEED_GAP - 1` numbers by design, which costs nothing, and a number WRITTEN
-  without being ISSUED seals its own band forever: it never enters the ledger, and it raises this project's
-  floor anyway. Measured 2026-09-02: the live floor stood well ABOVE the highest number the allocator has ever
-  issued, raised off a plan file that is on no merged ref — every number between is unissuable for good.
-  The parallel-branch collision — two branches each measuring a checkout and each taking the same next number —
-  is now MEASURED rather than remembered: `git fetch origin main` then `cd server &&
-  ./node_modules/.bin/vitest run test/deviation-refs.test.ts`, which compares this branch's entries against
-  `origin/main`'s **without merging** and reds on any allocator-era number defined in two plans. It fires before
-  the merge that would otherwise decide it; the older one-tree scan could only name the loser afterwards. It
-  cannot see the other shape — one plan defining a number NOBODY was issued — which `sweepLedgerReconcile`'s
-  orphan warning reports and nothing refuses. Source files carry `D-N` refs in comments; **read them
+  **You take your own number — nobody issues it** (self-assigned since 2026-11-23, spec
+  `2026-11-23-deviation-numbers-self-assigned-design.md`). `git fetch origin main`, then `cd server && npm run
+  next-deviation -- <count>`: it prints `max(highest + 1, 10000)` onward, the highest being the highest `D-N`
+  DEFINED on `origin/main` in any file under `docs/superpowers/plans/`, `programs/` or `specs/`, with no server
+  and no token. Take and DEFINE IN THE SAME COMMIT; until then a deviation is `D-TBD-<slug>`, which
+  `dtbd.test.ts` refuses to land. 10000 is the cut-over, clear of every number the allocator issued, not a guard:
+  nothing reds a low number. **A collision is caught, not prevented:** two branches in flight will often take the
+  same number, and `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` (after `git fetch
+  origin main`) compares this branch's definitions against `origin/main`'s **without merging** and reds, for a
+  number of 10000 or more, on one defined in two files or twice in one file across all three directories (below
+  10000 the old rule stands: an allocator-era number defined in two plans). The merge queue runs it on the
+  merged result, so the pair never lands; the one that lands second renumbers, the entry and every reference to
+  it. The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23: it answers 410 and writes nothing,
+  and its prose-seeded floor, which only ever rose, is no longer read; `GET /api/ledger?project=` still reads
+  the numbers it issued. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
 - **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though

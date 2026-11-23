@@ -84,12 +84,20 @@ the spec links to them by relative path; files already on `main` stay where they
 
 **`D-N` markers in comments are the deviation ledger** — a global, monotonic record of
 decisions and the measurements behind them. Read them as history; don't delete them. If
-you add one, you are ISSUED numbers by the allocator (`POST /api/ledger/deviations`),
-and **allocate and define in the same act** — the gap between asking for a number and
-writing it down is where two branches come to hold the same one.
+you add one, you take its number yourself, with no server and no token:
 
-Two branches allocating in parallel has forced a renumber more than once, so it is checked
-rather than remembered:
+```bash
+git fetch origin main
+cd server && npm run next-deviation -- <count>
+```
+
+The helper prints `max(highest + 1, 10000)` onward, where the highest is the highest `D-N`
+defined on `origin/main` in any file under `docs/superpowers/plans/`, `programs/` or `specs/`.
+**Take and define in the same commit**; until then the entry is `D-TBD-<slug>`, which CI
+refuses to land. The server allocator (`POST /api/ledger/deviations`) retired on 2026-11-23.
+
+Two pull requests in flight can take the same number, so a collision is checked rather than
+prevented:
 
 ```bash
 git fetch origin main
@@ -97,10 +105,13 @@ cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
 ```
 
 That suite compares this branch's ledger entries against `origin/main`'s **without merging
-either into the other**, and reds if any allocator-era number is defined in two different
-plans. It measures whatever `origin/main` your checkout has fetched — hence the `git fetch`
-first — and it goes red on a base it cannot resolve rather than quietly passing, so a
-shallow clone reports a problem instead of a clean bill. CI runs it on every PR.
+either into the other**, and reds if a number of 10000 or more is defined in two files, or
+twice in one file, across those three directories (an older, allocator-era number is checked
+across plans only). It measures whatever `origin/main` your checkout has fetched — hence the
+`git fetch` first — and it goes red on a base it cannot resolve rather than quietly passing, so
+a shallow clone reports a problem instead of a clean bill. CI runs it on every PR, and the merge
+queue runs it on the merged result, so the pair never lands: whoever lands second renumbers the
+entry and every reference to it.
 
 **Don't collapse two conditions a caller handles differently into one value.** "Absent"
 and "unreadable" are not the same answer; a function that returns `null` for both has

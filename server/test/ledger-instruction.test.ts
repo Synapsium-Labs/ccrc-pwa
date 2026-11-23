@@ -59,48 +59,19 @@ const sectionToEnd = (name: string, text: string, from: string): string => {
   return out;
 };
 
-const NUM = '(?:next (?:free|available|unused)|highest|next number)';
-const VERB = '(?:grep\\w*|sweep\\w*|scan\\w*|read)';
-const TREE = '(?:origin/main|remote ref|both trees|the tree|`main`)';
-/** "Get your number by reading a tree", in the spellings this corpus has used. */
-const BY_SCANNING = new RegExp(
-  `${NUM}[^.]{0,120}${VERB}[^.]{0,120}${TREE}` + '|' +
-  `${NUM}[^.]{0,120}${TREE}` + '|' +
-  `${VERB}[^.]{0,120}${TREE}[^.]{0,120}(?:before allocating|${NUM})`, 'i');
+/** The allocator's route may be named only as history: in a sentence that says it retired. */
+const ALLOCATOR = 'POST /api/ledger/deviations';
+const allocatorAsInstruction = (text: string): string[] =>
+  text.split(/(?<=\.)\s/).filter((s) => s.includes(ALLOCATOR) && !/retired/i.test(s));
 
-describe('the allocation instruction', () => {
-  it('the scanner is LIVE — it catches the sentences it replaced and spares the ones it keeps', () => {
-    // ANTI-VACUITY. Most assertions below are absences, and an absence proves
-    // nothing unless the pattern can produce a presence. These three positives
-    // are real historical texts (the middle one is still in the spec at HEAD).
-    for (const yes of [
-      'Allocate the next number by grepping `origin/main` across BOTH `docs/` and source',
-      'The next free number must be read from `origin/main` at plan-writing time',
-      'Verify at execution by sweeping every remote ref across `docs/` AND source before allocating',
-    ]) expect(BY_SCANNING.test(yes), yes).toBe(true);
-    // …and the procedures the bullets KEEP must not trip it, or the guard gets
-    // deleted the first time it cries wolf.
-    for (const no of [
-      'git fetch origin main then vitest run test/deviation-refs.test.ts, which compares ' +
-      "this branch's entries against `origin/main` without merging",
-      '`GET /api/ledger?project=` is the READ, and its `floor` is what the next POST would mint',
-    ]) expect(BY_SCANNING.test(no), no).toBe(false);
-  });
-
-  it('CLAUDE.md tells you that you are ISSUED a number, and what the floor is', () => {
+describe('the numbering instruction (self-assigned since 2026-11-23)', () => {
+  it('CLAUDE.md tells you to take a number with the helper, from 10000', () => {
     const b = passage('CLAUDE.md, the deviation-ledger bullet', read('CLAUDE.md'),
       '- **Deviation ledger (D-N):**', '\n- **Wire discipline');
-    // A RATCHET, stated as one: this passage does NOT match today (measured), so
-    // it is here to keep the instruction from coming back, not to go red first.
-    // The liveness case above is what proves it can still fire.
-    expect(b, 'the bullet prescribes reading a tree for a number').not.toMatch(BY_SCANNING);
-    expect(b).toContain('POST /api/ledger/deviations');
-    expect(b, 'nothing says the floor cannot come back down').toMatch(/only ever rises/i);
-    // NAMED, not valued: the gap lives in shared/api.ts and the bullet points at
-    // it. Asserting its NUMBER here would red a doc test on a legitimate change
-    // to the constant — a red for the wrong reason.
-    expect(b, 'the bullet does not name the gap the floor is built from')
-      .toContain('LEDGER_SEED_GAP');
+    expect(b, 'the bullet does not name the helper').toContain('next-deviation');
+    expect(b, 'the bullet does not state the 10000 start').toContain('10000');
+    expect(allocatorAsInstruction(b), 'the bullet still sends a session to the retired allocator').toEqual([]);
+    expect(b, 'the bullet no longer says how a collision is caught').toContain('deviation-refs.test.ts');
     expect(b, 'the reconciled legacy series is described as still running')
       .not.toMatch(/runs alongside/);
     expect(b, 'source cannot run ahead of the plans — deviation-refs.test.ts reds on it')
@@ -113,22 +84,26 @@ describe('the allocation instruction', () => {
     const p = passage('CONTRIBUTING.md, the ledger paragraph', read('CONTRIBUTING.md'),
       '**`D-N` markers in comments are the deviation ledger**',
       "\n**Don't collapse two conditions");
-    expect(p, 'the public file prescribes reading a tree for a number').not.toMatch(BY_SCANNING);
-    expect(p).toContain('POST /api/ledger/deviations');
-    expect(p, 'the take-a-number framing is what produced the collisions')
-      .not.toMatch(/take the next free number/i);
+    expect(p, 'the public file does not name the helper').toContain('next-deviation');
+    expect(p, 'the public file does not state the 10000 start').toContain('10000');
+    expect(allocatorAsInstruction(p), 'the public file still sends a contributor to the retired allocator').toEqual([]);
+    expect(p, 'the public file no longer says how a collision is caught').toContain('deviation-refs.test.ts');
     expect(p, 'a renumber cardinal is back; this file names no incident at all')
       .not.toMatch(/\b(two|three|four|five|six|seven|eight)\s+times\b/i);
   });
 
-  it('the account-provisioning spec no longer prescribes reading a tree for a number', () => {
+  it('the allocator-route check is LIVE — it catches an instruction and spares a retirement note', () => {
+    expect(allocatorAsInstruction('You are ISSUED numbers by `POST /api/ledger/deviations`. Next.')).toHaveLength(1);
+    expect(allocatorAsInstruction('The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23. Next.')).toEqual([]);
+  });
+
+  it('the account-provisioning spec keeps its incident record', () => {
     // A design SPEC, imperative and present tense — not a dated note. Its
     // INCIDENT RECORD stays: the D-108..D-140 renumber is why the section
     // exists, and deleting the instruction must not take the history with it.
     const s = sectionToEnd('account-provisioning spec, section 14',
       read('docs/superpowers/specs/2026-08-21-account-provisioning-design.md'),
       '## 14. Deviations');
-    expect(s, 'the spec still prescribes reading a tree for a number').not.toMatch(BY_SCANNING);
     expect(s, 'the incident record was deleted along with the instruction')
       .toContain('descending-order rewrite');
   });

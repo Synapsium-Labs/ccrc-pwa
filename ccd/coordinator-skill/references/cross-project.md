@@ -94,10 +94,10 @@ immutable producer blob proves where that shape came from; and the plan blob
 controls wave scope and requirements. `ledgerAbsPath` names only the programme
 ledger. Paths, not payloads: the 8 KB ceiling is unchanged.
 
-**Deviations found during a foreign-repo wave are minted against the HOME
-project** — `POST /api/ledger/deviations` with the home project's name — and
-defined in the home plan, because that is where the plan lives. The allocator
-takes the project from the caller and cannot cross-check it, so this one is
+**Deviations found during a foreign-repo wave are numbered in the HOME
+project** — `npm run next-deviation` run in the home project's checkout — and
+defined in the home plan, because that is where the plan lives. The helper
+reads whichever checkout it runs in and cannot cross-check it, so this one is
 discipline rather than a mechanism, which is exactly why it is written down.
 
 **Address the worker as `toId: 'worker'` with this run's `runId`**, and the

@@ -1,4 +1,4 @@
-# The peer protocol — discovery, claims, the allocator
+# The peer protocol — discovery, claims, deviation numbers
 
 The long form of coordinator clause 10 and worker clause 11 (Build 9, spec
 D9–D13, D17). Both skills point here. The FIRST copy of the etiquette rides
@@ -162,37 +162,24 @@ row whose `chainedFrom` is its id (D-8395). `GET /api/lifecycle?session=<id>` is
 tense, and it answers for a workspace that no longer exists — read each
 row's own lifecycle families (`obs`/`dec`/`meas`), never the registry's
 archive stamp, which is measured false on live rows. `GET /api/ledger?project=<slug>`
-(per-project, required) lists every deviation allocation with its state
+(per-project, required) lists every deviation allocation the retired allocator made, with its state
 (`allocated`, `landed`) and its derived `stale` flag — reported at read
 time, never stored.
 
-## The allocator — `POST /api/ledger/deviations`
+## Deviation numbers — `npm run next-deviation`
 
-    body=$("$API" ledger allocate --json - <<JSON
-    {"byId":"$id","project":"$project","count":8,"title":"program $slug D-block"}
-    JSON
-    )
+    git fetch origin main
+    (cd server && npm run next-deviation -- 3)
 
-`201 {numbers, floor}` — a contiguous block, appended to the flat ledger log
-BEFORE the database commits, so on any doubt a number is SKIPPED, never
-reissued (gaps cost nothing; a reissue once cost 394 rewritten D-ref lines
-across 30 files). `409 not-seeded` no longer means "wait for the sweep": the
-first allocation on a project seeds the floor itself, measuring that project's
-own docs/superpowers plans and specs inline, and then proceeds. The refusal now
-means one of two things, and the `detail` says which — the documents were read
-and name no `D-<n>` at all, so there is nothing to seed from; or they could not
-be measured, so nothing was proven either way. Report it, do not invent. The
-coordinator allocates the program's whole block at run-open (clause 10) and names it in
-the brief, so a wave in flight never calls the allocator at all. A worker
-that finds an unplanned deviation with no server reachable writes
-`D-TBD-<slug>` and reports — the tree's own red suite refuses to let a
-`D-TBD` land, which turns a server outage into a loud mechanical blocker
-instead of a judgement call. Inventing a number is the root cause this
-allocator exists to delete.
-
-`byId` is who asked, and it is stored unverified — attribution, not authentication,
-the claims table's stance one section up. Omit it and the row records no holder at
-all: at least 101 of this project's allocations were in that state when this was
-written (2026-09-02), and nothing can put a holder back on them. The client fills it
-from your pane when the body leaves it out, and refuses rather than sending a blank
-one; `--by <id>` is for a caller that has no pane at all.
+A deviation number is self-assigned: the highest `D-N` defined on `origin/main`
+(in any file under `docs/superpowers/plans/`, `programs/` or `specs/`) plus one,
+and never below 10000; the helper prints that many consecutive numbers, with no
+server and no token. Take them when the wave records a deviation, and define them
+in the same commit. Two branches in flight will sometimes take the same number:
+`deviation-refs.test.ts` compares a branch's definitions against `origin/main`'s
+without merging, and the merge queue runs it on the merged result, so the pair
+never lands; the one that lands second renumbers, the entry and every reference
+to it. Until a number is taken, a deviation is `D-TBD-<slug>`, which the tree's
+own red suite refuses to let land. The allocator (`POST /api/ledger/deviations`)
+retired on 2026-11-23 and answers 410; `GET /api/ledger` above still reads the
+numbers it issued.
