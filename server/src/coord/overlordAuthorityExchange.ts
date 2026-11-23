@@ -22,7 +22,7 @@ import { authorityCoherence, type AuthorityRowsSeen } from './overlordAuthorityC
 import type { ConfirmPrivacyRead } from './overlordRestore.js';
 import type { AgentHostRelation } from '../../../shared/isolation.js';
 import {
-  authorityEpoch, currentWitnessTuple, measuredWitnessFacts, narrowestTold, offVolumeHeld, offVolumeHolders, witnessVerdict,
+  authorityEpoch, currentWitnessTuple, measuredWitnessFacts, narrowestTold, offVolumeHeld, offVolumeHolders, raiseWitnessMaximum, witnessVerdict,
   type AuthorityEpoch, type HostRelation, type ServerWitnessFacts, type WitnessHeld, type WitnessSourceAnswer, type WitnessVerdict,
 } from './overlordAuthorityWitness.js';
 import type { WitnessLink } from './overlordAuthorityWitnessLink.js';
@@ -145,9 +145,9 @@ export class OverlordAuthorityExchange {
   }
 
   private noteHighest(t: WitnessTuple): void {
-    this.highestEpoch = Math.max(this.highestEpoch, t.epoch);
-    this.highestGeneration = Math.max(this.highestGeneration, t.highestIds.restoreGeneration);
-    if (t.highestIds.message !== undefined) this.highestMessage = Math.max(this.highestMessage ?? 0, t.highestIds.message);
+    this.highestEpoch = raiseWitnessMaximum(this.highestEpoch, t.epoch);
+    this.highestGeneration = raiseWitnessMaximum(this.highestGeneration, t.highestIds.restoreGeneration);
+    if (t.highestIds.message !== undefined) this.highestMessage = raiseWitnessMaximum(this.highestMessage, t.highestIds.message);
   }
 
   // ── The agent ────────────────────────────────────────────────────────────────────────────────────────────────────

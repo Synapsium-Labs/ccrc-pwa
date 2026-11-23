@@ -49,6 +49,19 @@ export function authorityEpoch(view: AuthorityView, authoritySequence: number, p
   return { total, base, terms: { authority, privacy: term } };
 }
 
+// ── Witnessed counter maxima ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** Even at a million increments per second this takes over a century to reach. Keep more than half of the safe integer
+ *  range above any witnessed raise. This is not a parsing limit or a limit on the server's own counters. */
+export const WITNESS_RAISE_CEILING = Math.floor(Number.MAX_SAFE_INTEGER / 2);
+
+/** Apply the ceiling to each already parsed counter independently. An over-ceiling counter leaves the maximum unchanged. */
+export function raiseWitnessMaximum(held: number, seen: number): number;
+export function raiseWitnessMaximum(held: number | null, seen: number): number | null;
+export function raiseWitnessMaximum(held: number | null, seen: number): number | null {
+  return seen > WITNESS_RAISE_CEILING ? held : Math.max(held ?? 0, seen);
+}
+
 // ── The verdict ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Where a witness lives against the server's volume (question 10); `console` is a signed-in console, which counts. */

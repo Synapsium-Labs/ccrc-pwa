@@ -59,6 +59,21 @@ describe('exchangeWitness', () => {
       expect(JSON.parse(mem.getItem(WITNESS_KEY)!)).toEqual(tuple(12));
     } finally { unlock(); vi.unstubAllGlobals(); }
   });
+  it.each([
+    ['rejects', async () => { throw new Error('lock refused'); }],
+    ['throws', () => { throw new Error('lock refused'); }],
+  ])('reports failed and never writes unlocked when the lock request %s', async (_word, request) => {
+    const mem = memoryStorage();
+    const held = JSON.stringify(tuple(3));
+    mem.setItem(WITNESS_KEY, held);
+    const write = vi.spyOn(mem, 'setItem');
+    vi.stubGlobal('navigator', { locks: { request } });
+    try {
+      await expect(exchangeWitness({ from: () => mem, ask: async () => ({ offer: tuple(4) }) })).resolves.toEqual({ kind: 'failed' });
+      expect(write).not.toHaveBeenCalled();
+      expect(mem.getItem(WITNESS_KEY)).toBe(held);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('sends what is held, and held null for nothing stored, a value that does not parse, and storage that throws', async () => {
     const sent: unknown[] = [];
     const ask = async (h: unknown) => { sent.push(h); return { offer: tuple(1) }; };

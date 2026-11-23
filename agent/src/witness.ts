@@ -3,10 +3,10 @@
 // `<home>/.ccrc/authority-witness.json` (`AUTHORITY_WITNESS_FILE_NAME`); this module is its ONLY writer, and `witnessKeep` (L0) is its
 // one ordering rule. An unreadable or malformed file is NEVER overwritten: the agent answers `unmeasured` until a person removes it.
 //
-// THE RESIDUAL (review F8): any process of the fleet's one user can write this file. The Overlord has no write tool (§3.6, R12), the
-// spec already caps a forged caller on a shared-user box at `advise` (Table 3.8a), and every agent reads `unmeasured` until the
-// isolation word lands (question 10), so a forged file lifts nothing in W1. What is left is a false "held" on the console and a
-// refusal a forger can cause, which fences toward safety. A session's spawn denies an edit of it (an accident guard only).
+// THE RESIDUAL: any process of the fleet's one user can write this file. A session's spawn denies an edit of it (an accident guard
+// only). A forged file can open a gap in message ids, the epoch and the restore generation, once and at most up to the witnessed
+// raise ceiling; it cannot exhaust a counter, deny issuance or Confirm through counter exhaustion, or lift trust in W1.
+// A rollback verdict can still fence toward safety.
 import { closeSync, constants as fsConstants, fstatSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, writeSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';

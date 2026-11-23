@@ -458,7 +458,8 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   // POST: the console's witness exchange (Overlord W1 authority journal, Task 6, §7.6). Session-gated through the account gate with no
   // step-up and no box token, so it refuses `auth-off` while sign-in is dark (no Overlord without sign-in). The body is `{ held }`: the
   // tuple the console keeps, or null. It answers the current tuple to keep; the exchange judges what the console held. A narrowing-free
-  // read of the server's facts: nothing here decides, and a tuple that does not parse is the exchange's `malformed`, never a 400.
+  // read of the server's facts. The wrong outer body shape is a 400; an admitted tuple object that does not parse is the exchange's
+  // `malformed` word.
   app.post('/api/overlord/witness', async (req, reply) => {
     const g = deps.gate(req, reply, { cap: null });
     if (!g.pass) return reply;

@@ -46,6 +46,8 @@ the coordinator can allocate numbers when it folds them into the plan.
   witness client builds its own `offer | refused | malformed | failed` answer, so `pwa/src/lib/api.ts` grows by four lines.
 - `page-clock-injection`: the console client reads visibility through `lib/pageClock.ts` (the one owner of the page's visibility
   listener), never a second listener.
+- `browser-without-web-locks-rereads`: the fallback when the browser has no lock API is deliberate: it re-reads before the write,
+  in one synchronous task. A lock request that rejects or throws is a failure, not permission to write unlocked.
 - `signed-in-by-shell`: the app shell starts the console exchange unless sign-in is lost, and stops it otherwise; while sign-in is
   dark the door answers `auth-off` and the client records `refused`.
 - `narrowing-nudge-unwired`: `nudgeWitness()` is exported for the console's narrowing doors, but no console control calls the rung,
@@ -146,3 +148,23 @@ local test-project measurement gap, not the record of its exit 137.
 
 These are local measurements, not a full suite or CI results. The request-op and rejection censuses ran as selections within their
 files; the other cases in those two files were not measured by these runs.
+
+## Second independent review
+
+- `witness-maximum-raise-is-bounded`: apply one ceiling to each witnessed epoch, restore generation and message id independently,
+  for every source. A counter above the ceiling cannot raise its maximum; other eligible counters in the tuple still can. This is
+  not a parser ceiling. The wire, verdict, fence, keep rule and offers are unchanged, including offers after a local counter
+  passes the ceiling. A fixture used the real message store, Confirm and exchange to check both sides of the boundary and a
+  mixed tuple; the guard still saw a higher base as rollback. At the ceiling the next counters were safe and the server's own
+  above-ceiling offer parsed and counted as a consistent holding.
+- Tests pin no boot-confidence lift after a same-boot rollback, no effect from an obsolete connection's reply, no unlocked write
+  when a lock request rejects or throws, and no blocking or symlink following at the agent carrier. The FIFO test stops a missing
+  nonblocking flag before the open can hang the runner; the symlink fixture has no target to read.
+
+### Known limits
+
+A forged agent file can open a gap in message ids, the epoch and the restore generation, once and at most up to the witnessed
+raise ceiling; it cannot exhaust a counter, deny issuance or Confirm through counter exhaustion, or lift trust in W1. The normal
+rollback verdict can still fence. Once a server's counters stand above the ceiling (beyond a realistic lifetime without a forged
+raise), those above-ceiling witnessed maxima are not used. After a later rollback, protection against reuse rests on the verdict's
+fence and the database and journal highest values.

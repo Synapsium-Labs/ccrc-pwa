@@ -2,8 +2,8 @@
 // journals, so a restore of the server's volume shows as the console holding more than the server. L3 by `pwaRing` (it names the
 // browser's storage and the clock) and the one writer of the key below. The tuple's parse and keep rule are L0 (`shared/`).
 //
-// The exchange never throws and never overloads null: storage that cannot be read sends `held: null` ("no witness"), a value that does
-// not parse is read the same way, and a refused call, a call that failed and an offer that does not parse are three answers.
+// By the plan, unreadable storage, no stored value and an unparseable value all send `held: null` ("no witness"). The exchange never
+// throws: a refused call, a failed call and an offer that does not parse are distinct answers.
 import { parseWitnessTuple, witnessKeep, type WitnessTuple } from '../../../shared/authorityWitness';
 import { ApiError } from './apiError';
 import { api } from './api';

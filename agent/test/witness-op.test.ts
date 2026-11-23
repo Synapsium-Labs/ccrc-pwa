@@ -1,13 +1,19 @@
 // Overlord W1 authority journal plan, Task 6: the agent's `witness` op and its file (`agent/src/witness.ts`). A REAL agent over
 // loopback against a fixture HOME (`token-sync-op.test.ts`'s idiom); no case touches a live HOME.
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { constants, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { answerWitness, readHeldWitness } from '../src/witness.js';
 import { AUTHORITY_WITNESS_FILE_NAME, CCRC_DIR_NAME, type AgentReady } from '../../shared/agent-protocol.js';
 import type { WitnessTuple } from '../../shared/authorityWitness.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  return { ...fs, openSync: vi.fn(fs.openSync) };
+});
 
 const D = (c: string): string => c.repeat(64);
 function tuple(epoch: number, boot = 'boot-a'): WitnessTuple {
@@ -77,6 +83,38 @@ describe('the witness file and its answer', () => {
     mkdirSync(file(home), { recursive: true });
     expect(answerWitness(home, tuple(9))).toEqual({ kind: 'unmeasured', why: 'unreadable' });
     expect(statSync(file(home)).isDirectory()).toBe(true);
+  });
+
+  it('refuses a FIFO without waiting for a writer', async () => {
+    fixture = makeFixture();
+    const home = fixture.home;
+    const fifo = file(home);
+    mkdirSync(path.dirname(fifo), { recursive: true });
+    execFileSync('mkfifo', [fifo], { timeout: 5_000 });
+    const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const opened = vi.mocked(openSync);
+    let wouldBlock = false;
+    opened.mockImplementation((name, flags, mode) => {
+      // Never let a regressed synchronous open hang the test runner. All safe opens are real.
+      if (name === fifo && (typeof flags !== 'number' || (flags & constants.O_NONBLOCK) === 0)) {
+        wouldBlock = true;
+        throw new Error('fixture refuses a blocking open');
+      }
+      return fs.openSync(name, flags, mode);
+    });
+    try {
+      expect(readHeldWitness(home)).toEqual({ kind: 'unmeasured', why: 'unreadable' });
+      expect(wouldBlock).toBe(false);
+    } finally { opened.mockReset(); }
+  });
+
+  it('refuses a symbolic link even if its target is missing', () => {
+    fixture = makeFixture();
+    const home = fixture.home;
+    const link = file(home);
+    mkdirSync(path.dirname(link), { recursive: true });
+    symlinkSync(path.join(home, 'missing-target'), link);
+    expect(readHeldWitness(home)).toEqual({ kind: 'unmeasured', why: 'unreadable' });
   });
 
   it('refuses an oversized regular file without overwriting it, even when it contains valid JSON', () => {

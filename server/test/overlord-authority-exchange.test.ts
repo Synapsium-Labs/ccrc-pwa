@@ -14,8 +14,12 @@ import type { WitnessLink, WitnessLinkAnswer } from '../src/coord/overlordAuthor
 import { makeIsolationReader } from '../src/isolationFacts.js';
 import type { AgentHostRelation } from '../../shared/isolation.js';
 import { PRIVACY_HEAD_UNWIRED, type PrivacyHeadRead } from '../src/coord/privacyJournalHead.js';
-import type { ReadyWitness } from '../../shared/agent-protocol.js';
+import { readReadyWitness, type ReadyWitness } from '../../shared/agent-protocol.js';
 import type { WitnessTuple } from '../../shared/authorityWitness.js';
+import { WITNESS_RAISE_CEILING } from '../src/coord/overlordAuthorityWitness.js';
+import { OverlordRestoreState } from '../src/coord/overlordRestoreState.js';
+import { openOperatorModelStore } from '../src/operatorModel/store.js';
+import { OPERATOR } from './overlordRestoreRig.js';
 import { fakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -154,6 +158,25 @@ describe('an agent', () => {
     r.agent.held = { kind: 'nothing' }; // a new ready on a new connection is a new answer
     await r.ex.exchangeAgent();
     expect(r.ex.heldFor(2)).toBe('not-yet');
+  });
+  it('discards an op reply from the connection that is no longer ready', async () => {
+    const r = rig();
+    r.append(WIDEN);
+    const obsolete = r.held({ highestIds: { restoreGeneration: 7, message: 9 } });
+    r.agent.held = { kind: 'nothing' };
+    let respond!: (answer: WitnessLinkAnswer) => void;
+    r.agent.next = () => new Promise((resolve) => { respond = resolve; });
+    const pending = r.ex.exchangeAgent();
+    await flush();
+    expect(r.agent.sends).toHaveLength(1);
+    r.agent.held = { kind: 'nothing' }; // same word, different ready object
+    respond(answered(obsolete));
+    await pending;
+    expect(r.guard.state()).toEqual({ kind: 'coherent' });
+    expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+    expect(r.ex.heldFor(1)).toBe('not-yet');
+    expect(r.ex.highest()).toEqual({ kind: 'measured', epoch: 0, restoreGeneration: 0 });
+    expect(r.ex.witnessHighestIds()).toEqual({ message: null });
   });
   it('answers unmeasured to the op: judged as malformed, one warn line per change, no refusal and no count', async () => {
     const r = rig();
@@ -306,6 +329,66 @@ describe('an unmeasured privacy head', () => {
   });
 });
 
+describe('witnessed counter raises', () => {
+  const ceiling = WITNESS_RAISE_CEILING;
+  const above = ceiling + 1;
+  it.each([
+    { name: 'above-limit counters leave the local bounds alone', host: 'same-host', raw: [above, above, above], next: [4, 1, 2] },
+    { name: 'at-limit counters raise every bound without stopping publication', host: 'unmeasured', raw: [ceiling, ceiling, ceiling], next: [above, above, above] },
+    { name: 'an above-limit counter does not discard eligible neighbours', host: 'same-host', raw: [above, ceiling, 7], next: [4, above, 8] },
+  ] as const)('$name ($host)', async ({ host, raw: [epoch, generation, message], next: [nextEpoch, nextGeneration, nextMessage] }) => {
+    const r = rig();
+    const dir = mkTmp('ccrc-witness-counter-');
+    const { db, store } = openOperatorModelStore(path.join(dir, 'operator-model.db'), dir, 1000, r.ex);
+    const issue = (at: number): number => {
+      const result = store.recordMessage({ at, actor: OPERATOR, sessionId: 'lane-a-project-a', term: 1, text: 'fixture', mark: false, composedKey: null });
+      if (!result.ok) throw new Error(`message issuance refused: ${result.error}`);
+      const head = store.privacyJournalHead();
+      if (head.kind !== 'measured' || head.value === 'empty') throw new Error('no fixture privacy head');
+      r.privacy.now = {
+        kind: 'head', sequence: head.value.sequence, digest: head.value.digest, highestMessageId: head.value.highestId,
+        digestAt: (n) => { const d = store.privacyJournalDigestAt(n); return d.kind === 'unmeasured' ? 'unmeasured' : d.value; },
+      };
+      return result.value.id;
+    };
+    try {
+      r.db.exec(find('ALTER TABLE overlord_designation ADD COLUMN actorKind'));
+      r.append(WIDEN);
+      expect(issue(1001)).toBe(1);
+      expect(r.ex.epoch(r.journal.readVerified())).toEqual({ kind: 'measured', n: 2 });
+      r.agent.host = host;
+      r.agent.held = readReadyWitness(r.held({
+        base: epoch, epoch, terms: { authority: 0, privacy: 0, act: 'absent' }, highestIds: { restoreGeneration: generation, message },
+      }));
+      expect(r.agent.held.kind).toBe('tuple');
+      await r.ex.exchangeAgent();
+      // A higher base still detects rollback. Only the maxima used for numbering change.
+      expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+      expect(r.agent.sends).toHaveLength(0);
+      expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+      expect.soft(issue(1002)).toBe(nextMessage);
+      expect(r.ex.epoch(r.journal.readVerified())).toEqual({ kind: 'measured', n: 3 });
+      r.agent.held = undefined;
+      const restore = new OverlordRestoreState({ db: r.db, journal: r.journal, guard: r.guard, witness: r.ex });
+      const confirmed = restore.confirm(OPERATOR, 'op-confirm', 1_800_000_000_000);
+      await r.ex.exchangeAgent();
+      expect.soft(confirmed).toMatchObject({ ok: true, changed: true, epochAtConfirm: nextEpoch, restoreGeneration: nextGeneration });
+      if (!confirmed.ok || !confirmed.changed) return;
+      const offered = r.offer();
+      expect.soft(offered).toMatchObject({ epoch: nextEpoch, highestIds: { restoreGeneration: nextGeneration, message: nextMessage } });
+      expect(r.ex.exchangeConsole('dev-a', offered)).toEqual({ kind: 'offer', tuple: offered });
+      expect(r.ex.heldFor(confirmed.sequence)).toBe('held');
+      expect(r.guard.state()).toEqual({ kind: 'coherent' });
+      if (epoch === ceiling) {
+        for (const issued of [offered.epoch, offered.highestIds.restoreGeneration, offered.highestIds.message!]) {
+          expect(Number.isSafeInteger(issued)).toBe(true);
+          expect(Number.MAX_SAFE_INTEGER - issued).toBeGreaterThanOrEqual(ceiling);
+        }
+      }
+    } finally { db.close(); r.db.close(); }
+  });
+});
+
 describe('the reads', () => {
   it('heldFor answers held once a counting console holds the record\'s authority sequence, and not-yet for a same-host holder only', async () => {
     const r = rig();
@@ -381,6 +464,19 @@ describe('the reads', () => {
     r.ex.exchangeConsole('dev-a', r.held({}));
     expect(r.ex.noWitnessSinceBoot()).toBe('lifted');
     r.ex.exchangeConsole('dev-b', ahead(r));
+    expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+  });
+  it('does not re-lift boot confidence on a consistent prior-boot answer after a same-boot rollback verdict', () => {
+    const r = rig();
+    r.append(WIDEN);
+    const prior = r.held({});
+    r.ex.exchangeConsole('dev-a', prior);
+    expect(r.ex.noWitnessSinceBoot()).toBe('lifted');
+    r.ex.exchangeConsole('dev-b', { ...ahead(r), boot: BOOT });
+    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+    expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+    expect(r.ex.exchangeConsole('dev-a', prior).kind).toBe('offer');
+    expect(r.ex.heldFor(1)).toBe('held');
     expect(r.ex.noWitnessSinceBoot()).toBe('standing');
   });
   it('withdraws the earlier boot observation on Confirm and does not re-lift within that boot', () => {
