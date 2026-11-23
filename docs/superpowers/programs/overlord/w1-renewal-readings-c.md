@@ -22,17 +22,21 @@ No D-number is minted for them; the coordinator folds them into the plan's ledge
 - **`latch-clear-stays-the-operators`** (the operator's standing direction of 2026-11-22, checked): clearing this latch is a
   widening of the Overlord's authority, behind the account gate (Table 7.5a, §7.5), so it is an operator-only act and not a
   chore the system could take. Nothing here adds a manual step: the ladder's existing clear door is the way back.
+- **`failed-or-lost-latch-raise-is-not-retried`**: the lane asks once, after writing the degrade step. A refused or thrown
+  raise is logged; a crash between the step and the raise can lose it. The lane does not ask again, so if no latch was
+  recorded, no latch from that step outlives the next renewal. The coordinator accepted this limit in review 3460 and
+  carries it forward for the wave that first lets a rung above `chat` depend on this latch.
 
 ## The designation's readings (Task 5)
 
 - **`unmeasured-designation-mints-nothing`**: the plan says a mint whose `designationRead()` answers `unmeasured` stamps
   `null`. On `main`, designation A's pass fails the mint step closed on an unmeasured designation (`fail('designation', …)`),
   so no such mint happens. `designatedClassAtMint` keeps the `null` arm anyway, so the decider stays total.
-- **`in-place-bind-reads-class-unmeasured`**: a generation minted under its own session id and then re-stamped `overlord` by
-  designation A's `restampOverlordGeneration` (an in-place bind, or a rebind's body at go-live) keeps `designatedClass` `NULL`,
-  because the mint is the column's one writer. Its `classChanged` reads unmeasured `minted before the class was recorded`
-  for that generation's life (blind, never a default), and the next generation is stamped. The daily backstop still renews it
-  within a day. Making the re-stamp write the class too would be a second writer of the column; not done.
+- **`in-place-bind-reads-class-unmeasured`** (historical slug): in-place designate re-stamps only identity and term. A
+  generation minted as a coordinator keeps that role and `designatedClass` `NULL`; the wiring takes neither designation
+  reading for it, and role-change renewal applies instead. The next mint under the `overlord` identity stamps the class.
+  A pending rebind body mints under its own identity and stamps `NULL`; its go-live re-stamp is not active at this tip.
+  The daily backstop is unchanged.
 - **`designated-class-read-as-written`**: the plan narrows the column to a class word or `null`. The reader keeps the stored
   text (`strOrNull`), so a class word a later build writes compares honestly against the row's `model` rather than folding
   into `null`, whose reason (`minted before the class was recorded`) would then be false.
@@ -45,7 +49,7 @@ No D-number is minted for them; the coordinator folds them into the plan's ledge
 - **`designated-class-tests-in-own-file`**: the column's tests (migration, mint, read) are in a new
   `server/test/continuity-designated-class.test.ts` rather than the generations store's suite, so this PR adds no hunk to a
   file a W1 peer is editing.
-- **`migration-121-provisional`**: the column is migration 121, the next slot on `main` at build time. Several W1 PRs add one
-  today; whichever lands later renumbers and re-pins on absorbing `main` (the coordinator's word, 2026-11-22).
+- **`migration-121-provisional`**: after integrating the cap-mode migration from `main`, the designation-class column is
+  appended at migration 122. Before landing, re-measure the actual tail and re-pin if it moved; no slot is reserved.
 - **`latch-call-site-in-on-step`**: the lane asks `probesFailedTwiceOf` in `onStep`, which both apply loops (the walk's and
   `applyFedEvents`) call after a written step with the row before the step, so the probes feed's degrade reaches it.

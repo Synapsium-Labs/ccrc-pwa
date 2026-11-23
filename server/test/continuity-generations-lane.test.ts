@@ -1585,7 +1585,7 @@ describe('the renewal readings PR C: the class a mint stamps, and the probes-fai
     expect(renewalDue(renewalInputsOf(g, { ...r, w1: { termRaised: { kind: 'measured', value: true } } }, unknown, 0, unknown)))
       .toMatchObject({ due: true, cls: 'hard', why: 'term-raised' });
     expect(renewalDue(renewalInputsOf(g, { ...r, w1: { classChanged: { kind: 'measured', value: true } } }, unknown, 0, unknown)))
-      .toMatchObject({ cls: 'soft' });
+      .toMatchObject({ due: true, cls: 'soft', why: 'class-changed' });
   }, 60_000);
 
   /** The Overlord (`COORD` designated) live in probing with its first round open, its latch recorded. */
@@ -1613,15 +1613,17 @@ describe('the renewal readings PR C: the class a mint stamps, and the probes-fai
     const w = f.s.answerRound(open.rows[0]!.roundId, COORD, open.rows.map((r) => ({ qid: r.qid, answer: 'x', grade: 'fail' as const })), 'unmeasured', f.t.ports.clock.wall());
     if (!w.ok) throw new Error(w.kind);
   };
-  const twoFailedRounds = (f: Fixture, state: 'state' | 'shadowState'): void => {
+  const twoFailedRounds = (f: Fixture, state: 'state' | 'shadowState', beforeSecondFeed?: () => void): ReturnType<Fixture['pass']> => {
     failRound(f);
     f.pass();
     f.t.advance(5_000);
     feedCard(f);
     f.pass();
     failRound(f);
-    f.pass();
+    beforeSecondFeed?.();
+    const result = f.pass();
     expect(live(f.s)[0]![state]).toBe('degraded');
+    return result;
   };
 
   it('a live Overlord degraded by two failed rounds raises the latch once, and later passes raise nothing more', () => {
@@ -1645,6 +1647,30 @@ describe('the renewal readings PR C: the class a mint stamps, and the probes-fai
     const { f, latched } = overlordProbing(false);
     expect(live(f.s)[0]).toMatchObject({ role: 'overlord', shadowState: 'probing' });
     twoFailedRounds(f, 'shadowState');
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  it('a live walk that fails its second round after the lane is lowered still latches', () => {
+    const { f, latched } = overlordProbing();
+    const result = twoFailedRounds(f, 'state', () => {
+      expect(live(f.s)[0]).toMatchObject({ walk: 'live', state: 'probing', probeRounds: 1 });
+      f.s.setLaneArm(CONTINUITY_LANE, 'shadow', f.t.ports.clock.wall());
+    });
+    expect(result).toMatchObject({ live: false, probesFed: 1 });
+    expect(live(f.s)[0]).toMatchObject({ state: 'degraded', shadowState: null });
+    expect(latched).toEqual([{ cause: 'probes-failed-twice', detail: expect.stringContaining('two failed probe rounds') }]);
+  }, 60_000);
+
+  it('a shadow walk that fails its second round under a live lane does not latch', () => {
+    const { f, latched } = overlordProbing(false);
+    const result = twoFailedRounds(f, 'shadowState', () => {
+      expect(live(f.s)[0]).toMatchObject({ walk: 'shadow', shadowState: 'probing', probeRounds: 1 });
+      // The clear can miss its compare-and-set; the probes feed can still write the in-flight shadow walk.
+      vi.spyOn(f.s, 'clearShadowWalk').mockReturnValue({ changed: false });
+      f.s.setLaneArm(CONTINUITY_LANE, 'live', f.t.ports.clock.wall());
+    });
+    expect(result).toMatchObject({ live: true, probesFed: 1 });
+    expect(live(f.s)[0]).toMatchObject({ state: 'active', shadowState: 'degraded' });
     expect(latched).toEqual([]);
   }, 60_000);
 

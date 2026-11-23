@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { parseFile, ts } from '../scan/parse.js';
-import { sqlWrites } from './sqlStatements.js';
+import { sqlWrites, tableRefSource } from './sqlStatements.js';
 import { ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
@@ -528,6 +528,34 @@ describe(TABLES_PIN, () => {
       check(f);
     } finally { rmSync(d, { recursive: true, force: true }); }
   };
+  // Renewal readings C, Task 5: count statements that write the class, not readers or other columns' writers.
+  const designatedClassWrites = (files: readonly string[]): string[] => {
+    const table = 'continuity_generations';
+    const insert = new RegExp(`\\b(INSERT|REPLACE)(?:\\s+OR\\s+\\w+)?\\s+INTO\\s+${tableRefSource(table)}\\s*(?:\\(([^)]*)\\))?`, 'i');
+    const column = /^["`\[]?designatedClass["`\]]?$/i;
+    const assignment = /(?:\bSET\s+|,\s*)["`\[]?designatedClass["`\]]?\s*=/i;
+    return sqlWrites(files, [table]).flatMap(({ writer, sql }) => {
+      const m = insert.exec(sql);
+      const sites: string[] = [];
+      if (m !== null && (m[3] === undefined || m[3].split(',').some((c) => column.test(c.trim())))) {
+        sites.push(`${writer} ${m[1]!.toUpperCase()}`);
+      }
+      if ((m === null ? /^UPDATE\b/i.test(sql) : /\bDO\s+UPDATE\s+SET\b/i.test(sql)) && assignment.test(sql)) sites.push(`${writer} SET`);
+      return sites;
+    }).sort();
+  };
+  it('CONTROL: the designatedClass census finds an insert and a second writer, not a read or an unrelated update', async () => {
+    await plant('a.ts', [
+      "export function mint() { db.prepare('INSERT INTO continuity_generations (id, designatedClass) VALUES (?, ?)'); }",
+      "export function restamp() { db.prepare('UPDATE continuity_generations SET term = ?, [designatedClass] = ? WHERE id = ?'); }",
+      "export function other() { db.prepare('UPDATE continuity_generations SET term = ? WHERE designatedClass = ?'); }",
+      "export function read() { db.prepare('SELECT designatedClass FROM continuity_generations'); }",
+    ].join('\n'), (f) => expect(designatedClassWrites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['mint INSERT', 'restamp SET']));
+  });
+  it('the designatedClass column is written by the mint INSERT alone', () => {
+    expect(designatedClassWrites(ALL.filter((f) => !rel(f).startsWith('pwa/'))))
+      .toEqual(['server/src/continuity/continuityStore.ts#mintGeneration INSERT']);
+  });
   it('CONTROL: a call to setPortfolioRank in a function is named by it; its definition is not a call', async () => {
     await plant('a.ts', ['export function setPortfolioRank(): void {}', 'export function door(): void { setPortfolioRank(); }'].join('\n'),
       (f) => expect(rankCallSites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['door']));

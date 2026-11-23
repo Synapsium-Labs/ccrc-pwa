@@ -293,8 +293,9 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   }
   // A written step's acts: planned while live, recorded (and logged) in shadow, naming every machine action.
   const onStep = (gen: GenRow, from: GenerationStateOf, step: GenStep, event: GenEvent, about?: ItemAbout): void => {
-    // `gen` is the row before the step (the machine's `degrade` resets `probeRounds`, review 2183 F8).
-    if (probesFailedTwiceOf({ role: gen.role, from, event, view: gen, next: step.next.state, column: live ? 'state' : 'shadowState' })) latchProbes(gen);
+    // The pre-step row holds both the walk's written column and the probe count that `degrade` resets (review 2183 F8).
+    const { column } = effectiveGeneration(gen, live);
+    if (probesFailedTwiceOf({ role: gen.role, from, event, view: gen, next: step.next.state, column })) latchProbes(gen);
     if (live) { for (const act of actsOfStep(step.actions, from, event, about)) planned.push({ target: targetOf(gen), act }); return; }
     const line = shadowLine(gen, from, step, event);
     recorded.push(line);

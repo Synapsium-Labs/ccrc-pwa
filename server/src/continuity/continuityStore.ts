@@ -228,9 +228,10 @@ export interface GenRow {
   readonly startId: number; readonly startReportedAt: number;
   readonly observed: Observed; readonly mintedObservedMs: number;
   readonly softRenewalObservedMs: number | null; readonly holdOffUntilObservedMs: number | null;
-  /** The designation's model class when this generation was minted as the Overlord, written by the mint alone (renewal
-   *  readings PR C, slug designated-class-stamped-at-mint); null for every other role, and for a row minted before the column or
-   *  by an older build, which `classChangedOf` reads unmeasured. */
+  /** The designation's model class when minted under the `overlord` identity, written by the mint alone (renewal readings
+   *  PR C, slug designated-class-stamped-at-mint). A mint under its own session id, including a pending rebind body with
+   *  role `overlord`, stamps null. A row minted before the column or by an older build also stores null; `classChangedOf`
+   *  reads null as unmeasured. */
   readonly designatedClass: string | null;
 }
 

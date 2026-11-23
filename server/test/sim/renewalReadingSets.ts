@@ -271,6 +271,9 @@ const CLASS_CHANGED_SET: MutantSet<RenewalReadingsModule> = {
     { id: 'K3', old: 'value: b.row.model !== g.designatedClass }', new: 'value: b.row.model === g.designatedClass }' },
     { id: 'K4', old: "  if (b === false) return { kind: 'measured', value: false };\n  if (b.kind === 'unmeasured') return b;\n  if (g.designatedClass",
       new: "  if (b === false) return { kind: 'measured', value: true };\n  if (b.kind === 'unmeasured') return b;\n  if (g.designatedClass" },
+    // Only the fallback fixture supplies a running model; keep the other cases' inputs as given.
+    { id: 'K5', old: 'value: b.row.model !== g.designatedClass };\n}',
+      new: "value: b.row.model !== ('model' in g && typeof g.model === 'string' ? familyClassOf(g.model) : g.designatedClass) };\n}\nimport { familyClassOf } from '../../../shared/models.js';" },
   ],
   suite: classChangedCases,
 };
@@ -327,8 +330,8 @@ export function probesFailedTwiceCases(m: RenewalReadingsModule): Record<string,
     'a deadline in probing is not two failed probes': () => {
       expect(m.probesFailedTwiceOf({ ...TWICE, event: { kind: 'deadline' } })).toBe(false);
     },
-    'a passed round does not latch': () => {
-      expect(m.probesFailedTwiceOf({ ...TWICE, event: { kind: 'probes', passed: true }, next: 'active' })).toBe(false);
+    'even if the step lands on degraded, a passed round does not latch': () => {
+      expect(m.probesFailedTwiceOf({ ...TWICE, event: { kind: 'probes', passed: true } })).toBe(false);
     },
     'a step from another state, or to another state, does not latch': () => {
       expect(m.probesFailedTwiceOf({ ...TWICE, from: 'carded' })).toBe(false);
@@ -346,6 +349,7 @@ const PROBES_FAILED_TWICE_SET: MutantSet<RenewalReadingsModule> = {
     { id: 'P4', old: "i.role === 'overlord' && ", new: '' },
     { id: 'P5', old: 'i.view.probeRounds >= 1', new: 'i.view.probeRounds >= 0' },
     { id: 'P6', old: " && i.next === 'degraded'", new: '' },
+    { id: 'P7', old: ' && !i.event.passed', new: '' },
   ],
   suite: probesFailedTwiceCases,
 };
