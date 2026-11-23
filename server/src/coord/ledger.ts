@@ -330,6 +330,21 @@ export function crossTreeCollisions(
     .sort((a, b) => a.n - b.n);
 }
 
+/** Self-assigned numbers start here: every number below it is history (allocator or hand-numbered). */
+export const SELF_ASSIGNED_ERA = 10000;
+
+/**
+ * The next `count` deviation numbers: one past the highest definition at or above the era, or the era
+ * itself when there is none. Pure; the caller reads the tree (`scripts/next-deviation.ts`).
+ */
+export function nextDeviationNumbers(defs: readonly Definition[], count: number): number[] {
+  if (!Number.isInteger(count) || count < 1 || count > LEDGER_ALLOC_MAX) {
+    throw new RangeError(`count must be an integer 1..${LEDGER_ALLOC_MAX}, got ${count}`);
+  }
+  const top = defs.reduce((m, d) => (d.n >= SELF_ASSIGNED_ERA && d.n > m ? d.n : m), SELF_ASSIGNED_ERA - 1);
+  return Array.from({ length: count }, (_, i) => top + 1 + i);
+}
+
 /**
  * A project's own allocator era: the FIRST number its allocator ever issued.
  * Anything a plan defines below it predates the allocator for that project and is

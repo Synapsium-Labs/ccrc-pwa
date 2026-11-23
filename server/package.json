@@ -10,6 +10,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "test": "vitest run",
+    "next-deviation": "tsx scripts/next-deviation.ts",
     "postinstall": "node scripts/fix-node-pty-helper.mjs"
   },
   "dependencies": {
