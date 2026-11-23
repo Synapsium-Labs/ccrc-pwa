@@ -61,6 +61,7 @@ They decide every question the plan leaves open.
 | 8 skill section | the coordinator plan reference gains its `linking suggest` section, checked against today's code (`w8-skill-section`) | D-8808, D-8809 | #3174 | **merged** 2026-11-22 as `83457077f` (head `6ae8c761c`, by the merge queue; run 3238 closed done): three review rounds (3242, 3245, 3248); accepted at the cap, two wording gaps carried to `w8-suggest-workspace-id` |
 | 8 overlord door | the Overlord skill's door table names `link_team`, and says when the Overlord leaves a team candidate for the operator (`w8-overlord-skill`) | D-8808, D-8809 | #3177 | **merged** 2026-11-22 as `d899d4fb1` (head `575d1b80c`, by the merge queue; run 3251 closed done): three review rounds (3253, 3260, 3261); accepted at the cap, one false note sentence corrected by run 3264 |
 | 8 pair last | the client puts the pane's pair last on the linking suggest, linking confirm and call record doors (`w8-suggest-pair-last`) | D-8808, D-8809 | #3179 | **merged** 2026-11-22 as `3af4842d5` (head `b46aa17bc`, by the merge queue after one flake ejection, re-run green alone; run 3264 closed done): three review rounds (3266, 3271, 3274); accepted at the cap, two refusal pins carried to `w8-pair-refusal-pins` |
+| 8 workspace measurement | suggest, confirm and operator write distinguish an unread workspace from a measured absence (`w8-confirm-unmeasured`) | D-8808, D-8809 | #3182 | **merged** 2026-11-22 as `8cae33f869` (head `9a1329d4a1`, by the merge queue; run 3279 closed done): reviews 3286 and 3307 |
 | 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence (built, off), a coordinator's suggestion, the Overlord's link as a call made for the operator, the console | D-8808, D-8809 | #3123 | **merged** 2026-11-21 as `6c3ea2c55` (head `dbc6483eb`, by the merge queue; run 2862 closed done): three review rounds (2971, 2997, 3020); accepted at the cap, migration **116**; six follow-up tickets, one dropped as built |
 
 ## Decisions & deviations
@@ -415,15 +416,17 @@ Reviewers of every wave get these.
 
 ## Next-wave brief
 
-Every planned wave and every fix before the pilot has landed (#3145, #3150). The pilot is the operator's alone (item
-533): a rollout of v0.0.1369 or later, then one team's map from the console; its map is approved there; its report goes
-to the operator before any other team is started. After that rollout the coordinator makes item 498's one read-only
-capture, records it as a scrubbed fixture, and only then may `w8-attached-wire` switch the evidence on.
+The original pilot started after the guarded rollout (#3145, #3150; item 533) but has no submitted map yet. Run 3310
+(`w7-map-identifier`) repairs the proposal contract (call 261): the owner can propose using the visible identifier, and
+ccrc resolves it within the proposal's existing scoped read. The same pilot resumes only after the repair is measured
+on the running server. Map and report decisions stay in the console; deliver this pilot's report before starting any
+other team. The separate one-time read-only capture for Task 8.3 stays within item 498's ruling; `w8-attached-wire` waits
+for its scrubbed fixture.
 
-In flight: run 3279, ticket `w8-confirm-unmeasured` (the team confirm, the team suggest and the operator's linking
-write answer `unavailable`, not `team-unknown`, when a workspace cannot be read).
+Call 272 accepted #3182 after review 3307 verified the stored-empty case and evidence retention. The dated plan and
+wave 8 note record the named, omitted and explicit-null distinctions without changing behavior. Run 3326
+(`w8-linking-measurement-record`) carries the policy comment and the handler-derived suggestion refusal and remedy pins.
 
-Open follow-up tickets: `w8-attached-wire` (after the capture), `w8-suggest-workspace-id` (a coordinator can learn
-the workspace id the `team-ambiguous` remedy asks for, review 3248 F1 and F2) and `w8-pair-refusal-pins` (the nested and
-padded identity-key refusal pinned on the linking and call doors, review 3274 F1). Each is a rules or small code change
-of its own.
+Other open follow-ups: `w8-suggest-workspace-id` (help a coordinator obtain the workspace id the `team-ambiguous`
+remedy asks for, review 3248 F1 and F2) and `w8-pair-refusal-pins` (pin nested and padded identity-key refusals on the
+linking and call doors, review 3274 F1).
