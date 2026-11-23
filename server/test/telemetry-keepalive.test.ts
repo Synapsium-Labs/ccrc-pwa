@@ -996,11 +996,337 @@ printf '%s' '${JSON.stringify({
     expect(limitsNow()).toMatchObject({ five: 10, seven: 100 });
   });
 
-  it('the marker reaches the turn and nothing else: the pass itself does not carry it', () => {
+  it('the marker reaches the turn and its writer and nothing else: the pass itself does not carry it', () => {
+    // Two subshells set it (D-8957): the turn's own, and the one that hands the turn's figures to the writer. Both are
+    // in the region from `_ka_turn` to the log helper, and neither is the pass's own environment.
     const src = fs.readFileSync(KEEPALIVE, 'utf8');
     const sets = src.split('\n').filter((l) => /^\s*(export\s+)?CCRC_KEEPALIVE_PROBE=/.test(l));
-    expect(sets).toHaveLength(1);
+    expect(sets).toHaveLength(2);
     const turn = src.slice(src.indexOf('_ka_turn() {'), src.indexOf('# The CLI\'s own diagnostic'));
-    expect(turn).toContain(sets[0]);
+    for (const s of sets) expect(turn).toContain(s);
+  });
+});
+
+// D-8957 (delivers D-6185's source). A `-p` turn renders no statusline, so its figures never reached the writer and the
+// keepalive measured nothing. The turn now asks for Claude Code's stream (`--output-format stream-json --verbose`), whose
+// `rate_limit_event` carries every subscription window in `rate_limit_info.unifiedWindows` (utilization a fraction,
+// resetsAt epoch seconds), and the keepalive pipes the newest event that names both windows into the REAL writer, in the
+// shape a render hands it, with the probe marker. A fake wrapper prints the stream here; the writer is the repository's.
+describe('the turn\'s stream reaches the writer (D-8957)', () => {
+  const STATUSLINE = path.resolve(__dirname, '../../ccd/statusline-command.sh');
+  const now = () => Math.floor(Date.now() / 1000);
+  const SEVEN_RESET = now() + 4 * 86400;
+  const FIVE_RESET = now() + 3600;
+  const plantWriter = (): void => {
+    fs.mkdirSync(j('.claude'), { recursive: true });
+    fs.copyFileSync(STATUSLINE, j('.claude', 'statusline-command.sh'));
+  };
+  const event = (windows: Record<string, unknown>): string => JSON.stringify({
+    type: 'rate_limit_event', uuid: 'u-1', session_id: 's-1',
+    rate_limit_info: { status: 'allowed', resetsAt: FIVE_RESET, rateLimitType: 'five_hour', utilization: 0.012, unifiedWindows: windows },
+  });
+  const BOTH = { five_hour: { utilization: 0.012, resetsAt: FIVE_RESET }, seven_day: { utilization: 0.004, resetsAt: SEVEN_RESET } };
+  /** A wrapper that prints a stream as `claude -p --output-format stream-json --verbose` does: init, the events, a result. */
+  const streams = (...lines: string[]): string => `
+printf '%s\\n' '{"type":"system","subtype":"init","session_id":"s-1"}'
+${lines.map((l) => `printf '%s\\n' '${l}'`).join('\n')}
+`;
+  const atTheCeiling = (): void => {
+    fs.mkdirSync(j('.cc-limits'), { recursive: true });
+    fs.writeFileSync(j('.cc-limits', 'claude-a.json'), JSON.stringify({
+      five: 10, seven: 100, ts: now() - 7200, fiveResetAt: FIVE_RESET, sevenResetAt: SEVEN_RESET }));
+  };
+  const limitsNow = (): Record<string, unknown> => JSON.parse(fs.readFileSync(j('.cc-limits', 'claude-a.json'), 'utf8'));
+
+  it('an event with both windows lowers a row at the ceiling through the one writer, with the probe marker', () => {
+    plantWriter(); plantWrapper('claude-a', streams(event(BOTH))); atTheCeiling();
+    const started = now();
+    const r = run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(row('claude-a').outcome).toBe('refreshed');
+    // 0.012 -> 1.2% -> the writer's whole percent, 1; 0.004 -> 0.4% -> 0. The lowering is the probe marker's doing:
+    // without it the writer drops a reading under the row as older (D-8943).
+    expect(limitsNow()).toMatchObject({ five: 1, seven: 0, fiveResetAt: FIVE_RESET, sevenResetAt: SEVEN_RESET, sevenResetFrom: SEVEN_RESET });
+    expect(limitsNow()['resetSeen']).toBeGreaterThanOrEqual(started);
+    expect(row('claude-a').costUsd, 'the price is the stream\'s result line').toBe(0.0021);
+    const line = turns().find((l) => l.startsWith('turn claude-a '))!;
+    expect(line).toContain('--output-format stream-json --verbose');
+  });
+
+  it('the newest event that names both windows is the one that is written', () => {
+    const older = { five_hour: { utilization: 0.5, resetsAt: FIVE_RESET }, seven_day: { utilization: 0.9, resetsAt: SEVEN_RESET } };
+    plantWriter(); plantWrapper('claude-a', streams(event(older), event(BOTH), event({ five_hour: BOTH.five_hour }))); atTheCeiling();
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
+    expect(limitsNow()).toMatchObject({ five: 1, seven: 0 });
+  });
+
+  it('an event with no weekly window is no source: the row is untouched and the pass says no-render, and why', () => {
+    // The writer reads a payload with no weekly figure as `"seven":0`, a measurement nobody made, so a five-hour window
+    // alone is never handed to it.
+    plantWriter(); plantWrapper('claude-a', streams(event({ five_hour: BOTH.five_hour }))); atTheCeiling();
+    run();
+    expect(row('claude-a').outcome).toBe('no-render');
+    expect(row('claude-a').reason).toContain('no rate-limit event with a weekly window');
+    expect(limitsNow()).toMatchObject({ five: 10, seven: 100 });
+  });
+
+  /** A writer that records what it was handed, and from whom, in place of the real one. */
+  const plantRecordingWriter = (body = ''): void => {
+    fs.mkdirSync(j('.claude'), { recursive: true });
+    fs.writeFileSync(j('.claude', 'statusline-command.sh'), `
+cat > "$HOME/writer-stdin"
+printf 'pane=%s cfg=%s probe=%s\\n' "\${TMUX_PANE-unset}" "\${CLAUDE_CONFIG_DIR-unset}" "\${CCRC_KEEPALIVE_PROBE-unset}" > "$HOME/writer-env"
+${body}
+`);
+  };
+  const handed = (): any => JSON.parse(fs.readFileSync(j('writer-stdin'), 'utf8'));
+
+  it('a weekly window alone is handed to the writer as a render on a plan with no five-hour window gives it', () => {
+    // Some plans have no five-hour window, and a render then carries `seven_day` alone, which the writer reads as such
+    // (D-8120's `fiveAbsentSince`). The event is the same reading, so it is the same payload.
+    plantRecordingWriter(); plantWrapper('claude-a', streams(event({ seven_day: BOTH.seven_day }))); atTheCeiling();
+    run();
+    expect(handed()).toEqual({ rate_limits: { seven_day: { used_percentage: 0.4, resets_at: SEVEN_RESET } } });
+    expect(row('claude-a').reason).toContain('the writer was handed');
+  });
+
+  it('the percentage is spelled as Claude Code spells it: one decimal, half up, at most 100', () => {
+    plantRecordingWriter();
+    plantWrapper('claude-a', streams(event({ five_hour: { utilization: 0.12345, resetsAt: FIVE_RESET }, seven_day: { utilization: 1.7, resetsAt: SEVEN_RESET } })));
+    atTheCeiling();
+    run();
+    expect(handed()).toEqual({ rate_limits: {
+      five_hour: { used_percentage: 12.3, resets_at: FIVE_RESET }, seven_day: { used_percentage: 100, resets_at: SEVEN_RESET } } });
+    plantWrapper('claude-a', streams(event({ five_hour: { utilization: 0.0125, resetsAt: FIVE_RESET }, seven_day: BOTH.seven_day })));
+    fs.rmSync(j('.ccrc', 'keepalive-state'), { recursive: true, force: true });
+    run();
+    expect(handed().rate_limits.five_hour.used_percentage).toBe(1.3);
+  });
+
+  it('the writer runs as a render with no ccd id, under the turn\'s config dir and probe second, even from a pane', () => {
+    // A keepalive run by hand from a tmux pane carries TMUX_PANE; the writer would then read a ccd id and ignore the
+    // probe marker, keeping the row against a lower reading.
+    plantRecordingWriter(); plantWrapper('claude-a', streams(event(BOTH))); atTheCeiling();
+    const started = now();
+    run({ TMUX_PANE: '%7' });
+    const env = fs.readFileSync(j('writer-env'), 'utf8').trim();
+    const cfg = /cfg=(\S+)/.exec(turns().find((l) => l.startsWith('turn claude-a '))!)![1];
+    expect(env).toMatch(new RegExp(`^pane=unset cfg=${cfg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} probe=\\d+$`));
+    const probe = Number(/probe=(\d+)/.exec(env)![1]);
+    expect(probe).toBeGreaterThanOrEqual(started);
+    expect(probe).toBeLessThanOrEqual(now());
+  });
+
+  it('a writer that hangs is cut off, and the pass goes on', () => {
+    plantRecordingWriter('exec sleep 60'); plantWrapper('claude-a', streams(event(BOTH))); atTheCeiling();
+    const t0 = Date.now();
+    const r = run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(row('claude-a').outcome).toBe('no-render');
+    expect(row('claude-a').reason).toContain('the writer was handed');
+  }, 60_000);
+
+  it('the price is read from the stream\'s result line, past a line that is not JSON', () => {
+    plantRecordingWriter(); plantWrapper('claude-a', streams('this line is not json', event(BOTH))); atTheCeiling();
+    run();
+    expect(row('claude-a').costUsd).toBe(0.0021);
+  });
+
+  it('the census tells "no event" from "the writer kept the row" (D-8959)', () => {
+    // The first fleet pass has to say which half failed: a stream that carried no usable event (the source is wrong) or
+    // an event the writer was handed and kept the row against (the writer's rules). Here the writer's copy ignores the
+    // probe marker, so it drops the lower reading as older, and the row must say the writer was handed it.
+    plantWriter();
+    const w = j('.claude', 'statusline-command.sh');
+    fs.writeFileSync(w, fs.readFileSync(w, 'utf8').replace('"${CCRC_KEEPALIVE_PROBE:-}"', '""'));
+    plantWrapper('claude-a', streams(event(BOTH))); atTheCeiling();
+    run();
+    expect(row('claude-a').outcome).toBe('no-render');
+    expect(row('claude-a').reason).toContain('the writer was handed');
+    expect(limitsNow()).toMatchObject({ five: 10, seven: 100 });
+  });
+
+  it('a stream with no writer on the box says which path, and writes nothing', () => {
+    plantWrapper('claude-a', streams(event(BOTH))); atTheCeiling();
+    run();
+    expect(row('claude-a').outcome).toBe('no-render');
+    expect(row('claude-a').reason).toContain('.claude/statusline-command.sh');
+    expect(limitsNow()).toMatchObject({ five: 10, seven: 100 });
+  });
+});
+
+// D-8958. AN ACCOUNT WHOSE EVERY SESSION WAITS AT THE LIMIT. The keepalive refused a turn on an account any live session
+// sat on, and a session stopped at a limit makes no API call, so when every account is exhausted and every session waits on
+// its own, an early reset of all of them is seen by nobody. The limit watchdog (`ccd limit-watchdog`, D-8123) is the owner
+// of "this session has stopped at a limit and has nowhere to go": its `$REG/<id>.limitsign` (a pane, banner, menu or
+// transcript sign; an account-only sign is a session that may still be working) and its open `$REG/<id>.limitwait` on that
+// account. A session both name is not counted as sitting on the account; every other session is judged as before.
+describe('an account whose every session waits at the limit gets the turn (D-8958)', () => {
+  const now = () => Math.floor(Date.now() / 1000);
+  const onAccount = (sid: string, heartbeat = true): void => {
+    fs.writeFileSync(j('.cc-sessions', `${sid}.wrapper`), 'claude-a\n');
+    if (heartbeat) fs.writeFileSync(j('.cc-sessions', `${sid}.supervised`), `${now()}\n`);
+  };
+  /** The watchdog's two records for a session stopped at a limit with no room anywhere, as `_reg_set` writes them, and
+   *  the hook's turn marker of the turn the limit ended (StopFailure, `rate_limit`). */
+  const waits = (sid: string, opts: { sign?: string; account?: string; wait?: string; turn?: string | null } = {}): void => {
+    const since = now() - 900;
+    fs.writeFileSync(j('.cc-sessions', `${sid}.limitsign`), `${since} ${opts.sign ?? 'pane'} noroom`);
+    fs.writeFileSync(j('.cc-sessions', `${sid}.limitwait`), opts.wait
+      ?? `state=open since=${since + 300} reset=${now() + 86400} account=${opts.account ?? 'claude-a'} sign=pane choice=wait at=${since + 300} by=auto`);
+    const turn = opts.turn === undefined ? 'failed' : opts.turn;
+    if (turn !== null) {
+      fs.writeFileSync(j('.cc-sessions', `${sid}.turn.json`),
+        `{"v":1,"sessionId":"s-${sid}","state":"${turn}","event":"StopFailure","at":${(since - 5) * 1000},"err":"rate_limit"}\n`);
+    }
+  };
+  /** Every named session has a live pane; anything else is gone. */
+  const live = (...sids: string[]): void =>
+    plantTmux(`case "$3" in ${sids.map((s) => `=cc-${s}:`).join('|')}) exit 0 ;; esac\n${TMUX_GONE}`);
+  const setUp = (): void => { plantWrapper('claude-a', renders('claude-a', 12)); plantLimits('claude-a', 100, 9999); };
+  const refused = (sid: string): void => {
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(row('claude-a').reason).toContain(sid);
+    expect(turns()).toEqual([]);
+  };
+
+  it('every session on the account waits: the turn is taken, and the row says beside whom', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    onAccount('claude-a-two'); waits('claude-a-two', { sign: 'transcript', turn: 'done' });
+    live('claude-a-one', 'claude-a-two');
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
+    expect(row('claude-a').reason).toContain('claude-a-one');
+    expect(row('claude-a').reason).toContain('claude-a-two');
+    expect(turns().filter((l) => l.startsWith('turn claude-a ')).length).toBe(1);
+  });
+
+  it('a working session beside a waiting one still refuses the turn', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    onAccount('claude-a-work');
+    live('claude-a-one', 'claude-a-work');
+    run();
+    refused('claude-a-work');
+  });
+
+  it.each([
+    // The wait the watchdog opened stands until a pass finds no sign at all, so a session that went back to work on an
+    // account that still reads high carries an open wait beside an account-only sign: the sign is what says it stopped.
+    ['an account-only sign beside a wait still open (the session may be working again)', { sign: 'account' }],
+    ['a wait recorded for another account', { account: 'claude-b' }],
+    ['a closed wait', { wait: `state=closed since=1 reset=2 account=claude-a sign=pane end=clear until=3` }],
+    ['a wait whose line is not the watchdog\'s grammar', { wait: `state=open since=1 reset=2 account=claude-a sign=pane extra=1` }],
+    // THE RECORDS ARE AS OLD AS THE WATCHDOG'S LAST PASS, so a current reading confirms them: the hook's turn marker. A
+    // session the operator typed into, or that a reset let go on, opens a turn (`working`) before its next API call.
+    ['a session whose turn marker reads a running turn', { turn: 'working' }],
+    ['a session with no turn marker', { turn: null }],
+  ])('%s is not a wait, and the session still holds the account', (_what, opts) => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one', opts);
+    live('claude-a-one');
+    run();
+    refused('claude-a-one');
+  });
+
+  it('a wait opened on an account-only sign is a wait once the sign says the session stopped', () => {
+    // `_limitwait_open` keeps an open record for the same account as it is, so a wait opened while the account read high
+    // keeps `sign=account` after the session's next turn hits the limit. The current `.limitsign` is what says it stopped.
+    setUp();
+    onAccount('claude-a-one');
+    waits('claude-a-one', { wait: `state=open since=${now() - 600} reset=${now() + 3600} account=claude-a sign=account choice=wait at=${now() - 300} by=auto` });
+    live('claude-a-one');
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
+  });
+
+  it('a waiting session whose pane is gone while its heartbeat is fresh is restarting, and holds the account', () => {
+    // Spec §3.7 keeps `restarting` occupied: the supervisor is about to respawn `claude` under this config dir.
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    run();
+    refused('claude-a-one');
+    expect(row('claude-a').reason).toContain('supervisor heartbeat');
+  });
+
+  it('a waiting session whose pane cannot be measured holds the account: the gate fails shut', () => {
+    setUp();
+    onAccount('claude-a-one', false); waits('claude-a-one');
+    plantTmux(TMUX_NO_SERVER);
+    run();
+    refused('claude-a-one');
+    expect(row('claude-a').reason).toContain('could not measure');
+  });
+
+  it('a sign with no open wait is not a wait (the watchdog has not found the session nowhere to go)', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    fs.rmSync(j('.cc-sessions', 'claude-a-one.limitwait'));
+    live('claude-a-one');
+    run();
+    refused('claude-a-one');
+  });
+
+  it('a sign dated ahead of now is not a wait', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-one.limitsign'), `${now() + 3600} pane noroom`);
+    live('claude-a-one');
+    run();
+    refused('claude-a-one');
+  });
+
+  it.each(['limitsign', 'limitwait', 'turn.json'])('a .%s that is a symlink is not read: the session holds the account', (rec) => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    const f = j('.cc-sessions', `claude-a-one.${rec}`);
+    fs.renameSync(f, `${f}.real`);
+    fs.symlinkSync(`${f}.real`, f);
+    live('claude-a-one');
+    run();
+    refused('claude-a-one');
+  });
+
+  it('a session moved in the last two minutes is not a wait (a restart may be under way)', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-one.lastswap'), `${now() - 30}`);
+    live('claude-a-one');
+    run();
+    refused('claude-a-one');
+  });
+
+  it('a move an hour old does not stop a wait: almost every fleet session carries one', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-one.lastswap'), `${now() - 3600}`);
+    live('claude-a-one');
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
+  });
+
+  it('a lastswap that does not read as an epoch is unmeasured, and an unmeasured move holds', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-one.lastswap'), 'torn');
+    live('claude-a-one');
+    run();
+    refused('claude-a-one');
+  });
+
+  it('$REG/keepalive-heartbeat-occupied restores today\'s answer: a waiting session holds the account', () => {
+    setUp();
+    onAccount('claude-a-one'); waits('claude-a-one');
+    live('claude-a-one');
+    fs.writeFileSync(j('.cc-sessions', 'keepalive-heartbeat-occupied'), '');
+    run();
+    refused('claude-a-one');
+    // …and the other direction, the same fixture with the marker gone.
+    fs.rmSync(j('.cc-sessions', 'keepalive-heartbeat-occupied'));
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
   });
 });

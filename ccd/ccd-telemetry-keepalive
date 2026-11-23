@@ -25,6 +25,12 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 # writer, so this mechanism can never stamp stale percentages with a fresh ts.
 # The failure mode it CAN have is doing nothing, which is loud (`no-render`).
 #
+# A `-p` TURN RENDERS NO STATUSLINE (spec 2026-10-21 §2.7), so for its first
+# year this measured nothing. Since D-8957 the turn asks for Claude Code's
+# stream, and the newest `rate_limit_event` that names the weekly window is piped
+# into that same writer in the shape a render hands it (`_ka_feed`): the writer
+# stays the only one.
+#
 # ── WHAT IT WILL NOT DO ──────────────────────────────────────────────────
 #   • never a turn on an account carrying $REG/<account>-authdead — spending
 #     to confirm a known-dead credential is waste, and the health probe
@@ -48,14 +54,22 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 #     tmux pane OR a fresh supervisor heartbeat — because `KillMode=process`
 #     means a pane and its `claude` outlive their supervisor unit, and the
 #     heartbeat alone reads that session as absent. An account whose pane
-#     liveness cannot be MEASURED reads as occupied too: this gate fails shut;
+#     liveness cannot be MEASURED reads as occupied too: this gate fails shut.
+#     ONE EXCEPTION, by the operator's direction of 2026-11-23 (D-8958): a
+#     session the limit watchdog records as STOPPED at a limit with nowhere to
+#     go, whose last turn has ended and whose pane is live, makes no API call,
+#     so it is not counted (`_ka_waits_at_limit`); a working session beside it
+#     still is, and so is a restarting or unmeasurable one. `$REG/keepalive-heartbeat-occupied`
+#     restores the rule without the exception;
 #   • never a claim about a refresh it did not measure. The turn's exit code
 #     is a CLAIM; `ts` advancing in the telemetry file is the ARTIFACT.
 #
 # ── WHAT IT COSTS, PER ACCOUNT, PER DAY ──────────────────────────────────
 # WORST CASE 48. One turn per CCRC_KEEPALIVE_FRESH (1800s) per account,
 # whatever that turn achieved — the timer may tick more often, and the attempt
-# gate is what decides. Doubling the window halves the bill.
+# gate is what decides. Doubling the window halves the bill. An account whose
+# sessions all wait at a limit (D-8958) is under the same gates, so it adds at
+# most that one turn per window, and only while the watchdog records the wait.
 #
 # An account that can NEVER render does not stay at 48. It takes
 # CCRC_KEEPALIVE_BACKOFF_AFTER (3) turns at that rate, and then the backoff
@@ -109,6 +123,8 @@ LOG="$HOME/.ccrc/keepalive.log"
 PAUSE="$HOME/.ccrc/keepalive-paused"
 LOCK="$HOME/.ccrc/keepalive.lock"
 WORKDIR="$HOME/.ccrc/keepalive-cwd"
+# The account row's one writer, where `ccrc update` places it (`_inst_atomic`, ccd/ccrc): the turn's figures go to it.
+WRITER="$HOME/.claude/statusline-command.sh"
 # One tiny row per account: {lastAttempt, fails}. It is SEPARATE from
 # ~/.cc-limits deliberately — that file is ccd's ground truth and this script
 # is a reader of it, never a writer. Losing this directory costs one extra
@@ -557,6 +573,47 @@ _ka_pane_probe() {   # <session id> -> KA_PANE_VERDICT=live|gone|unknown,
   esac
 }
 
+# D-8958: A SESSION STOPPED AT A LIMIT WITH NOWHERE TO GO IS NOT ON THE ACCOUNT, for this one question. It makes no API
+# call, so its reading never changes, and when every account is exhausted and every session waits on its own an early
+# reset is seen by nobody (plan 2026-11-23). The owner of that fact is the limit watchdog (`ccd limit-watchdog`, D-8123,
+# once a minute), and this reads its two records in its own grammar, it decides nothing of its own:
+#   `$REG/<id>.limitsign` = `<since> <sign>[ <flag>…]` (`_wd_record_read`), a sign of a session that HAS stopped (pane,
+#     banner, menu, transcript). An `account` sign is an account that reads high, and that session may still be working;
+#   `$REG/<id>.limitwait`, open, on THIS account (`_limitwait_open`'s record): the watchdog found no account with room.
+#     Its own `sign=` is the sign it was opened on, kept while it stays open, so the current `.limitsign` is what counts.
+# THE RECORDS ARE AS OLD AS THE WATCHDOG'S LAST PASS (it re-stamps neither while the sign holds, and a pass that is off,
+# starved or cannot measure leaves them), so a CURRENT reading confirms them: the hook's turn marker (`$REG/<id>.turn.json`)
+# reads a turn that has ENDED (`done`, or `failed`: a limit ends a turn by StopFailure). A prompt or a tool call writes
+# `working` before the session's next API call; an absent or unreadable marker is no confirmation. The caller then asks
+# the pane, and only a live one is a wait: a dead pane with a fresh heartbeat (`restarting`) and an unmeasurable one keep
+# the rule (spec §3.7). A move stamped in the last KA_SESSION_FRESH seconds (`lastswap`) is a restart that may be under way
+# (an in-place resume stamps it before its unit starts and clears both records after), and one that does not read as an
+# epoch is unmeasured, so neither is a wait. Read AFTER the records, so a resume that began before they were read is seen.
+# Each file is refused as a symlink and matched, never evaluated. The three patterns are ccd's own, text for text
+# (`keepalive-limit-record-parity.test.ts`). `$REG/keepalive-heartbeat-occupied` (any file, the `-e`/`-L` test) is the
+# operator's no-deploy way back to the rule without this exception.
+KA_LIMITSIGN_RE='^([0-9]{1,12}) (pane|banner|menu|transcript|account)(( [a-z]+)*)$'
+KA_LIMITWAIT_RE='^state=open since=[0-9]{1,12} reset=([0-9]{1,12}|-) account=[A-Za-z0-9._-]+ sign=(pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12}( by=auto)?)?$'
+KA_TURN_STATE_RE='"state":"([a-z]+)"'
+_ka_waits_at_limit() {   # <session id> <account> <now> -> rc 0 iff the watchdog records it stopped at a limit, with no room, on this account, and its last turn has ended
+  local sid="$1" sign="" wait="" turn="" last="" f
+  for f in "$REG/$sid.limitsign" "$REG/$sid.limitwait" "$REG/$sid.turn.json"; do [ -f "$f" ] && [ ! -L "$f" ] || return 1; done
+  { IFS= read -r sign < "$REG/$sid.limitsign" || :; } 2>/dev/null
+  { IFS= read -r wait < "$REG/$sid.limitwait" || :; } 2>/dev/null
+  { IFS= read -r turn < "$REG/$sid.turn.json" || :; } 2>/dev/null
+  [[ "$sign" =~ $KA_LIMITSIGN_RE ]] && [ "${BASH_REMATCH[2]}" != account ] && (( 10#${BASH_REMATCH[1]} <= $3 )) || return 1
+  [[ "$wait" =~ $KA_LIMITWAIT_RE ]] && [[ " $wait " == *" account=$2 "* ]] || return 1
+  [[ "$turn" =~ $KA_TURN_STATE_RE ]] && [[ "${BASH_REMATCH[1]}" == "done" || "${BASH_REMATCH[1]}" == failed ]] || return 1
+  f="$REG/$sid.lastswap"
+  if [ -e "$f" ] || [ -L "$f" ]; then
+    [ -f "$f" ] && [ ! -L "$f" ] || return 1
+    { IFS= read -r last < "$f" || :; } 2>/dev/null
+    [[ "$last" =~ ^[0-9]{1,12}$ ]] || return 1
+    (( $3 - 10#$last < KA_SESSION_FRESH )) && return 1
+  fi
+  return 0
+}
+
 # THREE ANSWERS, NOT TWO, and the caller must not collapse them. "A session is
 # on this account" and "I could not tell whether one is" both refuse the spend,
 # but they are different news — the same split, for the same reason, as the
@@ -569,14 +626,19 @@ _ka_pane_probe() {   # <session id> -> KA_PANE_VERDICT=live|gone|unknown,
 # mode is reduced preference, not a magnet.
 _ka_session_on() {   # <account> -> rc 0: a session is measurably ON it (reason on stdout)
                      #               rc 2: pane liveness UNMEASURABLE (reason on stdout)
-                     #               rc 1: measurably clear (nothing on stdout)
-  local acct="$1" w txt b sid sup now fresh unmeasured=""
+                     #               rc 1: measurably clear (stdout: the sessions waiting at a limit, D-8958, or nothing)
+  local acct="$1" w txt b sid sup now fresh probed unmeasured="" waiting="" mark="$REG/keepalive-heartbeat-occupied"
   now="$(date +%s)"
   for w in "$REG"/*.wrapper; do
     [ -f "$w" ] || continue
     txt="$(cat "$w" 2>/dev/null)" || continue
     [ "$txt" = "$acct" ] || continue
     b="${w##*/}"; sid="${b%.wrapper}"
+    probed=0
+    if [ ! -e "$mark" ] && [ ! -L "$mark" ] && _ka_waits_at_limit "$sid" "$acct" "$now"; then
+      _ka_pane_probe "$sid"; probed=1   # a wait is a live pane; anything else is judged below on this same answer
+      if [ "$KA_PANE_VERDICT" = live ]; then waiting="$waiting${waiting:+, }$sid"; continue; fi
+    fi
     fresh=0
     sup="$(cat "$REG/$sid.supervised" 2>/dev/null)" || sup=""
     [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < KA_SESSION_FRESH )) && fresh=1
@@ -585,7 +647,7 @@ _ka_session_on() {   # <account> -> rc 0: a session is measurably ON it (reason 
         "$sid" "$KA_SESSION_FRESH"
       return 0
     fi
-    _ka_pane_probe "$sid"
+    (( probed )) || _ka_pane_probe "$sid"
     case "$KA_PANE_VERDICT" in
       live)
         # `_session_state`'s `unsupervised` (or `unclaimed`): a live pane whose
@@ -603,6 +665,7 @@ _ka_session_on() {   # <account> -> rc 0: a session is measurably ON it (reason 
     esac
   done
   [ -n "$unmeasured" ] && { printf '%s' "$unmeasured"; return 2; }
+  [ -n "$waiting" ] && printf 'beside sessions stopped at a limit with no room (%s)' "$waiting"
   return 1
 }
 
@@ -629,8 +692,8 @@ _ka_session_on() {   # <account> -> rc 0: a session is measurably ON it (reason 
 # stdin — has something to wait on; this turn has nothing to say to it, and a
 # turn that blocks costs the whole CCRC_KEEPALIVE_TURN_TIMEOUT before the pass
 # moves on.
-_ka_turn() {   # <account> <config-dir> -> the child's rc; output captured
-  local acct="$1" cfg="$2"
+_ka_turn() {   # <account> <config-dir> <probe second> -> the child's rc; output captured
+  local acct="$1" cfg="$2" probe="$3"
   (
     cd "$WORKDIR" || exit 125
     # `set -a` because a sourced file only reaches the child if it EXPORTS, and
@@ -664,11 +727,47 @@ _ka_turn() {   # <account> <config-dir> -> the child's rc; output captured
     # starts; the writer takes it only from a render with no ccd id and only for
     # ten minutes. It is set HERE, in the turn's own subshell, so nothing but this
     # turn's process tree ever carries it: no session is a child of this script.
-    CCRC_KEEPALIVE_PROBE="$(date +%s)"; export CCRC_KEEPALIVE_PROBE
+    # (`_ka_feed` below sets the same second in the writer's own subshell.)
+    CCRC_KEEPALIVE_PROBE="$probe"; export CCRC_KEEPALIVE_PROBE
+    # D-8957: THE STREAM, because it is where the figures are. `-p` renders no
+    # statusline; `--output-format stream-json --verbose` (print mode prints the
+    # stream only with `--verbose`) carries `rate_limit_event` lines, and `_ka_feed`
+    # reads them. Its `result` line carries the price, as the json object did.
     exec timeout "$CCRC_KEEPALIVE_TURN_TIMEOUT" \
       "$WRAPPER_DIR/$acct" -p "$CCRC_KEEPALIVE_PROMPT" \
-      --model "$CCRC_KEEPALIVE_MODEL" --output-format json
+      --model "$CCRC_KEEPALIVE_MODEL" --output-format stream-json --verbose
   ) >"$TURN_OUT" 2>"$TURN_ERR" </dev/null
+}
+
+# D-8957 (delivers D-6185's source, spec 2026-10-21 §3.7): THE TURN'S FIGURES REACH THE ONE WRITER. Claude Code's
+# `rate_limit_event` carries every subscription window it read from the response headers in `rate_limit_info.unifiedWindows`
+# (`five_hour`, `seven_day`: `utilization` a fraction of the window, `resetsAt` epoch seconds), the same values its
+# statusline builds `rate_limits` from. Read from the installed build's own schema (2.1.330), never seen on a fleet turn: the
+# first fleet pass must show `refreshed` (plan 2026-11-23). The NEWEST event naming the WEEKLY window becomes the payload a
+# render would hand the writer, `used_percentage` spelled as Claude Code spells it (the fraction times 100 to one decimal,
+# rounded half up, at most 100), with the five-hour window when the event names it: a plan with no five-hour window renders
+# `seven_day` alone, and the writer reads that as such (D-8120). NO WEEKLY WINDOW IS NO SOURCE: the writer reads a payload
+# with no weekly figure as `"seven":0`, a measurement nobody made. The writer runs in its own subshell under the turn's config dir and probe second, with no
+# credential (only the turn's subshell sources one) and no `TMUX_PANE` (so it is a render with no ccd id), bounded, and its
+# status line is discarded. Whether the row moved is judged by the caller, as for a render: the writer may keep it.
+KA_WRITER_DEADLINE=10   # seconds for one writer run: it reads files and runs jq, and asks neither git nor tmux here
+_ka_feed() {   # <config-dir> <probe second> -> rc 0 the writer was handed the figures | 1 the stream named no event with a weekly window | 2 no writer
+  local cfg="$1" probe="$2" payload
+  payload="$(jq -Rc 'def pct: ([((. * 1000 + 0.5) | floor) / 10, 100] | min);
+      def win: type == "object" and (.utilization | type) == "number" and (.resetsAt | type) == "number";
+      def out: {used_percentage: (.utilization | pct), resets_at: .resetsAt};
+      fromjson? | select(type == "object" and .type == "rate_limit_event") | .rate_limit_info.unifiedWindows
+      | select(type == "object" and (.seven_day | win))
+      | {rate_limits: ((if (.five_hour | win) then {five_hour: (.five_hour | out)} else {} end) + {seven_day: (.seven_day | out)})}' \
+    "$TURN_OUT" 2>/dev/null | tail -n 1)" || payload=""
+  [ -n "$payload" ] || return 1
+  [ -f "$WRITER" ] || return 2
+  ( unset TMUX_PANE
+    [ -n "$cfg" ] && export CLAUDE_CONFIG_DIR="$cfg"
+    CCRC_KEEPALIVE_PROBE="$probe"; export CCRC_KEEPALIVE_PROBE
+    exec timeout "$KA_WRITER_DEADLINE" bash "$WRITER"
+  ) <<<"$payload" >/dev/null 2>&1
+  return 0
 }
 
 # The CLI's own diagnostic goes to the LOG, never to the census: the census is
@@ -747,6 +846,7 @@ for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
     _ka_row "$acct" skipped "$sess_why" "$fb" "" "" 0
     continue
   fi
+  beside="$sess_why"   # D-8958: the sessions waiting at a limit this turn is taken beside, for the census row; or empty
   ts=""; [ -f "$lim" ] && { ts="$(_ka_num "$lim" ts)" || ts=""; }
   now="$(date +%s)"
   if [ -n "$ts" ] && [ "$((now - ts))" -lt "$CCRC_KEEPALIVE_FRESH" ]; then
@@ -787,18 +887,27 @@ for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
   # whole block closes.
   _ka_state_set "$acct" "$now" "$((fails + 1))"
   t0="$(date +%s%3N)"
-  _ka_turn "$acct" "$cfg"; rc=$?
+  probe="$(date +%s)"   # the second the turn starts: CCRC_KEEPALIVE_PROBE for the turn and for its writer (D-8943)
+  _ka_turn "$acct" "$cfg" "$probe"; rc=$?
+  _ka_feed "$cfg" "$probe"; feed=$?
   dur=$(( $(date +%s%3N) - t0 ))
 
   after=""; [ -f "$lim" ] && { after="$(_ka_num "$lim" ts)" || after=""; }
-  cost="$(jq -r '.total_cost_usd // empty' "$TURN_OUT" 2>/dev/null)" || cost=""
+  cost="$(jq -Rr 'fromjson? | select(type == "object" and .type == "result") | .total_cost_usd // empty' "$TURN_OUT" 2>/dev/null | tail -n 1)" || cost=""
   [[ "$cost" =~ ^[0-9]+(\.[0-9]+)?$ ]] || cost=""
+  # D-8959: A ROW THAT DID NOT MOVE SAYS WHICH HALF FAILED, so the first fleet pass tells a wrong source (no event with
+  # a weekly window) from a writer that kept the row against the reading (its own rules), and both from a box with no writer.
+  case "$feed" in
+    0) why="the writer was handed the turn's figures" ;;
+    2) why="the turn's figures had no writer at \$HOME/.claude/statusline-command.sh" ;;
+    *) why="its stream carried no rate-limit event with a weekly window" ;;
+  esac
 
-  # THE EXIT CODE IS A CLAIM; THE TELEMETRY FILE IS THE ARTIFACT. Whether
-  # `claude -p` renders a statusline at all is unmeasured (see the plan's
-  # background). If it does not, `no-render` is how the fleet finds out —
-  # per account, per pass, in a durable census — rather than a silent no-op
-  # that reads as success on every tick for ever.
+  # THE EXIT CODE IS A CLAIM; THE TELEMETRY FILE IS THE ARTIFACT. A `-p` turn
+  # renders no statusline (spec 2026-10-21 §2.7), and whether its stream carries
+  # the figures on every build is what the census measures (D-8957): `no-render`
+  # is how the fleet finds out — per account, per pass, in a durable census —
+  # rather than a silent no-op that reads as success on every tick for ever.
   #
   # fiveAfter IS READ ONLY ON THE REFRESHED BRANCH. On every other branch the
   # row on disk is the SAME row `fb` was read from, and reporting it as an
@@ -807,10 +916,10 @@ for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
   if [ -n "$after" ] && [ "$after" != "$ts" ]; then
     fa=""; [ -f "$lim" ] && { fa="$(_ka_num "$lim" five)" || fa=""; }
     _ka_state_set "$acct" "$now" 0    # one success clears the whole streak
-    _ka_row "$acct" refreshed "" "$fb" "$fa" "$cost" "$dur"
+    _ka_row "$acct" refreshed "$beside" "$fb" "$fa" "$cost" "$dur"
   elif [ "$rc" -eq 0 ]; then
     _ka_log "$acct" "$rc"
-    _ka_row "$acct" no-render "the turn exited 0 and $lim did not advance" \
+    _ka_row "$acct" no-render "the turn exited 0 and $lim did not advance: $why${beside:+; $beside}" \
       "$fb" "" "$cost" "$dur"
   elif [ "$rc" -eq 124 ]; then
     _ka_log "$acct" "$rc"
