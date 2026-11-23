@@ -565,6 +565,20 @@ describe('CoordStore: caps', () => {
     expect(s.caps()).toEqual({ maxConcurrentWorkers: 3 });
   });
 
+  // D-8920: what the stored number IS. A fresh box is automatic; a number written is an override; the
+  // mode is written with the number, in `setCaps`, the one writer of both.
+  it('a fresh box is automatic, a number written is an override, and automatic keeps the stored number', () => {
+    const s = store();
+    expect(s.capMode()).toBe('automatic');
+    s.setCaps({ maxConcurrentWorkers: 12 }, 5, 'override');
+    expect([s.capMode(), s.caps(), s.capsUpdatedAt()]).toEqual(['override', { maxConcurrentWorkers: 12 }, 5]);
+    s.setCaps(s.caps(), 6, 'automatic');
+    expect([s.capMode(), s.caps(), s.capsUpdatedAt()]).toEqual(['automatic', { maxConcurrentWorkers: 12 }, 6]);
+    // With no mode a write is an override: writing a number is setting one.
+    s.setCaps({ maxConcurrentWorkers: 7 }, 8);
+    expect([s.capMode(), s.caps()]).toEqual(['override', { maxConcurrentWorkers: 7 }]);
+  });
+
   it('does not count a `planned` run that never dispatched — a botched dispatch must not wedge the cap (D-13)', () => {
     // capsUsage review: a bare "state is not terminal" predicate alone also
     // matched `planned` — the state `openRun` writes and Task 9's

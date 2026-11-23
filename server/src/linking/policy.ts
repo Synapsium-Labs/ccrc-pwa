@@ -8,6 +8,7 @@ import type {
 import { TEAM_SUGGESTION_WHY_MAX, teamEvidenceClause } from '../../../shared/linking.js';
 import { CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_TEXT_MAX, CALL_WHY_MAX } from '../coord/coordCalls.js';
 import { measuredProjectTeam, type LinearRoute, type TeamRoutes } from '../linear/route.js';
+import { cleanName } from '../../../shared/unprintable.js';
 import { claimsOpenRunOf } from '../roleOf.js';
 import { isWsProject } from '../../../shared/slug.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
@@ -131,17 +132,43 @@ export function confirmedCandidate(candidates: readonly TeamCandidateWire[], tea
   return candidates.find((c) => c.key === team && (c.workspaceId ?? null) === workspace) ?? null;
 }
 
+/** How many holding workspaces a `team-ambiguous` detail names; the rest are counted. */
+const AMBIGUOUS_HOLDERS_NAMED_MAX = 8;
+
+/** Which linking door a pair's verdict answers: `suggest` (`POST /api/linking/suggest`), which takes a resend naming a workspace,
+ *  or `confirm` (`POST /api/linking/confirm`), whose `team-ambiguous` comes only from a candidate stored with no workspace, which
+ *  no resend can name (review 3482 F1). */
+export type TeamPairDoor = 'suggest' | 'confirm';
+
+/** D-8808, D-8809: the `team-ambiguous` detail: each holder as `<workspace id> (<URL key>)`, or the bare id when it has no URL key
+ *  (or one that cleans to nothing), at most `AMBIGUOUS_HOLDERS_NAMED_MAX`, then a count of the rest. At the suggest door the id is
+ *  what a caller sends back as `workspace`, so the detail says so; at the confirm door it only lists them (review 3482 F1). */
+function ambiguousDetail(holders: ReadonlyArray<{ workspaceId: string; urlKey: string | null }>, door: TeamPairDoor): string {
+  const named = holders.slice(0, AMBIGUOUS_HOLDERS_NAMED_MAX).map((h) => {
+    const key = cleanName(h.urlKey);
+    return key === null ? h.workspaceId : `${h.workspaceId} (${key})`;
+  });
+  const more = holders.length - named.length;
+  const lead = door === 'suggest'
+    ? 'more than one connected Linear workspace holds the key; send one of these as workspace: '
+    : 'more than one connected Linear workspace holds the key, and the candidate names none of them: ';
+  return `${lead}${named.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
+}
+
 /** D-8808 (final review I2, I3), D-8809: what a (key, workspace) pair's MEASURED route through the live Linear store
  *  (`measuredProjectTeam`) means for a suggestion or a confirm: the workspace of the one slot that holds it; `unavailable` when a
  *  slot the answer depends on could not be read (never `team-unknown`: the pair may well be held there); `team-ambiguous` for a key
  *  two connected workspaces hold with no workspace named (storing it with none would resolve nowhere); `not-configured` when no
  *  Linear workspace is connected at all; every other refusal `team-unknown` (every workspace the pair depends on was read, and none
- *  holds it: for a named workspace, that workspace alone). A refusal carries its fixed `detail`, decided here. */
-export function teamPairVerdict(route: LinearRoute | { kind: 'unmeasured' }):
+ *  holds it: for a named workspace, that workspace alone). A refusal carries its `detail`, decided here: fixed, except that
+ *  `team-ambiguous` names each holding workspace by its workspace id (its URL key beside it when it has one, cleaned: Linear's
+ *  data), at most `AMBIGUOUS_HOLDERS_NAMED_MAX` of them, then a count of the rest; `door` decides only that detail's lead: the
+ *  suggest door's tells the caller to send one as `workspace`, the confirm door's does not (`ambiguousDetail`). */
+export function teamPairVerdict(route: LinearRoute | { kind: 'unmeasured' }, door: TeamPairDoor):
   { ok: true; workspaceId: string } | { ok: false; error: 'team-unknown' | 'team-ambiguous' | 'unavailable' | 'not-configured'; detail: string } {
   if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId };
   if (route.kind === 'unmeasured') return { ok: false, error: 'unavailable', detail: 'a Linear workspace the pair depends on could not be read' };
-  if (route.word === 'team-ambiguous') return { ok: false, error: 'team-ambiguous', detail: 'more than one connected Linear workspace holds the key' };
+  if (route.word === 'team-ambiguous') return { ok: false, error: 'team-ambiguous', detail: ambiguousDetail(route.holders, door) };
   if (route.word === 'not-configured') return { ok: false, error: 'not-configured', detail: 'no Linear workspace is connected' };
   return { ok: false, error: 'team-unknown', detail: 'the pair is not held in the connected Linear workspaces now' };
 }
@@ -184,27 +211,29 @@ export function measuredPairRoute(routes: TeamRoutes | null): PairRoute {
 }
 
 /** D-8808 (review 2971 F5): whether the operator's write must read the Linear store to decide its workspace. Never for a cleared
- *  key, nor for the stored key sent back with no workspace named (it keeps what is stored); every other write with a key does. */
+ *  key, nor for the unchanged key with the workspace omitted (it keeps the stored choice, a stored none included); every other
+ *  write with a key does, an explicit `workspace: null` with the unchanged key included. */
 export function writeReadsStore(before: { teamKey: string | null }, written: { teamKey: string | null; workspace?: string | null }): boolean {
   return written.teamKey !== null && !(written.workspace === undefined && written.teamKey === before.teamKey);
 }
 
-/** D-8808: the workspace a write stores beside the key, from the LIVE Linear store (`route`, asked only when `writeReadsStore`),
- *  asked through the MEASURED route (`measuredPairRoute`): a slot the answer depends on that cannot be read is `unavailable`, never
- *  stored as none; with no connected workspace the answers are today's (named: `team-unknown`; none named: stored with none).
- *  A key's workspace is set in the same write (spec §3.1.1, review 2971 F4):
- *  - a named workspace must hold the key (`team-unknown`);
- *  - with none named (`workspace` omitted or null), an omitted one keeps the stored workspace while it holds the key; otherwise
- *    the one connected workspace that holds the key is stored, a key two hold is `team-ambiguous`, and a key none holds (Linear
- *    not connected yet, or not this team) is stored with none;
- *  - an unreadable store is `unavailable`, never stored as none;
- *  - no key stores none (a named workspace with no key is `team-unknown`).
- *  A row stored with no workspace whose key one connected workspace holds already resolves to it, so the unchanged key sent back
- *  with that workspace (or with none) keeps the stored none (review 2971 F2): the pair is the same, and its source, team name,
- *  evidence and time stay. The keep is decided from what the write measures (review 3286 F1): the key is unchanged and the named
- *  slot holds it; another slot that cannot be read does not undo it, because naming a holder of the stored key changes nothing.
- *  Only two readable holders of the key do (the stored none resolves nowhere, so naming one of them is a real change). The ONE
- *  writer of which workspace a row stores. */
+/** D-8808: the workspace a write stores beside the key (spec §3.1.1, review 2971 F4), the ONE writer of which workspace a row
+ *  stores. It asks the LIVE Linear store (`route`, asked only when `writeReadsStore`) through the MEASURED route
+ *  (`measuredPairRoute`), so a slot the answer depends on that cannot be read is `unavailable` and nothing is written, never
+ *  stored as none. The cases, as the coordinator plan reference's `## linking suggest` states them:
+ *  - a workspace named: it must hold the key, else `team-unknown` (as with no workspace connected); a named slot that cannot be
+ *    read is `unavailable`;
+ *  - the workspace omitted with the unchanged key: the stored choice, a stored none included, with no read;
+ *  - the workspace omitted with a changed key: a stored workspace while it holds the new key (`unavailable` while it cannot be
+ *    read); otherwise as with none named;
+ *  - none named (omitted as above, or an explicit null, which reads with the unchanged key too): the one connected workspace that
+ *    holds the key; two holders `team-ambiguous`; a store that could not be listed, or any slot the answer depends on unread
+ *    while two readable ones do not already hold the key, `unavailable`; a key no connected workspace holds, every one read, or no workspace connected, stored with none;
+ *  - the keep of a stored none (review 2971 F2, review 3286 F1): a row stored with no workspace keeps it, with its source, team
+ *    name, evidence and time, when its unchanged key is sent back and one readable workspace holds it, named (another slot that
+ *    cannot be read does not undo it: naming a holder of the stored key changes nothing) or not (every slot read). Only two
+ *    readable holders undo it: the stored none resolves nowhere, so naming one of them is a real change;
+ *  - a cleared key stores none; a workspace named with no key is `team-unknown`. */
 export function workspaceAfterWrite(a: {
   before: { teamKey: string | null; workspace: string | null };
   written: { teamKey: string | null; workspace?: string | null };

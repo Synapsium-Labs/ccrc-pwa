@@ -67,7 +67,7 @@ export interface SettingsView {
   readonly delegationAdopt: DelegationAdoptPoll;
   /** The test box block (TB10, D-7412), polled at the server poll's cadence. */
   readonly testbox: TestboxPoll;
-  /** The Linear workspace keys and the legacy key (#1444, spec §10.2), shown on the Security page; read when the page
+  /** The Linear workspace keys and the legacy key (#1444, spec §10.2), shown on the Integrations page; read when the page
    *  becomes visible, not polled. */
   readonly linear: LinearWorkspacesPoll;
   readonly pause: PauseRead;

@@ -25,7 +25,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { readTestboxAdminStatus } from '../../shared/testbox-admin.js';
+import { TESTBOX_ADMIN_DEADLINE_S, readTestboxAdminStatus } from '../../shared/testbox-admin.js';
 
 removeTmpFixturesEachTest();
 
@@ -549,7 +549,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin conn
     const id = m![1]!;
     // the parent started one unit named for the act, and nothing has run on the box yet
     const calls = readFileSync(join(h.home, 'systemd-run-calls'), 'utf8').trim().split('\n');
-    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} /usr/bin/env CCRC_TBA_ACT=${id} /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" ccrc-detach testbox-admin connect`]);
+    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} --property=RuntimeMaxSec=${TESTBOX_ADMIN_DEADLINE_S.connect} --property=TimeoutStopSec=${TESTBOX_ADMIN_DEADLINE_S['unit/stop']} /usr/bin/env CCRC_TBA_ACT=${id} /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" ccrc-detach testbox-admin connect`]);
     expect(sshCalls(h)).toEqual([]);
     expect(lastAct(h)).toMatchObject({ id, outcome: 'running' });
     // the checked words reach the unit by file and are read once

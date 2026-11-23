@@ -371,19 +371,19 @@ describe('the room: capsRoomOf reads the cap reading\'s own count (Part 3 ships 
   const rows = [{ runId: 1, sessionId: 'w-1' }, { runId: 2, sessionId: 'w-2' }, { runId: 3, sessionId: 'w-3' }];
   const readings = new Map([[1, 'waiting'], [2, 'gone'], [3, 'busy']] as const);
   it('in shadow a waiting worker still holds its slot, even when the reading measured it: no room', () => {
-    const shadow = capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, false);
+    const shadow = capsReadingOf(3, rows, readings, false);
     expect(shadow.usage.waiting).toBe(2);
     expect(capsRoomOf(shadow, WAKE_BURST)).toBe(0);
   });
   it('armed, the waiting and gone workers free their slots: room for two, while the freed-slot window admits two', () => {
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true), 2)).toBe(2);
+    expect(capsRoomOf(capsReadingOf(3, rows, readings, true), 2)).toBe(2);
   });
   it('capacity follow-ups (T4 F5): armed, a freed slot is room only up to what the freed-slot window admits now', () => {
-    const armed = capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true);
+    const armed = capsReadingOf(3, rows, readings, true);
     expect(capsRoomOf(armed, 1)).toBe(1);
     expect(capsRoomOf(armed, 0)).toBe(0);
     // An ordinary free slot never waits on the window: limit 5 over three counted runs, two of them waiting.
-    const roomy = capsReadingOf({ maxConcurrentWorkers: 5 }, rows, readings, true);
+    const roomy = capsReadingOf(5, rows, readings, true);
     expect(capsRoomOf(roomy, 0)).toBe(2);
     expect(capsRoomOf(roomy, 1)).toBe(3);
   });
@@ -397,8 +397,8 @@ describe('the room: capsRoomOf reads the cap reading\'s own count (Part 3 ships 
     expect(list).toEqual([NOW - 1]);
   });
   it('with no readings it is today\'s count, and never below zero', () => {
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 5 }, rows, null, false), 0)).toBe(2);
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 2 }, rows, null, true), WAKE_BURST)).toBe(0);
+    expect(capsRoomOf(capsReadingOf(5, rows, null, false), 0)).toBe(2);
+    expect(capsRoomOf(capsReadingOf(2, rows, null, true), WAKE_BURST)).toBe(0);
   });
 });
 
@@ -765,7 +765,7 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
 describe('the pass reads no worker while nothing could be woken (review 2981 F2)', () => {
   const passWith = async (f: ReturnType<typeof fixture>, workerFacts: AdmissionWakeDeps['workerFacts']): Promise<void> =>
     admissionWakePass({
-      coord: f.coord, names: [], serial: async (fn) => fn(), workerFacts, freedSlotRecent: () => [],
+      coord: f.coord, names: [], serial: async (fn) => fn(), workerFacts, hostMachine: () => ({ kind: 'unmeasured', why: 'no-reading' }), freedSlotRecent: () => [],
       memory: { recent: [], served: new Map() }, push: () => undefined, warn: () => undefined,
     });
   const park = (f: ReturnType<typeof fixture>, wakeOn: string): number => f.coord.insertCall('prog-a', 'coord-a', {

@@ -1,9 +1,11 @@
-// Overlord W1, the renewal readings (plan `w1-renewal-readings.md`, PR A): the L1 mappers' cases, written once in
+// Overlord W1, the renewal readings (plan `w1-renewal-readings.md`, PRs A and C): the L1 mappers' cases, written once in
 // `sim/renewalReadingSets.ts` and run here against the real module (the floors run them against each mutant), and the
 // readings' L0 vocabulary.
 import { describe, it, expect } from 'vitest';
 import * as readings from '../src/continuity/renewalReadings.js';
-import { backstopDueCases, backstopInstantCases, fittedCeilingCases } from './sim/renewalReadingSets.js';
+import {
+  backstopDueCases, backstopInstantCases, classChangedCases, designatedClassCases, fittedCeilingCases, probesFailedTwiceCases, termRaisedCases,
+} from './sim/renewalReadingSets.js';
 import { BACKSTOP_DEFAULT, BACKSTOP_HOURS, BACKSTOP_ZONE_MAX, isBackstopHour, isBackstopZone } from '../../shared/renewal-readings.js';
 
 describe('fittedCeilingOf', () => {
@@ -16,6 +18,22 @@ describe('backstopInstantBefore', () => {
 
 describe('backstopDueOf', () => {
   for (const [name, fn] of Object.entries(backstopDueCases(readings))) it(name, fn);
+});
+
+describe('termRaisedOf (PR C)', () => {
+  for (const [name, fn] of Object.entries(termRaisedCases(readings))) it(name, fn);
+});
+
+describe('classChangedOf (PR C)', () => {
+  for (const [name, fn] of Object.entries(classChangedCases(readings))) it(name, fn);
+});
+
+describe('designatedClassAtMint (PR C)', () => {
+  for (const [name, fn] of Object.entries(designatedClassCases(readings))) it(name, fn);
+});
+
+describe('probesFailedTwiceOf (PR C)', () => {
+  for (const [name, fn] of Object.entries(probesFailedTwiceCases(readings))) it(name, fn);
 });
 
 describe('the backstop vocabulary (shared/renewal-readings.ts)', () => {

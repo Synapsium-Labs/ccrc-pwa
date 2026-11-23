@@ -66,8 +66,15 @@ export const CCD_DOOR_LIB = path.resolve(__dirname, '../../ccd/lib/door.sh');
 /** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
 export const CCD_DOOR_LIB_PIN_PLACEHOLDER = '__CCD_LIB_DOOR_SHA256=stamp-at-install';
 
+/** The seventh library `CCD` loads at its foot (the model-class Anthropic arm): the aliases reader, beside the others in
+ *  `ccd/lib/`, pinned the same way. */
+export const CCD_ALIASES_LIB = path.resolve(__dirname, '../../ccd/lib/model-aliases.sh');
+
+/** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
+export const CCD_ALIASES_LIB_PIN_PLACEHOLDER = '__CCD_LIB_ALIASES_SHA256=stamp-at-install';
+
 /** Every library `CCD` loads, in load order: the file and the name it is installed under in `lib/` beside the body. */
-export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_DOOR_LIB];
+export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_DOOR_LIB, CCD_ALIASES_LIB];
 
 /** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
  *  tree's `shared/`, and pinned by digest in the body like the library. */
@@ -77,8 +84,8 @@ export const CCD_DOOR_PROG = path.resolve(__dirname, '../../ccd/door-process.mjs
 export const CCD_REDACT_CLI = path.resolve(__dirname, '../../shared/redact-cli.mjs');
 
 /** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`, the redactor's two files
- *  (`shared`, the repository's by default) and the train-proof, delegation-lease and pool-set, long-lived and door libraries' bytes (`train`, `lease`, `poolset`, `longlived`, `door`, the
- *  repository's by default): the nine pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
+ *  (`shared`, the repository's by default) and the train-proof, delegation-lease and pool-set, long-lived, door and model-aliases libraries' bytes (`train`, `lease`, `poolset`, `longlived`, `door`, `aliases`, the
+ *  repository's by default): the ten pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
  *  marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures; `ccd-entry-install.test.ts` holds it
  *  equal to the installer's real output. */
 export function installedCcdBody(
@@ -90,6 +97,7 @@ export function installedCcdBody(
   longlived: string | Buffer = fs.readFileSync(CCD_LONGLIVED_LIB),
   door: string | Buffer = fs.readFileSync(CCD_DOOR_LIB),
   prog: string | Buffer = fs.readFileSync(CCD_DOOR_PROG),
+  aliases: string | Buffer = fs.readFileSync(CCD_ALIASES_LIB),
 ): string {
   const digest = createHash('sha256').update(lib).digest('hex');
   const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
@@ -101,7 +109,8 @@ export function installedCcdBody(
     .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${sha(lease)}`)
     .replace(/^__CCD_LIB_POOLSET_SHA256=stamp-at-install$/m, `__CCD_LIB_POOLSET_SHA256=${sha(poolset)}`)
     .replace(/^__CCD_LIB_LONGLIVED_SHA256=stamp-at-install$/m, `__CCD_LIB_LONGLIVED_SHA256=${sha(longlived)}`)
-    .replace(/^__CCD_LIB_DOOR_SHA256=stamp-at-install$/m, `__CCD_LIB_DOOR_SHA256=${sha(door)}`).split('\n');
+    .replace(/^__CCD_LIB_DOOR_SHA256=stamp-at-install$/m, `__CCD_LIB_DOOR_SHA256=${sha(door)}`)
+    .replace(/^__CCD_LIB_ALIASES_SHA256=stamp-at-install$/m, `__CCD_LIB_ALIASES_SHA256=${sha(aliases)}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return markGenerated(lines.join('\n'));
 }

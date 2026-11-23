@@ -15,6 +15,7 @@ import { parseMapProposal } from '../src/linear/migrationPolicy.js';
 import { clientRoutes } from './ccrcApiTable.js';
 import { parsePlanTicketMove } from '../src/coord/planPolicy.js';
 import { parseTeamSuggestion } from '../src/linking/policy.js';
+import { TEAM_SUGGEST_REFUSALS, type TeamSuggestRefusal } from '../../shared/linking.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -145,6 +146,16 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     const bodies = bodiesOf('## The Linear owner: plan map-propose');
     expect(bodies).toHaveLength(1);
     for (const b of bodies) expect(parseMapProposal(b, 'AAA').ok, JSON.stringify(b)).toBe(true);
+    // w7-map-identifier (D-8186): the runnable example names issues by identifier alone, the recommended path; the older
+    // id-and-identifier pair is shown inline as a whole body, and parses too.
+    const example = bodies[0] as { entries: Record<string, unknown>[] };
+    expect(example.entries.length).toBeGreaterThan(0);
+    for (const e of example.entries) expect(Object.keys(e)).not.toContain('issue');
+    const olderText = /`(\{"entries":\[\{"issue":[^`]+\})`/.exec(plan())?.[1];
+    expect(olderText).toBeDefined();
+    const older = JSON.parse(olderText!.replace(/<[^>]+>/g, 'some text')) as { entries: Record<string, unknown>[] };
+    expect(Object.keys(older.entries[0]!)).toEqual(['issue', 'identifier', 'class']);
+    expect(parseMapProposal(older, 'AAA').ok).toBe(true);
     const text = plan();
     const at = text.indexOf('\n## The Linear owner: plan map-propose\n');
     const next = text.indexOf('\n## ', at + 1);
@@ -152,6 +163,14 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     expect(section).toMatch(/`team-ambiguous` \(a migration of the team waits for a map in more than one workspace whose owner you are, so ccrc cannot tell which this map is for: stop and tell the operator\)/);
     expect(section).toMatch(/`unreachable` \(ccrc could not measure something the map needs: the team's Linear owner, in a workspace whose owner you could be; a Linear key that serves the team; the team's open issues, read from Linear, all of them within the pages one map reads; or the runs\. The refusal's detail names which\. Try once more later; if it is refused again, stop and tell the operator\. When the detail says the team has more open issues than the map reads, tell the operator at once: a retry never helps\)\./);
     for (const word of ['not-linear-owner', 'map-incomplete', 'map-rewrites-plan', 'plan-bad-body', 'team-ambiguous', 'unreachable']) expect(section).toContain(`\`${word}\``);
+    expect(section).toContain('ccrc matches each identifier, in any letter case, against the team\'s open issues it reads for this map, '
+      + 'and stores the issue\'s Linear id and the identifier as Linear spells it; it never guesses, so a link or any other text is no identifier.');
+    expect(section).toContain('The older form, an entry that also carries the issue\'s Linear id as `issue`, is still accepted');
+    expect(section).toContain(': its `issue` must be that identifier\'s own issue.');
+    expect(section).toContain('`map-incomplete` (an open issue missing; one listed twice, also once by its id and once by its identifier; '
+      + 'an identifier that is not one of the open issues this map may place, because it is closed, in another team or workspace, already '
+      + 'held by ccrc\'s plan, or not on a follow-up\'s list; or an identifier more than one of the issues read answers to)');
+    expect(section).toContain('`plan-bad-body` (an `issue` id that is not its identifier\'s issue,');
   });
 
   it('its plan take examples, all three arms, parse as the route parses them (review 2580 A5)', () => {
@@ -326,10 +345,68 @@ describe('the plan reference after wave 6 (D-8185)', () => {
 
 // Linear hierarchy wave 8's carried `w8-skill-section` (D-8808, D-8809; run 3238): the coordinator's team suggestion, the
 // `linking suggest` section of `references/plan.md`. Its load-bearing sentences are pinned inside the section: who may suggest,
-// one suggestion each, the identity the client fills, and the suggest door's own refusal words, from a list kept by hand that
-// reads the section, never the route (review 3242 F1, 3245 F1). The attribution and token words the door passes through are the
-// ones api.md lists for the mail routes, with the stale-uuid remedy in SKILL.md; no-body and bad-body are the client's own, and
-// the section's identity sentence describes bad-body's cause. Nothing here checks either.
+// one suggestion each, the identity the client fills, what the operator's save stores as the workspace, and the suggest door's
+// refusal words (`w8-linking-measurement-record`): the list is the door's one vocabulary, `TEAM_SUGGEST_REFUSALS`, which
+// `linking-door-refusals.test.ts` holds equal to what the handler answers, and each word's remedy line is pinned below. The
+// attribution and token words the door passes through are the ones api.md lists for the mail routes, with the stale-uuid
+// remedy in SKILL.md; no-body and bad-body are the client's own, and the section's identity sentence describes bad-body's
+// cause. Nothing here checks either.
+
+/** The remedy line `plan.md` gives each of the suggest door's refusal words, word for word. Typed by the door's vocabulary, so a
+ *  word added to `TEAM_SUGGEST_REFUSALS` fails the typecheck here until it has a line, and the guard below fails until the
+ *  section gives it that line. */
+const SUGGEST_REMEDIES: Readonly<Record<TeamSuggestRefusal, string>> = {
+  'bad-request': 'a body with a key other than these, or a field missing or malformed: the project, the team key, a `workspace` '
+    + 'that is present but not a Linear id, or a reason that is empty, over 280 characters (an emoji counts as two) or not one '
+    + 'plain line. The detail names the field: fix it and send again.',
+  'unavailable': 'the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the '
+    + 'operator.',
+  'not-a-coordinator': 'the session claims no open run: only a programme\'s coordinator suggests.',
+  'run-unreadable': 'the open run claimants could not be read: try again.',
+  'team-set': 'the project already has a key; a project whose key the operator cleared still takes suggestions.',
+  'team-unknown': 'no connected workspace has that team, or the named workspace does not; the workspace the pair depends on was '
+    + 'read. Check the key, and the workspace if you named one, before you send again.',
+  // w8-suggest-workspace-id (D-8808): the detail names each holding workspace by the id the door accepts.
+  'team-ambiguous': 'no workspace named and the key is in more than one connected workspace: send it again with `workspace` set '
+    + 'to one of the workspaces the detail names.',
+  'not-configured': 'no Linear workspace is connected: do not retry; tell the operator.',
+  'linear-text-public': 'the reason names a ticket id or another name that may not be shown publicly: reword it and send again.',
+  'no-project': 'ccrc has no row for that project: check the project\'s name.',
+  'write-failed': 'the store write failed: try once more; if it is refused again, stop and tell the operator.',
+};
+
+/** What the operator's save stores as the workspace (`workspaceAfterWrite`, D-8808), as the section states it, case by case. */
+const WORKSPACE_CASES: readonly string[] = [
+  'A workspace named: it must hold the key, or the write is refused `team-unknown`, as it is when no workspace is connected; a '
+    + 'named workspace that cannot be read is `unavailable`, and nothing is written.',
+  'The workspace omitted with the unchanged key: the stored choice stays, a stored none included, and the Linear store is not read.',
+  'The workspace omitted with a changed key: a stored workspace stays while it holds the new key, and is `unavailable` while it '
+    + 'cannot be read; otherwise the write goes on as with none named.',
+  'None named (omitted as above, or an explicit `null`, which reads the store with the unchanged key too): the one connected '
+    + 'workspace that holds the key is stored; two holders are `team-ambiguous`; a Linear store that cannot be read, or any '
+    + 'workspace the answer depends on that cannot be read while two readable ones do not already hold the key, is '
+    + '`unavailable`, and nothing is written; a key no '
+    + 'connected workspace holds, every one read, or no workspace connected at all, is stored with none.',
+  'A row stored with no workspace keeps that none, with its evidence, when its unchanged key is sent back and one readable '
+    + 'workspace holds it, whether that workspace is named (even while another workspace cannot be read) or not (every '
+    + 'workspace read). Only two readable holders undo the keep.',
+  'A cleared key stores no workspace; a workspace named with no key is `team-unknown`.',
+];
+
+/** The bullet items of the raw text that follows `lead` in `section`, up to the first line that is neither a bullet nor its
+ *  indented continuation, each flattened to one line. */
+const bulletsAfter = (section: string, lead: string): string[] => {
+  const at = section.indexOf(lead);
+  expect(at, `the section has no "${lead}"`).toBeGreaterThanOrEqual(0);
+  const items: string[] = [];
+  for (const line of section.slice(at + lead.length).replace(/^\n+/, '').split('\n')) {
+    if (line.startsWith('- ')) items.push(line.slice(2));
+    else if (line.startsWith('  ') && items.length > 0) items[items.length - 1] += ` ${line.trim()}`;
+    else break;
+  }
+  return items.map((i) => flat(i).trim());
+};
+
 describe('the linking suggest section (D-8808, D-8809)', () => {
   /** The section, from its heading to the next one, whitespace flattened (raw when `raw`). */
   const suggestSection = (raw = false): string => {
@@ -340,6 +417,8 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
     const section = text.slice(at, next === -1 ? undefined : next);
     return raw ? section : flat(section);
   };
+  /** The section's refusal list, one flattened line per word. */
+  const refusalLines = (): string[] => bulletsAfter(suggestSection(true), 'Refusals, each with what to do:');
 
   it('comes after plan take, and its one example is the client verb with a body that names no identity', () => {
     const text = plan();
@@ -360,8 +439,13 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
   });
 
   it('says who may suggest: a session that claims an open run, a programme\'s coordinator', () => {
-    expect(suggestSection()).toContain('`not-a-coordinator` (the session claims no open run: only a programme\'s coordinator suggests)');
-    expect(suggestSection()).toContain('`run-unreadable` (the open run claimants could not be read: try again)');
+    expect(suggestSection()).toContain('`not-a-coordinator`: the session claims no open run: only a programme\'s coordinator suggests.');
+    expect(suggestSection()).toContain('`run-unreadable`: the open run claimants could not be read: try again.');
+  });
+
+  it('says where the workspace id comes from: the team-ambiguous refusal\'s detail (w8-suggest-workspace-id, D-8808)', () => {
+    expect(suggestSection()).toContain('add `"workspace":"<Linear workspace id>"` only when the key exists in more than one connected '
+      + 'workspace (the `team-ambiguous` refusal\'s detail names them by that id, up to eight, and counts the rest)');
   });
 
   it('says one suggestion each: a resend replaces the session\'s earlier one', () => {
@@ -378,16 +462,27 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
     expect(section).toContain('The reason is shown in the console only, never written to Linear');
   });
 
-  it('names the suggest door\'s own refusal words, team-ambiguous and write-failed with their remedies (review 3242 F1, 3245 F1)', () => {
-    const section = suggestSection();
-    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'not-configured', 'write-failed',
-      'no-project', 'linear-text-public', 'bad-request']) {
-      expect(section, `the section does not name ${word}`).toContain(`\`${word}\``);
+  it('lists exactly the suggest door\'s refusal words, from its one vocabulary, each once (review 3242 F1, 3245 F1; w8-linking-measurement-record)', () => {
+    const listed = refusalLines().map((l) => /^`([a-z-]+)`: /.exec(l)?.[1] ?? `<no word: ${l}>`);
+    expect(new Set(listed).size, 'the section lists a refusal word twice').toBe(listed.length);
+    expect(listed.filter((w) => !(TEAM_SUGGEST_REFUSALS as readonly string[]).includes(w)), 'the section lists a word the door cannot answer')
+      .toEqual([]);
+    expect(TEAM_SUGGEST_REFUSALS.filter((w) => !listed.includes(w)), 'the door answers a word the section does not list').toEqual([]);
+  });
+
+  it('gives each refusal word its remedy line, word for word (w8-linking-measurement-record)', () => {
+    expect(Object.keys(SUGGEST_REMEDIES).sort(), 'a remedy pin for a word the door does not answer, or none for one it does')
+      .toEqual([...TEAM_SUGGEST_REFUSALS].sort());
+    const lines = refusalLines();
+    for (const word of TEAM_SUGGEST_REFUSALS) {
+      expect(lines.find((l) => l.startsWith(`\`${word}\`: `)), `the remedy line of \`${word}\``).toBe(`\`${word}\`: ${SUGGEST_REMEDIES[word]}`);
     }
-    expect(section).toContain('`team-ambiguous` (no workspace named and the key is in more than one connected workspace: send it again with `workspace`)');
-    expect(section).toContain('`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions)');
-    expect(section).toContain('`unavailable` (the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the operator)');
-    expect(section).toContain('`write-failed` (the store write failed: try once more; if it is refused again, stop and tell the operator)');
+  });
+
+  it('states what the operator\'s save stores as the workspace, case by case (D-8808, w8-linking-measurement-record)', () => {
+    expect(suggestSection()).toContain('**What the operator\'s save stores as the workspace.** The operator\'s write of a key decides '
+      + 'the workspace beside it by one rule, so a suggestion\'s workspace is kept only as the write measures it:');
+    expect(bulletsAfter(suggestSection(true), 'kept only as the write measures it:')).toEqual(WORKSPACE_CASES);
   });
 });
 

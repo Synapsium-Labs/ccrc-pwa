@@ -66,6 +66,8 @@ const IMPORTS = [
   "import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+  // The cap in force (D-8920): type-only, from `shared/runCap.ts`, whose own imports are L0.
+  "import type { CoordCapNow } from './runCap.js';",
   "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",
   "import type { LandingWrite } from './landingLine.js';",
   "import { hookEventIs, type HookEvent } from './hook-events.js';",

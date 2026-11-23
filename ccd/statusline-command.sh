@@ -251,6 +251,40 @@ if [ ${#rate_parts[@]} -gt 0 ]; then
   segments+=("$rate_str")
 fi
 
+# ── This render's session and its sidecar file (derived once, used twice) ──
+#    The limit publish below asks what THIS session's previous render carried
+#    (D-8942), and the usage sidecar further down is where that is kept, so
+#    the session id and the sidecar path are worked out here, before both. The
+#    id is the tmux session name with `cc-` stripped; why the tmux call is
+#    bounded, and spelled the way it is, is told at "Side-effect 2" below.
+#    `usage_file` stays empty for a render with no ccd id (a pane outside ccd,
+#    a box without `~/.cc-sessions`) and for an agent name that is no file name.
+usage_dir="$HOME/.cc-sessions/usage"
+ccd_id=""; agent_name=""; usage_target_dir=""; usage_file=""
+if [ -n "${TMUX_PANE:-}" ] && [ -d "$HOME/.cc-sessions" ]; then
+  sl_timeout=""
+  for sl_bin in timeout gtimeout; do
+    if command -v "$sl_bin" >/dev/null 2>&1; then sl_timeout="$sl_bin"; break; fi
+  done
+  tname=""
+  [ -n "$sl_timeout" ] && tname=$("$sl_timeout" 2 "${_TMX_ARGV[@]}" display-message -p '#S' 2>/dev/null)
+  case "$tname" in cc-?*) ccd_id="${tname#cc-}" ;; esac
+  case "$ccd_id" in *[!A-Za-z0-9._-]*) ccd_id="" ;; esac
+fi
+if [ -n "$ccd_id" ]; then
+  agent_name=$(printf '%s' "$input" | jq -r '.agent.name // empty' 2>/dev/null)
+  case "$agent_name" in
+    "")                       usage_target_dir="$usage_dir"; usage_file="$usage_dir/$ccd_id.json" ;;
+    *[!A-Za-z0-9._-]*|.|..)   : ;;
+    *)                        usage_target_dir="$usage_dir/$ccd_id.agents"; usage_file="$usage_target_dir/$agent_name.json" ;;
+  esac
+fi
+# The limit payload as this session saw it, raw: the sidecar's `limits` key and
+# the comparison with it are one jq definition, so the two cannot drift apart.
+sl_limits_def='def limits: {
+  five: (.rate_limits.five_hour.used_percentage // null), fiveResetAt: (.rate_limits.five_hour.resets_at // null),
+  seven: (.rate_limits.seven_day.used_percentage // null), sevenResetAt: (.rate_limits.seven_day.resets_at // null)};'
+
 # ── Side-effect: publish this account's limit telemetry for `ccd` auto-swap ──
 #    Limits are account-scoped, so any session's report is valid for the whole
 #    account — but NOT last-writer-wins, and that is the whole of the guard
@@ -321,6 +355,39 @@ fi
 #    figure beside it. The figure itself is gone, so inside that window the
 #    values can no longer decide, and a reading that names the window once it
 #    has ended is dropped as well.
+#
+#    A READING THAT CHANGED IS NEW, WHATEVER THE ROW SAYS (D-8942). "Used% only
+#    ever climbs inside a window" is false once: when the provider resets an
+#    account EARLY. Measured: a row at `"seven":100` with days of its window
+#    left, the account reset, and every session on it then reading 0% or 1% —
+#    each dropped as older, so the row held the ceiling until the old window's
+#    end and `_avail` kept the account out. The row cannot tell that reading
+#    from a snapshot; the WRITER can, from its own history. `rate_limits` is
+#    this session's last API response, so it differs from what this session's
+#    previous render carried only when a response arrived in between. That
+#    previous payload is the `limits` key of this session's usage sidecar (one
+#    writer, below), and a reading the row calls older (`rewound`, `undercuts`)
+#    is published anyway when it differs from it. This cannot bring the flapping
+#    back: an idle session's snapshot is the same render after render, so it
+#    never differs and never passes. A first render has no history and is
+#    dropped as before (a respawned session's sidecar holds an empty `limits`
+#    after its first, pre-response render), and so is a writer with no ccd id.
+#    The two live-5h arms below are NOT relaxed: what they hold back ends by
+#    itself within one 5h window, not days later.
+#
+#    AND THE LOWERED ROW REMEMBERS WHAT IT REPLACED. Every idle session on the
+#    account still carries the reading from before the reset, and against the
+#    lowered row that one is HIGHER in the same window (or names a LATER
+#    window), which always lands: the row would go straight back to the
+#    ceiling. So a publish of that kind writes `fiveResetFrom`/`sevenResetFrom`,
+#    the end of the window it replaced, and while a window's mark stands a ccd
+#    session's reading for a window ending no later than the mark that would
+#    RAISE the row needs the same proof of change. Equal and lower readings are
+#    judged as ever. A writer with no ccd id cannot hold a snapshot from before
+#    the reset on a box with sessions to protect (the keepalive's one-turn
+#    process reads fresh), so its raise lands as it always did. The mark rides
+#    along on every publish and is dropped once the row names a window that
+#    ends after it, when the old snapshots are `rewound` again.
 measured=0
 if [ -n "$acct_id" ]; then
   for m in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
@@ -338,9 +405,12 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
   # is a word, never a number this shell then has to re-decide. Any failure
   # (absent row, unparseable row, a `resets_at` that is not a number and so
   # not `--argjson`-able) leaves `acct_verdict` empty, which publishes.
-  acct_verdict=""
+  # Since D-8942 the word is one of four — `behind`, `publish`, and two that ask
+  # the writer for proof of change, `older` and `raise` — and a second line
+  # carries the row's marks as they stand after this publish.
+  acct_verdict=""; acct_mark=""
   if [ -f "$acct_row" ]; then
-    acct_verdict=$(jq -r \
+    acct_out=$(jq -r \
       --argjson f "${five_int:-null}" --argjson s "${seven_int:-0}" \
       --argjson fr "${five_reset:-null}" --argjson sr "${seven_reset:-null}" \
       --argjson now "$acct_now" '
@@ -356,13 +426,75 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
         def fiveLive:
           (.five | type) == "number" and (.ts | type) == "number" and $now - .ts <= 18000
           and ((.fiveResetAt | type) != "number" or $now < .fiveResetAt);
-        if rewound($fr; .fiveResetAt) or rewound($sr; .sevenResetAt) then "behind"
-        elif undercuts($f; (.five // 0); $fr; .fiveResetAt)
-          or undercuts($s; (.seven // 0); $sr; .sevenResetAt) then "behind"
-        elif $f == null and fiveLive then "behind"
-        elif $f != null and $fr != null and .five == null and $fr == .fiveResetAt and $now >= $fr then "behind"
-        else "publish" end' "$acct_row" 2>/dev/null) || acct_verdict=""
+        # D-8942: `older` is a reading the row would drop, decided
+        # per window; `raises` is the reading a standing mark holds back.
+        def older($new; $old; $newReset; $oldReset):
+          rewound($newReset; $oldReset) or undercuts($new; $old; $newReset; $oldReset);
+        def raises($new; $old; $newReset; $oldReset; $from):
+          ($from | type) == "number" and ($newReset | type) == "number" and ($oldReset | type) == "number"
+          and $newReset <= $from
+          and ($newReset > $oldReset
+               or ($newReset == $oldReset and ($new | type) == "number" and ($old | type) == "number" and $new > $old));
+        # The mark a window carries after this publish: the end of the window an
+        # `older` reading replaces (never earlier than a mark already standing),
+        # else the standing mark while the row still names a window inside it.
+        def mark($hit; $newReset; $oldReset; $from):
+          (if ($from | type) == "number" then $from else null end) as $kept
+          | if $hit and ($oldReset | type) == "number" then ([$oldReset, $kept] | max)
+            elif $kept != null and ($newReset | type) == "number" and $newReset <= $kept then $kept
+            else null end;
+        def field($key; $v): if $v == null then "" else ",\"\($key)\":\($v | floor)" end;
+        older($f; (.five // 0); $fr; .fiveResetAt) as $five
+        | older($s; (.seven // 0); $sr; .sevenResetAt) as $seven
+        | (if $f == null and fiveLive then "behind"
+           elif $f != null and $fr != null and .five == null and $fr == .fiveResetAt and $now >= $fr then "behind"
+           elif $five or $seven then "older"
+           elif raises($f; .five; $fr; .fiveResetAt; .fiveResetFrom)
+             or raises($s; .seven; $sr; .sevenResetAt; .sevenResetFrom) then "raise"
+           else "publish" end),
+          ((field("fiveResetFrom"; mark($five; ($fr // .fiveResetAt); .fiveResetAt; .fiveResetFrom))
+           + field("sevenResetFrom"; mark($seven; $sr; .sevenResetAt; .sevenResetFrom))
+           # D-8944: `resetSeen` is WHEN the row was lowered, which the marks do not say
+           # (they ride along). The publish that sets a mark stamps it; it then rides
+           # and ends with the marks. `ccd` ends a limit wait on it (`_watchdog_resume_here`).
+           ) as $m | $m + (if $m == "" then ""
+                  elif ($five and (.fiveResetAt | type) == "number") or ($seven and (.sevenResetAt | type) == "number")
+                  then field("resetSeen"; $now)
+                  else field("resetSeen"; (.resetSeen | if type == "number" then . else null end)) end))' "$acct_row" 2>/dev/null) || acct_out=""
+    acct_verdict="${acct_out%%$'\n'*}"
+    case "$acct_out" in *$'\n'*) acct_mark="${acct_out#*$'\n'}" ;; esac
+    [[ "$acct_mark" =~ ^(,\"fiveResetFrom\":[0-9]+)?(,\"sevenResetFrom\":[0-9]+)?(,\"resetSeen\":[0-9]+)?$ ]] || acct_mark=""
   fi
+  # D-8942: the writer's own history decides `older` and `raise`. One `jq`, and
+  # only on those two words, so an ordinary render forks nothing more than it
+  # did. No sidecar, an unreadable one, or a previous render with no figure in
+  # either window is no history.
+  case "$acct_verdict" in older|raise)
+    acct_changed=0
+    if [ -n "$usage_file" ] && [ -f "$usage_file" ]; then
+      acct_changed=$(printf '%s' "$input" | jq -r --slurpfile prev "$usage_file" "$sl_limits_def"'
+        ($prev[0] | if type == "object" then .limits else null end) as $was
+        | if ($was | type) == "object" and (($was.five | type) == "number" or ($was.seven | type) == "number")
+             and $was != limits then 1 else 0 end' 2>/dev/null) || acct_changed=0
+    fi
+    # D-8943: THE KEEPALIVE'S PROBE IS NEW BY CONSTRUCTION. An account at the
+    # ceiling is the one every session has left, so no ccd session renders there
+    # and nothing above can show a change: an early reset on it went unseen until
+    # the old window ended. `ccd-telemetry-keepalive` starts one process, which
+    # makes one API call and renders that call's figures; it exports
+    # `CCRC_KEEPALIVE_PROBE`, the second it started the turn, and that is the
+    # proof for an `older` reading. NARROW ON PURPOSE: only a render with no ccd
+    # id (a session is judged by its own history whatever its environment says,
+    # and no session is a child of the keepalive), and only for ten minutes after
+    # that second, so a value left in some environment proves nothing later.
+    if [ "$acct_changed" != 1 ] && [ -z "$ccd_id" ] && [[ "${CCRC_KEEPALIVE_PROBE:-}" =~ ^[0-9]{9,12}$ ]]; then
+      acct_probe_age=$(( acct_now - 10#$CCRC_KEEPALIVE_PROBE ))
+      [ "$acct_probe_age" -ge 0 ] && [ "$acct_probe_age" -le 600 ] && acct_changed=1
+    fi
+    if [ "$acct_changed" = 1 ]; then acct_verdict="publish"
+    elif [ "$acct_verdict" = raise ] && [ -z "$ccd_id" ]; then acct_verdict="publish"
+    else acct_verdict="behind"; fi ;;
+  esac
   if [ "$acct_verdict" != "behind" ]; then
     # `$$`-unique, like the usage sidecar's own tmp: the fixed `.{acct}.tmp`
     # this replaces was ONE path shared by every session on the account, so two
@@ -423,8 +555,8 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
         fi
       fi
     fi
-    printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s%s}\n' \
-      "${five_int:-null}" "${seven_int:-0}" "$acct_now" "${acct_five_reset:-null}" "${seven_reset:-null}" "$acct_five_extra" \
+    printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s%s%s}\n' \
+      "${five_int:-null}" "${seven_int:-0}" "$acct_now" "${acct_five_reset:-null}" "${seven_reset:-null}" "$acct_five_extra" "$acct_mark" \
       > "$acct_tmp" && mv -f "$acct_tmp" "$acct_row" || rm -f "$acct_tmp" 2>/dev/null
   fi
 fi
@@ -480,27 +612,10 @@ fi
 #    third arm (the background watcher) is deliberately NOT copied: it costs a
 #    fork and a stamp file on every render, and skipping one tmux question is
 #    the cheaper honest answer here.
-usage_dir="$HOME/.cc-sessions/usage"
-ccd_id=""
-if [ -n "${TMUX_PANE:-}" ] && [ -d "$HOME/.cc-sessions" ]; then
-  sl_timeout=""
-  for sl_bin in timeout gtimeout; do
-    if command -v "$sl_bin" >/dev/null 2>&1; then sl_timeout="$sl_bin"; break; fi
-  done
-  tname=""
-  [ -n "$sl_timeout" ] && tname=$("$sl_timeout" 2 "${_TMX_ARGV[@]}" display-message -p '#S' 2>/dev/null)
-  case "$tname" in cc-?*) ccd_id="${tname#cc-}" ;; esac
-  case "$ccd_id" in *[!A-Za-z0-9._-]*) ccd_id="" ;; esac
-fi
 if [ -n "$ccd_id" ]; then
-  agent_name=$(printf '%s' "$input" | jq -r '.agent.name // empty' 2>/dev/null)
-  agent_ok=1
-  if [ -n "$agent_name" ]; then
-    case "$agent_name" in *[!A-Za-z0-9._-]*|.|..) agent_ok=0 ;; esac
-  fi
-  if [ "$agent_ok" = 1 ]; then
+  if [ -n "$usage_file" ]; then
     usage_json=$(printf '%s' "$input" | jq -c \
-      --arg ts "$(date +%s)" --arg acct "$acct_id" --arg agent "$agent_name" '{
+      --arg ts "$(date +%s)" --arg acct "$acct_id" --arg agent "$agent_name" "$sl_limits_def"'{
         ts: ($ts | tonumber),
         uuid: (.session_id // null),
         account: (if $acct == "" then null else $acct end),
@@ -511,14 +626,10 @@ if [ -n "$ccd_id" ]; then
         ctxWindow: (.context_window.context_window_size // null),
         cost: (.cost.total_cost_usd // null),
         cacheExpiresAt: (.prompt_cache.expires_at | if type == "number" then . else null end),
-        agent: (if $agent == "" then null else $agent end)
+        agent: (if $agent == "" then null else $agent end),
+        limits: limits
       }' 2>/dev/null)
     if [ -n "$usage_json" ]; then
-      if [ -n "$agent_name" ]; then
-        usage_target_dir="$usage_dir/$ccd_id.agents"; usage_file="$usage_target_dir/$agent_name.json"
-      else
-        usage_target_dir="$usage_dir"; usage_file="$usage_dir/$ccd_id.json"
-      fi
       # atomic tmp-and-rename, the registry's own discipline (`_reg_set`)
       usage_tmp="$usage_target_dir/.$ccd_id.$$.tmp"
       mkdir -p "$usage_target_dir" 2>/dev/null \

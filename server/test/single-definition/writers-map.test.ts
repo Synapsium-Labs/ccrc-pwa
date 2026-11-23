@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { parseFile, ts } from '../scan/parse.js';
-import { sqlWrites } from './sqlStatements.js';
+import { sqlWrites, tableRefSource } from './sqlStatements.js';
 import { ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
@@ -319,7 +319,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
-  'continuity_hook_reports', 'continuity_witness_checks'] as const;
+  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -404,12 +404,14 @@ describe(TABLES_PIN, () => {
       portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
       // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
       answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
-      // The Overlord authority journal's head row (Overlord W1, H27): one writer, the apply step of the journal's append, inside
-      // its caller's transaction. Confirm the restore's `appendConfirmInTx` joins it in authority journal C.
-      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx'],
+      // The Overlord authority journal's head row (Overlord W1, H27): one writer, `writeHeadRow`, inside its caller's transaction,
+      // called by the apply step of `appendInTx` and by Confirm the restore's `appendConfirmInTx` (authority journal C).
+      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#writeHeadRow'],
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
-      overlord_designation: [...['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
+      // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the
+      // row's writers.
+      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
         .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
       // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
       // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.
@@ -467,6 +469,11 @@ describe(TABLES_PIN, () => {
       continuity_hook_reports: ['server/src/continuity/hookReportStore.ts#insertHookReport'],
       // The witness checks (Overlord W1 door process B1, plan w1-door-process.md Task 9): one writer, which also prunes its rows past 7 days.
       continuity_witness_checks: ['server/src/continuity/hookReportStore.ts#recordWitnessCheck'],
+      // The run cap's stored number and what it is (D-8920): ONE writer of `maxConcurrentWorkers`, `capMode`
+      // and `updatedAt`, in one statement, reached only from the caps door (`coord-caps-route.test.ts` holds the one
+      // caller). A second method that writes the mode reds here. The seed row and migration 121's upgrade rule are SQL in
+      // MIGRATIONS' string, so the scanner names its module.
+      coordinator_state: ['server/src/coord/schema.ts#(module)', `${S}setCaps`],
     });
   });
 
@@ -521,6 +528,34 @@ describe(TABLES_PIN, () => {
       check(f);
     } finally { rmSync(d, { recursive: true, force: true }); }
   };
+  // Renewal readings C, Task 5: count statements that write the class, not readers or other columns' writers.
+  const designatedClassWrites = (files: readonly string[]): string[] => {
+    const table = 'continuity_generations';
+    const insert = new RegExp(`\\b(INSERT|REPLACE)(?:\\s+OR\\s+\\w+)?\\s+INTO\\s+${tableRefSource(table)}\\s*(?:\\(([^)]*)\\))?`, 'i');
+    const column = /^["`\[]?designatedClass["`\]]?$/i;
+    const assignment = /(?:\bSET\s+|,\s*)["`\[]?designatedClass["`\]]?\s*=/i;
+    return sqlWrites(files, [table]).flatMap(({ writer, sql }) => {
+      const m = insert.exec(sql);
+      const sites: string[] = [];
+      if (m !== null && (m[3] === undefined || m[3].split(',').some((c) => column.test(c.trim())))) {
+        sites.push(`${writer} ${m[1]!.toUpperCase()}`);
+      }
+      if ((m === null ? /^UPDATE\b/i.test(sql) : /\bDO\s+UPDATE\s+SET\b/i.test(sql)) && assignment.test(sql)) sites.push(`${writer} SET`);
+      return sites;
+    }).sort();
+  };
+  it('CONTROL: the designatedClass census finds an insert and a second writer, not a read or an unrelated update', async () => {
+    await plant('a.ts', [
+      "export function mint() { db.prepare('INSERT INTO continuity_generations (id, designatedClass) VALUES (?, ?)'); }",
+      "export function restamp() { db.prepare('UPDATE continuity_generations SET term = ?, [designatedClass] = ? WHERE id = ?'); }",
+      "export function other() { db.prepare('UPDATE continuity_generations SET term = ? WHERE designatedClass = ?'); }",
+      "export function read() { db.prepare('SELECT designatedClass FROM continuity_generations'); }",
+    ].join('\n'), (f) => expect(designatedClassWrites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['mint INSERT', 'restamp SET']));
+  });
+  it('the designatedClass column is written by the mint INSERT alone', () => {
+    expect(designatedClassWrites(ALL.filter((f) => !rel(f).startsWith('pwa/'))))
+      .toEqual(['server/src/continuity/continuityStore.ts#mintGeneration INSERT']);
+  });
   it('CONTROL: a call to setPortfolioRank in a function is named by it; its definition is not a call', async () => {
     await plant('a.ts', ['export function setPortfolioRank(): void {}', 'export function door(): void { setPortfolioRank(); }'].join('\n'),
       (f) => expect(rankCallSites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['door']));

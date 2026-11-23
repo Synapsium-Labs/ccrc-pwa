@@ -951,3 +951,56 @@ case "$1" in +%s) printf '1700000000\\n' ;; *) exec '${date}' "$@" ;; esac
     expect(turns()).toEqual([]);
   });
 });
+
+// D-8943. AN ACCOUNT AT THE CEILING WITH NO SESSION ON IT. Every session leaves such an account, so the keepalive's turn
+// is the only thing that reads it, and the account row's one writer drops a reading lower than the row unless its
+// writer shows it is new. The turn is new by construction (a process started a moment ago, one API call), and it says so
+// with `CCRC_KEEPALIVE_PROBE`, the second the turn started. These cases run the REAL writer under the fake wrapper, the
+// way a render of the turn would: nothing else in this file does.
+describe('an account at the ceiling with no session on it is re-measured, and an early reset lands (D-8943)', () => {
+  const STATUSLINE = path.resolve(__dirname, '../../ccd/statusline-command.sh');
+  const SEVEN_RESET = Math.floor(Date.now() / 1000) + 4 * 86400;
+  const FIVE_RESET = Math.floor(Date.now() / 1000) + 3600;
+  /** A render of the turn: the payload the account answers with after its reset, through the one writer. */
+  const rendersThroughTheWriter = (prefix = ''): string => `
+printf '%s' "\${CCRC_KEEPALIVE_PROBE:-none}" > "$HOME/probe-marker"
+printf '%s' '${JSON.stringify({
+    model: { display_name: 'Haiku' }, workspace: { current_dir: '/nonexistent-for-this-test' },
+    rate_limits: { five_hour: { used_percentage: 1, resets_at: FIVE_RESET }, seven_day: { used_percentage: 0, resets_at: SEVEN_RESET } },
+  })}' | ${prefix}bash "${STATUSLINE}" >/dev/null
+`;
+  const atTheCeiling = (): void => {
+    fs.mkdirSync(j('.cc-limits'), { recursive: true });
+    fs.writeFileSync(j('.cc-limits', 'claude-a.json'), JSON.stringify({
+      five: 10, seven: 100, ts: Math.floor(Date.now() / 1000) - 7200, fiveResetAt: FIVE_RESET, sevenResetAt: SEVEN_RESET }));
+  };
+  const limitsNow = (): Record<string, unknown> => JSON.parse(fs.readFileSync(j('.cc-limits', 'claude-a.json'), 'utf8'));
+
+  it('the account is probed, not skipped, and the lower reading lands with its marks', () => {
+    plantWrapper('claude-a', rendersThroughTheWriter()); atTheCeiling();
+    const started = Math.floor(Date.now() / 1000);
+    const r = run();
+    expect(r.status, r.stderr).toBe(0);
+    expect(row('claude-a').outcome).toBe('refreshed');
+    expect(limitsNow()).toMatchObject({ five: 1, seven: 0, sevenResetAt: SEVEN_RESET, sevenResetFrom: SEVEN_RESET });
+    expect(limitsNow()['resetSeen']).toBeGreaterThanOrEqual(started);
+    const marker = Number(fs.readFileSync(j('probe-marker'), 'utf8'));
+    expect(marker).toBeGreaterThanOrEqual(started);
+    expect(marker).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+  });
+
+  it('the marker is what carries it: the same render without it is dropped, and the pass says no-render', () => {
+    plantWrapper('claude-a', rendersThroughTheWriter('env -u CCRC_KEEPALIVE_PROBE ')); atTheCeiling();
+    run();
+    expect(row('claude-a').outcome).toBe('no-render');
+    expect(limitsNow()).toMatchObject({ five: 10, seven: 100 });
+  });
+
+  it('the marker reaches the turn and nothing else: the pass itself does not carry it', () => {
+    const src = fs.readFileSync(KEEPALIVE, 'utf8');
+    const sets = src.split('\n').filter((l) => /^\s*(export\s+)?CCRC_KEEPALIVE_PROBE=/.test(l));
+    expect(sets).toHaveLength(1);
+    const turn = src.slice(src.indexOf('_ka_turn() {'), src.indexOf('# The CLI\'s own diagnostic'));
+    expect(turn).toContain(sets[0]);
+  });
+});

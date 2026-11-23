@@ -745,13 +745,51 @@ describe('the advance file\'s wave 3 keys: missing and effortFallback', () => {
     expect(moved.classes.sonnet['effortFallback']).toEqual(FALLBACK);
   });
 
-  it('reads and preserves wave 3 and wave 8 optional members on one class', () => {
+  it('reads and preserves missing, effortFallback and releasedHold on one class', () => {
     const a = example();
-    const fields = { missing: MISSING, effortFallback: FALLBACK, releasedHold: { model: MISSING.model, at: AT } };
-    Object.assign(a.classes.opus, fields);
+    const releasedHold = { model: MISSING.model, at: AT };
+    a.classes.opus.missing = MISSING;
+    a.classes.opus.effortFallback = FALLBACK;
+    a.classes.opus.releasedHold = releasedHold;
+    const fields = { missing: MISSING, effortFallback: FALLBACK, releasedHold };
     const p = parseAdvance(JSON.parse(serializeAdvance(a)));
     expect(p.classes.opus).toMatchObject(fields);
     expect(JSON.parse(serializeAdvance(p)).classes.opus).toMatchObject(fields);
+  });
+
+  it('refuses malformed releasedHold alongside valid missing and effortFallback', () => {
+    const a = example();
+    a.classes.opus.missing = MISSING;
+    a.classes.opus.effortFallback = FALLBACK;
+    a.classes.opus.releasedHold = { model: MISSING.model, at: 'not-a-time' };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.releasedHold',
+      message: 'classes.opus.releasedHold is not {"model": <id>, "at": <time of the form YYYY-MM-DDTHH:MM:SSZ>}.',
+    }));
+  });
+
+  // The reverse of the case above: a valid releasedHold never hides wave 3's own refusals on the same class.
+  it('refuses malformed missing alongside a valid releasedHold, with wave 3\'s own message and field', () => {
+    const a = example();
+    a.classes.opus.missing = { model: MISSING.model, since: 'not-a-time' };
+    a.classes.opus.releasedHold = { model: MISSING.model, at: AT };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.missing',
+      message: 'classes.opus.missing is not {"model": <id>, "since": <time>, "seen": <time>}.',
+    }));
+  });
+
+  it('refuses malformed effortFallback alongside a valid releasedHold, with wave 3\'s own message and field', () => {
+    const a = example();
+    a.classes.opus.effortFallback = { ...FALLBACK, to: null };
+    a.classes.opus.releasedHold = { model: MISSING.model, at: AT };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.effortFallback',
+      message: 'classes.opus.effortFallback is not {"at": <time>, "model": <id>, "from": <level>, "to": <level>}.',
+    }));
   });
 
   it('a missing record of the first shape, with no seen, still reads (the rule restarts it, D-8838)', () => {
