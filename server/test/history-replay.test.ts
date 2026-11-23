@@ -3142,7 +3142,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
 
 // ── W2-4 Task 6: the limits stop and the spend budget (W2-D55; spec §10.2:2697, erratum E18) ─────────────────────
 // The driver reads one limits row, read-only, by readLimits' rules, and keeps the provenance readLimits folds: a 0 from
-// a lapsed resetAt is a measured reset, a 0 inferred from age measured nothing and stops as stale. The parity case holds
+// a lapsed resetAt is a measured end of its window, a 0 inferred from age measured nothing; both stop as stale (run 3538). The parity case holds
 // the driver's reading to readLimits' over rolloverCases' bytes, the fixture limits.test.ts and ccd-limits.test.ts share.
 // Fixture HOMEs only; the clock is a parameter.
 describe('W2-4 Task 6: the limits row is read by readLimits\' rules, keeping its provenance (W2-D55 parity)', () => {
@@ -3224,7 +3224,7 @@ describe('W2-4 Task 6: the limits row is read by readLimits\' rules, keeping its
     expect([theirs['edge-seven']!.sevenRolledOver, theirs['edge-seven']!.seven]).toEqual([true, 0]);
   });
 
-  it('only the age path sets *Inferred: a lapsed resetAt is a measured reset, an age-inferred 0 is not', () => {
+  it('only the age path sets *Inferred: a lapsed resetAt is a fact, an age-inferred 0 is not', () => {
     const inferred: Record<string, { fiveInferred: boolean; sevenInferred: boolean }> = {
       'no-reset-fields-old.json': { fiveInferred: true, sevenInferred: false },
     };
@@ -3382,10 +3382,12 @@ describe('W2-4 Task 6: the gate stops on every limits and budget condition (W2-D
     expect(stopOf(b, { maxAge: 800_000_000 })).toEqual({ word: 'limits-stale', detail: 'inferred-by-age' });
   });
 
-  it('a resetAt-fact 0 beside a fresh seven is a measured reset: admitted', () => {
+  // Run 3538 (the coordinator's answer of 2026-11-23, one room rule): a lapsed resetAt says the window ended, and nothing has
+  // read the window now running, so the row is unknown, as shared/limitRoom.ts reads it. This row was admitted before.
+  it('a resetAt-fact 0 beside a fresh seven: the window now running is unread, limits-stale rolled-over', () => {
     const b = t6Box('ccrc-replay-t6-fact-');
     t6Fs.writeFileSync(b.row, JSON.stringify({ five: 87, seven: 40, ts: NOW_S - 600, fiveResetAt: NOW_S - 60, sevenResetAt: NOW_S + 200_000 }));
-    expect(stopOf(b)).toBeNull();
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'rolled-over' });
   });
 
   it('older than max_age_ms: limits-stale old <age_ms>; exactly max_age_ms old still passes', () => {
