@@ -25440,6 +25440,7 @@ _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <w
   echo "free"; return 0
 }
 
+_TMX_SDRUN_V=''   # `systemd-run --version`'s number (254 or later), or `unread`, for `_tmux_new_session` ('' = ask; D-8953)
 _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the server if this call creates it
   # Every session on this box is a child of ONE tmux server, and that server
   # lives in whichever cgroup happened to create it — so the unit file's
@@ -25545,6 +25546,22 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # drop-in gets an uncapped slice, which is exactly what it has today.
     scope=(systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server
            --slice='app-claude\x2dsession.slice')
+    # NOTHING IN THE PANE COMMAND MAY BE EXPANDED (D-8953). systemd 254 added `--expand-environment=`, off for
+    # `--scope` there and on by default in a later release, which then replaces every `${NAME}` in the argv, an
+    # unknown name with nothing. Measured on a fleet box, 2026-11-22, systemd 259: the pane writer's `${p%?.}`
+    # became empty, so the writer wrote nothing, the parent's pending entry line stood for ever, and every child
+    # reclaim on the fleet held behind that one row for 13 hours. Before 254 `--scope` expanded nothing (systemd
+    # NEWS, 254), so the option is not passed there and no `$` is doubled: a `$$` would reach sh as its pid. A
+    # version that cannot be read passes the option: an older systemd-run refuses it and the session is created
+    # bare below, a misplaced server, never a pane command rewritten. Read bounded, and kept for the process only
+    # once it passes the option: a supervisor lives for weeks, and a pre-254 answer kept across an in-place upgrade
+    # would strip the writer again, so that answer is asked again at the next slow-path spawn, which is rare.
+    if [[ -z "$_TMX_SDRUN_V" ]]; then
+      _TMX_SDRUN_V=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" systemd-run --version 2>/dev/null </dev/null) || :
+      [[ "$_TMX_SDRUN_V" =~ ^systemd\ ([0-9]{1,6})[^0-9] ]] && _TMX_SDRUN_V="${BASH_REMATCH[1]}" || _TMX_SDRUN_V=unread
+    fi
+    if [[ "$_TMX_SDRUN_V" != unread ]] && (( 10#$_TMX_SDRUN_V < 254 )); then _TMX_SDRUN_V=''
+    else scope+=(--expand-environment=no); fi
   fi
   if [[ ${#scope[@]} -gt 0 ]]; then
     # systemd-run may still refuse (no D-Bus, no user manager, or a scope of
@@ -34642,7 +34659,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # BEFORE any arm below can `continue` past the row, so a row the string arms
   # leave unplaced is still placed by it, and it never adds a `continue`. A
   # VALID field joins the one walk; a PENDING one (a spawn whose pane never
-  # recorded where it entered) and an UNMEASURED one (not a regular file, or
+  # recorded where it entered), unless its spelling resolves `complete` to
+  # itself (D-8954, at the arm), and an UNMEASURED one (not a regular file, or
   # unreadable) hold the child, by row id, with their remedies; a LEGACY one
   # (absent, a link, unparseable, or naming another logical spelling) is today's
   # string rule plus the row's current identity, and is only counted. A valid
@@ -34807,7 +34825,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     efst="$_WS_WDID_STATE"
     case "$efst" in
       valid) efid="$_WS_WDID_IDENT"; efo+=("$o"); efi+=("$efid"); efp+=("$_WS_WDID_PHYS"); efw+=("") ;;
-      pending) npending=$(( npending + 1 )); unpend+="${unpend:+, }$o"; _ws_held_by_put entry-pending "$o" ;;
+      pending) npending=$(( npending + 1 )) ;;   # held below, once its spelling is resolved (D-8954)
       legacy-*) nlegacy=$(( nlegacy + 1 )) ;;
       *) unfield+="${unfield:+, }$o"; _ws_held_by_put entry-unmeasured "$o" ;;
     esac
@@ -34823,6 +34841,14 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     _ws_reclaim_resolve "$w" && wr="$_WS_RESOLVED"
     basis="$_WS_RESOLVE_BASIS"; [[ "$basis" == complete && -n "$mine" ]] && rok=1
     [[ -n "$wr" ]] || rok=0
+    # A PENDING FIELD HOLDS ONLY WHERE ITS PANE COULD BE (D-8954). Its logical spelling is `.workdir` itself, so a
+    # spelling that resolves `complete` to itself crossed no link and no `..`: the pane's `cd` went where it reads
+    # now, the row is placed by it as a legacy row is, and every arm below still refuses it at, inside or through
+    # the child or a leaf. Any other answer (a link on it, an unplain form, a gone or unresolvable component) holds,
+    # by row id, as every pending field did before. Measured on a fleet box, 2026-11-22: ONE unrelated pending row
+    # held every child reclaim for 13 hours. A row that left above (not plain, under `/proc`) holds by its word.
+    [[ "$efst" != pending ]] || [[ "$basis" == complete && "$wr" == "$w" ]] \
+      || { unpend+="${unpend:+, }$o"; _ws_held_by_put entry-pending "$o"; }
     [[ "$basis" != complete || -z "$wr" ]] || req+=("A"$'\t'"$ri"$'\t'"$wr")   # ancestry of where it reads now
     # A valid field's row resolved `complete` has its current identity asked (its `A` request): rule (d) reads it.
     [[ "$efst" == valid && "$basis" == complete && -n "$wr" ]] && efw[${#efw[@]}-1]="$wr"
