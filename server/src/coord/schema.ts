@@ -4298,6 +4298,54 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
   ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
   `,
+
+  // ── 121: user_version 120 -> 121 ──────────────────────────────────────────
+  // The run cap is derived from the machine (D-8920; the operator's ruling of 2026-11-22, task note
+  // `docs/superpowers/programs/overlord/run-cap-derived.md`): `coordinator_state.capMode` says what the stored
+  // `maxConcurrentWorkers` IS. `automatic`: the cap is derived from the fleet host's memory and cores
+  // (`caps.ts#deriveCap`), and the stored number is only what is used while the host is unmeasured. `override`: the
+  // operator set the stored number, and it is the cap. ONE writer, `CoordStore.setCaps`; one reader, `CoordStore.capMode`.
+  //
+  // THE UPGRADE MOVES NO CAP SOMEBODY SET. A fresh box, and a box that still holds the untouched seed (3, never
+  // written: `updatedAt` 0), is `automatic`: nobody chose that number. A row somebody wrote (`updatedAt > 0`, the caps
+  // route's stamp) or edited by hand to another number becomes `override`: that number bounded things the formula does
+  // not measure (other tenants of the box, disk per worktree, account usage), and it may have been LOWERED on purpose,
+  // so an upgrade must not raise it, or drop it, with no operator act. The control then says "Set by hand: N.
+  // Automatic would be M" and offers `use automatic`: one tap, and a recorded one. The UPDATE below is that rule;
+  // `run-cap-derived.test.ts` reds without it.
+  //
+  // AN OLDER BUILD opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing);
+  // its reads and writes name their columns and never this one, so it enforces the stored number as it always did: an
+  // override if one stands, else the number the box ran on before. A number it WRITES leaves the mode as it was. STILL
+  // OPEN: after a roll forward, a number set by the older build under `automatic` is not an override until it is set
+  // again, so a cap lowered during a rollback is replaced by the derived one. It is recorded when it happens (the
+  // automatic cap's feed line, `caps.ts#capAutomaticNotice`, keyed on that write), and nothing prevents it.
+  //
+  // The slot is the next free one by position on `main` (b33a9ae13 holds 120); whoever lands second renumbers.
+  // RE-MEASURE the slot before merge (it must print 120, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE coordinator_state ADD COLUMN capMode TEXT NOT NULL DEFAULT 'automatic'
+    CHECK (capMode IN ('automatic', 'override'));
+  UPDATE coordinator_state SET capMode = 'override' WHERE updatedAt > 0 OR maxConcurrentWorkers <> 3;
+  `,
+
+  // ── 122: user_version 121 -> 122 ──────────────────────────────────────────
+  // The class the Overlord's generation was minted under (Overlord W1 renewal readings PR C, plan `w1-renewal-readings.md`
+  // Task 5, slug designated-class-stamped-at-mint): `designatedClass` on `continuity_generations`, the designation's model
+  // class when the generation was minted as the Overlord, so `classChanged` asks whether the operator changed the class
+  // after the mint and never compares the class the generation runs (a fallback generation runs another). ONE writer,
+  // `continuityStore.ts#mintGeneration`. Nothing is back-filled: NULL is a coordinator's or a plain session's generation, an
+  // Overlord generation minted before this entry or by an older build, and `classChanged` reads it unmeasured.
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 122` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // RE-MEASURE the slot before merge (it must print 121 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN designatedClass TEXT;   -- the designation's class at the mint; NULL is unknown
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -20,9 +20,9 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import {
-  TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_PHASES, TESTBOX_ADMIN_SUBS, TESTBOX_ADMIN_SUB_MAP, TESTBOX_BOX_KEYS,
+  TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_DEADLINE_S, TESTBOX_ADMIN_PHASES, TESTBOX_ADMIN_SUBS, TESTBOX_ADMIN_SUB_MAP, TESTBOX_BOX_KEYS,
   TESTBOX_FLEET_EDITABLE, buildTestboxAdminArgv, isBoxAddress, isHostKeyFingerprint, isLoginUser, isPrNumber, isSshPort,
-  readTestboxAdminStatus, testboxAdminIsLong, type TestboxAdminSub,
+  readTestboxAdminStatus, readTestboxBusyHolder, testboxAdminIsLong, type TestboxAdminSub,
 } from '../../shared/testbox-admin.js';
 
 removeTmpFixturesEachTest();
@@ -515,7 +515,8 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
     expect(state).toContain('act_outcome=running\n');
     const calls = readFileSync(join(h.home, 'systemd-run-calls'), 'utf8').trim().split('\n');
     // The unit's PATH is the user manager's: the shell puts ~/.local/bin first, as `_upd_detach` does, so `node` and `gh` resolve there as in the parent.
-    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} /usr/bin/env CCRC_TBA_ACT=${id} /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" ccrc-detach testbox-admin connect`]);
+    // The unit has a ceiling the system manager enforces (D-8899): the sub's row of the one deadline table.
+    expect(calls).toEqual([`--user --collect --quiet --unit=ccrc-testbox-admin-connect-${id} --property=RuntimeMaxSec=${TESTBOX_ADMIN_DEADLINE_S.connect} --property=TimeoutStopSec=${TESTBOX_ADMIN_DEADLINE_S['unit/stop']} /usr/bin/env CCRC_TBA_ACT=${id} /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" ccrc-detach testbox-admin connect`]);
     const args = readFileSync(join(h.home, '.ccrc', `testbox-admin.args.${id}`), 'utf8');
     expect(args).toBe(`--set=CCRC_TESTBOX_RUN_TMPDIR=/tmp/$HOME/%h\n--repo=${rowArg(ROW)}\n--from\npwa\n`);
     expect((statSync(join(h.home, '.ccrc', `testbox-admin.args.${id}`)).mode & 0o777).toString(8)).toBe('600');
@@ -684,5 +685,212 @@ describe.skipIf(!HAS_FLOCK)('an act whose unit is gone, and the state file writt
       [ "$(_tba_state_get act_outcome)" = ok ] && echo fine`, [VERB]);
     expect(r.out, r.err).toBe('fine\n');
     expect(readFileSync(h.state, 'utf8').split('\n').filter((l) => l.startsWith('act_outcome=')).length).toBe(1);
+  });
+});
+
+// D-8899 (spec 2026-11-22-test-box-managed-node-design.md §2.9, PR 1). One parity act once held the lock for
+// 23 hours: its unit had no ceiling, `busy` named nobody, and nothing but a hand could end it.
+describe.skipIf(!HAS_FLOCK)('the deadline table, the unit\'s ceiling and who holds the lock (D-8899)', () => {
+  const SUBS = Object.keys(TESTBOX_ADMIN_SUB_MAP) as TestboxAdminSub[];
+  const LONG = SUBS.filter((s) => TESTBOX_ADMIN_SUBS[s].long);
+  const ROWS = TESTBOX_ADMIN_DEADLINE_S as Readonly<Record<string, number>>;
+  /** The stand-ins of every long sub, so `_tba_main` detaches without a box. */
+  const STUBS = LONG.map((s) => `_tba_run_${s}() { :; }; `).join('');
+  const ARGV: Record<string, string[]> = {
+    connect: ['--set=CCRC_TESTBOX_RUN_TMPDIR=/tmp/x', `--repo=${rowArg(ROW)}`], 'settings-box': ['--set=CCRC_TESTBOX_WORKERS=4'],
+  };
+  const unitCalls = (h: Home): string[] => (existsSync(join(h.home, 'systemd-run-calls')) ? readFileSync(join(h.home, 'systemd-run-calls'), 'utf8').trim().split('\n') : []);
+  const stateNum = (h: Home, key: string): number => Number(new RegExp(`^${key}=(\\d+)$`, 'm').exec(readFileSync(h.state, 'utf8'))?.[1] ?? NaN);
+  /** The bash table's rows, and the idle wait the `settings-box/idle` row is built from (`TBA_IDLE_DEADLINE_DEFAULT`). */
+  const bashTable = (): { table: Record<string, number>; idleWait: number } => {
+    const h = fixture();
+    const r = sh(h, SRC('linux') + 'for k in "${!TBA_DEADLINE_S[@]}"; do printf "%s\\t%s\\n" "$k" "${TBA_DEADLINE_S[$k]}"; done; printf "idle-wait\\t%s\\n" "$TBA_IDLE_DEADLINE_DEFAULT"', [VERB]);
+    expect(r.rc, r.err).toBe(0);
+    const { 'idle-wait': idleWait, ...table } = Object.fromEntries(r.out.split('\n').filter(Boolean).map((l) => { const [k, v] = l.split('\t'); return [k!, Number(v)]; }));
+    return { table, idleWait: idleWait! };
+  };
+
+  it('the bash table is shared/testbox-admin.ts\'s, row for row', () => {
+    expect(bashTable().table).toEqual({ ...TESTBOX_ADMIN_DEADLINE_S });
+  });
+
+  it('every long sub has a row, a row named for a sub is a long sub, and a sub is long in bash because it has a row', () => {
+    for (const s of LONG) expect(ROWS[s], `${s}: a long sub with no row would detach with no ceiling`).toBeGreaterThan(0);
+    const subRows = Object.keys(ROWS).filter((k) => !k.includes('/')).sort();
+    expect(subRows).toEqual([...LONG].sort());
+    for (const k of Object.keys(ROWS).filter((x) => x.includes('/'))) expect(SUBS as string[], k).not.toContain(k);
+    const h = fixture();
+    // a part is never long, and a sub whose row is taken away is not long: it cannot detach at all
+    const r = sh(h, SRC('linux') + '_tba_is_long parity/leg && echo part-long; _tba_is_long unit/stop && echo part-long; _tba_is_long "" && echo empty-long; '
+      + 'unset "TBA_DEADLINE_S[repair]"; _tba_is_long repair && echo repair-long; _tba_is_long parity && echo parity-long', [VERB]);
+    expect(r.out).toBe('parity-long\n');
+  });
+
+  it('the parts sum inside their totals: an Apply when idle is its wait, then the act; a stopped leg leaves parity time to go on', () => {
+    for (const [k, v] of Object.entries(ROWS)) expect(Number.isSafeInteger(v) && v > 0, k).toBe(true);
+    // the wait the verb waits (its own constant, unchanged), then the act, then two minutes for the wait's last look
+    const idleWait = bashTable().idleWait;
+    expect(idleWait).toBe(21600);
+    expect(ROWS['settings-box/idle']).toBe(idleWait + ROWS['settings-box']! + 120);
+    // parity's legs have the ceiling less the tail: one step stopped at its bound, and killed, still leaves a second full step,
+    // and the local leg's wait in the fleet's heavy-test queue on top (D-8947)
+    expect(ROWS['parity']! - ROWS['parity/tail']!).toBeGreaterThanOrEqual(2 * (ROWS['parity/leg']! + ROWS['parity/kill']!) + ROWS['parity/queue']!);
+    // the tail: a leg stopped at the act's time is killed before the tool itself is stopped (half the tail later), and the tool is
+    // killed before the unit's ceiling, which leaves the record the rest
+    expect(ROWS['parity/kill']! * 2).toBeLessThan(ROWS['parity/tail']! / 2);
+    expect(ROWS['parity/tail']! % 2).toBe(0);
+    // no act holds the lock for hours, the deliberate six-hour wait aside (an Apply when idle has one ceiling for its wait and
+    // its act together: the `settings-box/idle` row)
+    for (const s of LONG) expect(ROWS[s], s).toBeLessThanOrEqual(3600);
+    expect(ROWS['unit/stop']).toBeLessThanOrEqual(120);
+  });
+
+  it('the sample fits a leg: its CI-measured seconds at two workers, three times over for a loaded box, plus a minute to start (D-8947)', () => {
+    // `parity/sample` is the CI-time budget of one leg's sample (the parity tool's `--sample-budget`); `parity/leg` bounds that
+    // leg. A loaded fleet box runs about three times slower than a CI runner, and vitest takes about a minute to start there.
+    expect(ROWS['parity/sample']! / 2 * 3 + 60).toBeLessThanOrEqual(ROWS['parity/leg']!);
+    // the light check: a whole act of minutes, never the hours a full suite took, and a queue wait of minutes too
+    expect(ROWS['parity']).toBeLessThanOrEqual(1500);
+    expect(ROWS['parity/queue']).toBeLessThanOrEqual(ROWS['parity/leg']!);
+  });
+
+  it('every long sub\'s unit is started with its row as RuntimeMaxSec, and the state records the latest time the act can end', () => {
+    for (const s of LONG) {
+      const h = fixture({ SYSTEMD_RUN_RC: '0' });
+      const r = sh(h, SRC('linux') + STUBS + '_tba_main "$@" --from pwa', [VERB, s, ...(ARGV[s] ?? [])]);
+      expect(r.out, s + r.err).toMatch(/^\{"ok":true,"act":"[0-9a-f]{32}"\}\n$/);
+      const calls = unitCalls(h);
+      expect(calls, s).toHaveLength(1);
+      expect(calls[0], s).toContain(` --property=RuntimeMaxSec=${ROWS[s]} --property=TimeoutStopSec=${ROWS['unit/stop']} `);
+      // the latest time the lock can be held: the ceiling, and the stop the system manager gives the unit after it
+      expect(stateNum(h, 'act_deadline') - stateNum(h, 'act_started'), s).toBe((ROWS[s]! + ROWS['unit/stop']!) * 1000);
+    }
+  });
+
+  it('an Apply when idle has its own row (the six-hour wait, then the act); a plain box settings edit has the act\'s', () => {
+    const idle = fixture({ SYSTEMD_RUN_RC: '0' });
+    sh(idle, SRC('linux') + STUBS + '_tba_main settings-box --set=CCRC_TESTBOX_WORKERS=4 --when-idle=true --from pwa', [VERB]);
+    expect(unitCalls(idle)[0]).toContain(` --property=RuntimeMaxSec=${ROWS['settings-box/idle']} `);
+    expect(stateNum(idle, 'act_deadline') - stateNum(idle, 'act_started')).toBe((ROWS['settings-box/idle']! + ROWS['unit/stop']!) * 1000);
+    const plain = fixture({ SYSTEMD_RUN_RC: '0' });
+    sh(plain, SRC('linux') + STUBS + '_tba_main settings-box --set=CCRC_TESTBOX_WORKERS=4 --from pwa', [VERB]);
+    expect(unitCalls(plain)[0]).toContain(` --property=RuntimeMaxSec=${ROWS['settings-box']} `);
+  });
+
+  it('with no row for the call, no unit is started and nothing is written (the guard in _tba_detach)', () => {
+    const h = fixture({ SYSTEMD_RUN_RC: '0' });
+    const r = sh(h, SRC('linux') + STUBS + 'unset "TBA_DEADLINE_S[settings-box/idle]"; _tba_main settings-box --set=CCRC_TESTBOX_WORKERS=4 --when-idle=true --from pwa; echo "rc=$?"', [VERB]);
+    expect(r.out).toBe('rc=1\n');
+    expect(r.err).toContain('has no deadline row');
+    expect(unitCalls(h)).toEqual([]);
+    expect(existsSync(h.state)).toBe(false);
+  });
+
+  it('busy names the act that holds the lock: its sub, its start and the latest time it can end, and nothing else', () => {
+    const h = fixture({ SYSTEMD_RUN_RC: '0' });
+    const started = Date.now() - 60_000;
+    const deadline = started + ROWS['parity']! * 1000;
+    writeState(h, [`address=${ADDR}`, 'port=22', 'login=root', `act_id=${ID}`, 'act_sub=parity', 'act_phase=legs', 'act_outcome=running', `act_started=${started}`, `act_deadline=${deadline}`]);
+    const held = 'exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; ';
+    const r = sh(h, SRC('linux') + STUBS + held + '_tba_main repair --from pwa', [VERB]);
+    const j = JSON.parse(r.out) as Record<string, unknown>;
+    expect(j).toEqual({ ok: false, code: 'busy', holder: { sub: 'parity', startedAt: started, deadlineAt: deadline } });
+    expect(readTestboxBusyHolder(j['holder'])).toEqual({ sub: 'parity', startedAt: started, deadlineAt: deadline });
+    expect(r.out).not.toContain(ADDR);
+    expect(r.out).not.toContain(h.home);
+    // a short act that finds the lock held names the same holder
+    const short = sh(h, SRC('linux') + held + '_tba_short_lock; echo "rc=$?"', [VERB]);
+    expect(short.out).toBe(`${r.out}rc=1\n`);
+    // the status shows the same: its running act carries the same sub, start and latest end, and nothing else is new
+    const st = sh(h, SRC('linux') + held + '_tba_main status', [VERB]);
+    expect(st.out).toContain(`"startedAt":${started},"endedAt":null,"deadlineAt":${deadline}}`);
+    expect(st.out).not.toMatch(/holder/i);
+    expect(st.out).not.toContain(ADDR);
+    const read = readTestboxAdminStatus(st.out.trim());
+    expect(read.ok && read.value.act).toMatchObject({ sub: 'parity', outcome: 'running', startedAt: started, deadlineAt: deadline });
+  });
+
+  it('the status says a latest end for a running act with a recorded one only: never for an ended act, an act an older verb began or a time off its shape', () => {
+    // begun a moment ago, so the status's own reap leaves it alone
+    const started = Date.now() - 1_000;
+    const deadline = started + (ROWS['parity']! + ROWS['unit/stop']!) * 1000;
+    const base = [`act_id=${ID}`, 'act_sub=parity', 'act_phase=legs', `act_started=${started}`];
+    const rows: [string[], number | undefined][] = [
+      [[...base, 'act_outcome=running', `act_deadline=${deadline}`], deadline],
+      [[...base, 'act_outcome=failed', 'act_code=interrupted', `act_ended=${started + 500}`, `act_deadline=${deadline}`], undefined],
+      [[...base, 'act_outcome=running'], undefined],
+      [[...base, 'act_outcome=running', 'act_deadline=/home/x'], undefined],
+      [[...base, 'act_outcome=running', `act_deadline=${'9'.repeat(16)}`], undefined],
+    ];
+    for (const [lines, want] of rows) {
+      const h = fixture();
+      writeState(h, lines);
+      const out = run(h, ['status']).out;
+      const read = readTestboxAdminStatus(out.trim());
+      expect(read.ok, `${lines.join(' ')}: ${JSON.stringify(read)}`).toBe(true);
+      expect(read.ok ? read.value.act?.deadlineAt : null, lines.join(' ')).toBe(want);
+      expect(out.includes('deadlineAt'), lines.join(' ')).toBe(want !== undefined);
+    }
+  });
+
+  it('busy names no holder when the state holds no running long act, or holds one off its shape', () => {
+    const held = 'exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; ';
+    const rows: string[][] = [
+      [],
+      [`act_id=${ID}`, 'act_sub=parity', 'act_outcome=failed', 'act_started=1700000000000', 'act_deadline=1700003600000'],
+      [`act_id=${ID}`, 'act_sub=parity', 'act_outcome=running', 'act_started=1700000000000'],   // begun by an older verb: no deadline
+      [`act_id=${ID}`, 'act_sub=key', 'act_outcome=running', 'act_started=1700000000000', 'act_deadline=1700003600000'],
+      [`act_id=${ID}`, 'act_sub=parity', 'act_outcome=running', 'act_started=1700000000000', 'act_deadline=/home/x'],
+      // a time of more than fifteen digits is one no reader could show
+      [`act_id=${ID}`, 'act_sub=parity', 'act_outcome=running', 'act_started=1700000000000', `act_deadline=${'9'.repeat(16)}`],
+      [`act_id=${ID}`, 'act_sub=parity', 'act_outcome=running', `act_started=${'1'.repeat(16)}`, `act_deadline=${'1'.repeat(15)}`],
+    ];
+    for (const lines of rows) {
+      const h = fixture({ SYSTEMD_RUN_RC: '0', TBA_REAP_AFTER: '99999' });
+      if (lines.length > 0) writeState(h, lines);
+      const r = sh(h, SRC('linux') + '_tba_run_repair() { :; }; ' + held + '_tba_main repair --from pwa', [VERB]);
+      expect(r.out, lines.join(' ')).toBe('{"ok":false,"code":"busy"}\n');
+    }
+  });
+
+  it('an act past its ceiling whose lock cannot be taken (a process it left behind holds it) still reads ended `interrupted`', () => {
+    // `act_deadline` is the unit's ceiling plus one `unit/stop` (its KILL); the reap waits one more before it trusts it
+    const stop = ROWS['unit/stop']! * 1000;
+    const live = (h: Home, deadline: number): void => writeState(h, [
+      `act_id=${ID}`, 'act_sub=parity', 'act_phase=legs', 'act_outcome=running', `act_started=${deadline - ROWS['parity']! * 1000 - stop}`, `act_deadline=${deadline}`,
+    ]);
+    const statusHeld = (h: Home): unknown => {
+      const r = sh(h, SRC('linux') + 'exec 8>>"$HOME/.ccrc/testbox-admin.lock"; flock -n 8 || exit 91; _tba_main status', [VERB]);
+      const read = readTestboxAdminStatus(r.out.trim());
+      expect(read.ok, JSON.stringify(read)).toBe(true);
+      return read.ok ? read.value.act : null;
+    };
+    // well past the latest end: no unit of the act is alive
+    const gone = fixture();
+    live(gone, Date.now() - stop - 5_000);
+    expect(statusHeld(gone)).toMatchObject({ sub: 'parity', outcome: 'failed', code: 'interrupted', phase: 'legs' });
+    expect(readFileSync(gone.state, 'utf8')).toMatch(/^act_ended=\d+$/m);
+    // just past its latest end: left running for one more `unit/stop`
+    const stopping = fixture();
+    live(stopping, Date.now() - stop + 30_000);
+    expect(statusHeld(stopping)).toMatchObject({ outcome: 'running', code: null });
+    // before its ceiling: left running
+    const alive = fixture();
+    live(alive, Date.now() + 600_000);
+    expect(statusHeld(alive)).toMatchObject({ outcome: 'running', code: null });
+  });
+
+  it('a new act first ends the one whose unit is gone, so it is kept as an ended act and never written over as if it had not run', () => {
+    const h = fixture({ SYSTEMD_RUN_RC: '0' });
+    writeState(h, [`act_id=${ID}`, 'act_sub=parity', 'act_phase=legs', 'act_outcome=running', `act_started=${Date.now() - 120_000}`, `act_deadline=${Date.now() + 600_000}`]);
+    const r = sh(h, SRC('linux') + STUBS + '_tba_main repair --from pwa', [VERB]);
+    expect(r.out, r.err).toMatch(/^\{"ok":true,"act":"[0-9a-f]{32}"\}\n$/);
+    const read = readTestboxAdminStatus(run(h, ['status']).out.trim());
+    expect(read.ok, JSON.stringify(read)).toBe(true);
+    if (!read.ok) return;
+    expect(read.value.act).toMatchObject({ sub: 'repair', outcome: 'running' });
+    expect(read.value.endedActs).toMatchObject([{ id: ID, sub: 'parity', outcome: 'failed', code: 'interrupted' }]);
+    // the parent still holds no lock
+    expect(spawnSync('flock', ['-n', join(h.home, '.ccrc', 'testbox-admin.lock'), 'true']).status).toBe(0);
   });
 });

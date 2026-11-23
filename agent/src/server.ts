@@ -47,19 +47,21 @@ import {
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { measureDisk, type DiskSeams } from './disk.js';
-import { measureHeadroom, measurePressure, type PressureSeams } from './pressure.js';
+import { measurePressure, measureSessions, type PressureSeams } from './pressure.js';
 import { measureBackup, type BackupSeams } from './backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools, type TestboxCaptureSeams, type TestboxOpSeams } from './testboxOp.js';
 import { isClaudeVersion } from '../../shared/claudeVersion.js';
 import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
 import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
-import { OVERLORD_HISTORY_OP, type OverlordHistoryReq } from '../../shared/agent-protocol.js';
+import { OVERLORD_HISTORY_OP, type OverlordHistoryReq, type PressureOpReply, type PressureOpSizeOnly } from '../../shared/agent-protocol.js';
 import {
   MODELS_OP, buildModelsArgv, type ModelsArgvRefusal, type ModelsOpAnswer, type ModelsReq,
 } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { boundedSpawn } from '../../shared/spawn.mjs';
+import { hostReportOf, readHostIds, type HostRoots } from '../../shared/host-identity.mjs';
+import type { HostReport } from '../../shared/isolation.js';
 import {
   readB64Measured,
   readFromMeasured,
@@ -116,6 +118,7 @@ export interface AgentOpts {
   backupSeams?: Partial<BackupSeams>; // default: this process's environment — tests inject CCRC_BACKUP_STATE_DIR (D-7858)
   testboxSeams?: Partial<TestboxOpSeams & TestboxCaptureSeams>; // default realTestboxSeams() — tests inject the agent's PATH and the clock (D-7411)
   historySeams?: Partial<HistoryOpSeams>; // default realHistoryOpSeams() — tests inject the worker resolver, the deadline and the platform (Overlord W1)
+  hostRoots?: Partial<HostRoots>; // default the real /proc, /etc and platform — tests inject synthetic trees; the host report's ONLY id reads (Overlord W1, the isolation word)
 }
 
 export interface RunningAgent {
@@ -224,10 +227,13 @@ export function resolveProjectsRoot(
  *  `update` op, and this build is never that agent. It answers the op, so its
  *  own frame type says so, and the send site cannot compile while silently
  *  omitting the one word the server's dispatcher looks for before it sends it. */
-type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch' | 'ops'> & {
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch' | 'ops' | 'host'> & {
   ccdVerbs: string[];
   observedEpoch: number | null;
   ops: string[];
+  /** Required for the same reason (Overlord W1, the isolation word): this build always measures its host, and an id it
+   *  cannot read is sent as `'unmeasured'`, never omitted. */
+  host: HostReport;
 };
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
@@ -747,10 +753,19 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       return;
     }
     case 'pressure': {
-      // #1170. No argument (`validateReq` refuses a frame that carries one); two fixed kernel files. A file that cannot
-      // be read or parsed throws into the envelope's `.catch`, an error the server reads as unmeasured, never as calm.
-      // D-8122: the session slice's headroom beside it, `null` when unreadable (never a throw: the PSI stands alone).
-      send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams), headroomBytes: measureHeadroom(ctx.pressureSeams) }));
+      // #1170. No argument (`validateReq` refuses a frame that carries one); fixed kernel files only.
+      // D-8122: the session slice's headroom beside the PSI, `null` when unreadable (never a throw: the PSI stands alone).
+      // D-8920: the machine's size beside them, `null` when unmeasured (never a throw either), and it
+      // answers WITHOUT the PSI too. A box with no PSI (the two files unreadable or unparsed) still has memory and
+      // cores, so it answers the size alone (`PressureOpSizeOnly`): a reply with no PSI is no reading to every server
+      // (`readHostPsi`), never calm, exactly as the error this arm answered before was.
+      const sessions = measureSessions(ctx.pressureSeams);
+      let psi: PressureOpReply;
+      try { psi = measurePressure(ctx.pressureSeams); } catch {
+        send(ws, ok(req.id, { machine: sessions.machine } satisfies PressureOpSizeOnly));
+        return;
+      }
+      send(ws, ok(req.id, { ...psi, ...sessions }));
       return;
     }
     case 'backup': {
@@ -1499,6 +1514,9 @@ function handleConnection(
       // build). It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
         t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP, TESTBOX_CAPTURE_OP],
+        // `host` (Overlord W1, the isolation word, §7.4): this process's uid and its host ids digested under the bearer this
+        // connection just proved, measured on every ready; the raw ids never leave this process.
+        host: hostReportOf(readHostIds(opts.hostRoots), process.getuid?.(), opts.token),
       };
       // `overlord-history` (Overlord W1, Task 4) goes last, and only where this agent can serve the history store
       // (historyOp.ts#servable: the worker's entry found, not macOS), so a server never counts an agent that cannot.
@@ -1625,6 +1643,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     backupSeams: rawOpts.backupSeams ?? {},
     testboxSeams: rawOpts.testboxSeams ?? {},
     historySeams: rawOpts.historySeams ?? {},
+    hostRoots: rawOpts.hostRoots ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {

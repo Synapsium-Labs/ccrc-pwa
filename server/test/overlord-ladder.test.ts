@@ -30,7 +30,9 @@ describe('the rung words', () => {
 
 describe('every exported union has its runtime list', () => {
   it('the lists hold exactly the members', () => {
-    expect(L0.LADDER_CAUSES).toEqual(['generation-degraded', 'off-model', 'rung-word-missing', 'unwitnessed-third']);
+    // Presence and value, never a count (the isolation plan's Task 4): rows from other pieces land in either order.
+    for (const k of ['generation-degraded', 'off-model', 'rung-word-missing', 'shared-user', 'unwitnessed-third', 'probes-failed-twice']) expect(L0.LADDER_CAUSES).toContain(k);
+    expect(new Set(L0.LADDER_CAUSES).size).toBe(L0.LADDER_CAUSES.length);
     expect(L0.LADDER_READERS).toEqual(['launch-profile-unmet']);
     expect(L0.LADDER_NOTICES).toEqual(['none', 'push', 'item']);
     expect(L0.LADDER_ACT_KINDS).toEqual(['read', 'write-note', 'acknowledge', 'link-team']);
@@ -79,6 +81,8 @@ describe('the cause table', () => {
     expect(L0.LADDER_CAUSE_MAP['generation-degraded']).toMatchObject({ kind: 'condition', effect: { kind: 'cap', cap: 'chat' }, notice: 'none' });
     expect(L0.LADDER_CAUSE_MAP['rung-word-missing']).toMatchObject({ kind: 'condition', effect: { kind: 'server-words' }, notice: 'none' });
     expect(L0.LADDER_CAUSE_MAP['rung-word-missing'].spec).toContain('RV8');
+    // The isolation word's row (Overlord W1, Table 7.5a): one condition capping advise, notice none.
+    expect(L0.LADDER_CAUSE_MAP['shared-user']).toEqual({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none', spec: '`server-isolation` is `shared-user` or `unmeasured` (Table 7.5a, §7.4)' });
   });
   it('the cause key shape is the authority journal\'s: kebab words, at most 64 bytes', () => {
     expect(L0.LADDER_CAUSE_MAX).toBe(64);

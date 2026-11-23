@@ -13,14 +13,12 @@
 //
 // WHAT THE CASES PROVE, and no more:
 //  1. the hold serialises behind a held lane lock, answers nothing until it is released, then lands (200 done, held by hand);
-//  2. an `advance-commit` that runs AFTER a hold respects it (abandoned `held`, the class not moved);
-//  3. a lock held past the verb's wait refuses the hold `lock-busy` (409) and writes nothing;
-//  4. a locked `advance-commit` (the step's own `_models_node_locked`) and the POST's hold, both waiting on one held
-//     lock and released together, leave a consistent end state whichever takes the lock first.
-// They do NOT run the hourly step itself, nor a commit racing a hold that is mid-write: the verb's lock is what orders them.
-// In case 4 the order the two waiters take the lock in is the kernel's, so the case asserts the invariant both orders keep.
-// In every observed run the commit took the lock first, so case 4's `abandoned` branch (hold first) has NOT been seen to
-// run; it asserts an invariant both orders keep, not an order the suite forces.
+//  2. hold first: the locked commit moves to the newer candidate and records that it ended the hold;
+//  3. commit first: the POST's new hand hold survives on the moved class;
+//  4. released together from one held lock, both writers leave the end state that the commit's persisted move proves;
+//  5. a lock held past the verb's wait refuses the hold `lock-busy` (409) and writes nothing.
+// They do NOT run the hourly step itself: the test invokes its locked commit verb. The ordered cases prove both outcomes;
+// the concurrent case does not depend on which waiter the kernel wakes first.
 //
 // SKIPPED WITHOUT flock, NEVER PASSED: every case is `it.skipIf(!HAVE_FLOCK)`, and `HAVE_FLOCK` is MEASURED (`flock
 // --version` exits 0), so a box with no flock shows these as skipped in the run's summary and never as a vacuous pass.
@@ -40,6 +38,7 @@ import { ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { ADV_CATALOGUE, ADV_REGISTRY_BYTES } from './fixtures/advanceCases.js';
 import { mkTmp } from './tmpHelpers.js';
+import type { ClassAdvance } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -151,18 +150,26 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
   }
 
   const advanceFile = (home: string): string => join(home, '.ccrc', 'models', `${LANE}.advance.json`);
-  const readHold = (home: string): { at: string; by: string } | null =>
-    (JSON.parse(fs.readFileSync(advanceFile(home), 'utf8')) as { classes: Record<string, { hold: { at: string; by: string } | null }> }).classes[CLS]!.hold;
+  const readClass = (home: string): ClassAdvance =>
+    (JSON.parse(fs.readFileSync(advanceFile(home), 'utf8')) as { classes: Record<string, ClassAdvance> }).classes[CLS]!;
+  const readHold = (home: string): ClassAdvance['hold'] => readClass(home).hold;
 
-  /** The commit's verb alone, UNLOCKED: the op's own `advance-commit`, for a candidate whose canary passed. */
-  function commit(b: { home: string; env: NodeJS.ProcessEnv }): Record<string, unknown> {
-    const r = spawnSync(process.execPath, [join(b.home, 'ccrc', 'deploy', 'models-op.mjs'), 'advance-commit',
-      '--file', join(b.home, '.ccrc', 'accounts.json'), '--id', LANE, '--class', CLS, '--from', FROM, '--to', TO, '--canary', 'passed'],
-    { env: b.env, encoding: 'utf8' });
-    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
-    const lines = r.stdout.split('\n');
-    expect(lines.length, r.stdout).toBe(2);
-    return JSON.parse(lines[0]!) as Record<string, unknown>;
+  // The fresh fixture has just one move. Its exact endpoints and success bind the reason to this commit, not a prior row.
+  function expectMoveAndHold(home: string, order?: 'hold' | 'commit') {
+    const registry = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8')) as { classes: Record<string, string> };
+    expect(registry.classes[CLS]).toBe(TO);
+    const { hold, history } = readClass(home);
+    expect(history).toHaveLength(1);
+    const move = history[0]!;
+    expect(move).toMatchObject({ how: 'advance', from: FROM, to: TO, ok: true, canary: 'passed' });
+    const ended = `the hold ended: ${TO} is newer than ${FROM}`;
+    if (order === 'hold' || (order === undefined && move.reason === ended)) {
+      expect(move.reason).toBe(ended);
+      expect(hold, 'hold first: this move clears the hold it ended').toBeNull();
+    } else {
+      expect(move.reason, 'commit first: the move ended no hold').toBeUndefined();
+      expect(hold, 'commit first: the new hand hold must survive').toMatchObject({ by: 'hand' });
+    }
   }
 
   it.skipIf(!HAVE_FLOCK)('the hold waits out a held lock and lands: it does not answer while the lock is held, then 200 done, held by hand', async () => {
@@ -190,19 +197,6 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     expect(hold!.at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
   }, 60_000);
 
-  it.skipIf(!HAVE_FLOCK)('the commit that follows the hold abandons held and moves nothing: the Hold wins', async () => {
-    const b = box();
-    const app = await serverOver(b);
-    const res = await app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } });
-    expect(res.statusCode, res.body).toBe(200);
-    expect(readHold(b.home)).toMatchObject({ by: 'hand' });
-    const registryBefore = fs.readFileSync(join(b.home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8');
-    const answer = commit(b);
-    expect(answer).toMatchObject({ ok: true, op: 'advance-commit', class: CLS, outcome: 'abandoned', why: 'held' });
-    expect(fs.readFileSync(join(b.home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8'), 'the held class moved').toBe(registryBefore);
-    expect(readHold(b.home), 'the commit dropped the hold').toMatchObject({ by: 'hand' });
-  }, 60_000);
-
   /** The step's own locked commit: `_models_node_locked` from the real `ccd/ccrc`, a bash process that waits on the lane's
    *  lock as the hourly refresh does. Everything reaches it through the environment: the script is a constant. */
   function lockedCommit(b: { home: string; env: NodeJS.ProcessEnv }): Promise<{ code: number | null; first: Record<string, unknown> | null; stdout: string }> {
@@ -223,6 +217,21 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     });
   }
 
+  it.skipIf(!HAVE_FLOCK).each(['hold', 'commit'] as const)('%s first: the later locked writer leaves the right hold state', async (first) => {
+    const b = box();
+    const app = await serverOver(b);
+    const post = () => app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } });
+    const resFirst = first === 'hold' ? await post() : null;
+    if (resFirst !== null) expect(readHold(b.home)).toMatchObject({ by: 'hand' });
+    const commitRes = await lockedCommit(b);
+    expect(commitRes.code, commitRes.stdout).toBe(0);
+    expect(commitRes.first).toMatchObject({ outcome: 'moved' });
+    const res = resFirst ?? await post();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, action: 'hold', class: CLS, changed: true });
+    expectMoveAndHold(b.home, first);
+  }, 60_000);
+
   it.skipIf(!HAVE_FLOCK)('a locked advance-commit and the POST\'s hold both wait on one held lock: whichever takes it first, the end state is consistent', async () => {
     const b = box();
     const app = await serverOver(b);
@@ -240,19 +249,10 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     const [res, commitRes] = await Promise.all([pending, committing]);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, action: 'hold', class: CLS, changed: true });
-    expect(commitRes.first, commitRes.stdout).toMatchObject({ ok: true, op: 'advance-commit', class: CLS });
-    // The lock orders them, and either order is whole. Hold first: the commit abandons `held` and the class stays. Commit
-    // first: the class moves, and the hold lands on the moved model. Never a move that a hold stood over, never a lost hold.
-    const registry = JSON.parse(fs.readFileSync(join(b.home, '.ccrc', 'models', `${LANE}.classes.json`), 'utf8')) as { classes: Record<string, string> };
-    expect(readHold(b.home), 'the hold is lost').toMatchObject({ by: 'hand' });
-    if (commitRes.first!.outcome === 'abandoned') {
-      expect(commitRes.first).toMatchObject({ why: 'held' });
-      expect(registry.classes[CLS], 'a held class moved').toBe(FROM);
-    } else {
-      expect(commitRes.first).toMatchObject({ outcome: 'moved' });
-      expect(registry.classes[CLS]).toBe(TO);
-    }
-    expect((res.json().models as { advance: { classes: Record<string, { hold: unknown }> } }).advance.classes[CLS]!.hold).toMatchObject({ by: 'hand' });
+    expect(commitRes.code, commitRes.stdout).toBe(0);
+    expect(commitRes.first).toMatchObject({ ok: true, op: 'advance-commit', class: CLS, outcome: 'moved' });
+    // The POST re-reads after its write, so its response may already reflect a later commit. Use the persisted move.
+    expectMoveAndHold(b.home);
   }, 90_000);
 
   it.skipIf(!HAVE_FLOCK)('a lock held past the verb\'s wait is 409 lane-act-refused lock-busy, inside the spawn bound, and writes nothing', async () => {

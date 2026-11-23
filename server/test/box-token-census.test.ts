@@ -193,7 +193,9 @@ const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id
 const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate',
   // the Settings doors (Overlord W1 designation C): the model class and the account set, the same gate, a step-up for `fable` and a widening
   '/api/overlord/model', '/api/overlord/account-set',
-  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear'];
+  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
+  // Confirm the restore (authority journal C): the guard's state, and the door behind the step-up
+  '/api/overlord/restore', '/api/overlord/restore/confirm'];
 
 /** The private-name list's doors (Overlord W2, private names B), one path registered twice, `PUT` and `GET`: hand-kept for the
  *  NAMES only, compared with the file's registrations in both directions below. Neither consults the box token or sits in
@@ -494,7 +496,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the Overlord doors file registers nine routes (five designation and four ladder)').toBe(9);
+    expect(regs.length, 'the Overlord doors file registers eleven routes (five designation, four ladder and two restore)').toBe(11);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {

@@ -19,6 +19,13 @@
 // D-8290 (plan docs/superpowers/plans/2026-11-11-live-probe-budget.md): a `probe.submit` goes to the probe desk
 // (`probeDesk.ts`, the optional `probes` dependency), which answers it with `probe.state` frames; the status answer
 // carries the desk's block when the box names a probe config directory. A service without a desk refuses the frame.
+//
+// D-8907 (spec docs/superpowers/specs/2026-11-22-test-box-managed-node-design.md §2.5 "The drain"): the service stays
+// up through a drain, so it gives the drain's driver (`drainer.ts`) what a takeover never needed: whether anything is
+// in progress (`quiet`), the waiting runs taken out of the queue once they are on disk (`forgetWaiting`), and a pump
+// when admission reopens (`admitNow`). It tells the driver of each submission it queues (`queued`), and hands it a
+// cancel for a run it no longer holds (`cancelHandedOver`). A run that waits on disk keeps its id (`handedOver`,
+// asked by `runIdUsed`, the one owner of "two runs never share one id"). No frame carries any of it.
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { CaptureAnswer, CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
@@ -40,7 +47,7 @@ import {
   type InstallInput, type PristineSettings, type PristineStore,
 } from './pristine.js';
 import { buildInstallSpec, buildRunSpec, runPaths, writeInstallSpec, writeSpec, type RunSpec, type SpecSettings } from './spec.js';
-import { statusAnswer, type ProbeResult, type StatusFacts } from './status.js';
+import { statusAnswer, type MeasuredTools, type ProbeResult, type StatusFacts } from './status.js';
 import { units, type SystemManager, type UnitEnd } from './systemd.js';
 
 /** The settings the run manager reads, all from `config.ts`. */
@@ -64,8 +71,9 @@ export interface ServiceDeps {
   readonly chrome: string;
   readonly release: string | null;
   readonly serviceVersion: string;
-  /** The box's measured tool versions; the tool sync (TB6) measures them, and until then there are none. */
-  readonly tools?: () => TestboxToolVersions | null;
+  /** The box's measured tool versions; the tool sync (TB6) measures them, and until then there are none. On a managed
+   *  box they are its updater's, a tool it could not measure `null` alone (spec 2026-11-22 §2.6). */
+  readonly tools?: () => MeasuredTools | null;
   /** The pristine installs (TB5, D-7543); absent, every run installs nothing beyond its prepare. */
   readonly pristine?: PristineDeps;
   /** Whether a waiting run may start now (TB6, D-7426: a tool-sync takeover closes admissions while submissions still
@@ -78,6 +86,15 @@ export interface ServiceDeps {
   readonly probes?: ProbeDesk;
   /** The build capture desk (spec 2026-11-22); absent, a `capture.submit` is refused. */
   readonly captures?: CaptureDesk;
+  /** A submission was queued (D-8907: while a drain has the queue on disk, its driver writes this one there at once,
+   *  so the updater's stop loses no run); absent, nothing. */
+  readonly queued?: () => void;
+  /** A cancel for a run this service does not hold (D-8907: a drain handed it over to disk, and its driver removes it
+   *  there so it is not queued again); absent, nothing. */
+  readonly cancelHandedOver?: (runId: string) => void;
+  /** A run with this id waits on disk to be queued again (D-8907: a drain handed it over, or a takeover did and it
+   *  waits for the timer), so the id is used; absent, never. */
+  readonly handedOver?: (runId: string) => boolean;
 }
 
 /** What the pristine store needs from outside (D-7543). */
@@ -221,7 +238,8 @@ export class TestboxService {
   }
 
   private runIdUsed(id: string): boolean {
-    return this.runs.has(id) || existsSync(path.join(this.s.root, 'results', id)) || existsSync(path.join(this.s.root, 'logs', id));
+    return this.runs.has(id) || existsSync(path.join(this.s.root, 'results', id)) || existsSync(path.join(this.s.root, 'logs', id))
+      || (this.d.handedOver?.(id) ?? false);
   }
 
   /** A submission: refused with its reason, or queued. */
@@ -238,13 +256,39 @@ export class TestboxService {
     this.queue = q;
     this.runs.set(f.runId, { state: queuedRun(f.runId), submit: f, row, sink: conn, spec: null, prepareExit: null, prepareMs: 0, wallMs: 0 });
     this.pump();
+    this.d.queued?.();
   }
+
+  /** No run, pristine build or capture is in progress (D-8907: what a drain waits for before it answers). */
+  quiet(): boolean { return this.driving.size === 0 && (this.d.captures?.idle() ?? true); }
+
+  /** How many runs and builds are in progress, as the status answer counts them (D-8907: the drain's answer). */
+  inProgress(): number { return queueCounts(this.queue).inProgress; }
+
+  /** D-8907: every waiting run leaves this service's queue, each with the connection its frames go to. The drain's
+   *  driver calls it once those runs are on disk (`toolsync.ts#ToolSync.handOverWaiting`), so the queue has one home;
+   *  the service takes each id afresh when the run is queued again. A waiting pristine build is the service's own and
+   *  stays. */
+  forgetWaiting(): Map<string, RunSink> {
+    const out = new Map<string, RunSink>();
+    for (const e of this.queue.waiting) {
+      if (e.kind !== 'run') continue;
+      const run = this.runs.get(e.id);
+      if (run !== undefined) out.set(e.id, run.sink);
+      this.runs.delete(e.id);
+      this.queue = queueCancel(this.queue, e.id).state;
+    }
+    return out;
+  }
+
+  /** Admission reopened (D-8907: a drain's request was withdrawn or ran out): start what the queue admits. */
+  admitNow(): void { this.pump(); }
 
   /** A cancel (the session's Ctrl-C, or a lost run): a waiting run leaves the queue, a running one is stopped and then
    *  cleaned up as any run is. */
   async cancel(runId: string): Promise<void> {
     const run = this.runs.get(runId);
-    if (run === undefined) return;
+    if (run === undefined) { this.d.cancelHandedOver?.(runId); return; }
     const { run: next, act } = step(run.state, { t: 'cancel' });
     run.state = next;
     if (act.t === 'drop') {
@@ -354,9 +398,13 @@ export class TestboxService {
     run.sink.send(summary);
   }
 
-  /** Every run started so far has ended (tests and the takeover wait on it). */
+  /** Every run and every capture started so far has ended (tests and the takeover wait on it). A tool sync's takeover
+   *  replaces the release the capture's recorder runs from, so it waits for captures too (review 3226 F8). */
   async idle(): Promise<void> {
-    while (this.driving.size > 0) await Promise.all([...this.driving]);
+    do {
+      while (this.driving.size > 0) await Promise.all([...this.driving]);
+      await this.d.captures?.settled();
+    } while (this.driving.size > 0);
   }
 
   /** The service's sweep: every held run user whose units are inactive is cleaned again (spec §2.2), then the queue is

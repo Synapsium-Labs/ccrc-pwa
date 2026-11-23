@@ -2,9 +2,12 @@
 // a typed failure. Neutral lane and model ids only: this repository is public.
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../src/lib/apiError';
+import type { LaneClassAdvance, LaneClassModel } from '../../shared/models';
 import {
+  anthropicFacts, anthropicModelLine, SUPERVISOR_RESIDUAL_WORDS,
   advanceStateWords, asLaneModelsActAnswer, classActs, modelsActFailure, MODELS_READ_FAILED, MODELS_READ_UNREADABLE, modelsReadStateWords, pendingWords,
   revertConsequence, revertStillOffered, VERB_CODE_WORDS,
+  modelsActOffered, modelsSheetAnthropic,
 } from '../src/accounts/modelsSheetWords';
 import { laneReadFailureOf } from '../src/lib/models';
 
@@ -244,6 +247,123 @@ describe('a failed read of the lane', () => {
     }
     for (const a of [{ kind: 'unreadable' }, { kind: 'unsupported' }, { kind: 'refused', why: 'bad-lane' }] as const) {
       expect(modelsReadStateWords(a), a.kind).toMatch(/reads again when it is opened/);
+    }
+  });
+});
+
+// ── an Anthropic lane's class card (model-class-advance wave 9, Task A4.3; D-8744, D-8746, D-8820) ──
+// Every line is one pure function of the class's read and its advance entry, so the sheet decides nothing about wording.
+describe('anthropicFacts: the lines an Anthropic class card carries', () => {
+  const cls = (over: Partial<LaneClassModel> = {}): LaneClassModel => ({ model: 'claude-opus-9-1', label: 'Opus 9.1', efforts: null, ...over });
+  const adv = (over: Partial<LaneClassAdvance> = {}): LaneClassAdvance => ({ family: 'opus', hold: null, previous: null, revertable: false, lastMove: null, ...over });
+  const kinds = (c: LaneClassModel, a: LaneClassAdvance | null = adv()): string[] => anthropicFacts('opus', c, a).map((f) => f.kind);
+  const textOf = (c: LaneClassModel, kind: string, a: LaneClassAdvance | null = adv()): string | undefined =>
+    anthropicFacts('opus', c, a).find((f) => f.kind === kind)?.text;
+
+  it('says where the id came from, one sentence per source, and nothing for no source', () => {
+    expect(textOf(cls({ source: 'cache' }), 'source')).toMatch(/from Claude Code's catalogue/);
+    expect(textOf(cls({ source: 'use' }), 'source')).toMatch(/seen at a launch/);
+    expect(kinds(cls({ source: null }))).toEqual([]);
+    expect(kinds(cls())).toEqual([]);
+  });
+
+  it('names both ids only when the catalogue and a launch disagree', () => {
+    const both = textOf(cls({ source: 'use', cacheTarget: 'claude-opus-9-1', seenId: 'claude-opus-9-2' }), 'disagree')!;
+    expect(both).toContain('claude-opus-9-1');
+    expect(both).toContain('claude-opus-9-2');
+    expect(kinds(cls({ cacheTarget: 'claude-opus-9-1', seenId: 'claude-opus-9-1' }))).not.toContain('disagree');
+    expect(kinds(cls({ cacheTarget: 'claude-opus-9-1', seenId: null }))).not.toContain('disagree');
+    expect(kinds(cls({ cacheTarget: null, seenId: 'claude-opus-9-1' }))).not.toContain('disagree');
+  });
+
+  it('reads the held id from the advance file\'s hold, and the alias\'s id from aliasId only when they differ', () => {
+    const held = adv({ hold: { at: '2026-11-18T08:00:00Z', by: 'hand', model: 'claude-opus-9-1' } });
+    // the card's own model differs from the hold's: the held id is the advance file's
+    expect(textOf(cls({ model: 'claude-opus-9-3', aliasId: 'claude-opus-9-2' }), 'held', held)).toContain('claude-opus-9-1');
+    expect(textOf(cls({ model: 'claude-opus-9-3', aliasId: 'claude-opus-9-2' }), 'held', held)).not.toContain('claude-opus-9-3');
+    expect(textOf(cls({ aliasId: 'claude-opus-9-2' }), 'alias', held)).toContain('claude-opus-9-2');
+    expect(kinds(cls({ aliasId: 'claude-opus-9-1' }), held)).not.toContain('alias');
+    expect(kinds(cls(), held)).not.toContain('alias');
+    // a hold with no id (a Codex lane's) says no held id
+    expect(kinds(cls(), adv({ hold: { at: '2026-11-18T08:00:00Z', by: 'hand' } }))).not.toContain('held');
+  });
+
+  it('says the orphaned saved level in one line', () => {
+    expect(textOf(cls({ orphanedEffort: { id: 'claude-opus-9-0', level: 'high' } }), 'orphaned'))
+      .toBe('Saved effort high is keyed to an older model; ccd carries it at launch under Auto.');
+    expect(kinds(cls({ orphanedEffort: null }))).toEqual([]);
+  });
+
+  it('a class with no id says so in its class word, and an unlaunchable one names both builds', () => {
+    expect(anthropicModelLine('opus', null, null)).toBe('Opus class');
+    expect(anthropicModelLine('opus', 'claude-opus-9-1', 'Opus 9.1')).toBe('Opus 9.1 (claude-opus-9-1)');
+    const none = cls({ model: null, label: null, unobserved: true });
+    expect(kinds(none)).toEqual(['no-id']);
+    const old = cls({ model: null, label: null, unobserved: true, unlaunchable: { needs: '9.1.0', laneVersion: '9.0.1' } });
+    expect(kinds(old)).toEqual(['unlaunchable']);
+    expect(textOf(old, 'unlaunchable')).toMatch(/older than/);
+    expect(textOf(old, 'unlaunchable')).toContain('9.1.0');
+    expect(textOf(old, 'unlaunchable')).toContain('9.0.1');
+    const unread = cls({ model: null, label: null, unlaunchable: { needs: '9.1.0', laneVersion: null } });
+    expect(textOf(unread, 'unlaunchable')).toContain('9.1.0');
+    expect(textOf(unread, 'unlaunchable')).toMatch(/could not be read/);
+  });
+
+  it('unobserved is said only for a class that is held', () => {
+    const held = adv({ hold: { at: '2026-11-18T08:00:00Z', by: 'hand', model: 'claude-opus-9-1' } });
+    expect(textOf(cls({ unobserved: true }), 'unobserved', held)).toMatch(/not observed while the hold stands/);
+    expect(kinds(cls({ unobserved: true }), adv())).not.toContain('unobserved');
+    expect(kinds(cls({ unobserved: true }), null)).not.toContain('unobserved');
+    expect(kinds(cls(), held)).not.toContain('unobserved');
+  });
+
+  it('a held class carries the supervisor sentence, an unheld one does not, and it asks nothing of anyone', () => {
+    const held = adv({ hold: { at: '2026-11-18T08:00:00Z', by: 'hand', model: 'claude-opus-9-1' } });
+    expect(textOf(cls(), 'supervisor', held)).toBe(SUPERVISOR_RESIDUAL_WORDS);
+    expect(kinds(cls(), adv())).not.toContain('supervisor');
+    expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/supervisor on the fleet box still runs the previous ccd build/i);
+    expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/without the held model until it restarts/i);
+    expect(SUPERVISOR_RESIDUAL_WORDS).toMatch(/degraded/i);
+    expect(SUPERVISOR_RESIDUAL_WORDS).not.toMatch(/\b(run|restart|move|remove|start)\b[^.]*\b(it|them|the)\b[^.]*\.$/i);
+    expect(SUPERVISOR_RESIDUAL_WORDS.match(/\./g)).toHaveLength(1);
+  });
+});
+
+describe('the Models act is offered by the lane kind (wave 9, Task A4.3)', () => {
+  it('an Anthropic lane offers the Models act', () => {
+    expect(modelsActOffered({ kind: 'sign-in', telemetry: 'anthropic' })).toBe(true);
+    expect(modelsSheetAnthropic({ telemetry: 'anthropic' })).toBe(true);
+  });
+  it('a Codex lane still offers it, and other lanes do not', () => {
+    expect(modelsActOffered({ kind: 'codex', telemetry: 'codex' })).toBe(true);
+    expect(modelsSheetAnthropic({ telemetry: 'codex' })).toBe(false);
+    expect(modelsActOffered({ kind: 'key', telemetry: 'openrouter' })).toBe(false);
+    expect(modelsActOffered(undefined)).toBe(false);
+  });
+});
+
+describe('an Anthropic lane: no class actions, refusals that state facts', () => {
+  const ok = (opus: Partial<LaneClassAdvance>): Parameters<typeof classActs>[0] => ({
+    state: 'ok', detail: null, pending: null,
+    classes: Object.fromEntries((['fable', 'opus', 'sonnet', 'haiku'] as const).map((c) => [c, {
+      family: c, hold: null, previous: null, revertable: false, lastMove: null, ...(c === 'opus' ? opus : {}),
+    }])) as never,
+  });
+  it('classActs and the current-read recheck offer no Anthropic actions', () => {
+    expect(classActs(ok({}), 'opus', true)).toMatchObject({ hold: null, held: false, revert: false });
+    expect(classActs(ok({ hold: { at: 'x', by: 'hand' } }), 'opus', true)).toMatchObject({ hold: null, held: true });
+    const advance = ok({ revertable: true, previous: { model: 'm-before', effort: null } });
+    expect(classActs(advance, 'opus', true)).toMatchObject({ hold: null, revert: false });
+    const current = { kind: 'read', classes: {}, advance } as never;
+    expect(revertStillOffered(current, 'opus', true)).toBe(false);
+    expect(revertStillOffered(current, 'opus', false)).toBe(true);
+    expect(classActs({ state: 'absent', detail: null, pending: null, classes: null }, 'opus', true)).toMatchObject({ hold: null });
+    expect(classActs(ok({}), 'opus')).toMatchObject({ hold: 'hold' });
+  });
+  it('the Anthropic hold refusals ask no hand act', () => {
+    for (const code of ['alias-source-absent', 'aliases-file-unreadable', 'aliases-file-invalid', 'settings-overrides-hold'] as const) {
+      const text = VERB_CODE_WORDS[code];
+      expect(text, code).not.toMatch(/\b(Move|Remove|Start|Run|Restart)\b|then hold again|try again/);
     }
   });
 });

@@ -6,11 +6,12 @@ import type {
 } from '../../../shared/api';
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, TESTBOX_ADMIN_ROUTE_REFUSALS, TESTBOX_PARITY_REQUIRED_SENTENCE, type SwapRefusal, type TestboxAdminRouteRefusal } from '../../../shared/api';
-import { TESTBOX_ADMIN_CODE_SENTENCE } from '../../../shared/testbox-admin';
+import { TESTBOX_ADMIN_CODE_SENTENCE, readTestboxBusyHolder } from '../../../shared/testbox-admin';
 import type { LinkingRefusal } from '../../../shared/linking';
 import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX, type LinearItemAct } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
+import { busyHolderSentence } from '../fleet/testboxAdminWords';
 
 /** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
 const NOTHING_TO_SUBMIT_TEXT = 'The box is empty — nothing was sent from here. Check the transcript before sending again.';
@@ -845,10 +846,13 @@ export const TESTBOX_GATE_DARK_TEXT: Readonly<Record<'auth-off' | 'insecure-orig
  *  closed `code` of `testbox-admin-refused` wins over the word; both are read off the body, never branched on a literal. */
 export function testboxRouteText(err: unknown): string | null {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
-    const body = err.body as { error?: unknown; code?: unknown };
+    const body = err.body as { error?: unknown; code?: unknown; holder?: unknown };
     if (body.error === TESTBOX_ADMIN_ROUTE_REFUSALS[0] && typeof body.code === 'string') {
       const said = refusalText(new ApiError(err.status, { error: body.code }), TESTBOX_ADMIN_CODE_SENTENCE);
-      if (said !== null) return said;
+      // D-8899: a refusal that names the act holding the lock (the route sends one with `busy` alone) says which
+      // act it is and the latest time it can end.
+      const holder = readTestboxBusyHolder(body.holder);
+      if (said !== null) return holder === null ? said : `${said} ${busyHolderSentence(holder)}`;
     }
   }
   return refusalText(err, TESTBOX_ROUTE_TEXT);

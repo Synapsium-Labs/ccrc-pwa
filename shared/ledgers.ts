@@ -17,8 +17,9 @@ import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
 import type { AnswerMarksView, AskMarkRow } from './answerMarks.js';
 
-/** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
- *  `secret`'s value goes to its slot, never through the answer (spec §5). */
+/** What the operator is asked to do. `decide` and `value` carry an answer; `do` needs none, and its tick may carry the
+ *  operator's optional note as its answer (D-8931); a `secret`'s value goes to its slot, never through the
+ *  answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
 const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
 export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
@@ -114,9 +115,10 @@ export const isUntrustedBuildAction = (a: ItemAction | null): a is UntrustedBuil
 /** The console page the untrusted-build item's step links to (review 2752 F4): Settings' Automation section, whose Test box
  *  build list holds the build's row and its Capture again. The item's text names it, and the console links a routed path. */
 export const UNTRUSTED_BUILD_SETTINGS_PATH = '/settings/automation';
-/** The console page that holds every project's Linear row, its team key and its Workspace (D-8808): Settings' Security section.
- *  The `linear-team-workspace` item's text names it and the console links it. */
-export const LINEAR_PROJECTS_SETTINGS_PATH = '/settings/security';
+/** The console page that holds every project's Linear row, its team key and its Workspace (D-8808): Settings' Integrations
+ *  section (D-8932; Security held it before, and an item written then still names `/settings/security`,
+ *  where a line points here). The `linear-team-workspace` item's text names it and the console links it. */
+export const LINEAR_PROJECTS_SETTINGS_PATH = '/settings/integrations';
 /** The six hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). `linear-team-workspace`
  *  takes none: its remedy is a setting on the project's row (D-8808). */
 export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner' | 'linear-team-workspace';

@@ -25,7 +25,10 @@ stays allowed while no child is active (clause 19).
 
 In every class, raise one item with `ccrc-api items raise`, naming what, how and why. A `decide` item also names the
 option you recommend and why it beats each alternative. Set the item `blocking` only when every thread is parked on it.
-The item's tick mails you (clause 20), so a parked thread needs no other wake.
+The item's tick mails you (clause 20), so a parked thread needs no other wake. A `do` item's tick may carry the
+operator's note. The note is optional: when the operator wrote one, it is in the tick's mail and in the item's
+`answer`; when they wrote none, the mail says so. If you need a note (who did a step, and when), ask for it in the
+item's steps; a tick that came without it goes back with what is missing.
 
 - **O1. Irreversible or outward-facing acts.** Acts the repository's SAFETY rules forbid to sessions, and acts on the
   live boxes: reaping, removing, expiring or reclaiming workspaces; touching units or tmux; account management;

@@ -38,6 +38,19 @@ describe('record(): one line per call, and the reply the build needs', () => {
     expect(JSON.parse(out)).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
     expect((lines(t.file)[0] as { event: string }).event).toBe('PermissionRequest');
   });
+  it('the PermissionRequest line carries the answer the recorder printed, and the replay\'s reader reads it (spec §2.6)', () => {
+    const t = fresh();
+    const out = record('PermissionRequest', '{"tool_name":"Bash"}', { CLAUDE_CONFIG_DIR: t.config, CCRC_CAPTURE_RECORDING: t.file });
+    const behavior = (JSON.parse(out) as { hookSpecificOutput: { decision: { behavior: string } } }).hookSpecificOutput.decision.behavior;
+    expect(lines(t.file)).toEqual([{ kind: 'hook', event: 'PermissionRequest', payload: { tool_name: 'Bash' }, status: null, answer: behavior }]);
+    expect(readCaptureRecords(readFileSync(t.file, 'utf8')).records[0]).toMatchObject({ kind: 'hook', event: 'PermissionRequest', answer: 'allow' });
+  });
+  it('no other line carries an answer', () => {
+    const t = fresh();
+    const env = { CLAUDE_CONFIG_DIR: t.config, CCRC_CAPTURE_RECORDING: t.file };
+    for (const e of ['PreToolUse', 'PostToolUse', 'Stop', 'statusline']) record(e, '{}', env);
+    expect(lines(t.file).filter((l) => Object.prototype.hasOwnProperty.call(l, 'answer'))).toEqual([]);
+  });
   it('a stdin that is not JSON is kept as the raw string', () => {
     const t = fresh();
     record('Stop', 'not json {', { CLAUDE_CONFIG_DIR: t.config, CCRC_CAPTURE_RECORDING: t.file });

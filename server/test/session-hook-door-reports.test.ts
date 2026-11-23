@@ -134,9 +134,10 @@ describe('the witness: one report per door tool call, keyed by the call digest',
   });
 
   it('a reader\'s call carries its agent id: with a recorded join, or with an agent_type; neither is the main thread\'s', () => {
+    // A reader's door call is the read tool: B2's scope arm denies a reader any other door tool, which then sends no witness.
     fs.writeFileSync(reg(`${ID}.joined`), `${AGENT}\n`);
-    run(pre(toolName('note_list'), {}, { agent_id: AGENT }));                                       // a join, no type
-    run(pre(toolName('note_list'), {}, { agent_id: 'a0000000000000002', agent_type: 'Explore' }));   // a type, no join
+    run(pre(toolName('read'), {}, { agent_id: AGENT }));                                            // a join, no type
+    run(pre(toolName('read'), {}, { agent_id: 'a0000000000000002', agent_type: 'Explore' }));        // a type, no join
     run(pre(toolName('note_list'), {}, { agent_id: 'a0000000000000003' }));                          // neither: the roster never saw it
     run(pre(toolName('note_list'), {}));                                                            // the main thread
     expect(reports().map((r) => r['agentId'])).toEqual([AGENT, 'a0000000000000002', null, null]);

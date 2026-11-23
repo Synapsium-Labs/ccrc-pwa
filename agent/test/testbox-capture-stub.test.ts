@@ -2,7 +2,8 @@
 // over real HTTP on loopback: each scripted reply of `capture.ts#standInReply` through it, streamed and whole, the error
 // step, the token count, the routes it does not script, and a body that is not JSON.
 import { afterEach, describe, expect, it } from 'vitest';
-import { CAPTURE_CD_COMMAND, CAPTURE_MARK, CAPTURE_WRITE_COMMAND } from '../src/testbox/capture.js';
+import { CAPTURE_WRITE_COMMAND } from '../../shared/claudeBuildCapture.js';
+import { CAPTURE_CD_COMMAND, CAPTURE_MARK } from '../src/testbox/capture.js';
 import { startStandIn, type StandIn } from '../src/testbox/captureStub.js';
 
 let live: StandIn | null = null;

@@ -5,6 +5,13 @@
 // checks each connection's `hello` to the fleet agent's contract (`hello.ts`) against the service's token file, and
 // speaks `shared/testbox.ts`'s frames, `TESTBOX_PROTO`, never the fleet agent's `AgentReq` (D-7428). It imports
 // nothing of the fleet agent's (`agent/test/testbox-imports.test.ts`).
+//
+// D-8907 (spec docs/superpowers/specs/2026-11-22-test-box-managed-node-design.md §2.5, §2.7): the entry point owns two
+// more things. The drain's poll (`drainer.ts`): once before the service starts, so a request that stands then closes
+// admission before anything is queued, and then on its own short timer. And the ready file (`announceReady`), written
+// once the service has bound its address: the release it runs from and its process id, which the box's updater reads
+// as its form of "the new release answers", with no token and no network. Neither is a frame (D-8912). A stop removes
+// both files here; the unit's `RuntimeDirectory=` removes the directory at every stop, a takeover's exit included.
 import { readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { BlockList, isIP } from 'node:net';
@@ -15,9 +22,12 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { isReleaseTag } from '../../../shared/api.js';
 import { readTestboxFrame } from '../../../shared/testbox.js';
 import { startedAsProgram } from './entry.js';
+import { BOX_PATHS, encodeReady, READY_FILE, type BoxPaths } from './boxFiles.js';
+import { boxFs, type BoxFs } from './boxFs.js';
 import { CaptureDesk } from './captureDesk.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe, reflinkProbeDir } from './fsprobe.js';
+import { attachDrainer, Drainer, drainerOf } from './drainer.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from './hello.js';
 import { gitEnv, mirrorOps, realGit, runTreeFiles } from './mirror.js';
 import { pristineSettings } from './pristine.js';
@@ -163,7 +173,28 @@ export function readToken(file: string): string {
 /** What a test may put in place of the box's own (the service never passes any): the system manager, the reader of
  *  a run's install inputs from its mirror, and the probe runner (D-8290: the box installs none yet, so every probe is
  *  refused `no-runner`). */
-export interface ServiceSeams { readonly sys?: SystemManager; readonly inputs?: PristineDeps['inputs']; readonly probeRunner?: ProbeRunner }
+export interface ServiceSeams {
+  readonly sys?: SystemManager; readonly inputs?: PristineDeps['inputs']; readonly probeRunner?: ProbeRunner;
+  /** D-8907: where the drain request and the service's runtime directory are, and the drain's clock. */
+  readonly box?: BoxPaths & { readonly now?: () => number };
+}
+
+/** How often the service looks for a drain request (D-8907: the request is a file, so the service polls for it). */
+export const DRAIN_POLL_MS = 2000;
+
+/** The ready file (spec 2026-11-22 §2.7), written once the service has bound its address: the release this tree is
+ *  and this process's id. A tree with no release stamp writes none (the updater's gate then fails it, as it should),
+ *  and a box whose unit gives the service no runtime directory writes none either: both are said, neither stops the
+ *  service. */
+export function announceReady(runtimeDir: string, release: string | null, pid: number, fs: BoxFs = boxFs): { readonly ok: true } | { readonly ok: false; readonly why: string } {
+  if (release === null) return { ok: false, why: 'this tree has no release stamp' };
+  try {
+    fs.write(runtimeDir, READY_FILE, encodeReady({ release, pid }));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, why: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 /** The live probe desk (D-8290): the role and the settings from the box's own lines, the fleet config directories the
  *  service user's home names, and the day's count under `<root>/probes`. */
@@ -191,9 +222,15 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
   const short = boundedExec(sysEnv, SHORT_BOUND_MS);
   const git = realGit(boundedExec(gitEnv(os.homedir()), cfg.unitMaxMs));
   const sys = seams.sys ?? systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs));
+  // D-8907: the drain's driver. A standing request closes admissions through the same `admitting` the takeover uses.
+  const box = seams.box ?? BOX_PATHS;
+  const drain = new Drainer({ requestFile: box.drainRequest, runtimeDir: box.runtimeDir, now: seams.box?.now ?? (() => Date.now()), fs: boxFs });
   // TB6 (D-7408, D-7426): the tool sync. Its takeover closes admissions (`admitting`), never the run limit the service
   // reports, so every status answer during it still reads as the frame family's.
-  const tools = new ToolSync({ sys, root: cfg.root, toolsDir: cfg.toolsDir, settings: toolsSettings(cfg.lines, durationMs), now: () => Date.now(), exit });
+  const tools = new ToolSync({
+    sys, root: cfg.root, toolsDir: cfg.toolsDir, settings: toolsSettings(cfg.lines, durationMs), now: () => Date.now(), exit,
+    closed: () => drain.closed(),
+  });
   // TB6 (spec §2.10): each spec's PATH names the set current when it is built, never the link a sync switches.
   const settings = { ...cfg, get toolsBin(): string { return tools.bin(); } };
   const svc = new TestboxService({
@@ -203,18 +240,29 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
     now: () => Date.now(), get chrome(): string { return tools.chrome(); }, release: facts.release, serviceVersion: facts.serviceVersion,
     // TB6: the box's measured tool versions are the current set's.
     tools: () => tools.versions(), admitting: () => tools.admitting(), specBuilt: (spec) => tools.pin(spec),
-    // TB5 (D-7407, D-7543): the installs run under the box's node, the current set's (TB6), else the one this service runs under.
+    // TB5 (D-7407, D-7543): the installs run under the box's node, the current set's (TB6), else the one this service
+    // runs under: before a set is in place, and always on a managed box, whose act restarts the service when node
+    // changes and writes `tools.json` only after that start (spec 2026-11-22 §2.5).
     pristine: {
       settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths) => runTreeFiles(git, m, id, paths)),
       node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
     probes: probeDeskFor(cfg, seams.probeRunner ?? null), captures: captureDeskFor(cfg),
+    // D-8907: a submission queued while a drain has the queue on disk goes there at once; a cancel for a run on disk
+    // removes it there; and a run on disk keeps its id.
+    queued: () => drain.queued(), cancelHandedOver: (id) => tools.cancelHandedOver(id), handedOver: (id) => tools.handedOver(id),
   });
   tools.serve({
     status: () => svc.status(), idle: () => svc.idle(), tick: () => svc.tick(), liveRuns: () => liveRunIds(svc.poolNow()),
-    waiting: () => svc.waitingSubmits(), submit: (f, conn) => svc.submit(f, conn),
+    waiting: () => svc.waitingSubmits(), submit: (f, conn) => svc.submit(f, conn), forgetWaiting: () => svc.forgetWaiting(),
+  });
+  drain.serve({
+    // Nothing of the service's is in progress, and the tool sync is not moving the box (its unit, or its takeover).
+    quiet: () => svc.quiet() && !tools.busy(), running: () => svc.inProgress(), handOver: () => tools.handOverWaiting(),
+    reopen: () => { tools.resume(); svc.admitNow(); },
   });
   attachToolSync(svc, tools);
+  attachDrainer(svc, drain);
   return svc;
 }
 
@@ -245,12 +293,23 @@ async function main(): Promise<void> {
   if (refused !== null) throw new Error(`CCRC_TESTBOX_LISTEN: ${refused}`);
   const token = readToken(cfg.tokenFile);
   const service = serviceFor(cfg, release);
+  // D-8907: a drain request that stands now closes admission before the service queues or starts anything.
+  const drain = drainerOf(service);
+  drain?.poll();
   await registryFor(cfg);
   await service.start();
-  // TB6 (D-7426): the runs a takeover handed over wait in this service's queue, in their order.
+  // TB6 (D-7426): the runs a takeover handed over wait in this service's queue, in their order. A standing drain
+  // leaves them on disk (D-8907): they are queued when its request is withdrawn or runs out.
   toolSyncOf(service)?.resume();
   const server = await startTestboxServer({ host: cfg.listen.host, port: cfg.listen.port, token, service });
-  // The one scheduler (L5 owns it): fetch, sweep and retention on `CCRC_TESTBOX_FETCH_EVERY`.
+  // Spec 2026-11-22 §2.7: bound, so ready. The file names this tree's release and this process.
+  const ready = announceReady(BOX_PATHS.runtimeDir, releaseFacts(release).release, process.pid);
+  if (!ready.ok) console.error(`ccrc-testbox: no ready file (${ready.why})`);
+  // The drain's own timer, beside the service's below: a request is a file, so it is seen only by looking, and the
+  // updater waits on the answer, so it is looked for every `DRAIN_POLL_MS`. The service's timer runs on
+  // `CCRC_TESTBOX_FETCH_EVERY`, minutes apart, and each of its ticks waits for the last one's fetches to end.
+  const drainTimer = setInterval(() => drain?.poll(), DRAIN_POLL_MS);
+  // The service's scheduler (L5 owns both): fetch, sweep and retention on `CCRC_TESTBOX_FETCH_EVERY`.
   let ticking = false;
   const timer = setInterval(() => {
     if (ticking) return;
@@ -259,7 +318,14 @@ async function main(): Promise<void> {
   }, cfg.fetchEveryMs);
   console.log(`ccrc-testbox on ${cfg.listen.host}:${server.port}`);
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-    process.on(sig, () => { clearInterval(timer); void server.close().finally(() => process.exit(0)); });
+    process.on(sig, () => {
+      clearInterval(timer);
+      clearInterval(drainTimer);
+      // The two files say this process serves: they go before it does.
+      boxFs.remove(path.join(BOX_PATHS.runtimeDir, READY_FILE));
+      drain?.retire();
+      void server.close().finally(() => process.exit(0));
+    });
   }
 }
 

@@ -1,4 +1,4 @@
-// Settings › Security › Linear (#1444, spec §10.3's width table), in a real Chrome over the production build, at the
+// Settings › Integrations › Linear (#1444, spec §10.3's width table), in a real Chrome over the production build, at the
 // widths `accounts-open.browser.test.ts` uses (360, 390, 1280 and 1920), in both skins, light and dark, with one, three
 // and twelve workspaces, the first of them a workspace of forty teams with a long name, and the legacy row.
 // `test/linear-section.test.tsx` holds the card's behaviour in jsdom; this file holds what only an engine can say, row by
@@ -35,7 +35,7 @@ const VIEWS: AppView[] = SKINS.flatMap((skin) => THEMES.flatMap((theme) => WIDTH
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
 const bandOf = (width: number): LinearBand => (width < 900 ? 'phone' : width >= 1600 ? 'wide' : 'laptop');
 
-const TITLE = SETTINGS_CARDS.security.linear.title;
+const TITLE = SETTINGS_CARDS.integrations.linear.title;
 const NOW = Date.now();
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const LONG_NAME = 'Workspace with a deliberately long name that has to wrap on a phone screen';
@@ -161,7 +161,7 @@ const tabWalk = async (page: Page, title: string): Promise<{ controls: number; r
   return { controls, reached: seen.size };
 };
 
-describe('Settings › Security › Linear at every width (spec §10.3)', () => {
+describe('Settings › Integrations › Linear at every width (spec §10.3)', () => {
   for (const view of VIEWS) {
     it(named(view), async () => {
       const band = bandOf(view.width);
@@ -180,7 +180,7 @@ describe('Settings › Security › Linear at every width (spec §10.3)', () => 
       try {
         for (const n of [12, 3, 1]) {
           count = n;
-          await page.goto(server!.origin + '/settings/security');
+          await page.goto(server!.origin + '/settings/integrations');
           const section = page.getByRole('region', { name: TITLE });
           await expect.poll(() => section.locator('[data-linear="row"]').count(), { timeout: 20_000 }).toBe(n + 1);
           const m = await section.evaluate(measure);

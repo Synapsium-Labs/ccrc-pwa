@@ -12,7 +12,7 @@
 // never a seed: the grammar is the provider's convention, not a contract, so an id that breaks it is ignored
 // rather than guessed at. A class follows ONE family and moves only forwards, to the newest eligible model of it,
 // except when its pin has left a fresh catalogue.
-import { CLASSES, MODEL_ID_RE, resolveDiscovery } from './models.mjs';
+import { CLASSES, MODEL_ID_RE, RegistryInvalid, parseRegistry, resolveDiscovery } from './models.mjs';
 
 /** Every reason a lane or a class cannot advance, the words `model-advance-blocked` names. `chooseCandidate`
  *  answers the two that are a fact about one class; the others are facts about a lane's files, its kind or its
@@ -26,7 +26,28 @@ export const BLOCKED_CAUSES = Object.freeze([
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
   'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
+  // Programme wave 3 (backward-move, effort-level-dropped; D-8838, D-8842): a class waiting out `RETIRE_GRACE_MS` on a
+  // pin its fresh catalogue no longer lists; a registry still refused for a stored effort level its model no longer
+  // offers (`effortFallbacks`, until the hourly refresh writes the fallback); and a class running at the fallback the
+  // refresh recorded (`effortFallbackOf`). `advance-health` answers them; no file holds them, so an older build never
+  // reads any of the three words.
+  'pin-missing', 'effort-dropped', 'effort-fallback',
 ]);
+
+/** The shortest span of CONTINUOUS fresh sightings of the same missing pin before its class moves `retired`
+ *  (programme wave 3, backward-move, D-8838): six hours of the catalogue's own observation times (`fetchedAt`), never
+ *  wall time spent blind. Measured 2026-11-10: one lane's fresh catalogue left out a current pin for about two hours
+ *  and listed it again, and the class moved to an older model and back, each move behind a passing canary. The
+ *  hourly refresh observes about once an hour (its timer, plus however long the first pass takes), so the span is
+ *  six to seven hourly sightings. A pin that is gone for good is still retired (D-5199), six hours late; a newer
+ *  model never waits (`newer`). It is a backstop against a short absence, whatever caused it; it is not a finding
+ *  about why a catalogue was short. The class records the run of sightings as its `missing` (`markMissing`). */
+export const RETIRE_GRACE_MS = 6 * 3_600_000;
+
+/** The longest gap between two fresh sightings that still continues a run of them (D-8838): one hourly refresh plus
+ *  half an hour of slack, never two. A longer gap, from a missed hour, a failed probe or a stale catalogue, restarts
+ *  the run at the next sighting, so hours the lane was not observed never count toward `RETIRE_GRACE_MS`. */
+export const RETIRE_GAP_MS = 90 * 60_000;
 
 /** Why `chooseCandidate` named its candidate, the three words its `reason` takes: `newer` (a model strictly newer
  *  than the pin), `retired` (the pin left a fresh catalogue, the one move that may go to an OLDER version) and
@@ -103,22 +124,72 @@ export function eligibleIds(registry, catalogue) {
  *     never a candidate until one of its ids leaves the catalogue. Only ELIGIBLE ids make a tie: a hidden twin,
  *     or one outside the discovery list, unties the other.
  *  5. Then, among the untied ids that neither this class nor another pins: an EMPTY class takes the newest
- *     (`empty`); a pin the catalogue no longer lists takes the newest (`retired`, the one move that may go to
- *     an older version) but only on a catalogue that is fresh, because absence from a stale one is not evidence
- *     (D-5199); otherwise the newest STRICTLY newer than the pin (`newer`). A pin the catalogue lists HIDDEN is
- *     listed, so it is never retired.
+ *     (`empty`); a pinned class takes the newest STRICTLY newer than its pin (`newer`), and on a FRESH catalogue
+ *     whether or not it still lists the pin, so a newer model never waits (D-8839); a pin a STALE catalogue does not
+ *     list gets nothing, as before, because absence from a stale one is not evidence (D-5199). Failing a newer
+ *     model, a pin a fresh catalogue no longer lists takes the newest left (`retired`, the one move that may go to an
+ *     older version), and only once `retireDue` holds (programme wave 3, backward-move, D-8838): `missing`, the
+ *     class's record of its run of sightings (`markMissing`), names this pin, its last sighting is this catalogue's
+ *     own observation time (so a sighting whose record was never written proposes nothing), and the run spans at
+ *     least `RETIRE_GRACE_MS`. Until then the class waits (`pinMissing` names it). A pin the catalogue lists HIDDEN
+ *     is listed, so it is never retired.
  * Another class's pin is excluded in step 5 as well as tested in step 3, and a case pins it: when the family's
  * newest version is a tie of two ids nobody pins, step 3 stays quiet, and only the exclusion keeps a class off
  * the older id another class holds.
- * THE STALE GATE HERE COVERS THE RETIRED FALLBACK ONLY. On a stale catalogue this function still names a `newer`
- * or an `empty` candidate; the rule that nothing advances on a stale catalogue at all
+ * THE STALE GATE HERE COVERS A PIN THE CATALOGUE DOES NOT LIST ONLY. On a stale catalogue this function still names
+ * a `newer` candidate for a pin it lists, or an `empty` one; the rule that nothing advances on a stale catalogue at all
  * (D-5199) is the ops' — `advance-plan` answers `why: catalogue-stale`, and
  * `advance-commit` abandons with it (W2 Tasks 8 and 9). A case pins this split, so neither half is "fixed" alone.
  */
-export function chooseCandidate({ registry, catalogue, cls, family }) {
+export function chooseCandidate({ registry, catalogue, cls, family, missing, nowMs }) {
+  const r = choose({ registry, catalogue, cls, family });
+  if (r.older === undefined) return r.choice;
+  return retireDue({ registry, catalogue, cls, missing, nowMs })
+    ? { ...r.choice, candidate: r.older, reason: 'retired' } : r.choice;
+}
+
+/** `(catalogue) => 'YYYY-MM-DDTHH:MM:SSZ' | null`: when a FRESH catalogue was observed, its `fetchedAt` (whole epoch
+ *  seconds, the probe's) in the advance file's time form; null for a stale or absent catalogue, or a `fetchedAt` that
+ *  is not a time a `Date` holds (D-8838: an unmeasured time is no sighting). */
+export function observedAt(catalogue) {
+  if (catalogue === null || catalogue === undefined || catalogue.stale) return null;
+  return isoSeconds(catalogue.fetchedAt * 1000);
+}
+
+/** Whether a class's run of sightings of its missing pin has qualified it to move `retired` (D-8838): the record names
+ *  the pin and has a last sighting (`seen`; a record of the original shape has none, so it never qualifies), that
+ *  sighting is this catalogue's own observation (`observedAt`), it is not later than `nowMs` (a future time never
+ *  qualifies), and the run from `since` to `seen` spans at least `RETIRE_GRACE_MS`. Every comparison is written as one
+ *  that HOLDS, so a time that does not parse fails it. */
+export function retireDue({ registry, catalogue, cls, missing, nowMs }) {
+  const t = observedAt(catalogue);
+  return t !== null && isObj(missing) && missing.model === registry.classes[cls] && isAt(missing.since)
+    && missing.seen === t && Date.parse(t) <= nowMs && Date.parse(t) - Date.parse(missing.since) >= RETIRE_GRACE_MS;
+}
+
+/** `({registry, catalogue, cls, missing, nowMs}) => {model, since, until, older} | null`: the class `chooseCandidate`
+ *  holds back on a missing pin (programme wave 3, backward-move, D-8838). Its pin is not listed by a FRESH catalogue,
+ *  no model newer than the pin is free, and `older`, the newest model left in its family, is the `retired` move the
+ *  grace has not yet allowed. `since` is when the class's current run of sightings began (`missing`, when it names
+ *  this pin and records a last sighting; null when nothing has recorded a run yet), and `until` the EARLIEST the move
+ *  can come, if every hourly sighting until then misses the pin (null with no `since`). Null on every other class, a
+ *  class `retireDue` has qualified included: `chooseCandidate` names its move. Pure. */
+export function pinMissing({ registry, catalogue, cls, missing, nowMs }) {
+  const r = choose({ registry, catalogue, cls, family: null });
+  if (r.older === undefined || retireDue({ registry, catalogue, cls, missing, nowMs })) return null;
+  const pin = registry.classes[cls];
+  const run = isObj(missing) && missing.model === pin && isAt(missing.since) && isAt(missing.seen);
+  return { model: pin, since: run ? missing.since : null,
+    until: run ? isoSeconds(Date.parse(missing.since) + RETIRE_GRACE_MS) : null, older: r.older };
+}
+
+/** The family rule's steps 1 to 5 (`chooseCandidate`'s comment), with the `retired` fallback held apart: `choice` is
+ *  the answer with no retirement, and `older` the id a retirement would take, present only when the pin is not listed
+ *  by a fresh catalogue and no newer model is free. */
+function choose({ registry, catalogue, cls, family }) {
   const none = { candidate: null, reason: null, blocked: null };
   const pin = registry.classes[cls] ?? null;
-  if (pin !== null && parseModelId(pin) === null) return { ...none, blocked: 'pin-grammar' };
+  if (pin !== null && parseModelId(pin) === null) return { choice: { ...none, blocked: 'pin-grammar' } };
   const fam = pin !== null ? familyOf(pin) : family;   // D-5992: step 1 has refused a pin familyOf cannot read
   const inFamily = [];
   for (const id of eligibleIds(registry, catalogue)) {
@@ -129,19 +200,85 @@ export function chooseCandidate({ registry, catalogue, cls, family }) {
     .filter((v) => v !== null && v !== undefined));
   const topVersion = inFamily.reduce((v, m) => (v === null || compareVersions(m.version, v) > 0 ? m.version : v), null);
   if (topVersion !== null && inFamily.some((m) => compareVersions(m.version, topVersion) === 0
-      && m.id !== pin && otherPins.has(m.id))) return { ...none, blocked: 'shared-family' };
+      && m.id !== pin && otherPins.has(m.id))) return { choice: { ...none, blocked: 'shared-family' } };
   const untied = inFamily.filter((m) => inFamily.filter((o) => compareVersions(o.version, m.version) === 0).length === 1);
   const newestFirst = [...untied].sort((x, y) => compareVersions(y.version, x.version));
   const free = newestFirst.filter((m) => m.id !== pin && !otherPins.has(m.id));
-  if (pin === null) return free.length > 0 ? { ...none, candidate: free[0].id, reason: 'empty' } : none;
-  const listed = catalogue !== null && catalogue !== undefined && catalogue.models.some((m) => m.id === pin);
-  if (!listed) {
-    if (catalogue === null || catalogue === undefined || catalogue.stale) return none;
-    return free.length > 0 ? { ...none, candidate: free[0].id, reason: 'retired' } : none;
-  }
+  if (pin === null) return { choice: free.length > 0 ? { ...none, candidate: free[0].id, reason: 'empty' } : none };
+  if (catalogue === null || catalogue === undefined) return { choice: none };   // never probed: nothing is eligible
+  const listed = catalogue.models.some((m) => m.id === pin);
+  if (!listed && catalogue.stale) return { choice: none };   // D-5199: absence from a stale catalogue is no evidence
   const pinVersion = parseModelId(pin).version;
   const newer = free.filter((m) => compareVersions(m.version, pinVersion) > 0);
-  return newer.length > 0 ? { ...none, candidate: newer[0].id, reason: 'newer' } : none;
+  if (newer.length > 0) return { choice: { ...none, candidate: newer[0].id, reason: 'newer' } };
+  if (listed || free.length === 0) return { choice: none };
+  return { choice: none, older: free[0].id };
+}
+
+/** `({registry, catalogue, cls, family, missing, nowMs}) => {candidate, reason, blocked, effortTo, canaryEffort}`: one
+ *  class's candidate this hour (`chooseCandidate`) and the two effort levels that go with it (auto-advance spec §2.2
+ *  to §2.3): `effortTo`, the level the class would carry on the candidate (`resolveEffort`, ranked by its pin's own
+ *  row, D-5200; null: none), and `canaryEffort`, the lowest level the candidate lists (null: it lists none). Both null
+ *  with no candidate. ONE computation for `advance-plan`, which reports it before the canary, and `advance-commit`,
+ *  which re-checks it under the lock after the canary and writes its `effortTo`, so the level a plan names and the
+ *  level a commit writes cannot differ. `family` is the class's stored family, which `chooseCandidate` reads for an
+ *  EMPTY class only (D-5992); `missing` and `nowMs` are its grace on a missing pin. Moved here from
+ *  `deploy/models-op.mjs` (programme wave 3), where it was the op's own; it is pure. */
+export function candidateFor({ registry, catalogue, cls, family, missing, nowMs }) {
+  const choice = chooseCandidate({ registry, catalogue, cls, family, missing, nowMs });
+  if (choice.candidate === null) return { ...choice, effortTo: null, canaryEffort: null };
+  const rowOf = (id) => catalogue.models.find((m) => m.id === id);
+  const pin = registry.classes[cls];
+  const next = rowOf(choice.candidate);
+  const prev = pin === null ? undefined : rowOf(pin);
+  const newEfforts = next === undefined ? [] : next.efforts;
+  return {
+    ...choice,
+    effortTo: resolveEffort({
+      stored: isObj(registry.effort) ? registry.effort[cls] : undefined,
+      oldEfforts: prev === undefined ? null : prev.efforts,
+      newEfforts,
+    }) ?? null,
+    canaryEffort: canaryEffort(newEfforts),
+  };
+}
+
+/** `(adv, registry, catalogue, nowMs) => {advance, changed}`: each pinned class's `missing`, its run of sightings of
+ *  a missing pin `{model, since, seen}`, brought up to date with one catalogue (programme wave 3, backward-move,
+ *  D-8838). Only a FRESH catalogue with a measured observation time (`observedAt`) is a sighting: a stale or absent
+ *  catalogue changes nothing either way.
+ *   - A listed pin, or an empty class, loses its record, so a listed-again read ends the run.
+ *   - A sighting later than `nowMs` is unmeasured: it starts or continues no run.
+ *   - The same sighting twice (one catalogue read again) changes nothing.
+ *   - A pin the catalogue does not list continues its run (`seen` moves to the sighting) when the record names that
+ *     pin, has a last sighting, that sighting is earlier, and the gap is at most `RETIRE_GAP_MS`. Anything else
+ *     restarts the run at this sighting: no record, one naming another model, one of the original shape (no `seen`),
+ *     a gap past `RETIRE_GAP_MS` (a missed interval, or a clock that jumped forward), or a sighting earlier than the
+ *     last one (a clock that went back).
+ *  `changed` says whether the file would differ. The one writer is the hourly refresh's `materialise`, under the lane
+ *  lock, after every successful probe and before the advance step reads the record; every other writer keeps the key
+ *  as it keeps any unknown one. */
+export function markMissing(adv, registry, catalogue, nowMs) {
+  const t = observedAt(catalogue);
+  if (t === null) return { advance: adv, changed: false };
+  const tMs = Date.parse(t);
+  const next = copy(adv);
+  let changed = false;
+  for (const cls of CLASSES) {
+    const pin = registry.classes[cls] ?? null;
+    const c = next.classes[cls];
+    const m = c.missing;
+    if (pin === null || catalogue.models.some((row) => row.id === pin)) {
+      if (m !== undefined) { delete c.missing; changed = true; }
+      continue;
+    }
+    if (!(tMs <= nowMs) || (isObj(m) && m.model === pin && m.seen === t)) continue;
+    const run = isObj(m) && m.model === pin && isAt(m.since) && isAt(m.seen) && Date.parse(m.seen) < tMs
+      && tMs - Date.parse(m.seen) <= RETIRE_GAP_MS;
+    c.missing = { model: pin, since: run ? m.since : t, seen: t };
+    changed = true;
+  }
+  return { advance: changed ? next : adv, changed };
 }
 
 /**
@@ -161,6 +298,62 @@ export function resolveEffort({ stored, oldEfforts, newEfforts }) {
   }
   return newEfforts[0]; // the model's lowest: the list is lowest first (see `canaryEffort`)
 }
+
+/** `(json, catalogue) => {registry, fallbacks} | null` (programme wave 3, effort-level-dropped, D-8842): a class
+ *  registry `parseRegistry` refuses ONLY because a stored effort level is one its class's model no longer offers, read
+ *  with each such level replaced by `resolveEffort`'s fallback, ranked by a catalogue row that still lists the stored
+ *  level (D-5991's rule, as `revert` ranks it). Usually the next level down that the model offers (`max` on a model
+ *  now offering up to `xhigh` becomes `xhigh`); with nothing below it offered, or no row listing it, the model's
+ *  LOWEST, which can rank above the stored level. The new level is always one the model offers. `fallbacks` is one
+ *  `{class, model, from, to}` per class that falls back, `CLASSES` order. Null for a registry that parses as it is,
+ *  one refused for any other reason, or one still refused after the fallback: those are `registry-invalid` as before.
+ *  Pure: the caller writes. */
+export function effortFallbacks(json, catalogue) {
+  const field = (fn) => { try { fn(); return null; } catch (e) { if (e instanceof RegistryInvalid) return e; throw e; } };
+  if (field(() => parseRegistry(json, catalogue)) === null || !isObj(json) || !isObj(json.effort) || !isObj(json.classes)) {
+    return null;
+  }
+  const rows = catalogue?.models ?? [];
+  const next = copy(json);
+  const fallbacks = [];
+  for (const cls of CLASSES) {
+    const from = next.effort[cls];
+    const row = rows.find((m) => m.id === next.classes[cls]);
+    if (typeof from !== 'string' || row === undefined || row.efforts.length === 0 || row.efforts.includes(from)) continue;
+    const ranker = rows.find((m) => m.efforts.includes(from));
+    const to = resolveEffort({ stored: from, oldEfforts: ranker?.efforts ?? null, newEfforts: row.efforts });
+    next.effort[cls] = to;
+    fallbacks.push({ class: cls, model: row.id, from, to });
+  }
+  let registry = null;
+  if (fallbacks.length === 0 || field(() => { registry = parseRegistry(next, catalogue); }) !== null) return null;
+  return { registry, fallbacks };
+}
+
+/** A class's effort level in a registry copy the caller is building (`next`, edited in place and returned): set to
+ *  `level`, or removed for null, the `effort` map dropped once that was its last entry. ONE rule for every op that
+ *  moves a level: `revert`, `advance-commit` and `set-effort` (moved here from `deploy/models-op.mjs`, programme wave 3). */
+export function withEffort(next, cls, level) {
+  if (level === null) {
+    if (isObj(next.effort)) {
+      delete next.effort[cls];
+      if (Object.keys(next.effort).length === 0) delete next.effort;
+    }
+  } else {
+    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [cls]: level };
+  }
+  return next;
+}
+
+/** A history `reason` as the advance file's reader accepts it (plan §3.1):
+ *  printable ASCII, at most `REASON_MAX` characters, the number `parseAdvance`
+ *  holds every reason to. Every reason `deploy/models-op.mjs` records passes
+ *  through it (moved here from that file, programme wave 3), the canary's
+ *  (`--reason`) and its own, because one the reader refused would make the
+ *  whole advance file unreadable, and every later advance on the lane blocked
+ *  behind it. */
+export const historyReason = (text) =>
+  String(text).replace(/[^\x20-\x7e]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, REASON_MAX);
 
 /** The canary's effort (§2.3 step 3): the lowest level the model offers, or null when it lists none.
  *  `efforts[0]` IS the lowest, here and in `resolveEffort`'s fallback: the probe keeps the provider's own order,
@@ -271,6 +464,8 @@ function checkPending(p) {
   if (p.cause !== undefined && !CANDIDATE_REASONS.includes(p.cause)) {
     bad('pending.cause', `is not one of ${CANDIDATE_REASONS.join(', ')}.`);
   }
+  // revert-ends-itself: the move ends the class's hold, so `reconcilePending` clears it with the move it records.
+  if (p.endsHold !== undefined && p.endsHold !== true) bad('pending.endsHold', 'is not true, or absent.');
 }
 
 /** What a file written from `value` would hold, and what its next reader would parse: `value`'s JSON round trip,
@@ -322,9 +517,34 @@ export function parseAdvance(input) {
       if (x.hold.model !== undefined && !(typeof x.hold.model === 'string' && MODEL_ID_RE.test(x.hold.model))) {
         bad(`${f}.hold.model`, 'is not a model id.');
       }
+      // The id a Revert moved the class away from (revert-ends-itself): the hold ends once something newer than it
+      // comes (`holdEnds`). Optional, so a hand hold and a hold an older build wrote still read; `holdFrom` derives it.
+      if (x.hold.from !== undefined && !(typeof x.hold.from === 'string' && MODEL_ID_RE.test(x.hold.from))) {
+        bad(`${f}.hold.from`, 'is not a model id.');
+      }
     }
     if (x.releasedAt !== undefined && !isAt(x.releasedAt)) {
       bad(`${f}.releasedAt`, 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
+    }
+    // The id an Anthropic lane's class was held at when a release lifted the hold, and that release's time (review 2964
+    // F4, D-8857): absent unless a release is waiting for the hourly refresh to record the alias move it lifted. An older
+    // reader keeps it as an unknown key.
+    if (x.releasedHold !== undefined && !(isObj(x.releasedHold) && typeof x.releasedHold.model === 'string'
+        && MODEL_ID_RE.test(x.releasedHold.model) && isAt(x.releasedHold.at))) {
+      bad(`${f}.releasedHold`, 'is not {"model": <id>, "at": <time of the form YYYY-MM-DDTHH:MM:SSZ>}.');
+    }
+    // Programme wave 3: the run of sightings of a missing pin (`markMissing`; `seen` optional, so a record of the
+    // first shape still reads, and restarts), and the effort fallback the refresh last wrote (`recordEffortFallbacks`).
+    // Optional, so every file written before reads; an older build keeps both.
+    const ms = x.missing;
+    if (ms !== undefined && !(isObj(ms) && isIdOrNull(ms.model) && ms.model !== null && isAt(ms.since)
+        && (ms.seen === undefined || isAt(ms.seen)))) {
+      bad(`${f}.missing`, 'is not {"model": <id>, "since": <time>, "seen": <time>}.');
+    }
+    const fb = x.effortFallback;
+    if (fb !== undefined && !(isObj(fb) && isAt(fb.at) && typeof fb.model === 'string' && MODEL_ID_RE.test(fb.model)
+        && isLevelOrNull(fb.from) && fb.from !== null && isLevelOrNull(fb.to) && fb.to !== null)) {
+      bad(`${f}.effortFallback`, 'is not {"at": <time>, "model": <id>, "from": <level>, "to": <level>}.');
     }
     if (x.previous !== null) {
       if (!isObj(x.previous)) bad(`${f}.previous`, 'is not null or {"model": <id|null>, "effort": <level|null>}.');
@@ -433,6 +653,9 @@ export function reconcilePending(adv, registry) {
     return { advance: next, recovered: true };
   }
   next.classes[p.class].previous = { model: p.from, effort: p.effortFrom };
+  // revert-ends-itself: an advance that ended the class's hold clears it in the write that records the move, a
+  // recovered one too, so a crash between the rename and the commit never leaves the hold on the moved class.
+  if (p.endsHold === true) next.classes[p.class].hold = null;
   const e = {
     at: p.at, how: 'advance', from: p.from, to: p.to, ok: true, canary: 'passed',
     ...(p.effortFrom !== p.effortTo ? { effort: { from: p.effortFrom, to: p.effortTo } } : {}),
@@ -449,6 +672,285 @@ export function heldBackOf(c, candidate) {
   const last = c.history[c.history.length - 1];
   return last !== undefined && candidate !== null && last.how === 'advance' && last.ok === false && last.to === candidate
     ? last : null;
+}
+
+// ── THE END OF A HOLD (programme model-class-advance, follow-up revert-ends-itself) ──────────────────────────────────
+// The owner's ruling: classes always advance, and a Revert holds its class only until a newer model appears. No hold
+// ends by a person's act any more; it ends when the evidence says so, and the writer that moves the class clears it in
+// the same write that records the move: the Codex arm's `advance-commit` (canary first, as for any move) and the
+// Anthropic arm's `aliases-refresh`. ONE decider for both arms (`holdEnds`), asked by those writers, by `advance-plan`
+// and by `advance-health`, which doctor reads; ONE reader of what a hold waits to be passed (`holdFrom`).
+
+/** `(evidenceAt, hold) => boolean`: whether a held class's id is UNOBSERVED against the hold standing now: a hold stands,
+ *  and the id rests on no evidence or on evidence older than the hold. Such an id says nothing about where the alias
+ *  went after the hold, so no reader names the class behind on it and no hold ends on it. The one rule: the aliases
+ *  resolver sets `unobserved` with it (`shared/model-aliases.mjs`, which re-exports it), and `holdEnds` asks it again of
+ *  the hold that stands at its read, since a `revert` writes a new hold without rewriting the aliases file. Here, beside
+ *  the decider, because `shared/model-aliases.mjs` imports this module and never the other way. */
+export function heldUnobserved(evidenceAt, hold) {
+  return hold !== undefined && hold !== null && (evidenceAt === null || evidenceAt < hold.at);
+}
+
+/** `(c, heldId, arm) => id | null`: the id a class's standing hold waits to be passed, or null. `c` is the class's
+ *  advance entry, `heldId` the id it is held at (a Codex lane's pin, an Anthropic lane's `hold.model`) and `arm` the
+ *  lane's kind (`'codex'`, the default, or `'alias'`). THE ONE READER of a hold's `from`, used by every caller:
+ *   1. the hold's own `from`, the id a Revert moved the class away from (the revert of either arm writes it, and the
+ *      hourly refresh stamps it on a revert hold that has none, `holdEnds`' `stamp`);
+ *   2. failing that, a HAND hold waits on the held id itself, so it ends at the next newer model;
+ *   3. failing that, a REVERT hold reads the class's history (call 469): on a Codex lane the newest successful `revert`
+ *      to the held id gives its `from`, ignoring same-id effort changes. On an Anthropic lane, which records no revert
+ *      entry, the newest successful move whose `from` is the held id gives its `to`, the model the Revert left;
+ *   4. failing that, null: unknown. The hourly refresh stamps the class's observed id when usable (`holdEnds`' `stamp`).
+ *      Null also with no hold. */
+export function holdFrom(c, heldId, arm = 'codex') {
+  const h = isObj(c) ? c.hold : null;
+  if (!isObj(h)) return null;
+  if (typeof h.from === 'string') return h.from;
+  if (h.by !== 'revert') return heldId ?? null;
+  const history = Array.isArray(c.history) ? c.history : [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const e = history[i];
+    if (!isObj(e) || e.ok !== true) continue;
+    if (arm !== 'alias' && e.how === 'revert' && e.to === heldId) {
+      if (typeof e.from !== 'string') break;
+      if (e.from !== e.to) return e.from;
+    }
+    if (arm === 'alias' && e.how === 'advance' && e.from === heldId && typeof e.to === 'string') return e.to;
+  }
+  return null;
+}
+
+/**
+ * `(input) => {ends, why, from, stamp?}`: whether a class's standing hold ends NOW. Pure. `ends` false with `why` null
+ * when no hold stands, and `from` is `holdFrom`'s answer, what the hold waits to be passed. Two arms, one per lane kind:
+ *  - `{arm: 'codex', c, pin, choice, retired}`: `pin` the class's registry pin (the held id), `choice` its
+ *    `chooseCandidate` answer this hour (the advance step's own computation, so the move a hold's end takes is the move
+ *    an unheld class would take) and `retired` whether the retire grace has passed on the pin (`retireDue`; callers ask
+ *    `codexHoldEnd`). A blocked class, or one with no candidate, waits. Once the held pin has been missing past the grace
+ *    (`retired`, or `choice.reason === 'retired'`), the hold ends whatever the candidate's reason (`why: 'retired'`,
+ *    call 469), even onto the model the Revert left: it is then the only runnable choice besides an older one, and the
+ *    canary still guards it. Otherwise it ends when the candidate is a model of `from`'s family NEWER than `from` by
+ *    `compareVersions` (`why: 'newer'`; a hand hold on an EMPTY class, with nothing to pass, ends at its first candidate).
+ *  - `{arm: 'alias', c, row}`: `row` the class's row of the lane's aliases file (null: none). An alias id has no version
+ *    order, so it ends when the alias names an id other than `from` and other than the held id (`hold.model`), the row
+ *    is one a launch can use (an id, not `unlaunchable`, not `unobserved`), and its evidence came after the hold began
+ *    (`heldUnobserved`, asked of the hold standing now) (`why: 'alias-moved'`). This arm assumes, as the resolver does,
+ *    that an alias moves only on newer evidence: an alias that moved to an OLDER third id would end the hold on it.
+ * Apart from the Codex retirement exception, a REVERT hold whose `from` nothing derives waits. The answer carries
+ * `stamp`: the class's current id (the Codex candidate, or a launchable alias id distinct from the held id), or null
+ * with none. The hourly refresh records it as `from` without ending the hold on that pass, in its existing locked
+ * write (`refreshRecord`, `aliases-refresh`; call 469). Later, the hold can end on a model newer than that (Codex)
+ * or a third id seen after it (Anthropic).
+ */
+export function holdEnds(input) {
+  const c = isObj(input) ? input.c : null;
+  const hold = isObj(c) ? c.hold : null;
+  if (!isObj(hold)) return { ends: false, why: null, from: null };
+  if (input.arm === 'alias') {
+    const held = typeof hold.model === 'string' ? hold.model : null;
+    const from = holdFrom(c, held, 'alias');
+    const row = input.row;
+    const usable = isObj(row) && typeof row.id === 'string' && row.unlaunchable === null;
+    if (held !== null && from === null) {
+      return { ends: false, why: null, from, stamp: usable && row.id !== held ? row.id : null };
+    }
+    const ends = held !== null && usable && row.unobserved !== true && !heldUnobserved(row.evidenceAt ?? null, hold)
+      && row.id !== from && row.id !== held;
+    return { ends, why: ends ? 'alias-moved' : null, from };
+  }
+  const pin = input.pin ?? null;
+  const from = holdFrom(c, pin);
+  const choice = input.choice;
+  const unknown = from === null && hold.by === 'revert';
+  if (!isObj(choice) || choice.blocked !== null || typeof choice.candidate !== 'string') {
+    return { ends: false, why: null, from, ...(unknown ? { stamp: null } : {}) };
+  }
+  if (choice.reason === 'retired' || input.retired === true) return { ends: true, why: 'retired', from };
+  if (unknown) return { ends: false, why: null, from, stamp: choice.candidate };
+  if (from === null) return { ends: true, why: 'newer', from };
+  const was = parseModelId(from);
+  const next = parseModelId(choice.candidate);
+  const ends = was !== null && next !== null && was.family === next.family && compareVersions(next.version, was.version) > 0;
+  return { ends, why: ends ? 'newer' : null, from };
+}
+
+/** `({registry, catalogue, cls, c, choice, nowMs}) => HoldEnd`: `holdEnds`' Codex arm for one class, with its pin and
+ *  whether the retire grace has passed on it (`retireDue`, the grace an unheld class waits out) read from the class's own
+ *  files, so every Codex caller (`advance-plan`, `advance-commit`, `advance-health`, the refresh's stamp) asks alike. */
+export function codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs }) {
+  return holdEnds({ arm: 'codex', c, pin: registry.classes[cls] ?? null, choice,
+    retired: isObj(c) && retireDue({ registry, catalogue, cls, missing: c.missing, nowMs }) });
+}
+
+/** The longest a hold whose end has come may still stand before `advance-health` reports it (`heldBehind`'s `due`): one
+ *  hourly refresh plus half an hour of slack, the span `RETIRE_GAP_MS` already measures between two of the refresh's
+ *  sightings. The refresh that sees the end acts on it; a hold standing this long past that sighting is one the
+ *  refresh has not reached. Derived, never a second literal. */
+export const HOLD_END_WAIT_MS = RETIRE_GAP_MS;
+
+/** `(sinceAt, nowMs) => boolean`: whether a hold whose end came at `sinceAt` (the sighting that showed it) has stood past
+ *  `HOLD_END_WAIT_MS` by `nowMs`. A time that does not parse, or none, is never due. */
+export function holdEndDue(sinceAt, nowMs) {
+  return isAt(sinceAt) && Date.parse(sinceAt) + HOLD_END_WAIT_MS <= nowMs;
+}
+
+/** `(c, from, to, at) => Hold`: the hold a Codex `revert` writes, the act that set it last (D-5190, D-5206), naming what
+ *  the Revert moved the class away from (`from`) so it ends once a model newer than that comes. A re-run on a reverted
+ *  pin (D-5991) moves nothing, so it keeps what the hold it replaces waited for (`holdFrom`); an id equal to the held one
+ *  says nothing and is left out. */
+export function revertHold(c, from, to, at) {
+  const left = from !== to ? from : holdFrom(c, to);
+  return { at, by: 'revert', ...(left !== null && left !== to ? { from: left } : {}) };
+}
+
+/** `({registry, catalogue, cls, c, choice, to, nowMs}) => HoldEnd | null`: `advance-commit`'s question, asked under the
+ *  lane lock after the canary: null with no hold; else `codexHoldEnd`'s answer, which ends only on the very candidate
+ *  (`to`) the commit was planned on. */
+export function holdEndFor({ registry, catalogue, cls, c, choice, to, nowMs }) {
+  if (!isObj(c) || !isObj(c.hold)) return null;
+  const end = codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs });
+  return end.ends && choice.candidate === to ? end : { ...end, ends: false, why: null };
+}
+
+/** `(end, pin, to) => {reason?}`: what the history entry of a move that ended a hold says about why (none without one). */
+export function holdEndEntry(end, pin, to) {
+  if (end === null || !end.ends) return {};
+  return { reason: end.why === 'retired' ? `the hold ended: ${pin ?? 'none'} left the catalogue past its grace`
+    : `the hold ended: ${to} is newer than ${end.from ?? 'none'}` };
+}
+
+/** `({registry, catalogue, cls, c, choice, nowMs}) => {waiting} | {behind}`: one held Codex class's row for
+ *  `advance-health` (revert-ends-itself): `holdsWaiting`'s while its hold does not end (`from`, what it waits to be
+ *  passed, null for a revert hold the next refresh stamps), else `heldBehind`'s, with the candidate and its `reason`,
+ *  `from`, `since` (the fresh catalogue's observation that shows the end, `observedAt`, null on a stale one) and `due`
+ *  (`holdEndDue`). */
+export function holdReading({ registry, catalogue, cls, c, choice, nowMs }) {
+  const pin = registry.classes[cls] ?? null;
+  const end = codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs });
+  const hold = { at: c.hold.at, by: c.hold.by };
+  if (!end.ends) return { waiting: { class: cls, pin, hold, from: end.from } };
+  const since = observedAt(catalogue);
+  const reason = end.why === 'retired' ? 'retired' : choice.reason;
+  return { behind: { class: cls, pin, newer: choice.candidate, reason, hold, from: end.from, since,
+    due: holdEndDue(since, nowMs) } };
+}
+
+/** `(adv, cls, at, {alias}) => Advance`: the class's hold cleared, as the writer that moves it records the move (a copy;
+ *  the caller writes it in the write that records the move). An Anthropic lane's (`alias`) records the time as its
+ *  `releasedAt`, as a release does, so the sessions-behind reading counts its day from it, and drops any release
+ *  evidence (`releasedHold`): the move is recorded in this same write, so there is nothing left to settle. */
+export function endHold(adv, cls, at, { alias = false } = {}) {
+  const next = copy(adv);
+  const c = next.classes[cls];
+  c.hold = null;
+  if (alias) {
+    c.releasedAt = at;
+    delete c.releasedHold;
+  }
+  return next;
+}
+
+/** `(adv, fallbacks, at) => Advance`: each `effortFallbacks` row recorded on its class as `effortFallback`, `{at, model,
+ *  from, to}`, replacing the one before (programme wave 3, effort-level-dropped). Not a history entry: an older build's
+ *  `parseAdvance` refuses an entry `how` or `cause` it does not know, and would then read the whole file as invalid. */
+export function recordEffortFallbacks(adv, fallbacks, at) {
+  const next = copy(adv);
+  for (const f of fallbacks) next.classes[f.class].effortFallback = { at, model: f.model, from: f.from, to: f.to };
+  return next;
+}
+
+/** The class's recorded effort fallback while it still stands, or null (D-8842): the class still pins the model it was
+ *  recorded on, still carries the level it fell back to, and the catalogue's row for that model does not offer the old
+ *  level again. A move, a hand level (`set-effort` deletes the record, `clearEffortFallback`), or the old level offered
+ *  again ends it; the refresh deletes a record that no longer stands (`refreshRecord`), and never puts the old level
+ *  back over the one the class runs at. */
+export function effortFallbackOf(c, registry, cls, catalogue) {
+  const fb = isObj(c) ? c.effortFallback : undefined;
+  const level = isObj(registry.effort) ? registry.effort[cls] : undefined;
+  if (!(isObj(fb) && fb.model === registry.classes[cls] && fb.to === level)) return null;
+  const row = catalogue?.models.find((m) => m.id === fb.model);
+  return row !== undefined && row.efforts.includes(fb.from) ? null : fb;
+}
+
+/** `({registry, catalogue, cls, c, nowMs}) => [{cause, detail}]`: one class's programme wave 3 rows for
+ *  `advance-health`'s `blocked` list, in the op's words (D-8838, D-8842): `effort-fallback` while a recorded fallback
+ *  stands (`effortFallbackOf`), and `pin-missing` while an unheld class waits out its grace (`pinMissing`; a held class
+ *  is quiet about it, D-8840). `c` is the class's advance entry, or null. Pure. */
+export function classWaits({ registry, catalogue, cls, c, nowMs }) {
+  const rows = [];
+  const fb = effortFallbackOf(c, registry, cls, catalogue);
+  if (fb !== null) {
+    rows.push({ cause: 'effort-fallback', detail: `${fb.model} no longer offers effort ${fb.from}, so since ${fb.at} `
+      + `it runs at ${fb.to}, the fallback the hourly refresh chose` });
+  }
+  const gone = c !== null && c.hold !== null ? null : pinMissing({ registry, catalogue, cls, missing: c?.missing, nowMs });
+  if (gone !== null) {
+    rows.push({ cause: 'pin-missing', detail: `${gone.model} is missing from the lane's catalogue${gone.since === null
+      ? '' : ` since ${gone.since}`}; the class moves to ${gone.older}, an older model, once every hourly sighting has `
+      + `missed it for six hours (${gone.until === null ? 'counted from the next sighting the refresh records'
+      : `${gone.until} at the earliest`}), and any sighting that lists it again ends the wait` });
+  }
+  return rows;
+}
+
+/** `advance-health`'s detail for a registry still refused for a dropped level (`effort-dropped`, D-8842), one per
+ *  `effortFallbacks` row. `onDisk` when the caller measured the lane's effort file holding the fallback's rendering and
+ *  not the stored registry's (D-8865, review 3015 F1): the detail says what the file carries, never how it came to. */
+export const effortDroppedDetail = (f, onDisk = false) => `${f.model} no longer offers effort ${f.from}, so the lane's `
+  + `registry is refused until the hourly refresh writes the fallback, ${f.to}${onDisk ? '; the lane\'s effort file '
+  + 'already carries the fallback\'s levels, not the stored registry\'s' : ''}`;
+
+/** Why the automatic advance does not act on a lane that has a class registry, or null when it does (auto-advance
+ *  spec §2.2; D-5198). The first that applies:
+ *    - `lane-not-codex-kind`: only an `exec.kind: "codex"` row advances; an external row's tier, port and key are
+ *      not ccrc's to know;
+ *    - `probe-not-codex`: the family rule is the Codex lanes', so a registry whose probe is not `codex` never
+ *      advances.
+ *  A fact about the lane, never a refusal: each op of the advance step reports it as its `why`. ONE answer for all
+ *  of them, so they can never disagree about which lanes advance: `advance-backfill` and `advance-plan` call it, and
+ *  W2 Task 9's `advance-commit` calls it too. */
+export function advanceIneligible(account, registry) {
+  if (!(isObj(account.exec) && account.exec.kind === 'codex')) return 'lane-not-codex-kind';
+  if (registry.probe !== 'codex') return 'probe-not-codex';
+  return null;
+}
+
+/** `(adv, cls) => {advance, changed}`: the class's `effortFallback` deleted, after a hand `set-effort` on it succeeded
+ *  (any level, the one it already runs at included): the operator has chosen the level (D-8842). */
+export function clearEffortFallback(adv, cls) {
+  if (adv.classes[cls].effortFallback === undefined) return { advance: adv, changed: false };
+  const next = copy(adv);
+  delete next.classes[cls].effortFallback;
+  return { advance: next, changed: true };
+}
+
+/** `(adv, {registry, catalogue, fallbacks, nowMs}) => {advance, changed}`: what the hourly refresh's `materialise`
+ *  records on the lane's advance file after one probe (D-8838, D-8842), as one write: each class's run of sightings of
+ *  a missing pin (`markMissing`), each effort fallback it just wrote (`recordEffortFallbacks`, at the sighting's own
+ *  clock), the deletion of every recorded fallback that no longer stands (`effortFallbackOf`), and the `from` of each
+ *  revert hold that has none (`holdEnds`' `stamp`, revert-ends-itself, call 469), on a fresh catalogue only. Pure. */
+export function refreshRecord(adv, { registry, catalogue, fallbacks, nowMs }) {
+  const m = markMissing(adv, registry, catalogue, nowMs);
+  const next = recordEffortFallbacks(m.advance, fallbacks, isoSeconds(nowMs));
+  let changed = m.changed || fallbacks.length > 0;
+  const fresh = observedAt(catalogue) !== null;
+  for (const cls of CLASSES) {
+    const c = next.classes[cls];
+    if (c.effortFallback !== undefined && effortFallbackOf(c, registry, cls, catalogue) === null) {
+      delete c.effortFallback;
+      changed = true;
+    }
+    // revert-ends-itself (call 469): a revert hold whose `from` nothing derives gets the class's current candidate
+    // stamped as its `from` here, in this refresh's one locked write, and does not end on this pass.
+    const pin = registry.classes[cls] ?? null;
+    if (!fresh || !isObj(c.hold) || c.hold.by !== 'revert' || holdFrom(c, pin) !== null) continue;
+    const choice = chooseCandidate({ registry, catalogue, cls, family: c.family, missing: c.missing, nowMs });
+    const stamp = codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs }).stamp;
+    if (typeof stamp !== 'string') continue;
+    c.hold = { ...c.hold, from: stamp };
+    changed = true;
+  }
+  return { advance: changed ? next : adv, changed };
 }
 
 /** The class's newest entry that succeeded, of any kind, or null. */

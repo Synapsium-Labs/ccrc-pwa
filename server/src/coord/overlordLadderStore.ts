@@ -30,7 +30,7 @@ import type { ActorRefused, AuthorityAppender } from './overlordDesignationStore
 import type { ConsoleCaller, RecordedActor } from '../auth/callerIdentity.js';
 import { consoleSubject, isAccountGateOperator, isRecordedActor } from '../auth/attributionIdentity.js';
 import { authorityDirection, type OverlordAuthorityMove } from './overlordAuthority.js';
-import type { CurrentRung, LadderWriterRefusal } from './overlordLadder.js';
+import { LANE_RAISER_MAP, type CurrentRung, type LadderWriterRefusal } from './overlordLadder.js';
 import {
   LADDER_CAUSE_MAP, LADDER_DEFAULT_RUNG, isLadderCauseKey, isRung, rungRank,
   type LadderNotice, type Rung,
@@ -60,7 +60,23 @@ export type LadderWrite =
   | { readonly ok: false; readonly error: AuthorityAppendError | LadderWriterRefusal }
   | ActorRefused;
 
-export type BrakeActor = RecordedActor | ConsoleCaller;
+/** The server's own lanes that raise a latch (Table 7.5a's "raised by", for a row a lane raises). A lane is no caller: it has
+ *  no strength, so it is never an `ActorWire`, and it only ever brakes (renewal readings PR C, slug
+ *  lane-raises-the-latch-as-a-lane). Only `laneRaiser` makes one, frozen and remembered, so a structurally equal literal is
+ *  refused as a copy of a minted actor is. The row records the lane's name in `raisedBy`. The names are the ladder's
+ *  vocabulary (`overlordLadder.ts#LANE_RAISER_MAP`). */
+export type LaneRaiserName = keyof typeof LANE_RAISER_MAP;
+export interface LaneRaiser { readonly kind: 'lane'; readonly lane: LaneRaiserName }
+const LANE_RAISERS = new WeakSet<object>();
+export function laneRaiser(lane: LaneRaiserName): LaneRaiser {
+  if (!Object.hasOwn(LANE_RAISER_MAP, lane)) throw new Error('laneRaiser: not a lane that raises a latch');
+  const r: LaneRaiser = Object.freeze({ kind: 'lane', lane });
+  LANE_RAISERS.add(r);
+  return r;
+}
+const isLaneRaiser = (a: unknown): a is LaneRaiser => typeof a === 'object' && a !== null && LANE_RAISERS.has(a);
+
+export type BrakeActor = RecordedActor | ConsoleCaller | LaneRaiser;
 export interface RungMoveInput { from: Rung; to: Rung; actor: BrakeActor; at: number; opKey: string }
 export interface LatchRaiseInput { cause: string; cap: Rung; detail: string; raisedBy: BrakeActor; at: number; opKey: string }
 export interface LatchClearInput { cause: string; actor: RecordedActor; at: number; opKey: string }
@@ -72,6 +88,7 @@ export function ladderActor(actor: unknown, direction: 'brake' | 'widen'): { ok:
     return isAccountGateOperator(actor) ? { ok: true, subject: actor.subject } : { ok: false, reason: 'actor' };
   }
   if (isRecordedActor(actor)) return { ok: true, subject: actor.subject };
+  if (isLaneRaiser(actor)) return { ok: true, subject: actor.lane };
   // A brake takes the console's answer through its one mapping (`consoleSubject`, gates B): an answer the port did not make,
   // or a kind it does not know, refuses.
   const subject = consoleSubject(actor);

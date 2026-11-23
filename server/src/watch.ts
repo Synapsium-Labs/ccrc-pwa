@@ -106,7 +106,7 @@ import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
 import { BuildCaptureLane } from './buildCaptureLane.js';
 import { PoolSetLossLane } from './poolSetLossLane.js';
-import type { HostPressureHealth } from '../../shared/pressure.js';
+import type { HostMachineReading, HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-durability.js';
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
@@ -309,6 +309,7 @@ import {
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor, workerFactsFor } from './turnverdict.js';
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
+import { readLaneModels } from './laneModels.js';
 import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
@@ -1390,7 +1391,7 @@ export class FleetWatcher {
    *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   /** The automatic coordinator roll's journal throttle (D-7452). Its clock and single flight are the `rollIdle` row. */
-  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map() };
+  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map() };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -2132,6 +2133,10 @@ export class FleetWatcher {
 
   /** `FleetHealth.psi` (#1170), with the link as the route reads it; `null` before the first ask (absence is UNKNOWN). */
   pressure(linkUp: boolean): HostPressureHealth | null { return this.pressureLane.block(linkUp); }
+  /** D-8920: the fleet host's size as the pressure beat last measured it, which the automatic run cap is
+   *  derived from (`coord/dispatch.ts#capNow`). ONE reading for the dispatch door, the send-back door, the caps view and
+   *  the admission wake. Issues no read. */
+  hostMachine(): HostMachineReading { return this.pressureLane.machineReading(); }
   /** The host-pressure beat (#1170). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
   async sweepPressure(): Promise<void> { await this.pressureLane.sweep(); }
   /** `FleetHealth.backup` (D-7858); `null` before the first read landed (absence is UNKNOWN). */
@@ -2531,6 +2536,9 @@ export class FleetWatcher {
           liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
           processStartedAt: (rec) => processStartedAtFor(reads, rec),
           readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
+          // Typed-repick: an Anthropic lane's models, read only for a session past every other gate (rollLane.ts).
+          laneModels: (lane) => readLaneModels(this.deps.io, this.deps.cfg.ccrcDir, lane),
+          anthropicLane: (lane) => this.deps.cfg.roster.byId.get(lane)?.telemetry === 'anthropic',
           log: (line) => console.warn(line),
           startedAt: this.sleepStartedAt, now: Date.now,
           act: {
@@ -2589,7 +2597,8 @@ export class FleetWatcher {
     if (!this.primed || !coord) return;
     const turnReads = turnReadDeps(this.deps, this);
     await this.runLane('admissionWake', () => admissionWakePass({ coord, names, serial: this.stopDoneSerial,
-      workerFacts: (sid) => workerFactsFor(turnReads, sid), freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
+      workerFacts: (sid) => workerFactsFor(turnReads, sid), hostMachine: () => this.hostMachine(),
+      freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
       push: (n) => this.pushOne(n, this.activeProjects), warn: (line) => console.warn(line) }));
   }
 
@@ -6292,7 +6301,7 @@ export class FleetWatcher {
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
       const pass = generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
-        log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries }, {
+        log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries, latch: w1.latch }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child,
           precompact: r.route === null ? null : r.route.unreadable.includes('precompact') ? 'unread' : r.route.fields.precompact ?? null })),

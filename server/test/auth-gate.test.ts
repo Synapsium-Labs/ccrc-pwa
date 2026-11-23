@@ -764,10 +764,13 @@ describe('the scanner is looking at something', () => {
     // the HTTP half 288 -> 291, the gated count stays 183 (291 - 108), the exempt-HTTP count 105 -> 108.
     // 295 since review 3232's withdraw door, `POST /api/continuity/quiz-runs/:id/withdraw`, session-gated (the account gate,
     // no step-up) and NOT EXEMPT: the HTTP half 291 -> 292, the gated count 183 -> 184, the exempt-HTTP count stays 108.
-    // 298 since the Overlord's inbox doors (Overlord W1, inbox piece), in `coord/overlordInboxRoutes.ts`, a routes file of its own:
+    // 297 since Confirm the restore (Overlord W1, authority journal C), in `coord/overlordRoutes.ts`: `GET /api/overlord/restore`
+    // and `POST /api/overlord/restore/confirm`, each session-gated (the account gate, the door with a step-up) and NOT EXEMPT: the
+    // HTTP half 292 -> 294, the gated count 184 -> 186, the exempt-HTTP count stays 108.
+    // 300 since the Overlord's inbox doors (Overlord W1, inbox piece), in `coord/overlordInboxRoutes.ts`, a routes file of its own:
     // `GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and `POST /api/overlord/messages/:id/acknowledge`, three box-token
-    // machine lanes IN EXEMPT: the HTTP half 292 -> 295, the gated count stays 184 (295 - 111), the exempt-HTTP count 108 -> 111.
-    expect(ROUTES.length).toBe(298);
+    // machine lanes IN EXEMPT: the HTTP half 294 -> 297, the gated count stays 186 (297 - 111), the exempt-HTTP count 108 -> 111.
+    expect(ROUTES.length).toBe(300);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
@@ -957,7 +960,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 298 scanned + the static wildcard when the bundle is built.
+    // 300 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1667,6 +1670,9 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     'POST /api/overlord/account-set', 'POST /api/overlord/model',
     // Clearing a latch always asks the account gate, unlike lowering or Pause.
     'POST /api/overlord/latches/:cause/clear',
+    // Confirm the restore (authority journal C): the read and the door each ask the account gate with `cap: null` (the door with a
+    // step-up), so dark each answers `auth-off` (501): BY DESIGN.
+    'GET /api/overlord/restore', 'POST /api/overlord/restore/confirm',
     // The decision-model doors' five writes (Overlord W2, decision model B): each takes the account gate with `cap: null`, so dark
     // each answers `auth-off` (501); armed with a session the arm, key PUT, and a widening off or ceiling ask the step-up first, and
     // the rest reach their handler, which with no coordination store answers `not-configured`: BY DESIGN. The read is not here.
@@ -1680,7 +1686,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     'POST /api/continuity/quiz-runs/:id/withdraw',
   ]);
 
-  it('FLAG_AWARE is exactly those thirty-three — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those thirty-five — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1703,6 +1709,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'DELETE /api/programmes/:slug/secrets/:slot',
       'GET /api/auth/passkeys',
       'GET /api/overlord/designation',
+      'GET /api/overlord/restore',
       'POST /api/accounts/revoke-ack',
       'POST /api/auth/login',
       'POST /api/auth/logout',
@@ -1724,6 +1731,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/overlord/designate',
       'POST /api/overlord/latches/:cause/clear',
       'POST /api/overlord/model',
+      'POST /api/overlord/restore/confirm',
       'PUT /api/decision-model/key',
       'PUT /api/items/:id/secret',
       'PUT /api/linear/connection',
@@ -1736,7 +1744,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 295 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 297 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1800,7 +1808,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 295 HTTP routes, not the 111 exempt.
+          //    is not itself flag-aware — the assertion that covers all 297 HTTP routes, not the 111 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)
