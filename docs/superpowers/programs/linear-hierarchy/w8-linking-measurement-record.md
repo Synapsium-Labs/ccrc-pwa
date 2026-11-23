@@ -15,7 +15,7 @@ a new paragraph "What the operator's save stores as the workspace") now state th
 | A workspace named | It must hold the key, else `team-unknown`, as with no workspace connected; a named slot that cannot be read is `unavailable`, nothing written |
 | Omitted, unchanged key | The stored choice, a stored none included; the store is not read |
 | Omitted, changed key | A stored workspace while it holds the new key (`unavailable` while it cannot be read); otherwise as none named |
-| None named (omitted as above, or explicit `null`, which reads the store with the unchanged key too) | The one connected workspace that holds the key; two holders `team-ambiguous`; any slot the answer depends on unread, while two readable ones do not already hold the key, `unavailable`, nothing written; a key no connected workspace holds, every one read, or no workspace connected, stored with none |
+| None named (omitted as above, or explicit `null`, which reads the store with the unchanged key too) | The one connected workspace that holds the key; two holders `team-ambiguous`; a store that cannot be read, or any slot the answer depends on unread while two readable ones do not already hold the key, `unavailable`, nothing written; a key no connected workspace holds, every one read, or no workspace connected, stored with none |
 | The keep of a stored none (review 2971 F2, review 3286 F1) | A row stored with no workspace keeps that none, with its evidence, when its unchanged key is sent back and one readable workspace holds it: named (another unread slot does not undo it) or not (every slot read). Only two readable holders undo it |
 | A cleared key | Stores none; a workspace named with no key is `team-unknown` |
 
@@ -68,6 +68,12 @@ the Overlord as one of the Overlord spec's Table 11.6 groups. `TEAM_CONFIRM_REFU
 programme's plan), not an Overlord group of that table, and none of its door-specific words is in the table, so its comment
 names the door and its guard, not the Overlord. Registering it would need rows in the Overlord spec's table, which is not this
 wave's.
+
+**Review (a Sonnet per-task reviewer, read only):** no blocking finding; every stated case traced against the code. Two nits
+folded: the none-named case names an unreadable store, and the scan guard's header states its width (calls counted by name,
+so an inline send, another helper or an alias is not seen; a decider read by its declared words). One left: a named
+workspace may also read as unmeasured when the legacy slot is unreadable and no file slot has that id; the sentences say "a
+named workspace that cannot be read", which covers it loosely.
 
 ## Runs
 

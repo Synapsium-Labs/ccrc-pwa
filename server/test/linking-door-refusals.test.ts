@@ -3,7 +3,9 @@
 // (`refuseSuggest`, `refuseConfirm` in `routes.ts`), so a word outside its list is a compile error; this file holds the other
 // direction, read from the handler's parsed calls (`scan/symbols.ts`), never from its text: every word the list names is one
 // the handler can answer, and the handler reaches no refusal past its refuser except the words it passes through from the box
-// token and the attribution check. The guides read the same lists (`coordinator-plan-reference.test.ts` for the suggest
+// token and the attribution check. Its width: it counts calls of `refuseSuggest`, `refuseConfirm` and `refuseRoute` by name,
+// so an inline `reply.code(n).send(...)` (which `refusal-status.test.ts` ratchets), another helper or an alias is not seen;
+// and a decider's answer is read as the words its declared return type names, not the ones its body returns. The guides read the same lists (`coordinator-plan-reference.test.ts` for the suggest
 // door, `overlord-skill.test.ts` for the confirm door), so a word added here reds the guide that does not name it.
 import { describe, expect, it } from 'vitest';
 import { TEAM_CONFIRM_REFUSALS, TEAM_SUGGEST_REFUSALS } from '../../shared/linking.js';

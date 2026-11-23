@@ -269,8 +269,9 @@ rule, so a suggestion's workspace is kept only as the write measures it:
 - The workspace omitted with a changed key: a stored workspace stays while it holds the new key, and is `unavailable`
   while it cannot be read; otherwise the write goes on as with none named.
 - None named (omitted as above, or an explicit `null`, which reads the store with the unchanged key too): the one connected
-  workspace that holds the key is stored; two holders are `team-ambiguous`; any workspace the answer depends on that cannot
-  be read, while two readable ones do not already hold the key, is `unavailable`, and nothing is written; a key no
+  workspace that holds the key is stored; two holders are `team-ambiguous`; a Linear store that cannot be read, or any
+  workspace the answer depends on that cannot be read while two readable ones do not already hold the key, is
+  `unavailable`, and nothing is written; a key no
   connected workspace holds, every one read, or no workspace connected at all, is stored with none.
 - A row stored with no workspace keeps that none, with its evidence, when its unchanged key is sent back and one readable
   workspace holds it, whether that workspace is named (even while another workspace cannot be read) or not (every

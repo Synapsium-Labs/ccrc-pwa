@@ -200,8 +200,8 @@ export function writeReadsStore(before: { teamKey: string | null }, written: { t
  *  - the workspace omitted with a changed key: a stored workspace while it holds the new key (`unavailable` while it cannot be
  *    read); otherwise as with none named;
  *  - none named (omitted as above, or an explicit null, which reads with the unchanged key too): the one connected workspace that
- *    holds the key; two holders `team-ambiguous`; any slot the answer depends on unread, while two readable ones do not already
- *    hold the key, `unavailable`; a key no connected workspace holds, every one read, or no workspace connected, stored with none;
+ *    holds the key; two holders `team-ambiguous`; a store that could not be listed, or any slot the answer depends on unread
+ *    while two readable ones do not already hold the key, `unavailable`; a key no connected workspace holds, every one read, or no workspace connected, stored with none;
  *  - the keep of a stored none (review 2971 F2, review 3286 F1): a row stored with no workspace keeps it, with its source, team
  *    name, evidence and time, when its unchanged key is sent back and one readable workspace holds it, named (another slot that
  *    cannot be read does not undo it: naming a holder of the stored key changes nothing) or not (every slot read). Only two
