@@ -53,6 +53,7 @@ import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
+import type { IsolationReader } from './isolationFacts.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
@@ -244,6 +245,9 @@ export interface Deps {
   /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
   ladderWitness?: NarrowingWitness;
   ladderInputs?: LadderConditionInputs;
+  /** The isolation word's one reader (Overlord W1, §7.4, H28), built once in `index.ts` over the server's boot facts and the
+   *  live fleet state. Absent (a test, a script): the ladder's `shared-user` input reads `unmeasured: not-wired`, which caps. */
+  isolation?: IsolationReader;
   ladderServerCaps?: readonly string[];
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */

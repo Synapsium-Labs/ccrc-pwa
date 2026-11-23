@@ -281,5 +281,13 @@
   "server/src/coord/overlordGate.ts#counterVerdict": 1,
   "server/src/coord/overlordGate.ts#overlordGate": 1,
   "server/src/continuity/hookReports.ts#witnessVerdict": 1,
-  "server/src/continuity/hookReports.ts#unwitnessedLatchDue": 1
+  "server/src/continuity/hookReports.ts#unwitnessedLatchDue": 1,
+  "shared/isolation.ts#readHostReport": 1,
+  "server/src/isolationWord.ts#holdingExposure": 1,
+  "server/src/isolationWord.ts#linkKernel": 1,
+  "server/src/isolationWord.ts#linkIsolation": 1,
+  "server/src/isolationWord.ts#isolationWord": 1,
+  "server/src/isolationWord.ts#hostRelation": 1,
+  "server/src/isolationWord.ts#isolationCondition": 1,
+  "server/src/isolationWord.ts#wakingHostKey": 1
 }

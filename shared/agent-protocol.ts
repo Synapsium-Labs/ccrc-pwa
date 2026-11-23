@@ -12,6 +12,7 @@
 // about a bundled file — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
 import type { DiskMeasured } from './disk.js';
+import type { HostReport } from './isolation.js';
 import {
   ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_SUB_TIMEOUT_MS, isReleaseTag, isRequestKind, type AccountSub, type InFlightReport,
   type RequestKind,
@@ -107,6 +108,9 @@ export interface AgentReady {
   /** The op words defined for this list are `UPDATE_OP` (`'update'`), which programme wave 5's agent sends, and
    *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1) and `MODELS_OP` (`'models'`, auto-advance W4); `readReadyOps` reads them. */
   ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
+  /** ADDITIVE (Overlord W1, the isolation word, §7.4): the agent's uid and two keyed digests of its host ids. Its one reader
+   *  is `readHostReport` (`shared/isolation.ts`), called only by the client's ready handler; an older agent omits it. */
+  host?: HostReport;
 }
 
 /**

@@ -13,6 +13,8 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
+import { codeRootOf, measureServerFacts, realPeerSeams } from './isolationFacts.js';
+import { wireIsolation } from './isolationLog.js';
 import { bootPushOutbox } from './pushSender.js';
 import { responseStampNow } from './responses/stamp.js';
 import { PerfRecorder } from './perf/recorder.js';
@@ -76,6 +78,7 @@ import { mkdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const cfg = loadConfig();
 
@@ -242,7 +245,7 @@ if (cfg.fleetMode === 'remote') {
     console.error('ccrc-server: CCRC_FLEET=remote requires CCRC_AGENT_URL and CCRC_AGENT_TOKEN');
     process.exit(1);
   }
-  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms) });
+  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms), peerSeams: realPeerSeams() });
   fleetClient = fleet.client;
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
@@ -330,6 +333,12 @@ if (cfg.fleetMode === 'remote') {
     fleetState,
   };
 }
+
+// The isolation word (Overlord W1, §7.4, H28): the server's own facts measured once, here, over every path it holds; the
+// reader reads them with the live fleet state on each call. The log holder logs the reading at boot and after each change
+// of the link, by word and cause only.
+deps.isolation = wireIsolation(cfg.fleetMode, measureServerFacts(cfg, codeRootOf(fileURLToPath(import.meta.url))),
+  cfg.agentToken, cfg.fleetMode === 'remote' ? fleetClient : null, (line) => console.warn(line));
 
 // Loaded before anything that could touch it (the watcher's first tick can
 // fire a push the instant it starts) — a load racing a record would let a
