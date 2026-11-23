@@ -315,8 +315,8 @@ describe('the shared-key item (D-8808, review 3048 F5)', () => {
     expect(call).not.toHaveBeenCalled();
   });
 
-  it('links a page the route table knows: Settings, Security, where the project rows are', () => {
-    expect(matchRoute(LINEAR_PROJECTS_SETTINGS_PATH)?.route.id).toBe('settings-security');
+  it('links a page the route table knows: Settings, Integrations, where the project rows are', () => {
+    expect(matchRoute(LINEAR_PROJECTS_SETTINGS_PATH)?.route.id).toBe('settings-integrations');
   });
 
   it('draws its link on a Waiting row too', () => {

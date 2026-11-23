@@ -147,6 +147,8 @@
   "server/src/coord/overlordAuthority.ts#authorityFold": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,
+  "server/src/coord/overlordRestore.ts#restoreStricter": 1,
+  "server/src/coord/overlordRestore.ts#confirmRestorePlan": 1,
   "server/src/coord/rollTarget.ts#rollTargetVerdict": 1,
   "server/src/coord/stall.ts#stallRestartedVerdict": 1,
   "server/src/continuity/renewNow.ts#renewNowStands": 1,

@@ -6,11 +6,15 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_PHASE_MAP, TESTBOX_BOX_KEYS, fitsTestboxShape, type TestboxAdminStatus } from '../../shared/testbox-admin';
+import {
+  TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_ADMIN_CODES, TESTBOX_ADMIN_PHASE_MAP, TESTBOX_BOX_KEYS, TESTBOX_PHASED_SUB_MAP, fitsTestboxShape,
+  type TestboxAdminStatus, type TestboxPhasedSub,
+} from '../../shared/testbox-admin';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE } from '../../shared/api';
 import {
-  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, BOX_SETTING_FORM_START, TESTBOX_CONNECT_TEXT, TESTBOX_LISTEN_KEY, TESTBOX_SERVICE_PORT, actWord,
-  boxSettingStart, checkWord, codeSentence, isIpLiteral, isPublicIpLiteral, listenFor, phaseTime, phaseWord, shapeSentence, stepOf,
+  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, BOX_SETTING_FORM_START, TESTBOX_CONNECT_TEXT, TESTBOX_LISTEN_KEY, TESTBOX_MANAGE_TEXT, TESTBOX_SERVICE_PORT, actWord,
+  boxSettingStart, busyHolderSentence, checkWord, codeSentence, isIpLiteral, isPublicIpLiteral, listenFor, phaseTime, phaseWord, shapeSentence, stepOf,
+  utcMinuteUpAt,
 } from '../src/fleet/testboxAdminWords';
 import { ApiError } from '../src/lib/api';
 import { TESTBOX_GATE_DARK_TEXT, TESTBOX_ROUTE_TEXT, testboxRouteText } from '../src/lib/refusalWords';
@@ -183,6 +187,38 @@ describe('the routes\' refusals, through refusalText (D-8166)', () => {
     expect(testboxRouteText(refusal({ error: 'testbox-admin-refused', code: 'unreachable' }))).toBe(TESTBOX_ADMIN_CODE_SENTENCE.unreachable);
     expect(testboxRouteText(refusal({ error: 'testbox-admin-refused', code: 'a-code-from-later' }))).toBe(TESTBOX_ROUTE_TEXT['testbox-admin-refused']);
     expect(testboxRouteText(refusal({ error: 'testbox-admin-refused' }))).toBe(TESTBOX_ROUTE_TEXT['testbox-admin-refused']);
+  });
+
+  it('busy says which act holds the lock and the latest time it can end, when the route named one (D-8899)', () => {
+    // began 22:13:20, ends by 23:14:50: the start reads to its minute, the latest end to the next one
+    const holder = { sub: 'parity', startedAt: 1_700_000_000_000, deadlineAt: 1_700_003_690_000 };
+    expect(testboxRouteText(refusal({ error: 'testbox-admin-refused', code: 'busy', holder })))
+      .toBe(`${TESTBOX_ADMIN_CODE_SENTENCE.busy} Parity is running: it began at 2023-11-14 22:13 UTC and ends by 2023-11-14 23:15 UTC at the latest.`);
+    // no holder (an older fleet host, or a short act), or one off its shape: the code's own sentence
+    expect(testboxRouteText(refusal({ error: 'testbox-admin-refused', code: 'busy' }))).toBe(TESTBOX_ADMIN_CODE_SENTENCE.busy);
+    expect(testboxRouteText(refusal({ error: 'testbox-admin-refused', code: 'busy', holder: { sub: '/home/x', startedAt: 1, deadlineAt: 2 } }))).toBe(TESTBOX_ADMIN_CODE_SENTENCE.busy);
+    // a time no Date can show is refused by the reader, so the refusal's text is still built
+    expect(testboxRouteText(refusal({ error: 'testbox-admin-refused', code: 'busy', holder: { ...holder, deadlineAt: 9_000_000_000_000_000 } }))).toBe(TESTBOX_ADMIN_CODE_SENTENCE.busy);
+    // a code this build does not know keeps the word's floor, holder or not
+    expect(testboxRouteText(refusal({ error: 'testbox-admin-refused', code: 'a-code-from-later', holder }))).toBe(TESTBOX_ROUTE_TEXT['testbox-admin-refused']);
+    // an act that ended at its ceiling reads `interrupted`, whose sentence says so
+    expect(codeSentence('interrupted')).toContain('time limit');
+  });
+
+  it('the holder\'s sentence names the act in the card\'s words and two minutes, and no other value (D-8899)', () => {
+    const at = { startedAt: 1_700_000_000_000, deadlineAt: 1_700_003_690_000 };
+    const names: Record<TestboxPhasedSub, string> = { 'connect': 'Connect', 'repair': 'Repair', 'apply-release': 'Apply release', 'settings-box': 'Box settings', 'parity': 'Parity' };
+    for (const sub of Object.keys(TESTBOX_PHASED_SUB_MAP) as TestboxPhasedSub[]) {
+      const said = busyHolderSentence({ sub, ...at });
+      expect(said, sub).toBe(`${names[sub]} is running: it began at 2023-11-14 22:13 UTC and ends by 2023-11-14 23:15 UTC at the latest.`);
+      // never the sub's own token where the card has a word, and no path, address or setting name
+      expect(said, sub).not.toMatch(/[/@\\~]|CCRC_|https?|settings-box|apply-release/);
+    }
+    // a latest time is rounded UP to the minute, never down: the minute named is never before the time
+    expect(utcMinuteUpAt(Date.UTC(2026, 10, 18, 11, 37, 59))).toBe('2026-11-18 11:38 UTC');
+    expect(utcMinuteUpAt(Date.UTC(2026, 10, 18, 11, 37, 0, 1))).toBe('2026-11-18 11:38 UTC');
+    expect(utcMinuteUpAt(Date.UTC(2026, 10, 18, 11, 37, 0))).toBe('2026-11-18 11:37 UTC');
+    expect(TESTBOX_MANAGE_TEXT.endsBy(utcMinuteUpAt(Date.UTC(2026, 10, 18, 11, 37, 59)))).toBe('It ends by 2026-11-18 11:38 UTC at the latest.');
   });
 
   it('parity-required is the shared sentence, and the gate\'s two dark words have their own', () => {

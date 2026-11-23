@@ -1,8 +1,9 @@
 // Overlord W1, the renewal readings PR C (plan `w1-renewal-readings.md` Task 5; slug designated-class-stamped-at-mint): the
 // class an Overlord generation was minted under, `continuity_generations.designatedClass`. One nullable column (migration
-// 121), written by the mint alone and read back on every row; NULL reads null, which `classChangedOf` reads unmeasured.
+// 122), written by the mint alone and read back on every row; NULL reads null, which `classChangedOf` reads unmeasured.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -36,13 +37,44 @@ const rows = (s: CoordStore) => {
 };
 
 describe('continuity_generations.designatedClass', () => {
-  it('migration 121 adds one nullable column with no default', () => {
-    const entry = MIGRATIONS[120]!;
+  it('migration 122 adds one nullable column with no default', () => {
+    const entry = MIGRATIONS[121]!;
     expect(entry).toContain('ALTER TABLE continuity_generations ADD COLUMN designatedClass TEXT;');
     const s = store();
     const col = (s.db.prepare("SELECT name, \"notnull\" AS nn, dflt_value AS d FROM pragma_table_info('continuity_generations') WHERE name = 'designatedClass'").all());
     expect(col).toEqual([{ name: 'designatedClass', nn: 0, d: null }]);
     s.db.close();
+  });
+
+  it.each(['automatic', 'override'] as const)('upgrades version 121 without backfilling an old generation or changing an %s cap', (capMode) => {
+    const file = path.join(mkTmp('ccrc-designated-class-upgrade-'), 'coord.db');
+    const raw = new DatabaseSync(file);
+    try {
+      raw.exec('BEGIN');
+      for (const migration of MIGRATIONS.slice(0, 121)) raw.exec(migration);
+      raw.exec('PRAGMA user_version = 121');
+      // A non-seed number with a stamp in both modes catches a reset or re-derivation of the cap mode.
+      raw.prepare('UPDATE coordinator_state SET capMode = ?, maxConcurrentWorkers = 7, updatedAt = 9 WHERE id = 1').run(capMode);
+      const sessionId = 'lane-a-project-a';
+      const startId = startOf(new CoordStore(raw), sessionId);
+      raw.prepare(`INSERT INTO continuity_generations
+        (identity, sessionId, role, term, n, state, enteredAt, resumed, startId, startReportedAt, observed, mintedObservedMs, model)
+        VALUES ('overlord', ?, 'overlord', 2, 1, 'active', 1000, 0, ?, 1000, '{}', 0, 'claude-opus-5-5')`).run(sessionId, startId);
+      raw.exec('COMMIT');
+    } finally {
+      raw.close();
+    }
+
+    const db = openCoordDb(file);
+    try {
+      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 122 });
+      expect(db.prepare('SELECT role, model, designatedClass FROM continuity_generations').all())
+        .toEqual([{ role: 'overlord', model: 'claude-opus-5-5', designatedClass: null }]);
+      expect(db.prepare('SELECT capMode, maxConcurrentWorkers, updatedAt FROM coordinator_state WHERE id = 1').get())
+        .toEqual({ capMode, maxConcurrentWorkers: 7, updatedAt: 9 });
+    } finally {
+      db.close();
+    }
   });
 
   it('the mint writes the class it is given, and the reader reads it back', () => {

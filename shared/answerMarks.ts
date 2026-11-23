@@ -11,7 +11,8 @@
 // FOUR ANSWERS, NONE OF THEM NULL (plan question 14). On an item's view: the field absent means "this server cannot mark this
 // row" (an older server, or a row that carries no box); `never` means markable with no record; `marked` and `withdrawn` are
 // the newest record, ticked or unticked; `unmeasured` means the mark read failed. A `do` item (a task) carries `couldAnswer`
-// alone, its `unsure` key absent: a task has no answer to be unsure of (answer marks C, #2900).
+// alone, its `unsure` key absent: a task has no answer to be unsure of (answer marks C, #2900); the optional note its tick
+// may carry (D-8931) says what was done, and is no answer to a question.
 
 /** The kind of row a mark names: an operator item, or an ask the operator has (PR B, plan Task 5). */
 export type AnswerMarkKind = 'item' | 'ask';

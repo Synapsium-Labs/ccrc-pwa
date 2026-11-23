@@ -52,7 +52,7 @@ STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # independently as this branch's Task 5). The pairing is now a mechanism, not a
 # convention — install-session-hooks.test.ts derives the expected set from the
 # hook's own case block and fails on any divergence.
-EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart","SessionEnd"]'
+EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart","SessionEnd","PreModelSwitch","PostModelSwitch"]'
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 

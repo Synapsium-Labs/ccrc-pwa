@@ -45,7 +45,7 @@ const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 const cleanEnv = (): NodeJS.ProcessEnv => Object.fromEntries(
   Object.entries(process.env).filter(([k]) => !/^(CCRC_|CCD_|MODELS_|_CCD_|BASH_ENV$|ENV$|HTTPS?_PROXY$|ALL_PROXY$)/i.test(k)));
 
-const REFUSED = 'ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind lane';
+const REFUSED = 'ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind or Anthropic lane';
 /** What a refused lane tells the operator to fix, per server mode. In both modes the fix is made in this box's
  *  accounts.json, then a restart: nothing re-reads the roster because a lane's `exec.kind` alone differs. A codex row needs
  *  its whole exec block, and the server refuses a roster with an incomplete one at start, so remote mode copies the
@@ -58,7 +58,8 @@ const REMOTE_FIX = "copy the fleet box's whole accounts.json over this server bo
 const LOCAL_FIX = "if the lane is meant to be a codex lane, its row in this box's accounts.json needs a complete codex "
   + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, exec.proxyPort '
   + 'and exec.litellmPort), and the server refuses a roster with an incomplete one at start: fix the row, and restart '
-  + 'the server';
+  + 'the server; if it is meant to be an Anthropic lane, its row in this box\'s accounts.json needs telemetry '
+  + '"anthropic", and no codex exec block: fix the row, and restart the server';
 /** The exact tail of a lane refusal in a mode: the common clause, the mode's remedy and the closing words, contiguous. */
 const laneTail = (fix: string): string =>
   `(the server decides from the roster it holds); ${fix}; the banner went out, the phone push did not`;
@@ -163,16 +164,16 @@ describe('modelsPushDecision, the policy of push:true (plan W2 Task 12)', () => 
   ]);
 
   it.each([
-    [MOVED, { lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' }],
-    [CANARY_FAILED, { lane: 'lane-a', cls: 'haiku', kind: 'canary-failed', tag: 'models-advance:lane-a:haiku' }],
-    [MOVE_FAILED, { lane: 'lane-b', cls: 'sonnet', kind: 'move-failed', tag: 'models-advance:lane-b:sonnet' }],
+    [MOVED, { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' }],
+    [CANARY_FAILED, { lane: 'lane-a', lanes: ['lane-a'], cls: 'haiku', kind: 'canary-failed', tag: 'models-advance:lane-a:haiku' }],
+    [MOVE_FAILED, { lane: 'lane-b', lanes: ['lane-b'], cls: 'sonnet', kind: 'move-failed', tag: 'models-advance:lane-b:sonnet' }],
     // THE ACCEPTED RESIDUAL, measured rather than discovered: a well-shaped line carries up to 120 characters of any
     // printable ASCII in its reason slot, and model ids may be URL-shaped (`:` and `/` are in MODEL_ID_RE).
     ['lane-a: opus stays on none: model-6-alpha failed its canary (Re-authenticate now at https://example.invalid/login)',
-      { lane: 'lane-a', cls: 'opus', kind: 'canary-failed', tag: 'models-advance:lane-a:opus' }],
+      { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'canary-failed', tag: 'models-advance:lane-a:opus' }],
     ['lane-a: opus https://example.invalid/x → https://example.invalid/y',
-      { lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' }],
-  ] as [string, Record<string, string>][])('%s is pushable, with the tag of its lane and class', (message, want) => {
+      { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' }],
+  ] as [string, Record<string, string | string[]>][])('%s is pushable, with the tag of its lane and class', (message, want) => {
     expect(modelsPushDecision(message, lanes)).toEqual({ verdict: 'pushable', ...want });
   });
 
@@ -227,12 +228,60 @@ describe('modelsPushDecision, the policy of push:true (plan W2 Task 12)', () => 
     ]);
     const moved = (lane: string): string => `${lane}: opus claude-opus-9-1 → claude-opus-9-2`;
     expect(modelsPushDecision(moved('lane-a'), roster)).toEqual({
-      verdict: 'pushable', lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' });
+      verdict: 'pushable', lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' });
     expect(modelsPushDecision(moved('lane-up'), roster).verdict).toBe('pushable');
     expect(modelsPushDecision(moved('lane-g'), roster).verdict).toBe('pushable');
     for (const lane of ['lane-d', 'lane-e', 'lane-f']) {
       expect(modelsPushDecision(moved(lane), roster)).toEqual({ verdict: 'refused', reason: 'not-a-codex-lane', lane });
     }
+  });
+
+  describe('a moved line may name several lanes (one alias change, one push, F15)', () => {
+    const row = (kind: string, telemetry?: string) => ({ exec: { kind }, ...(telemetry === undefined ? {} : { telemetry }) });
+    const mixed: ModelsPushRoster = new Map([
+      ['lane-a', row('codex')], ['lane-b', row('generated', 'anthropic')], ['lane-c', row('generated')], ['lane-d', row('generated', 'anthropic')],
+    ]);
+    const tail = 'opus claude-opus-9-1 → claude-opus-9-2';
+
+    it('a moved line names several lanes', () => {
+      expect(modelsPushOf(`lane-a, lane-b, lane-d: ${tail}`)).toEqual({
+        lane: 'lane-a', lanes: ['lane-a', 'lane-b', 'lane-d'], cls: 'opus', kind: 'moved' });
+      expect(modelsPushDecision(`lane-b, lane-a: ${tail}`, mixed)).toEqual({
+        verdict: 'pushable', lane: 'lane-b', lanes: ['lane-b', 'lane-a'], cls: 'opus', kind: 'moved',
+        tag: 'models-advance:lane-b,lane-a:opus' });
+      // Other spellings of a list are no model line: no space, two spaces, a trailing comma, the same lane twice.
+      for (const head of ['lane-a,lane-b', 'lane-a,  lane-b', 'lane-a, lane-b,', 'lane-a, lane-a', 'lane-a , lane-b', ', lane-a']) {
+        expect(modelsPushOf(`${head}: ${tail}`), head).toBeNull();
+      }
+    });
+
+    it('a line with one unknown lane among several is refused naming it', () => {
+      expect(modelsPushDecision(`lane-a, lane-z, lane-b: ${tail}`, mixed))
+        .toEqual({ verdict: 'refused', reason: 'unknown-lane', lane: 'lane-z' });
+      expect(modelsPushDecision(`lane-a, lane-b, lane-c: ${tail}`, mixed))
+        .toEqual({ verdict: 'refused', reason: 'not-a-codex-lane', lane: 'lane-c' });
+      // The FIRST lane the roster refuses is the one named, and the roster is asked in line order, no further.
+      const get = vi.fn((id: string) => mixed.get(id));
+      expect(modelsPushDecision(`lane-b, lane-y, lane-c, lane-z: ${tail}`, { get }))
+        .toEqual({ verdict: 'refused', reason: 'unknown-lane', lane: 'lane-y' });
+      expect(get.mock.calls).toEqual([['lane-b'], ['lane-y']]);
+    });
+
+    it('a failure line names one lane only', () => {
+      const canary = 'opus stays on claude-opus-9-1: claude-opus-9-2 failed its canary (http 500)';
+      const move = 'opus stays on none: moving to claude-opus-9-2 failed (x)';
+      expect(modelsPushOf(`lane-a: ${canary}`)).toMatchObject({ lanes: ['lane-a'], kind: 'canary-failed' });
+      expect(modelsPushOf(`lane-a: ${move}`)).toMatchObject({ lanes: ['lane-a'], kind: 'move-failed' });
+      for (const tailOf of [canary, move]) {
+        expect(modelsPushOf(`lane-a, lane-b: ${tailOf}`), tailOf).toBeNull();
+        expect(modelsPushDecision(`lane-a, lane-b: ${tailOf}`, mixed), tailOf).toEqual({ verdict: 'refused', reason: 'not-a-model-line' });
+      }
+    });
+
+    it('a single-lane line answers as before', () => {
+      expect(modelsPushDecision(`lane-b: ${tail}`, mixed)).toEqual({
+        verdict: 'pushable', lane: 'lane-b', lanes: ['lane-b'], cls: 'opus', kind: 'moved', tag: 'models-advance:lane-b:opus' });
+    });
   });
 
   describe('the cap: it stays at 300, and what it refuses is stated', () => {
@@ -595,18 +644,18 @@ describe('POST /api/notify with push (plan W2 Task 12)', () => {
 
 describe('modelsPushOf, the one reader of a models push line (plan W2 Task 12)', () => {
   it.each([
-    [MOVED, { lane: 'lane-a', cls: 'opus', kind: 'moved' }],
-    ['lane-a: fable none → model-6-delta', { lane: 'lane-a', cls: 'fable', kind: 'moved' }],
-    ['lane-a: sonnet vendor-a/model-5:beta → vendor-a/model-6:beta', { lane: 'lane-a', cls: 'sonnet', kind: 'moved' }],
-    [CANARY_FAILED, { lane: 'lane-a', cls: 'haiku', kind: 'canary-failed' }],
-    [MOVE_FAILED, { lane: 'lane-b', cls: 'sonnet', kind: 'move-failed' }],
-    [`lane-a: opus stays on none: model-6-alpha failed its canary (${'x'.repeat(120)})`, { lane: 'lane-a', cls: 'opus', kind: 'canary-failed' }],
-    [`lane-a: opus stays on none: moving to model-6-alpha failed (${'x'.repeat(120)})`, { lane: 'lane-a', cls: 'opus', kind: 'move-failed' }],
-    ['lane-a: opus stays on none: moving to model-6-alpha failed ()', { lane: 'lane-a', cls: 'opus', kind: 'move-failed' }],
-    [`${'a'.repeat(32)}: opus model-5.6-gamma → model-6.1-gamma`, { lane: 'a'.repeat(32), cls: 'opus', kind: 'moved' }],
+    [MOVED, { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'moved' }],
+    ['lane-a: fable none → model-6-delta', { lane: 'lane-a', lanes: ['lane-a'], cls: 'fable', kind: 'moved' }],
+    ['lane-a: sonnet vendor-a/model-5:beta → vendor-a/model-6:beta', { lane: 'lane-a', lanes: ['lane-a'], cls: 'sonnet', kind: 'moved' }],
+    [CANARY_FAILED, { lane: 'lane-a', lanes: ['lane-a'], cls: 'haiku', kind: 'canary-failed' }],
+    [MOVE_FAILED, { lane: 'lane-b', lanes: ['lane-b'], cls: 'sonnet', kind: 'move-failed' }],
+    [`lane-a: opus stays on none: model-6-alpha failed its canary (${'x'.repeat(120)})`, { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'canary-failed' }],
+    [`lane-a: opus stays on none: moving to model-6-alpha failed (${'x'.repeat(120)})`, { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'move-failed' }],
+    ['lane-a: opus stays on none: moving to model-6-alpha failed ()', { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'move-failed' }],
+    [`${'a'.repeat(32)}: opus model-5.6-gamma → model-6.1-gamma`, { lane: 'a'.repeat(32), lanes: ['a'.repeat(32)], cls: 'opus', kind: 'moved' }],
     // Exactly MODELS_PUSH_MAX characters: the cap's own control.
     [`lane-a: opus stays on ${'m'.repeat(127)}: ${'n'.repeat(128)} failed its canary ()`,
-      { lane: 'lane-a', cls: 'opus', kind: 'canary-failed' }],
+      { lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind: 'canary-failed' }],
   ] as [string, unknown][])('%s reads as its lane, class and shape', (message, want) => {
     expect(modelsPushOf(message)).toEqual(want);
   });
@@ -678,7 +727,7 @@ describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12
   ] as [string, Record<string, unknown>, string, string][])('%s: its one push line is a line modelsPushOf reads, for the lane and class it names', (_w, answer, res, kind) => {
     const pushes = receiptPushes('commit', ['lane-a', 'opus', 'model-5.6-gamma', 'model-6.1-gamma', res], answer);
     expect(pushes).toHaveLength(1);
-    expect(modelsPushOf(pushes[0]!), pushes[0]).toEqual({ lane: 'lane-a', cls: 'opus', kind });
+    expect(modelsPushOf(pushes[0]!), pushes[0]).toEqual({ lane: 'lane-a', lanes: ['lane-a'], cls: 'opus', kind });
   });
 
   it('a recovered automatic move: its push line, from the step\'s receipt, is a moved line modelsPushOf reads', () => {
@@ -686,7 +735,7 @@ describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12
       recoveredMove: { class: 'sonnet', from: 'model-5.6-beta', to: 'model-6-beta', how: 'advance' } };
     const pushes = receiptPushes('backfill', ['lane-a', '-', '-', '-', '-'], answer);
     expect(pushes).toHaveLength(1);
-    expect(modelsPushOf(pushes[0]!), pushes[0]).toEqual({ lane: 'lane-a', cls: 'sonnet', kind: 'moved' });
+    expect(modelsPushOf(pushes[0]!), pushes[0]).toEqual({ lane: 'lane-a', lanes: ['lane-a'], cls: 'sonnet', kind: 'moved' });
   });
 
   it('a recovered automatic move: the line a HAND verb pushes (_models_hand_settled) is the same kind of line', () => {
@@ -694,7 +743,7 @@ describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12
     const r = inCcrc(`_models_push() { printf '%s\\n' "$1"; }\n_models_hand_settled lane-a ${q(answer)}`);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout.split('\n').filter(Boolean)).toEqual(['lane-a: fable none → model-6-delta']);
-    expect(modelsPushOf(r.stdout.trim())).toEqual({ lane: 'lane-a', cls: 'fable', kind: 'moved' });
+    expect(modelsPushOf(r.stdout.trim())).toEqual({ lane: 'lane-a', lanes: ['lane-a'], cls: 'fable', kind: 'moved' });
   });
 
   it('every class, a missing pin, and model ids that carry a colon and a slash: every push line is read, for the lane and class it names', () => {
@@ -705,7 +754,7 @@ describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12
           const answer = commitAnswer({ class: cls, from, to: ids[1], outcome, reason: 'upstream error (x)' });
           const pushes = receiptPushes('commit', ['lane-a', cls, from ?? 'none', ids[1]!, res], answer);
           expect(pushes, `${cls} ${String(from)} ${outcome}`).toHaveLength(1);
-          expect(modelsPushOf(pushes[0]!), pushes[0]).toEqual({ lane: 'lane-a', cls, kind });
+          expect(modelsPushOf(pushes[0]!), pushes[0]).toEqual({ lane: 'lane-a', lanes: ['lane-a'], cls, kind });
         }
       }
     }
@@ -717,7 +766,7 @@ describe('the advance step\'s messages, rendered by its real jq (plan W2 Task 12
       const pushes = receiptPushes('commit', ['lane-a', 'opus', 'model-5.6-gamma', 'model-6.1-gamma', res], commitAnswer({ outcome: 'failed', reason }));
       expect(pushes).toHaveLength(1);
       const line = modelsPushOf(pushes[0]!);
-      expect(line, pushes[0]).toMatchObject({ lane: 'lane-a', cls: 'opus' });
+      expect(line, pushes[0]).toMatchObject({ lane: 'lane-a', lanes: ['lane-a'], cls: 'opus' });
       const inner = /\(([^]*)\)$/.exec(pushes[0]!)![1]!;
       expect(inner.length).toBeLessThanOrEqual(120);
       expect(inner).toMatch(/^[\x20-\x7e]*$/);
@@ -800,20 +849,25 @@ describe('the push patterns are built from their owners, every shape uses them, 
     return [...block![1]!.matchAll(/new RegExp\(`([^`]*)`\)/g)].map((m) => m[1]!);
   };
 
-  it('PUSH_HEAD and PUSH_ID are built from pushInner(MODELS_LANE_ID_RE), CLASSES.join and pushInner(MODEL_ID_RE)', () => {
-    expect(src).toContain("const PUSH_HEAD = `^(${pushInner(MODELS_LANE_ID_RE)}): (${CLASSES.join('|')}) `;");
+  it('the heads and PUSH_ID are built from pushInner(MODELS_LANE_ID_RE), CLASSES.join and pushInner(MODEL_ID_RE)', () => {
+    expect(src).toContain('const PUSH_LANE = pushInner(MODELS_LANE_ID_RE);');
+    expect(src).toContain("const PUSH_CLASS = `(${CLASSES.join('|')})`;");
+    expect(src).toContain('const PUSH_HEAD = `^(${PUSH_LANE}): ${PUSH_CLASS} `;');
+    expect(src).toContain('const PUSH_HEAD_MANY = `^(${PUSH_LANE}(?:, ${PUSH_LANE})*): ${PUSH_CLASS} `;');
     expect(src).toContain('const PUSH_ID = `(?:${pushInner(MODEL_ID_RE)})`;');
   });
 
-  it('each of the three shapes begins with ${PUSH_HEAD} and names a model id only as ${PUSH_ID}, a reason only as ${PUSH_REASON}', () => {
+  it('each of the three shapes begins with its head (${PUSH_HEAD_MANY} for moved, ${PUSH_HEAD} for the failures) and names a model id only as ${PUSH_ID}, a reason only as ${PUSH_REASON}', () => {
     const t = shapes();
     expect(t, 'PUSH_SHAPES no longer holds exactly three regexes').toHaveLength(3);
+    // Only the moved shape takes several lanes; the two failure shapes are held to the single-lane head.
+    expect(t.map((x) => /^\$\{(PUSH_HEAD(?:_MANY)?)\}/.exec(x)?.[1])).toEqual(['PUSH_HEAD_MANY', 'PUSH_HEAD', 'PUSH_HEAD']);
     for (const x of t) {
-      expect(x.startsWith('${PUSH_HEAD}'), `a shape does not begin with PUSH_HEAD: ${x}`).toBe(true);
+      expect(/^\$\{PUSH_HEAD(?:_MANY)?\}/.test(x), `a shape does not begin with a push head: ${x}`).toBe(true);
       expect(x.match(/\$\{PUSH_ID\}/g), `a shape does not name its two ids as PUSH_ID: ${x}`).toHaveLength(2);
       // What is left once the three owners are taken out is the shape's own words and its end anchor, nothing that
       // could be a hand-written class list, id or reason pattern.
-      const rest = x.replaceAll('${PUSH_HEAD}', '').replaceAll('${PUSH_ID}', '').replaceAll('${PUSH_REASON}', '');
+      const rest = x.replaceAll('${PUSH_HEAD_MANY}', '').replaceAll('${PUSH_HEAD}', '').replaceAll('${PUSH_ID}', '').replaceAll('${PUSH_REASON}', '');
       expect(rest, `a shape spells more than its words: ${x}`).toMatch(/^[A-Za-z :\u2192]*\$$/);
     }
   });

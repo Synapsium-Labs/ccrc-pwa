@@ -417,6 +417,38 @@ export function modelEnvBlock(registry, catalogue, windows = null, { codexLane =
   return block;
 }
 
+/** `(settingsPath) => {json, existed}`: a Claude Code settings file as `mergeSettingsEnv` reads it before it merges,
+ *  `{}` for one that does not exist; throws `ModelEnvInvalid` for one it would refuse to rewrite (unreadable, not
+ *  JSON, not an object). Its own export so a writer can ask before its first write whether a later merge would
+ *  refuse (programme wave 3: `revert` decides every refusal before it writes). */
+export function readSettingsJson(settingsPath) {
+  let json = {};
+  let existed = false;
+  try {
+    // Type-tested (Plan 3b Task A6): a FIFO is "could not be read", never a block.
+    const text = readRegular(settingsPath);
+    existed = true;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      throw new ModelEnvInvalid(
+        `${settingsPath} is not valid JSON (${e.message}), so this run will not rewrite it. Fix the `
+        + 'file by hand, then re-run — nothing was written.');
+    }
+  } catch (e) {
+    if (e instanceof ModelEnvInvalid) throw e;
+    if (e.code !== 'ENOENT') {
+      throw new ModelEnvInvalid(`${settingsPath} could not be read: ${e.message}. Nothing was written.`);
+    }
+  }
+  if (existed && (typeof json !== 'object' || json === null || Array.isArray(json))) {
+    throw new ModelEnvInvalid(
+      `${settingsPath} does not hold a JSON object, so it is not a Claude Code settings file. `
+      + 'Nothing was written.');
+  }
+  return { json, existed };
+}
+
 /**
  * `(settingsPath: string, block: Record<string,string>) => { changed: boolean }`
  *
@@ -445,30 +477,7 @@ export function modelEnvBlock(registry, catalogue, windows = null, { codexLane =
  * @throws {ModelEnvInvalid}
  */
 export function mergeSettingsEnv(settingsPath, block) {
-  let json = {};
-  let existed = false;
-  try {
-    // Type-tested (Plan 3b Task A6): a FIFO is "could not be read", never a block.
-    const text = readRegular(settingsPath);
-    existed = true;
-    try {
-      json = JSON.parse(text);
-    } catch (e) {
-      throw new ModelEnvInvalid(
-        `${settingsPath} is not valid JSON (${e.message}), so this run will not rewrite it. Fix the `
-        + 'file by hand, then re-run — nothing was written.');
-    }
-  } catch (e) {
-    if (e instanceof ModelEnvInvalid) throw e;
-    if (e.code !== 'ENOENT') {
-      throw new ModelEnvInvalid(`${settingsPath} could not be read: ${e.message}. Nothing was written.`);
-    }
-  }
-  if (existed && (typeof json !== 'object' || json === null || Array.isArray(json))) {
-    throw new ModelEnvInvalid(
-      `${settingsPath} does not hold a JSON object, so it is not a Claude Code settings file. `
-      + 'Nothing was written.');
-  }
+  const { json, existed } = readSettingsJson(settingsPath);
   const env = (typeof json.env === 'object' && json.env !== null && !Array.isArray(json.env))
     ? json.env : {};
   let changed = false;

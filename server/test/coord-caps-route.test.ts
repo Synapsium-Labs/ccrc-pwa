@@ -21,8 +21,11 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { CcdResult } from '../src/lifecycle.js';
-import { CAP_MAX, CAP_MIN } from '../src/coord/caps.js';
+import { CAP_MAX, CAP_MIN, capAutomaticNotice } from '../src/coord/caps.js';
 import { testDeps } from './helpers.js';
+import { Bus } from '../src/bus.js';
+import type { FleetWatcher } from '../src/watch.js';
+import type { HostMachineReading } from '../../shared/pressure.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedLegacyProgramme } from './helpers/plan.js';
 import { sourceOfSymbol } from './scan/symbols.js';
@@ -82,7 +85,10 @@ describe('GET /api/coord/caps', () => {
       caps: { maxConcurrentWorkers: 4 },
       // D-8792: the cap reader's two additive fields; no run, so none waits, and the merge leaves the row in shadow.
       usage: { running: 0, waiting: 0, workingOnly: false },
-      updatedAt: 1_700_000_000_000 });
+      updatedAt: 1_700_000_000_000,
+      // D-8920: the cap in force. A number written is the operator's override; this server has no
+      // watcher, so nothing measured the host.
+      capNow: { mode: 'override', cap: 4, derived: { kind: 'unmeasured', why: 'no-reading' } } });
   });
 
   it('says null, never the epoch, for caps nobody has ever moved', async () => {
@@ -126,7 +132,9 @@ describe('POST /api/coord/caps', () => {
       usage: { running: 0, waiting: 0, workingOnly: false },
       // A write stamps it; the route reads the STORED value back, so this is the
       // server's own clock and not the caller's assertion about it.
-      updatedAt: expect.any(Number) });
+      updatedAt: expect.any(Number),
+      // D-8920: a number is the operator's override.
+      capNow: { mode: 'override', cap: 5, derived: { kind: 'unmeasured', why: 'no-reading' } } });
     // …and it really landed in the store, not merely in the reply.
     expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5 });
     expect(DEFAULTS.maxConcurrentWorkers, 'the seeded default moved').toBe(3);
@@ -322,7 +330,9 @@ describe('POST /api/coord/caps', () => {
       postCaps(app, { maxConcurrentWorkers: 5 }),
       postCaps(app, { maxConcurrentWorkers: 7 }),
     ]);
-    expect(capsBodies(coord)).toEqual(['workers 3 → 5', 'workers 5 → 7']);
+    // D-8920: a fresh box is automatic at the seeded 3 (no watcher here measured the host), so the first
+    // record says where it moved from; `capsBodies` sorts, so the override's own move reads first.
+    expect(capsBodies(coord)).toEqual(['workers 5 → 7', 'workers automatic (3, host unmeasured) → 5']);
     expect(coord.caps()).toEqual({ maxConcurrentWorkers: 7 });
   });
 
@@ -423,7 +433,7 @@ describe('POST /api/coord/caps', () => {
     for (const r of capRes) expect(r.statusCode).toBe(200);
     expect(capsBodies(coord),
       'one save read its `before` before the other wrote — the feed reports a transition that never happened')
-      .toEqual(['workers 3 → 5', 'workers 5 → 7']);
+      .toEqual(['workers 5 → 7', 'workers automatic (3, host unmeasured) → 5']);
     expect(coord.caps()).toEqual({ maxConcurrentWorkers: 7 });
   });
 
@@ -531,6 +541,103 @@ const handlerBody = (raw: string, blanked: string, decl: string): string => {
   expect(body.length, `the ${decl} body is too short to be a handler`).toBeGreaterThan(40);
   return body;
 };
+
+// D-8920 (the operator's ruling of 2026-11-22): the cap is derived from the machine. The view says the
+// cap in force and where it comes from; a number is an override; `{ mode: 'automatic' }` clears it.
+describe('the caps door: automatic and override (D-8920)', () => {
+  const GiB = 2 ** 30;
+  const BOX_TOKEN = 'f'.repeat(64);
+  const MEASURED = { kind: 'measured', machine: { memTotalBytes: 64 * GiB, cores: 16, sessionMemLimit: 'none' } } as const;
+  const DERIVED = { kind: 'measured', cap: 16, bound: 'cores', memTotalBytes: 64 * GiB, cores: 16 };
+  /** A server whose watcher holds a host reading (the pressure lane's), which a case may move. */
+  const withHost = async (first: HostMachineReading = MEASURED) => {
+    const home = mkTmp('ccrc-caps-host-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const held = { reading: first };
+    const watcher = { hostMachine: () => held.reading, stop: () => undefined, serverCapsSettled: async () => {} } as unknown as FleetWatcher;
+    const app = await buildServer({ ...testDeps(home), coord, notifyLog, mailToken: BOX_TOKEN }, new Bus(), watcher);
+    apps.push(app);
+    return { app, coord, held };
+  };
+  const dispatched = (coord: CoordStore, n: number): void => {
+    for (let i = 0; i < n; i++) {
+      const r = coord.openRun({ program: `p${i}`, title: 'P', project: 'demo', wave: 1, waveOf: 1, claimedBy: `c${i}` }) as { id: number };
+      coord.markDispatched(r.id, `w${i}`, `ws${i}`, `ws/ws${i}`, false);
+      expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    }
+  };
+
+  it('a fresh box is automatic: the derived cap, what it was derived from, and the stored number beside it', async () => {
+    const { app } = await withHost();
+    const body = (await getCaps(app)).json();
+    expect(body.capNow).toEqual({ mode: 'automatic', cap: 16, derived: DERIVED });
+    expect(body.caps, 'the stored number stays on the wire as an older console reads it').toEqual({ maxConcurrentWorkers: 3 });
+  });
+
+  it('an unmeasured host says so, and the cap is the stored number', async () => {
+    const { app, held } = await withHost({ kind: 'unmeasured', why: 'agent-older' });
+    expect((await getCaps(app)).json().capNow, 'and it says why, so the console can name the remedy')
+      .toEqual({ mode: 'automatic', cap: 3, derived: { kind: 'unmeasured', why: 'agent-older' } });
+    held.reading = MEASURED;
+    expect((await getCaps(app)).json().capNow.cap, 'the reading landed: the next read is the derived cap').toBe(16);
+  });
+
+  it('with no watcher at all (a bare server) the host is unmeasured, never a derived cap from nowhere', async () => {
+    const { app } = await withCoord();
+    expect((await getCaps(app)).json().capNow).toEqual({ mode: 'automatic', cap: 3, derived: { kind: 'unmeasured', why: 'no-reading' } });
+  });
+
+  it('a number is an override, and automatic clears it: the answer is the cap in force each time', async () => {
+    const { app, coord } = await withHost();
+    const set = await postCaps(app, { maxConcurrentWorkers: 12 });
+    expect(set.statusCode).toBe(200);
+    expect(set.json().capNow).toEqual({ mode: 'override', cap: 12, derived: DERIVED });
+    expect(coord.capMode()).toBe('override');
+
+    const back = await postCaps(app, { mode: 'automatic' });
+    expect(back.statusCode).toBe(200);
+    expect(back.json().capNow).toEqual({ mode: 'automatic', cap: 16, derived: DERIVED });
+    expect(back.json().caps, 'the stored number is kept for an unmeasured host').toEqual({ maxConcurrentWorkers: 12 });
+    expect(coord.capMode()).toBe('automatic');
+    expect(back.json().updatedAt, 'returning to automatic is a write, and it is stamped').toEqual(expect.any(Number));
+
+    expect(capsBodies(coord)).toEqual(['workers 12 → automatic (16)', 'workers automatic (16) → 12']);
+    // The move to automatic carries the automatic cap's own once-only key, so the pressure beat's record of the same
+    // cap (`PressureLane.noteAutomaticCap`, which asks the archive for this key) is not written a second time.
+    const key = capAutomaticNotice(coord.caps(), coord.capsUpdatedAt(), back.json().capNow)!.dedupeKey;
+    expect(coord.hasNotice('coord', '', key), 'the route\'s record is not keyed as the beat asks').toBe(true);
+  });
+
+  it('refuses a body that contradicts itself, or names a mode it does not know, and writes nothing', async () => {
+    const { app, coord } = await withHost();
+    for (const body of [{ mode: 'automatic', maxConcurrentWorkers: 12 }, { mode: 'override' }, { mode: 'auto' }, { mode: 'auto', maxConcurrentWorkers: 12 }]) {
+      const res = await postCaps(app, body);
+      expect(res.statusCode, JSON.stringify(body)).toBe(400);
+      expect(res.json().error).toBe('bad-request');
+    }
+    expect(coord.caps()).toEqual(DEFAULTS);
+    expect(coord.capMode()).toBe('automatic');
+    expect(coord.capsUpdatedAt()).toBeNull();
+    expect(capsBodies(coord)).toEqual([]);
+  });
+
+  it('what the view shows is what the dispatch door enforces: a run is refused at the derived cap, then at the override', async () => {
+    // Stored 3, derived 2 (two cores): two runs hold the slots, and a third dispatch is refused at 2.
+    const { app, coord } = await withHost({ kind: 'measured', machine: { memTotalBytes: 64 * GiB, cores: 2, sessionMemLimit: 'none' } });
+    dispatched(coord, 2);
+    expect((await getCaps(app)).json().capNow.cap).toBe(2);
+    const planned = coord.openRun({ program: 'next', title: 'N', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'c-next' }) as { id: number };
+    const dispatch = () => app.inject({ method: 'POST', url: `/api/runs/${planned.id}/dispatch`,
+      headers: { 'x-ccrc-mail-token': BOX_TOKEN }, payload: { brief: 'go' } });
+    expect((await dispatch()).json()).toMatchObject({ ok: false, refused: 'cap-concurrency', limit: 2, running: 2 });
+    // The operator lowers it in an incident: the same door refuses at the override.
+    expect((await postCaps(app, { maxConcurrentWorkers: 1 })).json().capNow.cap).toBe(1);
+    expect((await dispatch()).json()).toMatchObject({ ok: false, refused: 'cap-concurrency', limit: 1, running: 2 });
+  });
+});
 
 describe('the caps answer shape is defined ONCE, and both halves send it', () => {
   // D-1212, and it is the coordinator's own ruling getting the mechanism it

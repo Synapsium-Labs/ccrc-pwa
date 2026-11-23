@@ -13,8 +13,23 @@ export interface AliasRow {
   minVersion: string | null;
 }
 
+/** One row or one class's target the cache reader left out (cache-row-skip): `at` the field that breaks it
+ *  (`models[3].id`, `models[3].min_claude_code_version`, `provider_alias_targets.<class>.default`), `why` what is wrong
+ *  with that field. */
+export interface CacheSkip {
+  at: string;
+  why: string;
+  /** The normalized id of a skipped row (no row for that id survives in this file), `null` if the id was unreadable.
+   *  Omitted for skips that cannot hide a row for any valid target (malformed target or invalid string id). */
+  rowId?: string | null;
+}
+
 export type CacheReading =
-  | { format: 'current'; fetchedAt: string; aliasTargets: Record<ModelClass, string | null>; rows: Map<string, AliasRow> }
+  | {
+    format: 'current'; fetchedAt: string; aliasTargets: Record<ModelClass, string | null>; rows: Map<string, AliasRow>;
+    /** What the reader left out, in file order (targets first); `[]` when it read every row and every target. */
+    skipped: readonly CacheSkip[];
+  }
   | { format: 'older'; fetchedAt: string | null }
   | { format: 'invalid'; why: string };
 
@@ -62,8 +77,8 @@ export interface AliasClass {
   source: 'cache' | 'use' | null;
   evidenceAt: string | null;
   idSince: string | null;
-  /** The newest own cache's target for the class, even when the lane's build cannot launch it: what the cache says.
-   *  A reader labels from `id`, never from this. */
+  /** The newest own cache's target for the class, even if the lane's build is below its measured minimum. Null if
+   *  the target is absent, malformed, or a relevant skipped row leaves its minimum unknown. Label from `id`. */
   cacheTarget: string | null;
   seenId: string | null;
   seenAt: string | null;

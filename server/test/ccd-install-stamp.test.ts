@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_POOLSET_LIB, CCD_POOLSET_LIB_PIN_PLACEHOLDER, CCD_LONGLIVED_LIB, CCD_LONGLIVED_LIB_PIN_PLACEHOLDER, CCD_DOOR_LIB, CCD_DOOR_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_POOLSET_LIB, CCD_POOLSET_LIB_PIN_PLACEHOLDER, CCD_LONGLIVED_LIB, CCD_LONGLIVED_LIB_PIN_PLACEHOLDER, CCD_DOOR_LIB, CCD_DOOR_LIB_PIN_PLACEHOLDER, CCD_ALIASES_LIB, CCD_ALIASES_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
 import { verifyMarker, markGenerated } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -32,7 +32,7 @@ const sha = (text: string): string => createHash('sha256').update(text).digest('
 const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
 /** A fixture body: the pin placeholders the installer renders (the two libraries', D-6913 and D-7463, and the docs
  *  redactor's two, D-7077) and one line of its own. */
-const FIXTURE = `#!/usr/bin/env bash\n${CCD_LIB_PIN_PLACEHOLDER}\n${CCD_TRAIN_LIB_PIN_PLACEHOLDER}\n${CCD_LEASE_LIB_PIN_PLACEHOLDER}\n${CCD_POOLSET_LIB_PIN_PLACEHOLDER}\n${CCD_LONGLIVED_LIB_PIN_PLACEHOLDER}\n${CCD_DOOR_LIB_PIN_PLACEHOLDER}\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n__CCD_DOOR_SHA256=stamp-at-install\necho fixture\n`;
+const FIXTURE = `#!/usr/bin/env bash\n${CCD_LIB_PIN_PLACEHOLDER}\n${CCD_TRAIN_LIB_PIN_PLACEHOLDER}\n${CCD_LEASE_LIB_PIN_PLACEHOLDER}\n${CCD_POOLSET_LIB_PIN_PLACEHOLDER}\n${CCD_LONGLIVED_LIB_PIN_PLACEHOLDER}\n${CCD_DOOR_LIB_PIN_PLACEHOLDER}\n${CCD_ALIASES_LIB_PIN_PLACEHOLDER}\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n__CCD_DOOR_SHA256=stamp-at-install\necho fixture\n`;
 
 /** A shipped-tree copy at `<home>/ccrc` holding THIS checkout's real ccd body, library, template and installer. */
 function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {
@@ -45,6 +45,7 @@ function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {
   fs.copyFileSync(CCD_POOLSET_LIB, path.join(dir, 'lib', 'pool-set.sh'));   // the fourth library (the Overlord W1)
   fs.copyFileSync(CCD_LONGLIVED_LIB, path.join(dir, 'lib', 'long-lived.sh'));   // the fifth library (the Overlord W1 ccd arms)
   fs.copyFileSync(CCD_DOOR_LIB, path.join(dir, 'lib', 'door.sh'));   // the sixth library (the Overlord's door process)
+  fs.copyFileSync(CCD_ALIASES_LIB, path.join(dir, 'lib', 'model-aliases.sh'));   // the seventh library (the model-class Anthropic arm)
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
   fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));
@@ -186,6 +187,15 @@ describe('the library pin is rendered at install time, under the stamp (D-6913)'
     const text = fs.readFileSync(body(), 'utf8');
     const doorLib = path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'door.sh');
     expect(text.match(/^__CCD_LIB_DOOR_SHA256=.*$/gm)).toEqual([`__CCD_LIB_DOOR_SHA256=${sha(fs.readFileSync(doorLib, 'utf8'))}`]);
+    expect(verifyMarker(text)).toBe('ccrc-unmodified');
+  });
+
+  it('the installed body pins the installed model-aliases library (the model-class Anthropic arm)', () => {
+    plantTree();
+    expect(install().code).toBe(0);
+    const text = fs.readFileSync(body(), 'utf8');
+    const aliasesLib = path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'model-aliases.sh');
+    expect(text.match(/^__CCD_LIB_ALIASES_SHA256=.*$/gm)).toEqual([`__CCD_LIB_ALIASES_SHA256=${sha(fs.readFileSync(aliasesLib, 'utf8'))}`]);
     expect(verifyMarker(text)).toBe('ccrc-unmodified');
   });
 

@@ -145,6 +145,16 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     const bodies = bodiesOf('## The Linear owner: plan map-propose');
     expect(bodies).toHaveLength(1);
     for (const b of bodies) expect(parseMapProposal(b, 'AAA').ok, JSON.stringify(b)).toBe(true);
+    // w7-map-identifier (D-8186): the runnable example names issues by identifier alone, the recommended path; the older
+    // id-and-identifier pair is shown inline as a whole body, and parses too.
+    const example = bodies[0] as { entries: Record<string, unknown>[] };
+    expect(example.entries.length).toBeGreaterThan(0);
+    for (const e of example.entries) expect(Object.keys(e)).not.toContain('issue');
+    const olderText = /`(\{"entries":\[\{"issue":[^`]+\})`/.exec(plan())?.[1];
+    expect(olderText).toBeDefined();
+    const older = JSON.parse(olderText!.replace(/<[^>]+>/g, 'some text')) as { entries: Record<string, unknown>[] };
+    expect(Object.keys(older.entries[0]!)).toEqual(['issue', 'identifier', 'class']);
+    expect(parseMapProposal(older, 'AAA').ok).toBe(true);
     const text = plan();
     const at = text.indexOf('\n## The Linear owner: plan map-propose\n');
     const next = text.indexOf('\n## ', at + 1);
@@ -152,6 +162,14 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     expect(section).toMatch(/`team-ambiguous` \(a migration of the team waits for a map in more than one workspace whose owner you are, so ccrc cannot tell which this map is for: stop and tell the operator\)/);
     expect(section).toMatch(/`unreachable` \(ccrc could not measure something the map needs: the team's Linear owner, in a workspace whose owner you could be; a Linear key that serves the team; the team's open issues, read from Linear, all of them within the pages one map reads; or the runs\. The refusal's detail names which\. Try once more later; if it is refused again, stop and tell the operator\. When the detail says the team has more open issues than the map reads, tell the operator at once: a retry never helps\)\./);
     for (const word of ['not-linear-owner', 'map-incomplete', 'map-rewrites-plan', 'plan-bad-body', 'team-ambiguous', 'unreachable']) expect(section).toContain(`\`${word}\``);
+    expect(section).toContain('ccrc matches each identifier, in any letter case, against the team\'s open issues it reads for this map, '
+      + 'and stores the issue\'s Linear id and the identifier as Linear spells it; it never guesses, so a link or any other text is no identifier.');
+    expect(section).toContain('The older form, an entry that also carries the issue\'s Linear id as `issue`, is still accepted');
+    expect(section).toContain(': its `issue` must be that identifier\'s own issue.');
+    expect(section).toContain('`map-incomplete` (an open issue missing; one listed twice, also once by its id and once by its identifier; '
+      + 'an identifier that is not one of the open issues this map may place, because it is closed, in another team or workspace, already '
+      + 'held by ccrc\'s plan, or not on a follow-up\'s list; or an identifier more than one of the issues read answers to)');
+    expect(section).toContain('`plan-bad-body` (an `issue` id that is not its identifier\'s issue,');
   });
 
   it('its plan take examples, all three arms, parse as the route parses them (review 2580 A5)', () => {
@@ -380,13 +398,13 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
 
   it('names the suggest door\'s own refusal words, team-ambiguous and write-failed with their remedies (review 3242 F1, 3245 F1)', () => {
     const section = suggestSection();
-    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'write-failed',
+    for (const word of ['team-set', 'team-unknown', 'team-ambiguous', 'not-a-coordinator', 'run-unreadable', 'unavailable', 'not-configured', 'write-failed',
       'no-project', 'linear-text-public', 'bad-request']) {
       expect(section, `the section does not name ${word}`).toContain(`\`${word}\``);
     }
     expect(section).toContain('`team-ambiguous` (no workspace named and the key is in more than one connected workspace: send it again with `workspace`)');
     expect(section).toContain('`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions)');
-    expect(section).toContain('`unavailable` (the Linear store could not be read: try again later)');
+    expect(section).toContain('`unavailable` (the Linear store, or a workspace the answer depends on, could not be read: try once more later, then tell the operator)');
     expect(section).toContain('`write-failed` (the store write failed: try once more; if it is refused again, stop and tell the operator)');
   });
 });

@@ -319,7 +319,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
-  'continuity_hook_reports', 'continuity_witness_checks'] as const;
+  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -404,12 +404,14 @@ describe(TABLES_PIN, () => {
       portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
       // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
       answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
-      // The Overlord authority journal's head row (Overlord W1, H27): one writer, the apply step of the journal's append, inside
-      // its caller's transaction. Confirm the restore's `appendConfirmInTx` joins it in authority journal C.
-      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx'],
+      // The Overlord authority journal's head row (Overlord W1, H27): one writer, `writeHeadRow`, inside its caller's transaction,
+      // called by the apply step of `appendInTx` and by Confirm the restore's `appendConfirmInTx` (authority journal C).
+      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#writeHeadRow'],
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
-      overlord_designation: [...['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
+      // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the
+      // row's writers.
+      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
         .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
       // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
       // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.
@@ -467,6 +469,11 @@ describe(TABLES_PIN, () => {
       continuity_hook_reports: ['server/src/continuity/hookReportStore.ts#insertHookReport'],
       // The witness checks (Overlord W1 door process B1, plan w1-door-process.md Task 9): one writer, which also prunes its rows past 7 days.
       continuity_witness_checks: ['server/src/continuity/hookReportStore.ts#recordWitnessCheck'],
+      // The run cap's stored number and what it is (D-8920): ONE writer of `maxConcurrentWorkers`, `capMode`
+      // and `updatedAt`, in one statement, reached only from the caps door (`coord-caps-route.test.ts` holds the one
+      // caller). A second method that writes the mode reds here. The seed row and migration 121's upgrade rule are SQL in
+      // MIGRATIONS' string, so the scanner names its module.
+      coordinator_state: ['server/src/coord/schema.ts#(module)', `${S}setCaps`],
     });
   });
 

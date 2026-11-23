@@ -655,6 +655,16 @@ _ka_turn() {   # <account> <config-dir> -> the child's rc; output captured
       set +a
     } >/dev/null 2>&1
     [ -n "$cfg" ] && export CLAUDE_CONFIG_DIR="$cfg"
+    # D-8943: THIS TURN'S READING IS NEW, AND IT SAYS SO. The account row's writer
+    # (`statusline-command.sh`) drops a reading LOWER than the row unless its
+    # writer shows it is new, which a ccd session does from its own history. This
+    # process has none, and it is the only reader of an account every session has
+    # left because it reads at the ceiling: without this an EARLY reset there
+    # stayed unseen until the old window ended. The value is the second the turn
+    # starts; the writer takes it only from a render with no ccd id and only for
+    # ten minutes. It is set HERE, in the turn's own subshell, so nothing but this
+    # turn's process tree ever carries it: no session is a child of this script.
+    CCRC_KEEPALIVE_PROBE="$(date +%s)"; export CCRC_KEEPALIVE_PROBE
     exec timeout "$CCRC_KEEPALIVE_TURN_TIMEOUT" \
       "$WRAPPER_DIR/$acct" -p "$CCRC_KEEPALIVE_PROMPT" \
       --model "$CCRC_KEEPALIVE_MODEL" --output-format json
