@@ -134,7 +134,7 @@ and acceptance.
 | - | doctor | release-lookup-pins | Pin the release lookup's library read with a stand-in library, and two text corrections (wave 3's fifth review) | #3216 | merged 2026-11-22 |
 | - | anthropic-arm | no-keys-transitive | Guard passive alias observation against indirect key senders (wave 8's third review) | #3219 | merged 2026-11-22 |
 | - | anthropic-arm | entry-comment-seven | The launcher's comment names its seven libraries, with the launcher's next change of substance | | with that change |
-| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10, run 3500: the hunks wait on the freeze holder's consent (below) |
+| - | acceptance | readme-anthropic-arm | README lines for the Anthropic arm, after the README freeze lifts | | wave 10, run 3500: applied under the freeze holder's consent to the exact packet |
 
 Order: waves 3 and 8 merged on 2026-11-22 (#3118, then #3122), and wave 9 built on both and merged that evening
 (#3221). Five follow-ups ran beside wave 9, each on files wave 9 did not hold, and all merged the same day. On
@@ -208,7 +208,8 @@ Codex lanes marked as Codex lanes in its roster, the fleet box on v0.0.1288 or l
   continuous fresh sightings counted on the catalogue's own fetch times, with no shortcut by the clock; an Anthropic lane
   follows the resolved class alias with its model and effort, preserves a held id, and moves a running session by the
   existing idle relaunch, typing nothing, and the ledger makes no claim that belongs to the renewal programme (call 452);
-  doctor says what the files it reads show, not when the next refresh will act. The README's hunks are held (below).
+  doctor says what the files it reads show, not when the next refresh will act. The README's eight hunks are applied,
+  as the exact packet the holder of the README claim consented to.
   The corrected D-8751, the over-cap wording and the strong-timeout limit are in the Anthropic arm's plan (a
   correction under D-8751). The `ccrc-models` test's title was checked and not confirmed stale, so no test changed.
 - **The Models sheet and its door after #3246.** They offer Revert only, on a class with explicit literal-`true` support
@@ -327,7 +328,5 @@ v0.0.1416 is a published prerelease and no evidence of installation. Open, unles
 - `natural-move` at a real model release: the canary, the move, a new session on the new model, and no sessions-behind
   warning 24 hours later, doctor's evidence.
 - The renewal programme's evaluation evidence, which owns any claim about session renewal.
-- The README's hunks for the Anthropic arm and the models section, which wait on the consent of the claim holder on
-  `README.md`.
 
 Nothing here moves the fleet or asks the owner for a step.

@@ -19,11 +19,12 @@ at 31a07be5d0, which contains #3246 (merge 7ac5df4c96).
 - **The Anthropic arm's plan**: a correction under D-8751 to one push per class move, with the over-cap wording and the
   strong-timeout limit. Its head commit carries the `Ledger-Edit:` trailer.
 
-## What this PR did not change
+## README, under consent, and what did not change
 
-- **`README.md`.** Live claim 6676 (run 1850) holds it. The proposed hunks were sent to the holder as one unified diff
-  against `31a07be5d0bb1f348c3ddbef3e4d2e3d63cb20c1`, and the file stays untouched until the holder consents to those
-  exact bytes. Changed bytes or a moved anchor need fresh consent. The hunks cover the context-window rule (D-8564's
+- **`README.md` (changed, under consent).** Claim 6676 (run 1850) holds it. The holder consented to one unified diff
+  against `31a07be5d0bb1f348c3ddbef3e4d2e3d63cb20c1` (eight hunks, 20816 bytes, sha256
+  `60e740ddc1a0f914e2a6766fac31975c3f87a7eac3589e1a26c9eab957e2513a`), applied byte for byte here. The consent covers
+  that packet only; a changed line needs fresh consent. The hunks cover the context-window rule (D-8564's
   provider promise and the stale-catalogue notice), the Anthropic aliases file and idle relaunch, the retirement exception,
   Revert as the one brake, the Models sheet (the README said it had no PWA surface), the doctor causes and the pushes.
 - **The `ccrc-models` test title.** The candidates read were accurate for what they assert, so none was confirmed stale and
