@@ -86,6 +86,16 @@ const failed = (o: Json = {}): Json => ({ at: '2026-10-22T10:05:12Z', how: 'adva
   to: 'model-6.1-gamma', ok: false, canary: 'failed', reason: 'http 500: upstream error', tries: 3,
   lastAt: '2026-10-22T12:05:09Z', ...o });
 const HOLD = { at: '2026-10-22T08:00:00Z', by: 'hand' };
+/** revert-ends-itself: a revert hold waiting for a model newer than model-6.1-gamma, the lane's own candidate, so it
+ *  does not end. HOLD, a hand hold, ends on that candidate. */
+const WAITS = { at: '2026-10-22T08:00:00Z', by: 'revert', from: 'model-6.1-gamma' };
+const RETRY_ONE = '  remedy: the next hourly refresh retries it, canary first, and this clears once a move succeeds or a newer '
+  + 'candidate takes its place\n';
+const ENDS_CODEX = (classes: string): string => '  remedy: the hourly refresh ends the hold by itself and moves the class, '
+  + 'canary first; it has not reached this lane since the end came, which the \'models\' line names as a catalogue the '
+  + `refresh is not reaching (${classes})\n`;
+const HB_PASS = 'PASS model-held-behind: 1 lane(s) with a model registry or an aliases file: no hold whose end has come '
+  + 'still stands past the hourly refresh';
 
 /** One session's registry row, turn marker and usage sidecar. `svc` is the word the service manager answers for its
  *  unit (default `active`); `null` leaves it unanswered. `sidecar: false` writes no usage sidecar (a home whose
@@ -204,9 +214,8 @@ describe('model-advance-held-back', () => {
     plantLane(h, { advance: stepAdvance({ opus: { history: [failed()] } }) });
     const r = check(h, 'model-advance-held-back');
     expect(r.out).toBe('WARN model-advance-held-back: lane-a opus stays on model-5.6-gamma: model-6.1-gamma failed its '
-      + 'canary 3 times since 2026-10-22T10:05Z (http 500: upstream error)\n'
-      + '  remedy: the next hourly refresh retries it; \'ccrc models lane-a show\' shows the class, and '
-      + '\'ccrc models lane-a hold opus\' stops the retries\n');
+      + 'canary 3 times since 2026-10-22T10:05Z (http 500: upstream error)\n' + RETRY_ONE);
+    expect(r.out, 'revert-ends-itself: no remedy names a hold, a release or a shell verb').not.toMatch(/hold|release|ccrc models/);
     expect(r.code).toBe(2);
     plantLane(h, { registry: MOVED_REGISTRY, advance: stepAdvance({ opus: {
       previous: { model: 'model-5.6-gamma', effort: 'max' }, history: [failed(), { ...MOVE, at: '2026-10-22T13:05:10Z' }] } }) });
@@ -234,8 +243,8 @@ describe('model-advance-held-back', () => {
     expect(r.out).toBe('WARN model-advance-held-back: lane-a haiku stays on model-5.6-alpha: model-6-alpha failed its '
       + 'canary once, at 2026-10-22T10:05Z (http 500: upstream error); lane-a opus stays on model-5.6-gamma: '
       + 'model-6.1-gamma failed its canary 3 times since 2026-10-22T10:05Z (http 500: upstream error)\n'
-      + '  remedy: the next hourly refresh retries each; \'ccrc models lane-a show\' shows the classes, and '
-      + '\'ccrc models lane-a hold <class>\' stops a class\'s retries (haiku, opus)\n');
+      + '  remedy: the next hourly refresh retries each, canary first, and each clears once its move succeeds or a newer '
+      + 'candidate takes its place (haiku, opus)\n');
   });
 
   it('two lanes give two WARN lines, each with its own remedy', () => {
@@ -245,38 +254,78 @@ describe('model-advance-held-back', () => {
     const lines = check(h, 'model-advance-held-back').out.split('\n').filter(Boolean);
     expect(lines).toHaveLength(4);
     expect(lines[0]).toMatch(/^WARN model-advance-held-back: lane-a opus stays on model-5\.6-gamma: /);
-    expect(lines[1]).toMatch(/^ {2}remedy: the next hourly refresh retries it; .*'ccrc models lane-a hold opus'/);
+    expect(lines[1]).toBe(RETRY_ONE.trimEnd());
     expect(lines[2]).toMatch(/^WARN model-advance-held-back: lane-b opus stays on model-5\.6-gamma: /);
-    expect(lines[3]).toMatch(/^ {2}remedy: the next hourly refresh retries it; .*'ccrc models lane-b hold opus'/);
+    expect(lines[3]).toBe(RETRY_ONE.trimEnd());
   });
 
-  it('a held class is not held back: it is model-held-behind\'s (D-5221)', () => {
+  it('a hold that does not end is not held back (D-5221): the hold stops the retries', () => {
+    const h = box();
+    plantLane(h, { advance: stepAdvance({ opus: { hold: WAITS, history: [failed()] } }) });
+    expect(check(h, 'model-advance-held-back').out).toMatch(/^PASS model-advance-held-back: /);
+    expect(check(h, 'model-held-behind').code).toBe(0);
+  });
+
+  it('a hold whose end has come is retried, so its failed canary is held back, and model-held-behind leaves it to that line', () => {
     const h = box();
     plantLane(h, { advance: stepAdvance({ opus: { hold: HOLD, history: [failed()] } }) });
-    expect(check(h, 'model-advance-held-back').out).toMatch(/^PASS model-advance-held-back: /);
-    expect(check(h, 'model-held-behind').out).toMatch(/^WARN model-held-behind: lane-a opus is held /);
+    expect(check(h, 'model-advance-held-back').out).toMatch(/^WARN model-advance-held-back: lane-a opus stays on /);
+    expect(check(h, 'model-held-behind').out).toBe(`${HB_PASS}; lane-a opus's hold ends by itself at the next hourly refresh `
+      + 'that reaches the lane\n');
   });
 });
 
 describe('model-held-behind', () => {
-  it('WARNs a held class with a newer model in its family, with its exact line and one remedy, and PASSes once released', () => {
+  // revert-ends-itself: the line asks the op's one decider of a hold's end, and WARNs only a hold whose end has come and
+  // that still stands past the next hourly refresh. The lane's catalogue was observed 2026-09-10T00:26:40Z, weeks before
+  // NOW, so an end it shows is past that refresh.
+  it('WARNs a hold whose end has come past the next hourly refresh, with its exact line and one remedy, and PASSes once it is gone', () => {
     const h = box();
     plantLane(h, { advance: stepAdvance({ opus: { hold: HOLD } }) });
     const r = check(h, 'model-held-behind');
-    expect(r.out).toBe('WARN model-held-behind: lane-a opus is held (2026-10-22T08:00Z, by hand) while model-6.1-gamma '
-      + 'is newer in its family\n'
-      + '  remedy: \'ccrc models lane-a release opus\' lets the next hourly refresh advance it, canary first\n');
+    expect(r.out).toBe('WARN model-held-behind: lane-a opus is held (2026-10-22T08:00Z, by hand) on model-5.6-gamma though '
+      + 'the catalogue observed 2026-09-10T00:26Z lists model-6.1-gamma, newer than model-5.6-gamma, and the hold still stands '
+      + 'past the hourly refresh that ends it\n' + ENDS_CODEX('opus'));
+    expect(r.out, 'no remedy names a hold, a release or a shell verb').not.toMatch(/release|ccrc models|Models sheet/);
     expect(r.code).toBe(2);
     plantLane(h, { advance: stepAdvance() });
-    expect(check(h, 'model-held-behind').out).toBe('PASS model-held-behind: 1 lane(s) with a model registry or an aliases file: no held '
-      + 'class has a newer model in its family\n');
+    expect(check(h, 'model-held-behind').out).toBe(`${HB_PASS}\n`);
   });
 
-  it('an empty class held by a revert is behind the newest model of its stored family', () => {
+  it('a revert hold waiting for its newer model PASSes, naming what it waits for', () => {
+    const h = box();
+    plantLane(h, { advance: stepAdvance({ opus: { hold: WAITS } }) });
+    const r = check(h, 'model-held-behind');
+    expect(r.out).toBe(`${HB_PASS}; lane-a opus is held on model-5.6-gamma until a model of its family newer than `
+      + 'model-6.1-gamma appears\n');
+    expect(r.code).toBe(0);
+  });
+
+  it('a hold whose end has come within the hourly refresh\'s window PASSes: the refresh ends it by itself', () => {
+    const h = box();
+    // Observed ten minutes before NOW: the refresh that ends the hold has not yet had its turn.
+    plantLane(h, { catalogue: { ...STEP_CATALOGUE, fetchedAt: Date.parse(NOW) / 1000 - 600 },
+      advance: stepAdvance({ opus: { hold: HOLD } }) });
+    const r = check(h, 'model-held-behind');
+    expect(r.out).toBe(`${HB_PASS}; lane-a opus's hold ends by itself at the next hourly refresh that reaches the lane\n`);
+    expect(r.code).toBe(0);
+  });
+
+  it('a hand hold on an empty class ends at its family\'s first model', () => {
+    const h = box();
+    plantLane(h, { advance: stepAdvance({ fable: { family: 'delta', hold: { at: '2026-10-22T08:00:00Z', by: 'hand' } } }) });
+    expect(check(h, 'model-held-behind').out.split('\n')[0]).toBe('WARN model-held-behind: lane-a fable is held '
+      + '(2026-10-22T08:00Z, by hand) on none though the catalogue observed 2026-09-10T00:26Z lists model-6-delta for its '
+      + 'empty class, and the hold still stands past the hourly refresh that ends it');
+  });
+
+  it('a Codex revert hold with no baseline waits for usable evidence, with no action needed', () => {
     const h = box();
     plantLane(h, { advance: stepAdvance({ fable: { family: 'delta', hold: { at: '2026-10-22T08:00:00Z', by: 'revert' } } }) });
-    expect(check(h, 'model-held-behind').out.split('\n')[0]).toBe('WARN model-held-behind: lane-a fable is held '
-      + '(2026-10-22T08:00Z, by revert) while model-6-delta is newer in its family');
+    const r = check(h, 'model-held-behind');
+    expect(r.out).toBe(`${HB_PASS}; lane-a fable is held on none until the hourly refresh can record the class's observed `
+      + 'model from usable evidence and a newer model of its family appears (no action is needed)\n');
+    expect(r.code).toBe(0);
   });
 
   it('a held class whose pin has left the catalogue says so, and never calls an older fallback newer', () => {
@@ -287,8 +336,8 @@ describe('model-held-behind', () => {
     plantLane(h, { registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-7-gamma' } },
       advance: held('2026-09-09T18:26:40Z') });
     expect(check(h, 'model-held-behind').out.split('\n')[0]).toBe('WARN model-held-behind: lane-a opus is held '
-      + '(2026-10-22T08:00Z, by hand) on model-7-gamma, which has left the catalogue; model-6.1-gamma is the newest '
-      + 'left in its family');
+      + '(2026-10-22T08:00Z, by hand) on model-7-gamma though it has left the catalogue past its grace (model-6.1-gamma is '
+      + 'the newest left in its family), and the hold still stands past the hourly refresh that ends it');
     // Within the grace a missing pin is no fallback yet, so a held class is not behind one.
     plantLane(h, { registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-7-gamma' } },
       advance: held('2026-09-09T18:26:41Z') });
@@ -471,8 +520,7 @@ describe('model-advance-blocked', () => {
     fs.mkdirSync(join(h, '.ccrc', 'models', 'lane-a.advance.json'));
     expect(check(h, 'model-advance-blocked').out.split('\n')[1]).toBe('  remedy: per cause: advance file — repair the '
       + 'file the finding names; if you remove it instead, its holds and move history are lost and the next hourly '
-      + 'refresh seeds every empty class again and fills it, so run \'ccrc models lane-a hold <class>\' at once for '
-      + 'each class that must stay where it is');
+      + 'refresh seeds every empty class again and fills it');
   });
 });
 
@@ -628,7 +676,9 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     plantCache(h, C2, { opus: X2, sonnet: S2 });
     aop(h, T1, 'aliases-refresh');
   }
-  /** opus held on X1 at H1, then its alias moves on to X2 on evidence newer than the hold: held behind. */
+  /** opus held on X1 at H1, then its alias moves on to X2 on evidence newer than the hold. The refresh at T1 ends that
+   *  hold by itself (revert-ends-itself); what model-held-behind exists for is a hold the refresh did NOT end, so the
+   *  hold is written back over the refresh's write by hand, as if that write had been lost. */
   function heldStale(h: string): void {
     plantBuild(h, '9.9.0');
     plantCache(h, C1, { opus: X1 });
@@ -636,6 +686,10 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     aop(h, H1, 'hold');
     plantCache(h, C2, { opus: X2 });
     aop(h, T1, 'aliases-refresh');
+    const a = JSON.parse(fs.readFileSync(advancePath(h), 'utf8')) as { classes: Record<string, Json> };
+    expect(a.classes['opus']!['hold'], 'the refresh ended the hold by itself').toBeNull();
+    a.classes['opus']!['hold'] = { at: H1, by: 'hand', model: X1 };
+    fs.writeFileSync(advancePath(h), `${JSON.stringify(a, null, 2)}\n`);
   }
   /** moved, then reverted at R1: held on X1 by a revert, and its evidence (C2) is older than the hold, so unobserved
    *  once the next hourly refresh has read the hold (the revert itself rewrites no aliases file). */
@@ -865,25 +919,27 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
   });
 
   // ── held behind ──
-  it('held behind on an Anthropic lane carries the five fields, and the row is the exact one the check reads', () => {
+  it('held behind on an Anthropic lane carries its fields, and the row is the exact one the check reads', () => {
     const h = box();
     heldStale(h);
-    expect(laneOf(h)['heldBehind']).toEqual([{ class: 'opus', hold: { at: H1, by: 'hand' }, reason: 'newer', pin: X1, newer: X2 }]);
+    expect(laneOf(h)['heldBehind']).toEqual([{ class: 'opus', hold: { at: H1, by: 'hand' }, reason: 'newer', pin: X1, newer: X2,
+      from: X1, since: C2, due: true }]);
     expect(laneOf(h)['heldBack']).toEqual([]);
   });
 
-  it('an Anthropic held-behind row prints the release wording, no canary, and a Codex row beside it keeps its own', () => {
+  it('an Anthropic held-behind row says the class follows its alias by itself, no canary, and a Codex row beside it keeps its own', () => {
     const h = box();
     plantLane(h, { advance: stepAdvance({ opus: { hold: HOLD } }) });
     heldStale(h);
     const r = check(h, 'model-held-behind');
     const lines = r.out.split('\n');
-    expect(lines[0]).toBe(`WARN model-held-behind: lane-a opus is held (2026-10-22T08:00Z, by hand) while model-6.1-gamma is newer in its family`);
-    expect(lines[1]).toBe('  remedy: \'ccrc models lane-a release opus\' lets the next hourly refresh advance it, canary first');
-    expect(lines[2]).toBe(`WARN model-held-behind: lane-c opus is held (2026-10-18T12:00Z, by hand) while ${X2} is newer in its family`);
-    expect(lines[3]).toBe('  remedy: release the hold from the lane\'s Models sheet (or with \'ccrc models lane-c release <class>\': opus), and the '
-      + 'class follows its alias: its sessions launch on the alias\'s current id from their next launch. Leaving the hold in place keeps the '
-      + 'held id, and this warning');
+    expect(lines[0]).toMatch(/^WARN model-held-behind: lane-a opus is held \(2026-10-22T08:00Z, by hand\) on model-5\.6-gamma though /);
+    expect(lines[1]).toBe(ENDS_CODEX('opus').trimEnd());
+    expect(lines[2]).toBe(`WARN model-held-behind: lane-c opus is held (2026-10-18T12:00Z, by hand) on ${X1} though its alias has `
+      + `named ${X2} since 2026-10-19T00:00Z, and the hold still stands past the hourly refresh that ends it`);
+    expect(lines[3]).toBe('  remedy: the hourly refresh ends the hold by itself and the class follows its alias; it has not acted '
+      + 'since the alias moved, so the \'services\' line names a refresh timer that is not running (opus)');
+    expect(r.out, 'no remedy names a hold, a release or a shell verb').not.toMatch(/release|ccrc models|Models sheet/);
     expect(lines[3]).not.toContain('canary');
     expect(r.code).toBe(2);
   });
@@ -911,10 +967,27 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     // A refresh over the same cache: still evidence older than the hold, still nothing.
     aop(h, '2026-10-20T01:00:00Z', 'aliases-refresh');
     expect(laneOf(h)['heldBehind']).toEqual([]);
-    // Claude Code fetches its catalogue after the hold, still naming X2: now the class is held behind, as it should be.
+    // Claude Code fetches its catalogue after the hold, still naming X2, the id the Revert left (revert-ends-itself): the
+    // hold waits for a third id, so the class is not held behind, and the PASS names what it waits for.
     plantCache(h, '2026-10-20T02:00:00Z', { opus: X2, sonnet: S2 });
     aop(h, '2026-10-20T03:00:00Z', 'aliases-refresh');
-    expect(laneOf(h)['heldBehind']).toEqual([{ class: 'opus', hold: { at: R1, by: 'revert' }, reason: 'newer', pin: X1, newer: X2 }]);
+    expect(laneOf(h)['heldBehind']).toEqual([]);
+    expect(laneOf(h)['holdsWaiting']).toEqual([{ class: 'opus', pin: X1, hold: { at: R1, by: 'revert' }, from: X2 }]);
+    expect(check(h, 'model-held-behind').out).toContain(`; lane-c opus is held on ${X1} until its alias names a model other `
+      + `than ${X1} and ${X2}, on evidence after the hold`);
+  });
+
+  it('an Anthropic revert hold with no baseline waits for usable evidence, never held behind', () => {
+    const h = box();
+    reverted(h);
+    const a = JSON.parse(fs.readFileSync(advancePath(h), 'utf8')) as { classes: Record<string, Json> };
+    a.classes['opus']!['hold'] = { at: R1, by: 'revert', model: X1 };
+    a.classes['opus']!['history'] = [];
+    fs.writeFileSync(advancePath(h), `${JSON.stringify(a, null, 2)}\n`);
+    expect(laneOf(h)['heldBehind']).toEqual([]);
+    expect(laneOf(h)['holdsWaiting']).toEqual([{ class: 'opus', pin: X1, hold: { at: R1, by: 'revert' }, from: null }]);
+    expect(check(h, 'model-held-behind').out).toContain(`; lane-c opus is held on ${X1} until the hourly refresh can record `
+      + "the class's observed model from usable evidence and its alias names a third model after it (no action is needed)");
   });
 
   it('an unobserved class is never held behind', () => {
@@ -1164,10 +1237,9 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     const warn = out.split('\n').findIndex((l) => l.startsWith('WARN model-advance-blocked: lane-c'));
     expect(warn, out).toBeGreaterThanOrEqual(0);
     expect(out.split('\n')[warn + 1]).toBe('  remedy: per cause: advance file — repair the file the finding names; until '
-      + 'it is repaired, hold, release and revert on this lane are refused, a hold ccd can no longer read does not reach a '
+      + 'it is repaired, the lane\'s model acts are refused, a hold ccd can no longer read does not reach a '
       + 'launch (that class launches on its alias\'s current id), and a hold ccd can still read keeps applying. If '
-      + 'you remove it instead, its holds and move history are lost and nothing refills them: hold again, from the '
-      + 'lane\'s Models sheet or with \'ccrc models lane-c hold <class>\', each class that must stay where it is');
+      + 'you remove it instead, its holds and move history are lost, and every class follows its alias');
   });
 
   it('the PASS and the WARN carry the unmeasured count of an Anthropic lane\'s sessions', () => {
@@ -1185,14 +1257,12 @@ describe('model-advance-blocked: pin-missing, effort-dropped and effort-fallback
   // ends there when its record was written by that refresh (D-8838).
   const SEEN = '2026-09-10T00:26:40Z';
   const MISSING_FIX = '  remedy: per cause: missing pin — the class moves to the older model named once every hourly sighting '
-    + 'has missed its pin for six hours, and a sighting that lists it again ends the wait; to keep the class where it is, '
-    + 'hold it from the lane\'s Models sheet (or \'ccrc models lane-a hold <class>\'); after a move, Revert on the sheet '
-    + '(or \'ccrc models lane-a revert <class>\') works only once the previous model is listed again, and without a hold '
-    + 'the next hourly advance moves back to it by itself\n';
+    + 'has missed its pin for six hours, and a sighting that lists it again ends the wait; after that move, the next '
+    + 'hourly advance moves back to the pin by itself once it is listed again\n';
   const gone = (missing?: unknown) => ({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-9-gamma' } },
     advance: stepAdvance(missing === undefined ? {} : { opus: { missing } }) });
 
-  it('names a class waiting on a missing pin, with its run, the earliest move and the hold and revert remedy', () => {
+  it('names a class waiting on a missing pin, with its run, the earliest move and what happens by itself', () => {
     const h = box();
     plantLane(h, gone({ model: 'model-9-gamma', since: '2026-09-09T22:26:40Z', seen: SEEN }));
     const r = check(h, 'model-advance-blocked');

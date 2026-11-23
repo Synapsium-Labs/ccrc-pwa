@@ -12371,12 +12371,15 @@ _check_overlord-mods() {
 # WHAT EACH SAYS: one WARN line per lane, its findings joined with `_dr_join`, then that lane's remedy; a PASS that
 # names how many lanes were measured. Class words come from the answer; this block spells none.
 #  - `model-advance-held-back`: a class whose newest history entry is a failed advance to its standing candidate
-#    (its canary failed, or the move after a passed canary did). Clears when an advance succeeds, when the candidate
-#    leaves (D-5191), or when the class is held (D-5221: a hold stops
-#    the retries, and the class is then `model-held-behind`'s).
-#  - `model-held-behind`: a held class with a newer eligible model in its family, or whose pin has left the
-#    catalogue (the op's `reason: retired`: its fallback may be OLDER, so that line never calls it newer). Clears
-#    when the hold is released.
+#    (its canary failed, or the move after a passed canary did), held or not: a hold whose end has come
+#    (revert-ends-itself) is retried like any class, and a failed canary keeps it. Clears when an advance succeeds,
+#    or when the candidate leaves (D-5191).
+#  - `model-held-behind` (revert-ends-itself): a hold whose end has come, asked of the op's one decider (`holdEnds`,
+#    `shared/model-advance.mjs`), that still stands past the next hourly refresh (`due`); never a class the
+#    held-back or blocked line already names, nor one on a lane a blocked row names whole. A hold whose end has not
+#    come (a revert hold waiting for a model newer than the one it left) PASSes, and its line's tail names what it
+#    waits for. No remedy here tells the owner to hold, release or hold again: each names what happens by itself, or
+#    the line that owns the cause.
 #  - `model-sessions-behind`: a RUNNING session still rendering a model some move replaced a day or more ago, in a
 #    turn begun after that move; the line names that evidence (D-5194). The op lists
 #    sessions from their files alone; this check asks `_svc_is_active` about each LISTED session only, and only one
@@ -12484,28 +12487,26 @@ _dr_ma_report() {   # <check name> <rows> <remedy fn> <pass detail> [<tail>]
   return "$rc"
 }
 
+# revert-ends-itself: no remedy names a hold, a release or a button; each says what happens by itself.
 _dr_ma_held_back_fix() {   # <lane> <class>…
-  local id="$1"; shift
+  shift
   if [ "$#" -eq 1 ]; then
-    printf '%s' "the next hourly refresh retries it; 'ccrc models $id show' shows the class, and 'ccrc models $id hold $1' stops the retries"
+    printf '%s' "the next hourly refresh retries it, canary first, and this clears once a move succeeds or a newer candidate takes its place"
   else
-    printf '%s' "the next hourly refresh retries each; 'ccrc models $id show' shows the classes, and 'ccrc models $id hold <class>' stops a class's retries ($(_dr_ma_list "$@"))"
+    printf '%s' "the next hourly refresh retries each, canary first, and each clears once its move succeeds or a newer candidate takes its place ($(_dr_ma_list "$@"))"
   fi
 }
 
+# The hold's end has come and the refresh that ends it has not acted since: the line that owns a refresh that is not
+# reaching a lane is named. An Anthropic lane (`DR_MA_ANTHROPIC`, `|`-delimited lane ids from the answer's `anthropic`)
+# has no catalogue for the 'models' line to age, so its refresh timer is the 'services' line's.
 _dr_ma_held_behind_fix() {   # <lane> <class>…
   local id="$1"; shift
-  # An Anthropic lane (`DR_MA_ANTHROPIC`, `|`-delimited lane ids from the answer's `anthropic`) has no canary and no
-  # advance: its class follows its alias once the hold goes (model-class Anthropic arm A2.5).
   case "${DR_MA_ANTHROPIC:-}" in *"|$id|"*)
-    printf '%s' "release the hold from the lane's Models sheet (or with 'ccrc models $id release <class>': $(_dr_ma_list "$@")), and the class follows its alias: its sessions launch on the alias's current id from their next launch. Leaving the hold in place keeps the held id, and this warning"
+    printf '%s' "the hourly refresh ends the hold by itself and the class follows its alias; it has not acted since the alias moved, so the 'services' line names a refresh timer that is not running ($(_dr_ma_list "$@"))"
     return ;;
   esac
-  if [ "$#" -eq 1 ]; then
-    printf '%s' "'ccrc models $id release $1' lets the next hourly refresh advance it, canary first"
-  else
-    printf '%s' "'ccrc models $id release <class>' lets the next hourly refresh advance that class, canary first ($(_dr_ma_list "$@"))"
-  fi
+  printf '%s' "the hourly refresh ends the hold by itself and moves the class, canary first; it has not reached this lane since the end came, which the 'models' line names as a catalogue the refresh is not reaching ($(_dr_ma_list "$@"))"
 }
 
 # "Once it is idle": `ccd stop` ends the pane (`cmd_stop`'s `tmux kill-session`), and a turn in flight with it. The
@@ -12537,8 +12538,8 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
         # this file alone (`_held_model_env_to`, ccd/lib/model-aliases.sh): review 2886 R1. ccd reads only what a launch needs
         # (the classes object and each `hold.model`), so a file the op calls invalid can still carry holds ccd applies (review 2964 F7).
         case "${DR_MA_ANTHROPIC:-}" in
-          *"|$id|"*) part="advance file — repair the file the finding names; until it is repaired, hold, release and revert on this lane are refused, a hold ccd can no longer read does not reach a launch (that class launches on its alias's current id), and a hold ccd can still read keeps applying. If you remove it instead, its holds and move history are lost and nothing refills them: hold again, from the lane's Models sheet or with 'ccrc models $id hold <class>', each class that must stay where it is" ;;
-          *) part="advance file — repair the file the finding names; if you remove it instead, its holds and move history are lost and the next hourly refresh seeds every empty class again and fills it, so run 'ccrc models $id hold <class>' at once for each class that must stay where it is" ;;
+          *"|$id|"*) part="advance file — repair the file the finding names; until it is repaired, the lane's model acts are refused, a hold ccd can no longer read does not reach a launch (that class launches on its alias's current id), and a hold ccd can still read keeps applying. If you remove it instead, its holds and move history are lost, and every class follows its alias" ;;
+          *) part="advance file — repair the file the finding names; if you remove it instead, its holds and move history are lost and the next hourly refresh seeds every empty class again and fills it" ;;
         esac ;;
       registry-unreadable|registry-invalid)
         part="registry — repair the file the finding names, or 'ccrc models $id rm' then 'ccrc models $id init <probe>'" ;;
@@ -12549,7 +12550,7 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
       pin-grammar)
         part="pin — 'ccrc models $id set-class <class> <modelId>'" ;;
       shared-family)
-        part="shared family — 'ccrc models $id set-class <class> <modelId>' on one of the classes named, or 'ccrc models $id hold <class>'" ;;
+        part="shared family — neither class named moves until one of them follows another family; the finding names both" ;;
       lane-not-codex-kind)
         part="lane kind — make its roster row exec.kind \"codex\" (README, \"A ChatGPT/Codex lane\"), or leave it, and it never advances" ;;
       alias-source-absent)
@@ -12562,7 +12563,7 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
       # refused for an effort level its model dropped, whose verbs refuse until the refresh writes the fallback (so
       # no verb is offered that refuses on the same registry); and a class running at the fallback the refresh wrote.
       pin-missing)
-        part="missing pin — the class moves to the older model named once every hourly sighting has missed its pin for six hours, and a sighting that lists it again ends the wait; to keep the class where it is, hold it from the lane's Models sheet (or 'ccrc models $id hold <class>'); after a move, Revert on the sheet (or 'ccrc models $id revert <class>') works only once the previous model is listed again, and without a hold the next hourly advance moves back to it by itself" ;;
+        part="missing pin — the class moves to the older model named once every hourly sighting has missed its pin for six hours, and a sighting that lists it again ends the wait; after that move, the next hourly advance moves back to the pin by itself once it is listed again" ;;
       effort-dropped)
         part="effort level — the lane's registry names a level its model no longer offers, so its verbs refuse it; wait for the next hourly refresh, or run 'ccrc models refresh $id' now, which writes the fallback named" ;;
       effort-fallback)
@@ -12599,23 +12600,51 @@ _check_model-advance-held-back() {
     "$DR_MA_LANES lane(s) with a model registry or an aliases file: no class is held back by a failed canary or move"
 }
 
+# revert-ends-itself: the op's `heldBehind` names each hold whose end has come (`holdEnds`) and whether it has stood past
+# the next hourly refresh (`due`); `holdsWaiting` each hold whose end has not. A due row WARNs unless the held-back or
+# blocked line already names its class (a blocked row with no class names the whole lane); every other row rides the
+# tail of the verdict line, so a revert hold waiting for its newer model PASSes with what it waits for named.
 _check_model-held-behind() {
-  local rc rows
+  local rc rows tail
   _dr_ma_read model-held-behind; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   if ! rows="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
-      .lanes[] | .id as $id | .heldBehind[]
+      .lanes[] | .id as $id | ([.heldBack[].class] + [.blocked[].class]) as $named | .anthropic as $alias
+      | .heldBehind[] | select(.due == true and (.class as $c | $named | any(. == $c or . == null) | not))
       | [$id, .class,
-         ("\($id) \(.class) is held (\(.hold.at[0:16])Z, by \(.hold.by)) "
+         ("\($id) \(.class) is held (\(.hold.at[0:16])Z, by \(.hold.by)) on \(.pin // "none") "
           + (if .reason == "retired"
-             then "on \(.pin), which has left the catalogue; \(.newer) is the newest left in its family"
-             else "while \(.newer) is newer in its family" end) | clean)]
+             then "though it has left the catalogue past its grace (\(.newer) is the newest left in its family)"
+             elif $alias == true then "though its alias has named \(.newer) since \(.since[0:16])Z"
+             elif .from == null then "though the catalogue observed \(.since[0:16])Z lists \(.newer) for its empty class"
+             else "though the catalogue observed \(.since[0:16])Z lists \(.newer), newer than \(.from)" end)
+          + ", and the hold still stands past the hourly refresh that ends it" | clean)]
       | join("\u001f")' 2>/dev/null)"; then
     _dr_skip model-held-behind "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no lane's advance state was read"
     return 3
   fi
+  if ! tail="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
+      [.lanes[] | .id as $id | .anthropic as $alias
+       | ((.holdsWaiting[]
+           | "\($id) \(.class) is held on \(.pin // "none") until "
+             + (if .from == null and .hold.by == "revert"
+                then "the hourly refresh can record the class'"'"'s observed model from usable evidence and "
+                  + (if $alias == true then "its alias names a third model after it" else "a newer model of its family appears" end)
+                  + " (no action is needed)"
+                elif $alias != true and .from == null then "a model of its family appears"
+                elif $alias != true then "a model of its family newer than \(.from) appears"
+                elif .from == .pin then "its alias names another model, on evidence after the hold"
+                else "its alias names a model other than \(.pin) and \(.from), on evidence after the hold" end)),
+          (([.heldBack[].class] + [.blocked[].class]) as $named
+           | .heldBehind[] | select((.due == true and (.class as $c | $named | any(. == $c or . == null) | not)) | not)
+           | "\($id) \(.class)'"'"'s hold ends by itself at the next hourly refresh that reaches the lane"))]
+      | if length > 0 then "; " + join("; ") else "" end | clean' 2>/dev/null)"; then
+    _dr_skip model-held-behind "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no lane's advance state was read"
+    return 3
+  fi
   _dr_ma_report model-held-behind "$rows" _dr_ma_held_behind_fix \
-    "$DR_MA_LANES lane(s) with a model registry or an aliases file: no held class has a newer model in its family"
+    "$DR_MA_LANES lane(s) with a model registry or an aliases file: no hold whose end has come still stands past the hourly refresh" \
+    "$tail"
 }
 
 _check_model-sessions-behind() {

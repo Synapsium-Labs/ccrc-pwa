@@ -117,9 +117,8 @@ export declare function aliasesSourceCause(a: Aliases): AliasSourceCause | null;
 /** Whether a build of `laneVersion` can launch `row` (null: a target with no row, which names no minimum): a row naming
  *  a minimum is not launchable when the build is unreadable (`null`) or below it. */
 export declare function rowLaunchable(row: AliasRow | null, laneVersion: string | null): boolean;
-/** Whether a held class's id is unobserved against the hold standing now: a hold stands, and the id rests on no evidence
- *  or on evidence older than the hold (the resolver's `unobserved` rule, asked again by the health reading). */
-export declare function heldUnobserved(evidenceAt: string | null, hold: { at: string } | null | undefined): boolean;
+/** Whether a held class's id is unobserved against the hold standing now (declared in `./model-advance.mjs`). */
+export { heldUnobserved } from './model-advance.mjs';
 
 // ── a session behind its class's alias (Task A2.5) ──
 /** One class as `aliasModelBehind` reads it, from whichever reading the caller has (an aliases file and its advance
