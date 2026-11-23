@@ -4,7 +4,7 @@ The note of run 3538 (programme `overlord`, issue #2491, wave 216, ticket `quiz-
 into the programme ledger. No D-number was issued, so departures are named by slug. It covers why, the rulings, what
 changed, every account check the driver has and what became of it, the design question on measuring an idle account,
 what was measured, and the known limits. It also carries review 3533's corrections of PR #3253 (section 7), and fix
-round 1 after review 3545 (section 10).
+round 1 after review 3545 (section 10) and fix round 2 after review 3549 (section 11).
 
 ## In short
 
@@ -49,7 +49,7 @@ round 1 after review 3545 (section 10).
 | `deploy/history-replay.mjs` | The two functions and their three constants leave; the driver imports and re-exports them, so every importer keeps its path. It keeps the file read (`readLimitsRow`) and the gate (`refuseOnLimits`, `batchGate`). Code lines 6793 to 6746, against its cap of 6796. |
 | `deploy/history-quiz-single.mjs` | `arms` and `judge` take an optional `--account` (default the setup's). `WEEK_ACCOUNT_FILE` (`quiz/week-account.json`), its kind, its composer `weekAccountText`, its reader `weekAccountOf` (never throws: `recorded`, `recorded` with `older`, `none`, `unreadable`), and `settleWeekAccount`, which `arms` calls after its claim and before any spawn (writing the record when there is none) and `judge` calls without writing. The new word `account-moved`. |
 | `deploy/history-quiz-unattended.mjs` | `weekAccountChoiceOf` (pure; since fix round 1 it also takes the act's admission refusals), `weekAccountInputsOf` (reads the record, setup's candidates and the previous account, once per act), `previousAccountOf`, `statusAccountOf`. The setup's room re-check before `arms` and `judge` gives way to the choice; both acts get `--account`, and an unspawned week's `arms` refused `account-refused` with no record walks on to the choice's next answer. The new own word `week-account-unreadable`. The header's account paragraph says all of it. |
-| `server/src/continuity/quiz.ts`, `shared/lane-arm.ts`, `server/src/coord/schema.ts` (fix round 1, words only) | The mail for a quiz that has waited two weeks says the account is the week's, that an unspawned week picks again, and asks whether any candidate has room, where it said the account is never re-picked and advised a new setup. The status's `account` is described as the week's when recorded in the shared tick type and in the status table's column comment (a comment inside a migration's SQL text). No word, trigger or wire shape changes. |
+| `server/src/continuity/quiz.ts`, `server/src/continuity/quizStore.ts`, `shared/lane-arm.ts`, `server/src/coord/schema.ts` (fix rounds 1 and 2, words only) | The mail for a quiz that has waited two weeks says the account is the week's, that an unspawned week picks again, and asks whether any candidate has room, where it said the account is never re-picked and advised a new setup. The status's `account` is described as the week's when recorded in the shared tick type, and the waiting streak as the week's account's in the quiz store. In the schema file the migration's statement is main's, byte for byte (fix round 2 reverted round 1's edit of its column comment); the new meaning is a code comment above the statement, outside the string. No word, trigger or wire shape changes. |
 | `server/test/quiz-limits-reading.test.ts` (new) | The characterization, parity and stricter tables (section 3). Its first push named it `history-limits.test.ts`, which the node floor's list in `ci.yml` must then name; that made the PR change a rules file beside everything else, and the review judge refused it (`rules-mixed`). It was renamed, and `ci.yml` is untouched: the reading is pure JavaScript with nothing tied to a Node version, and the driver's own limits section still runs on the node floor (departure `limits-table-off-the-node-floor`). |
 
 ```mermaid
@@ -92,9 +92,9 @@ flowchart TD
 - An invariant over every row in the file: whatever the quiz admits, the fleet's rule calls room at the quiz's own
   threshold. Unknown is never room.
 
-The one room rule reaches every caller of the driver's limits gate (`batchGate`, `refuseSpawnAdmission`), the history
-gate's own W2 batches included (step 0a, the pilot, parts 1 and 2, the writer), not the quiz alone: there too only the
-marked row loosens, and a rolled-over window now stops.
+The one room rule reaches every caller of the driver's limits gate, not the quiz alone: every one goes through
+`decideLimits`, the history gate's own W2 batches among them. There too only the marked row loosens, and a rolled-over
+window now stops.
 
 A marked row with a five figure (no writer makes one) is judged on its weekly figure alone, as the shared rule judges it:
 five is not read, so it is not range-checked or age-inferred either.
@@ -112,7 +112,7 @@ The brief asked for every place a later step's account is compared with the setu
 | The status's account | `history-quiz-unattended.mjs`, `postStatus` | The week's when recorded, else the setup's. |
 | Step 0a's launch pin (`step0a-launch-mismatch`) and `step0a account … is not --account` | `history-replay.mjs`, W2's step 0a and pilot-source | Stay. They are W2's, not the quiz's. |
 | `report` | `history-quiz-single.mjs` | Compares no account, and spends nothing. |
-| The candidate filter (`eligibleAccountsOf`) against admission (`admitAccount`) | `history-quiz-unattended.mjs`, `history-replay.mjs` | Stay apart, by design: the filter checks hidden, the account kind, telemetry and the lane kill switch; admission also refuses an upstream account whose config folder is not `.claude`, a generated account whose provider is not anthropic, and one whose declared credentials file is undeclared, absent or unreadable. The filter does not make those checks, so a candidate can be refused at admission; since fix round 1 the week then tries the next one, as setup does. A launcher refusal (`launcher-<code>`) comes at the spawn, after the record, and closes the week as before. |
+| The candidate filter (`eligibleAccountsOf`) against admission (`admitAccount`) | `history-quiz-unattended.mjs`, `history-replay.mjs` | Stay apart, by design: the filter checks hidden, the account kind, telemetry and the lane kill switch; admission also refuses an upstream account whose config folder is not `.claude`, a generated account whose provider is not anthropic, and one whose declared credentials file is undeclared, absent or unreadable; and, before the week's folder or record exists, a generated account whose launcher file is missing or unreadable (`wrapper-unmeasured`). The filter does not make those checks, so a candidate can be refused at admission; since fix round 1 the week then tries the next one on `account-refused`, as setup does. The walk passes over that word only, as setup's does (ruled in fix round 2): an unspawned week whose pick is refused `wrapper-unmeasured` closes on that word, visibly, spending nothing. An upstream account with a bad launcher fails after the record, `version-unmeasured`, and closes as before. |
 
 One consequence of the move, stated so nobody reads it as an accident: the gate's code hash (`CODE_SHA_FILES`, the four
 files `gate_code` pins) covered `decideLimits` while it lived in the driver. In its own module it is covered as the
@@ -256,9 +256,10 @@ back among the damaged lists; the root-only mutant list was measured by running 
 - **admission-refused-falls-through** (fix round 1, the coordinator's ruling on review 3545 F1): the choice takes the
   act's admission refusals and answers the next account in its own order; the runner walks it, and only an admitted
   account becomes the week's record. When every candidate with room is refused, the tick waits `no-room` (each candidate
-  named by position, a refused one as `account-refused <detail>`) and the next tick tries again.  While every candidate
-  with room is refused, each tick runs the driver once per candidate, and each run stops at admission, spending nothing. A recorded
-  week, and a refusal after the act recorded its account, close on the word as before.
+  named by position, a refused one as `account-refused <detail>`) and the next tick tries again. While every candidate
+  with room is refused, each tick runs the driver once per candidate with room, and each run stops at admission, spending
+  nothing. A recorded week, and a refusal after the act recorded its account, close on the word as before. A stop ends
+  the walk before its next spawn, on `interrupted`, with the week still running (fix round 2).
 - **limits-table-off-the-node-floor**: the limits table is `quiz-limits-reading.test.ts`, not a `history-*` test, so the
   node floor's list (`ci.yml`) need not name it and the PR changes no rules file. The node floor still runs the driver's
   own limits section in `history-replay.test.ts`, which goes through the same module.
@@ -279,6 +280,14 @@ back among the damaged lists; the root-only mutant list was measured by running 
 - The candidate filter does not make admission's checks (section 4), so a candidate admission refuses is tried and
   refused again whenever it is an unspawned week's first answer; that spends nothing, and its refusal shows in the
   no-room detail only when every candidate with room is refused.
+- The walk passes over `account-refused` only (fix round 2's ruling). A picked generated account whose launcher file is
+  missing or unreadable is refused at admission on `wrapper-unmeasured`, before the week's folder or record exists; the
+  runner does not walk past that word, so an unspawned week closes on it, visibly, spending nothing.
+- The waiting word `no-room` covers both "no candidate has room" and "every candidate with room was refused at
+  admission", and the two-week mail's advice names room and the lane switch only, never admission.
+- Setup's own fall-through loop does not check the stop flag between candidates, as on `main`; only the week's walk
+  does (fix round 2). A stop that lands while a setup candidate's driver refuses at admission can let the next
+  candidate's setup start.
 
 ## 10. Fix round 1 (review 3545)
 
@@ -307,8 +316,41 @@ checked byte for byte):
 | A refused account is never recorded (F1) | red under F1-M2a (the record written before admission) | `9d2a9e77d7`, likewise |
 
 **Mutants** for the fix, all killed: F1-M1 the fall-through removed (the choice ignores the refusals): 5 runner cases;
-F1-M2a a refused candidate recorded (the record written before admission): 11 single-arm cases; F1-M2b the runner falls
+F1-M2a a refused candidate recorded (the record written before admission; the spelling and its count are in
+section 11); F1-M2b the runner falls
 through though the act recorded its account: 1; F1-M3 the week closed on the first refusal: 2; F2-S1: 1; F3-S2′: 2.
 
 **Suites**, green at the round's tip, as an ordinary user: the ten quiz files of section 6 (538 cases, the runner 202 and
 the single-arm module 73 of them), the tree guards (65 files, 1990 cases, 3 skipped) and the server's type check.
+
+## 11. Fix round 2 (review 3549)
+
+Review 3549 read `69f0706afa`: no critical or important finding, all six earlier mutants executed and killed, both of
+review 3545's survivors among them. The coordinator's rulings, and what was done:
+
+| Finding | Ruling | Done |
+|---|---|---|
+| F2 the walk ignores the stop flag | Fix | `41ffb63c3b`: at the top of each walk step, a set stop flag returns a waiting stop on `interrupted`; no next spawn, and the week is not closed on the refusal. Setup's loop has the same gap on `main`: named in section 9, left. |
+| F1 the launcher sentence; `wrapper-unmeasured` | Known limit; the walk is not widened | Section 4's sentence corrected and the check added to its list; section 9; the runner case that imagined a post-record refusal now says it pins the runner's own re-read of the record (`41ffb63c3b`). |
+| A1 one waiting word for two causes | A known limit | Section 9. |
+| A2 the edit inside a frozen migration's text | Revert | `b44728b50f`: the statement is main's again, compared byte for byte with `origin/main` (identical, 1567 bytes); the meaning is a code comment above it. |
+| A3 two stale phrases about the setup account's streak | Reword | `b44728b50f`: the quiz store's comment and the streak's describe title. |
+| A4 the rule's reach; "once per candidate" | Words | Section 3 says "every caller" and stops listing; the departure says once per candidate with room. |
+| A5 the invariant test's title | Title or call | `41ffb63c3b`: the test now calls `weekAccountChoiceOf` on every row. |
+| A6 the record-before-admission count; the walk covers judge | Words | Below; the header and the walk's comment say it covers `judge` too, which cannot meet an unrecorded week today (`41ffb63c3b`). |
+
+**The new case, red then green.** "A stop arriving while the first candidate's driver refuses at admission" calls the
+runner's own SIGTERM handler (no signal reaches the test process) while the first candidate's fake driver, which
+survives the runner's SIGTERM as the real admission does, refuses `account-refused`. Red against `69f0706afa`'s runner:
+a second spawn, on the next candidate. Green at `41ffb63c3b`. The mutant that removes the stop check, measured at this
+round's tip in a scratch copy: killed, that one case red.
+
+**F1-M2a, counted at this round's tip.** The spelling: in `arms`, the `settleWeekAccount(out, …)` line after `claimOut`
+is removed, and `settleWeekAccount(flags.out, …)` is inserted just before `admitNode`. It reds 11 cases of the run 3538
+block (56 of the whole single-arm file): writing the record first also makes `--out` before `openOut`, which then refuses
+a folder it did not make, so most of those reds are that side effect. The case that tells the fact itself is "an account
+admission refuses is never recorded". Review 3549's spelling (open the folder and write the record before admission)
+reds 4; the fact is killed either way.
+
+**Suites**, green before the note's commit, as an ordinary user: the ten quiz files (539 cases, the runner 203), the tree
+guards with `coord-db` (66 files, 2145 cases, 3 skipped) and the server's type check.
