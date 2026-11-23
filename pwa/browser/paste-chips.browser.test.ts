@@ -43,9 +43,9 @@ const FIXTURE: AppFixture = {
 
 /** 40 lines with tabs, inner blank lines and trailing spaces, about 2 KB, with no edge whitespace (so today's
  *  whole-message trim leaves it as it is) and a tail label to find. */
-const LONG = Array.from({ length: 40 }, (_, i) => (i % 9 === 4 ? '' : `\tline ${String(i + 1).padStart(2, '0')}\tof the paste probe   ${'x'.repeat(20)}`))
+const LONG = 'paste probe head\n' + Array.from({ length: 40 }, (_, i) => (i % 9 === 4 ? '' : `\tline ${String(i + 1).padStart(2, '0')}\tof the paste probe   ${'x'.repeat(20)}`))
   .join('\n') + '\nZQX-END-chip';
-const TOKEN = '[Pasted text #1 +41 lines]';
+const TOKEN = '[Pasted text #1 +42 lines]';
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -143,7 +143,7 @@ describe('at a phone width the chip’s controls reach the floor and the page do
         try {
           await pasteLong(s.page, s.field);
           await expect.poll(() => s.field.inputValue()).toBe(TOKEN);
-          for (const name of ['Expand pasted text #1, 41 lines, into the message', 'Remove pasted text #1']) {
+          for (const name of ['Expand pasted text #1, 42 lines, into the message', 'Remove pasted text #1']) {
             const box = await s.page.getByRole('button', { name }).boundingBox();
             expect(box, name).not.toBeNull();
             expect(box!.width, name).toBeGreaterThanOrEqual(44);
@@ -151,7 +151,7 @@ describe('at a phone width the chip’s controls reach the floor and the page do
           }
           const sideways = await s.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
           expect(sideways).toBeLessThanOrEqual(0);
-          await s.page.getByRole('button', { name: 'Expand pasted text #1, 41 lines, into the message' }).click();
+          await s.page.getByRole('button', { name: 'Expand pasted text #1, 42 lines, into the message' }).click();
           await expect.poll(() => s.field.inputValue()).toBe(LONG);
           expect(s.errors).toEqual([]);
         } finally {

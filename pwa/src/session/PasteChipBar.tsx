@@ -3,7 +3,7 @@
 // is acted on. Expand puts the full text back into the field in place, as ordinary text; Remove takes the token and
 // its text together. Ring L4: it renders what `liveChips` (pasteChips.ts, L1) listed and calls back, deciding nothing.
 import type { ReactNode } from 'react';
-import { FOCUS_RING } from '@ccrc/ui';
+import { Button } from '@ccrc/ui';
 import type { LiveChip } from './pasteChips';
 import './pasteChips.css';
 
@@ -27,24 +27,27 @@ export function PasteChipBar({ chips, onExpand, onRemove, disabled = false }: Pa
             <span className="paste-chip-lines">{linesWord(c.lines)}</span>
             {c.head !== '' && <span className="paste-chip-head">{c.head}</span>}
           </span>
-          <button
-            type="button"
-            className={`paste-chip-act ${FOCUS_RING}`}
+          {/* The design system's ghost Button, at its 44px floor at every width (the chip grows to hold it). */}
+          <Button
+            variant="ghost"
+            size="fit"
+            className="paste-chip-act flex-none"
             aria-label={`Expand pasted text #${c.n}, ${linesWord(c.lines)}, into the message`}
             disabled={disabled}
             onClick={() => onExpand(c.n)}
           >
             expand
-          </button>
-          <button
-            type="button"
-            className={`paste-chip-remove ${FOCUS_RING}`}
+          </Button>
+          <Button
+            variant="ghost"
+            size="fit"
+            className="paste-chip-remove flex-none min-w-tap"
             aria-label={`Remove pasted text #${c.n}`}
             disabled={disabled}
             onClick={() => onRemove(c.n)}
           >
             <span aria-hidden="true">×</span>
-          </button>
+          </Button>
         </li>
       ))}
     </ul>
