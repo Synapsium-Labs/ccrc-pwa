@@ -125,7 +125,7 @@ LOCK="$HOME/.ccrc/keepalive.lock"
 WORKDIR="$HOME/.ccrc/keepalive-cwd"
 # The account row's one writer, where `ccrc update` places it (`_inst_atomic`, ccd/ccrc): the turn's figures go to it.
 WRITER="$HOME/.claude/statusline-command.sh"
-# One tiny row per account: {lastAttempt, fails}. It is SEPARATE from
+# One tiny row per account: {lastAttempt, fails, src}. It is SEPARATE from
 # ~/.cc-limits deliberately — that file is ccd's ground truth and this script
 # is a reader of it, never a writer. Losing this directory costs one extra
 # round of turns and nothing else, which is why it needs no durability story.
@@ -392,17 +392,29 @@ _ka_num() {   # <file> <key> -> that integer field, or NOTHING
   printf '%s' "$v"
 }
 
-# THE ATTEMPT LEDGER. `{lastAttempt, fails}` per account, and it is what makes
+# THE ATTEMPT LEDGER. `{lastAttempt, fails, src}` per account, and it is what makes
 # the throttle honest: freshness in ~/.cc-limits advances ONLY on a turn that
 # rendered, so gating on it alone throttles success and leaves failure running
 # at the timer's cadence. An absent or unreadable row reads 0 — "never
 # attempted, never failed" — which is the safe direction: it costs one turn, it
 # cannot wedge an account out of ever being measured.
+#
+# D-8960: A STREAK COUNTS ONLY FAILURES OF THE SOURCE THAT EXISTS NOW. Before
+# D-8957 a turn could measure nothing (a `-p` turn renders no statusline), so
+# every turn was a failure and every account reached the daily cap. `src` names
+# the source a row's streak was counted against; a row without it, or with an
+# older one, reads `fails` as 0. `lastAttempt` is read as written, so the
+# attempt throttle still spaces the first turns after a deploy.
+KA_STATE_SRC=1
 _ka_state_get() {   # <account> <key> -> that integer, or 0
-  local f="$STATE_DIR/$1.json" v
+  local f="$STATE_DIR/$1.json" v s
   [ -f "$f" ] || { printf '0'; return 0; }
   v="$(_ka_num "$f" "$2")" || v=""
   [ -n "$v" ] || v=0
+  if [ "$2" = fails ]; then
+    s="$(_ka_num "$f" src)" || s=0
+    [ "$s" -ge "$KA_STATE_SRC" ] || v=0
+  fi
   printf '%s' "$v"
 }
 
@@ -411,7 +423,7 @@ _ka_state_get() {   # <account> <key> -> that integer, or 0
 _ka_state_set() {   # <account> <last-attempt-epoch> <consecutive-failures>
   local tmp
   tmp="$(mktemp "$STATE_DIR/$1.json.XXXXXX")" || { _ka_say "$1: cannot stage the attempt ledger"; return 1; }
-  jq -cn --argjson t "$2" --argjson f "$3" '{lastAttempt:$t, fails:$f}' > "$tmp" \
+  jq -cn --argjson t "$2" --argjson f "$3" --argjson s "$KA_STATE_SRC" '{lastAttempt:$t, fails:$f, src:$s}' > "$tmp" \
     && mv -f "$tmp" "$STATE_DIR/$1.json" \
     || { rm -f "$tmp"; _ka_say "$1: cannot write the attempt ledger"; return 1; }
 }

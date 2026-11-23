@@ -638,12 +638,16 @@ exec ${realOf('jq')} "$@"
   });
 });
 
-/** Seed the attempt ledger the throttle and the backoff both read. */
-function plantState(id: string, lastAttemptAgo: number, fails: number): void {
+/** Seed the attempt ledger the throttle and the backoff both read. `src` is the
+ *  measured source's epoch (D-8960): 1 by default, as the current script writes
+ *  it; `null` leaves it out, as every row written before that source did. */
+function plantState(id: string, lastAttemptAgo: number, fails: number, src: number | null = 1): void {
   fs.mkdirSync(j('.ccrc', 'keepalive-state'), { recursive: true });
   fs.writeFileSync(j('.ccrc', 'keepalive-state', `${id}.json`), JSON.stringify(
-    { lastAttempt: Math.floor(Date.now() / 1000) - lastAttemptAgo, fails }));
+    { lastAttempt: Math.floor(Date.now() / 1000) - lastAttemptAgo, fails, ...(src === null ? {} : { src }) }));
 }
+const stateOf = (id: string): any =>
+  JSON.parse(fs.readFileSync(j('.ccrc', 'keepalive-state', `${id}.json`), 'utf8'));
 
 describe('the throttle is on the ATTEMPT, not on the success', () => {
   it('takes ONE turn across three passes against a wrapper that never renders', () => {
@@ -710,6 +714,55 @@ describe('the backoff — an account that can never render stops being probed', 
     const state = JSON.parse(
       fs.readFileSync(j('.ccrc', 'keepalive-state', 'claude-a.json'), 'utf8'));
     expect(state.fails, 'a transient fault must not cost an account its cadence for ever').toBe(0);
+  });
+});
+
+describe('the failure streak starts over with the measured source (D-8960)', () => {
+  // Before D-8957 a `-p` turn could measure nothing, so every turn counted as a
+  // failure: a streak recorded then says nothing about the source that exists now.
+  for (const src of [null, 0] as const) {
+    it(`a row from before the source (src ${src === null ? 'absent' : src}), fails 40, attempted an hour ago, gets a turn`, () => {
+      plantWrapper('claude-a');           // exits 0, renders nothing
+      plantLimits('claude-a', 9, 9999);
+      plantState('claude-a', 3600, 40, src);
+      run();
+      expect(row('claude-a').outcome, 'the old streak must not hold the account in backoff').toBe('no-render');
+      expect(turns().filter((l) => l.startsWith('turn claude-a ')).length).toBe(1);
+      expect(stateOf('claude-a').fails, 'the streak counts from 0, so this failure is its first').toBe(1);
+    });
+  }
+
+  it('a row from before the source, attempted inside CCRC_KEEPALIVE_FRESH, is still throttled', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    plantState('claude-a', 600, 40, null);
+    run();
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(row('claude-a').reason, 'the attempt throttle, not the old streak, is what holds it').toContain('attempted');
+    expect(row('claude-a').reason).not.toContain('backoff');
+    expect(turns()).toEqual([]);
+  });
+
+  it('a row written with the source keeps its backoff', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    plantState('claude-a', 3600, 40);
+    run();
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(row('claude-a').reason).toContain('backoff, 40 consecutive failures');
+    expect(turns()).toEqual([]);
+  });
+
+  it('every row the pass writes carries the source epoch', () => {
+    plantWrapper('claude-a');
+    plantLimits('claude-a', 9, 9999);
+    run();
+    expect(stateOf('claude-a').src).toBe(1);
+    plantWrapper('claude-a', renders('claude-a'));
+    plantState('claude-a', 3600, 2);
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
+    expect(stateOf('claude-a')).toMatchObject({ fails: 0, src: 1 });
   });
 });
 
