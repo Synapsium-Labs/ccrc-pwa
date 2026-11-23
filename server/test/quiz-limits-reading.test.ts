@@ -4,8 +4,11 @@
 //
 // CHARACTERIZATION FIRST. This table was written against the driver as it stood on main, green there, before the reading
 // moved out of deploy/history-replay.mjs and before it learned the writer's `fiveWindowMinutes: 0` marker. Every row's
-// answer is the driver's own. The change commit edited exactly the rows it moves, each saying why: RULING 1 (a marked row
-// is judged on its weekly figure alone) or RESET (the coordinator's answer of 2026-11-23: a rolled-over window is unknown).
+// answer is the driver's own. It held thirty rows there (twenty with no marker, ten marked); it holds thirty-five now. The
+// change commit edited the rows it moves, each saying why: RULING 1 (a marked row is judged on its weekly figure alone) or
+// RESET (the coordinator's answer of 2026-11-23: a rolled-over window is unknown). It also added five rows, which never ran
+// against main's code (each "was ..." label still says what main's code answered), and changed one row's input (the marked
+// row at the threshold, its weekly figure 75 to 70).
 //
 // THE PARITY TABLE (ruling 1) runs the same bytes through the driver's reading and through the fleet's one rule
 // (shared/limitRoom.ts, over server/src/limits.ts's readLimits), and holds both to the windows each row is judged on and to
