@@ -1,6 +1,6 @@
 // deploy/history-limits.mjs: the replay drivers' limits reading, its pure rules (W2-D55). Moved out of
 // deploy/history-replay.mjs whole, by run 3538 (the note docs/superpowers/programs/overlord/quiz-account-room.md), behind
-// the characterization table server/test/history-limits.test.ts; the driver keeps the one read of the file
+// the characterization table server/test/quiz-limits-reading.test.ts; the driver keeps the one read of the file
 // (readLimitsRow, through its readPlain) and the gate that refuses on the answer (refuseOnLimits), and re-exports these.
 //
 // A row is parsed by readLimits' rules (server/src/limits.ts), term for term: a lapsed resetAt is a FACT and writes 0;
@@ -16,7 +16,7 @@
 // resetAt or by age, measured nothing about the window now running, so the row is unknown, and unknown is never room.
 // The quiz is deliberately stricter than that rule, and only stricter: the one-hour age bound, the 70 percent threshold
 // (the rule's ceiling is the caller's), a figure outside 0 to 100, an undated row and a stamp from the future each stop it
-// too. server/test/history-limits.test.ts holds both readings to one table.
+// too. server/test/quiz-limits-reading.test.ts holds both readings to one table.
 //
 // Pure: it imports nothing, reads no clock and no file.
 

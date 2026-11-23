@@ -47,7 +47,7 @@ what was measured, and the known limits. It also carries review 3533's correctio
 | `deploy/history-replay.mjs` | The two functions and their three constants leave; the driver imports and re-exports them, so every importer keeps its path. It keeps the file read (`readLimitsRow`) and the gate (`refuseOnLimits`, `batchGate`). Code lines 6793 to 6746, against its cap of 6796. |
 | `deploy/history-quiz-single.mjs` | `arms` and `judge` take an optional `--account` (default the setup's). `WEEK_ACCOUNT_FILE` (`quiz/week-account.json`), its kind, its composer `weekAccountText`, its reader `weekAccountOf` (never throws: `recorded`, `recorded` with `older`, `none`, `unreadable`), and `settleWeekAccount`, which `arms` calls after its claim and before any spawn (writing the record when there is none) and `judge` calls without writing. The new word `account-moved`. |
 | `deploy/history-quiz-unattended.mjs` | `weekAccountChoiceOf` (pure), `weekAccountPickOf` (reads the record, setup's candidates and the previous account, then asks the choice), `previousAccountOf`, `statusAccountOf`. The setup's room re-check before `arms` and `judge` gives way to the choice; both acts get `--account`. The new own word `week-account-unreadable`. The header's account paragraph says all of it. |
-| `.github/workflows/ci.yml` | The node floor's list names the new `history-limits` test, as its rule requires of every `history-*` test (so this PR runs the full suite). |
+| `server/test/quiz-limits-reading.test.ts` (new) | The characterization, parity and stricter tables (section 3). Its first push named it `history-limits.test.ts`, which the node floor's list in `ci.yml` must then name; that made the PR change a rules file beside everything else, and the review judge refused it (`rules-mixed`). It was renamed, and `ci.yml` is untouched: the reading is pure JavaScript with nothing tied to a Node version, and the driver's own limits section still runs on the node floor (departure `limits-table-off-the-node-floor`). |
 
 ```mermaid
 flowchart TD
@@ -69,7 +69,7 @@ flowchart TD
 
 ## 3. Ruling 1 in detail: the parity table, and where the quiz is stricter
 
-`server/test/history-limits.test.ts` holds three tables over the same bytes:
+`server/test/quiz-limits-reading.test.ts` holds three tables over the same bytes:
 
 - **Characterization** (30 rows, committed first and green against `main`): every row's answer was the driver's. The
   change commit edited exactly the rows it moves, each labelled RULING 1 or RESET.
@@ -150,10 +150,10 @@ otherwise.
 - **Characterization first.** `ccfe49ff33` pinned the driver's limits answers, 30 rows, green against `main` d5a032c409.
   The move (`7a9b08db28`) changed only the table's import, and kept it green. Ruling 1's change is `1bd9067849`.
 - **Suites, green:**
-  - `history-limits` (40 cases), `history-quiz-unattended`, `history-quiz-single`, `history-quiz-single-characterization`,
+  - `quiz-limits-reading` (40 cases; named `history-limits` until the rename), `history-quiz-unattended`, `history-quiz-single`, `history-quiz-single-characterization`,
     `continuity-quiz-lane`, `continuity-quiz-unattended`, `continuity-quiz-route`, `lifecycle`, `ccrc-doctor-quiz` and
     `limit-room-parity`: 10 files, 526 cases, at `e54a7ba3bc`.
-  - `history-replay`: the limits, step 0a and record-subcommand sections, 830 cases with `history-limits`, after the move.
+  - `history-replay`: the limits, step 0a and record-subcommand sections, 830 cases with the limits table, after the move.
     The whole file (1895 cases) ran once after ruling 1's change: 100 cases failed. All of them came from the new module:
     the import census, and two fixture trees that copy the driver's files without it. Those were fixed in the move commit,
     and the 830-case run above is after that fix. Two later whole-file runs and the test tree's type check were stopped
@@ -228,6 +228,9 @@ resumable closes the week on its own word. Each was red under its mutant (the no
 - **previous-is-newest-recorded-week**: "last week's account" is the newest earlier week whose folder records one; a week
   that spawned nothing is skipped; the setup's when none does.
 - **gate-code-hash-not-widened**: see section 4.
+- **limits-table-off-the-node-floor**: the limits table is `quiz-limits-reading.test.ts`, not a `history-*` test, so the
+  node floor's list (`ci.yml`) need not name it and the PR changes no rules file. The node floor still runs the driver's
+  own limits section in `history-replay.test.ts`, which goes through the same module.
 
 ## 9. Known limits and follow-ups
 

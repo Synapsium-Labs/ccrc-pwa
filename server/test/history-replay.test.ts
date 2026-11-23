@@ -3093,7 +3093,7 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
     '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs', './history-limits.mjs'];
   const EXACT_NAMES: Record<string, string> = {
-    // run 3538: the limits reading's pure rules, moved out whole; history-limits.test.ts pins that module imports nothing
+    // run 3538: the limits reading's pure rules, moved out whole; quiz-limits-reading.test.ts pins that module imports nothing
     './history-limits.mjs': '{ decideLimits, parseLimitsRow }',
     'node:child_process': '{ spawn }',
     'node:crypto': '{ randomBytes }',
