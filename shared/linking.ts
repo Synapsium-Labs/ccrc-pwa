@@ -126,9 +126,9 @@ export interface TeamSuggestionAnswer {
  *  keys; `workspace` is the candidate's workspace id, null only for a candidate stored without one. */
 export interface TeamConfirmBody { byId: string; byUuid: string; project: string; team: string; workspace: string | null }
 
-/** D-8809: every refusal word `POST /api/linking/confirm` decides itself: the one list its handler answers from (`refuseConfirm`)
- *  and the Overlord skill's team candidate guard reads. The box token's `unauthenticated` and the Overlord gate's own words
- *  are not in it. */
+/** D-8809: every refusal word the linking door `POST /api/linking/confirm` decides itself: the one list its handler answers
+ *  from (`refuseConfirm`) and the team candidate paragraph's guard reads (`overlord-skill.test.ts`). The box token's
+ *  `unauthenticated` and the door gate's own words are not in it. */
 export const TEAM_CONFIRM_REFUSALS = ['bad-request', 'unavailable', 'no-project', 'team-set', 'team-unknown', 'team-ambiguous',
   'not-configured', 'write-failed'] as const;
 export type TeamConfirmRefusal = (typeof TEAM_CONFIRM_REFUSALS)[number];
