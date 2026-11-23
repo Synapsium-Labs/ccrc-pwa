@@ -777,6 +777,7 @@ function ChatScroller({
     setAtBottom(bottom);
   }, [column]);
 
+
   // READ ONCE PER MOUNT, as a lazy initial state — storage is read and parsed
   // here and on no later render. Virtuoso takes `defaultItemHeight` and the
   // snapshot when it initialises; handing it different numbers later changes
@@ -785,6 +786,31 @@ function ChatScroller({
   const [meter] = useState(() => new RowMeter(() => column.measures()));
   // The pill's band, read once per mount: no skin or palette moves either token.
   const [band] = useState(() => column.pillBand());
+
+  // A READER AT THE NEWEST TURN FOLLOWS A ROW THAT GROWS THERE (review 3450 F5). A call arriving in a tool-activity row
+  // adds no item (the stretch's row takes it), so `followOutput`, which answers a new item only, never fires for it: a
+  // failure card surfacing under a closed live row left a reader at the foot 50px above it, inside the pill's band, so
+  // no pill said so (measured in Chrome, `browser/tool-activity.browser.test.ts`). So when the list's height changes and
+  // the reader is at the foot, the list goes back to it. A reader who scrolled up is never moved.
+  //
+  // "AT THE FOOT" IS MEASURED, NOT REMEMBERED: the reader's distance from the foot of the list as it stood BEFORE this
+  // change (the last height reported, the scroller's own position), within the pill's band. The pinned flag alone is
+  // late: a jump up the list (a dragged scrollbar, a key) renders and measures the rows it lands on, and the height
+  // change those measures make can arrive before the list reports the reader left the foot, which pulled the reader
+  // straight back down (measured in Chrome). A reader the flag says left is never followed either.
+  const scroller = useRef<HTMLElement | null>(null);
+  const onScroller = useCallback((el: HTMLElement | Window | null): void => {
+    scroller.current = el instanceof HTMLElement ? el : null;
+  }, []);
+  const lastHeight = useRef<number | null>(null);
+  const onHeight = useCallback((height: number): void => {
+    const before = lastHeight.current;
+    lastHeight.current = height;
+    const el = scroller.current;
+    if (!pinned.current || before === null || el === null) return;
+    if (before - el.scrollTop - el.clientHeight > (band ?? 0) + 1) return;
+    virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+  }, [band]);
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
@@ -866,6 +892,8 @@ function ChatScroller({
         // Stick to the bottom while the reader is there; never yank them back.
         followOutput={(isAtBottom) => (isAtBottom ? 'smooth' : false)}
         atBottomStateChange={onAtBottom}
+        totalListHeightChanged={onHeight}
+        scrollerRef={onScroller}
         // At the newest turn while its foot is inside the pill's band, so Jump
         // to latest never sits on a failed send's Retry or Discard (D-5464).
         {...(band !== undefined ? { atBottomThreshold: band } : {})}

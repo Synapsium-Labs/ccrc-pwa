@@ -26,6 +26,8 @@ const seen = vi.hoisted(() => ({
   scrolls: [] as unknown[],
   /** The rows the stand-in list renders, as [from, to) indices; null renders every row. */
   window: null as [number, number] | null,
+  /** The scroller the stand-in list hands over: where the reader is, as the list's follow reads it. */
+  scroller: Object.assign(document.createElement('div'), { scrollTop: 0 }) as HTMLElement,
 }));
 
 vi.mock('react-virtuoso', async () => {
@@ -33,6 +35,7 @@ vi.mock('react-virtuoso', async () => {
   return {
     Virtuoso: React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
       seen.props = props;
+      (props.scrollerRef as ((el: HTMLElement) => void) | undefined)?.(seen.scroller);
       React.useImperativeHandle(ref, () => ({
         scrollToIndex: (location: unknown) => { seen.scrolls.push(location); },
       }));
@@ -482,6 +485,30 @@ describe.each(SETS)('%s draws one collapsed row per stretch', (_name, set) => {
     expect(cards(), 'the arriving calls are not in the opened row').toBeGreaterThan(before);
     // Open, a failure that arrives is in the body, not drawn a second time under the row.
     expect(row().closest('.tool-activity')!.querySelector('.tool-activity-first')).toBeNull();
+  });
+
+  it('follows the foot when the list changes height while the reader is there, and never once they scrolled up', () => {
+    const s = longSession();
+    const { container } = render(list(set, s.events, { busy: true }));
+    const changed = (h: number): void => act(() => { (seen.props!.totalListHeightChanged as (h: number) => void)(h); });
+    // The reader at the foot of a 5000px list in a 600px view.
+    Object.defineProperty(seen.scroller, 'clientHeight', { configurable: true, value: 600 });
+    seen.scroller.scrollTop = 4400;
+    changed(5000); // the first height: nothing to compare it with
+    expect(seen.scrolls).toEqual([]);
+    changed(5050); // a failure card surfaced under the newest row
+    expect(seen.scrolls, 'a reader at the foot was left above a row that grew').toEqual([{ index: 'LAST', align: 'end' }]);
+    // A jump up the list before the list says the reader left the foot: the rows it lands on measure, the height
+    // changes, and the reader is NOT pulled back (they were far from the foot as it stood).
+    seen.scroller.scrollTop = 1200;
+    changed(5120);
+    expect(seen.scrolls, 'a reader who jumped up was pulled back to the foot').toHaveLength(1);
+    // Back at the foot, then scrolled up: once the list says so, a height change never moves them.
+    seen.scroller.scrollTop = 4520;
+    fireEvent.wheel(within(container).getByTestId('virtuoso'));
+    act(() => { (seen.props!.atBottomStateChange as (b: boolean) => void)(false); });
+    changed(5400);
+    expect(seen.scrolls, 'a reader who scrolled up was moved').toHaveLength(1);
   });
 
   it('an append into a closed stretch leaves it closed and moves no index the list was handed', () => {

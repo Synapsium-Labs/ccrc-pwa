@@ -209,3 +209,170 @@ describe('one collapsed row per stretch of tool activity (desktop polish wave 16
     });
   }
 });
+
+// ---- review 3450: the live row at a phone's width, and a live row that grows ----------------------------------------
+/** The turns before the live one: long enough to scroll, every call answered. */
+const HISTORY: object[] = EVENTS.slice(0, EVENTS.findIndex((e) => (e as { uuid?: string }).uuid === 'q-last'));
+/** A last turn whose stretch is live: an answered Read, a Bash that failed (unless `failed` is false: then it passed),
+ *  and a Bash still running, which the F4 cases hold an approval for. */
+const LIVE_TURN = (failed = true): { events: object[]; running: string } => {
+  const events: object[] = [...HISTORY];
+  events.push({ kind: 'user', uuid: 'q-live', ts: TS, text: 'Publish it.' });
+  events.push({ kind: 'assistant', uuid: 'a-live', ts: TS, text: 'Building, then publishing.' });
+  call(events, 'Read', { file_path: '/w/project-a/src/publish.ts' });
+  call(events, 'Bash', { command: 'npm run build' }, failed);
+  k += 1;
+  const running = `t${k}`;
+  events.push({ kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: running, name: 'Bash', input: JSON.stringify({ command: 'npm publish' }) });
+  return { events, running };
+};
+const APPROVAL = { type: 'ask', ask: { approval: { tool: 'Bash', summary: 'npm publish' } } };
+
+/** Open the session with `events`, and hand back the socket's sender. */
+async function openSession(page: Page, ctx: Awaited<ReturnType<typeof openApp>>['ctx'], events: object[], frames: object[] = []) {
+  let send: ((frame: object) => void) | null = null;
+  await ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+    send = (frame) => ws.send(JSON.stringify(frame));
+    send({
+      type: 'backlog', uuid: 'u-1', events, offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
+    });
+    for (const f of frames) send(f);
+  });
+  await page.goto(`${server!.origin}/s/${SESSION.id}`);
+  await page.waitForSelector('.tool-activity-row', { timeout: 20_000 });
+  await page.waitForTimeout(800);
+  return (frame: object): void => { expect(send, 'the session socket never opened').not.toBeNull(); send!(frame); };
+}
+
+/** How far the reader is from the foot of the transcript, in px, and the row at the top of the view. */
+async function position(page: Page) {
+  return page.evaluate(() => {
+    const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+    const top = s.getBoundingClientRect().top;
+    const item = [...s.querySelectorAll<HTMLElement>('.chat-item')].find((el) => el.getBoundingClientRect().top >= top);
+    return {
+      fromFoot: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight),
+      text: item?.textContent ?? '',
+      at: Math.round((item?.getBoundingClientRect().top ?? 0) - top),
+      pill: document.querySelector('.jump-latest') !== null,
+    };
+  });
+}
+
+const NARROW: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
+  [360, 390].map((width) => ({ skin, theme, width }))));
+
+describe('the live row fits a phone column with its flags (review 3450 F4)', () => {
+  for (const view of NARROW) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await openSession(page, ctx, LIVE_TURN().events, [APPROVAL]);
+        const m = await page.evaluate(() => {
+          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+          const box = rows[rows.length - 1]!;
+          const button = box.querySelector<HTMLElement>('.tool-activity-row')!;
+          const right = button.getBoundingClientRect().right;
+          const scroller = document.querySelector<HTMLElement>('.chat-scroller')!;
+          const flags = [...button.querySelectorAll<HTMLElement>('.tool-activity-flag')];
+          return {
+            text: button.textContent ?? '',
+            overflow: button.scrollWidth - button.clientWidth,
+            rowPastColumn: Math.round(right - scroller.getBoundingClientRect().right),
+            flags: flags.map((f) => ({
+              text: f.textContent ?? '',
+              cut: f.scrollWidth - f.clientWidth,
+              past: Math.round(f.getBoundingClientRect().right - right),
+            })),
+            wait: box.querySelector('.tool-activity-wait')?.textContent ?? null,
+            scrollerSide: scroller.scrollWidth - scroller.clientWidth,
+            pageSide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          };
+        });
+        console.log(`F4 ${named(view)}: ${JSON.stringify(m)}`);
+        expect(m.text).toContain('running');
+        expect(m.flags.map((f) => f.text.trim())).toEqual(['waiting on you', '1 failed']);
+        expect(m.overflow, 'the row overflows its own box').toBeLessThanOrEqual(0);
+        expect(m.rowPastColumn, 'the row passes the column').toBeLessThanOrEqual(0);
+        for (const f of m.flags) {
+          expect(f.cut, `flag "${f.text}" is cut`).toBeLessThanOrEqual(0);
+          expect(f.past, `flag "${f.text}" is past the row's edge`).toBeLessThanOrEqual(0);
+        }
+        expect(m.wait, 'the live wait line is not drawn').toContain('waiting for you');
+        expect(m.scrollerSide, 'the transcript has no sideways scroll').toBe(0);
+        expect(m.pageSide, 'the page has no sideways scroll').toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+const GROWTH: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [390, 1280].map((width) => ({ skin, theme: PHOSPHOR, width })));
+
+describe('a live row that changes size keeps the reader where they were (review 3450 F5, A5)', () => {
+  for (const view of GROWTH) {
+    it(`${named(view)}: opened, calls arrive; closed, a failure surfaces`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        const { events, running } = LIVE_TURN(false);
+        const send = await openSession(page, ctx, events);
+        const lastRowHeight = async (): Promise<number> => page.evaluate(() => {
+          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+          return Math.round(rows[rows.length - 1]!.getBoundingClientRect().height);
+        });
+        const more = (n: number, failLast: boolean): object[] => {
+          const out: object[] = [{ kind: 'tool_result', ts: TS, toolId: running, text: 'ok', isError: false }];
+          for (let i = 0; i < n; i += 1) call(out, 'Grep', { pattern: `p${k}` }, failLast && i === n - 1);
+          return out;
+        };
+        let offset = 2;
+        // 1. At the foot, the live row opened by the reader: calls arrive in it, and it changes size.
+        await scrollTo(page, 'bottom');
+        await page.locator('.tool-activity-row').last().click();
+        await page.waitForTimeout(400);
+        await scrollTo(page, 'bottom');
+        const atFootOpen = await position(page);
+        const openBefore = await lastRowHeight();
+        send({ type: 'events', uuid: 'u-1', events: more(4, false), offset: offset++ });
+        await page.waitForTimeout(1000);
+        const afterOpen = await position(page);
+        const openGrew = (await lastRowHeight()) - openBefore;
+        // 2. At the foot, a closed live row: a failure arrives and its card surfaces under the row.
+        await page.locator('.tool-activity-row').last().click(); // close it
+        await page.waitForTimeout(300);
+        await scrollTo(page, 'bottom');
+        const atFootClosed = await position(page);
+        const closedBefore = await lastRowHeight();
+        const failing: object[] = [];
+        call(failing, 'Bash', { command: 'npm audit' }, true); // the stretch's first failure: its card surfaces
+        send({ type: 'events', uuid: 'u-1', events: failing, offset: offset++ });
+        await page.waitForTimeout(1000);
+        const afterClosed = await position(page);
+        const closedGrew = (await lastRowHeight()) - closedBefore;
+        // 3. Higher up, the same two growths: the row the reader is reading does not move.
+        await page.locator('.tool-activity-row').last().click(); // open again
+        await page.waitForTimeout(300);
+        await scrollTo(page, 'middle');
+        const midBefore = await position(page);
+        send({ type: 'events', uuid: 'u-1', events: more(3, true), offset: offset++ });
+        await page.waitForTimeout(1000);
+        const midAfter = await position(page);
+        console.log(`F5 ${named(view)}: ${JSON.stringify({ atFootOpen, afterOpen, openGrew, atFootClosed, afterClosed, closedGrew, midBefore, midAfter })}`);
+        // Refined's opened row SHRINKS here (the answered call joins its neighbours' run group); Instrument's grows.
+        expect(openGrew, 'the opened live row did not change size: the case measures nothing').not.toBe(0);
+        expect(closedGrew, 'no failure card surfaced under the closed row: the case measures nothing').toBeGreaterThan(0);
+        expect(atFootOpen.fromFoot, 'not at the foot before the opened row grew').toBeLessThanOrEqual(2);
+        expect(afterOpen.fromFoot, 'the opened live row grew and the reader left the foot').toBeLessThanOrEqual(2);
+        expect(atFootClosed.fromFoot, 'not at the foot before the failure surfaced').toBeLessThanOrEqual(2);
+        expect(afterClosed.fromFoot, 'a failure surfaced and the reader left the foot').toBeLessThanOrEqual(2);
+        expect(midAfter.text, 'the row in view changed').toBe(midBefore.text);
+        expect(Math.abs(midAfter.at - midBefore.at), 'the row in view moved').toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
