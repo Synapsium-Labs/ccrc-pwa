@@ -3,9 +3,11 @@
 The note of run 3514 (programme `overlord`, issue #2491), for the coordinator to fold into the programme ledger. No
 D-number was issued, so departures are named by slug. It covers what changed and why, what the change means for the
 history gate's own pilot, what was measured and what was not, and the design options for the three failures this round
-leaves open. It reads after run 3508's note (`quiz-weekly-repair.md`, section 3, on PR #3252's branch until that PR lands),
-whose finding it builds on. Fix round 1 (review 3522) is folded in throughout and summarised under "In short". Fix
-round 2 (review 3528) added tests and words only: no line of the three deploy files changed after e0cd075057.
+leaves open. It reads after run 3508's note (`quiz-weekly-repair.md`, section 3, landed with PR #3252), whose finding it
+builds on. Fix round 1 (review 3522) is folded in throughout and summarised under "In short". Fix round 2 (review 3528)
+added tests and words only: no line of the three deploy files changed after e0cd075057. The final review's findings
+(review 3533, on PR #3253's tip) were corrected after the merge by run 3538, in tests and words only, in a commit of their
+own: section 5's "Review 3533's corrections" lists them.
 
 ## In short
 
@@ -89,7 +91,7 @@ changes.
 | Where the pilot runs | In the same week directory, through `arms --repilot`, so its spend lands on the week's one ledger. |
 | What `--repilot` does | With no failed result on the `--out`, it does nothing. With one, it first refuses `out-refused` if any arm batch was ever planned there, because the week's arms would then span two releases. It also refuses `out-refused` if the pin is not this setup's: the kind and setup check stays on the pin it replaces. If the pin already names the round after the failed one, that round is under way: it stopped before its result was written. It is resumed only on the release it was pinned to; on any other release it refuses `repilot-release-moved`, so one pilot result never mixes two releases. Otherwise it keeps the failed result as `quiz/step0b/<mode>.failed.r<round>.json`, writes the pin for the next round on the release it measures, and runs step 0b as that round. It makes no decision of its own. |
 | Why the pin has two write sites | The first start writes the pin and every later `arms` verifies it (`pinArmsRelease`). After a failed pilot, the pin is replaced on purpose for the round it starts (`repilotPrepare`). Both read the pin through `armsPinOf` and compose it with `releasePinText`. The reviewer's words for the replacement's safety: "the overwrite is gated on a verified failed pilot of this setup with no arm batch planned; `pinArmsRelease` re-reads the new pin on the next line; setup and frozen list are verified independently". The kind and setup check is kept on the replaced pin anyway (F3). |
-| Why the pin has two readers | The single-arm module reads the pin through `armsPinOf`, which checks the kind and the setup sha and answers the round. The runner reads it through `pinnedReleaseOf`, only to label a week's first pilot. The two are legitimately different: the runner's reader is the stricter one (it also wants `v` 1 and a non-empty string release), it reads only its own week folder, and it fails closed, so a pin it cannot read keeps the week closed. |
+| Why the pin has two readers | The single-arm module reads the pin through `armsPinOf`: it checks the kind and the setup's hash, reads through the bounded regular-file read (`readPlain`: no link followed, a size bound, never blocked on a FIFO), answers the round, and refuses. The runner reads it through `pinnedReleaseOf`, only to label a week's first pilot: it wants `v` 1 and a non-empty string release, reads only its own week folder and answers nothing on any failure, so a pin it cannot read keeps the week closed; it does not check the setup's hash, and it reads the file plainly, so it follows a link, has no size bound and could block on a FIFO. Each checks something the other does not, so neither is the stricter. The difference between them is the failure contract (one refuses, the other answers nothing), which is not one of the repository's recorded reasons for a second mechanism: they are a duplication, to consolidate into one pure parser as a follow-up (review 3533, F3). |
 | A pass | The week carries on into arms, judge, report and record, as a first pass would. |
 | Status wire | No change. `last` keeps its fields, and a closed week reads `act: done, outcome: refused, word: pilot-failed` as before (see the first known limit in section 7). |
 
@@ -177,8 +179,10 @@ Where each count comes from:
 - **The scratch copy.** The mutants ran in a scratch copy of the tree at the commit each list names, also through
   `ccrc test` in that copy's `server` package.
 - **The user.** Every count was taken as an ordinary user, not root. The kill cases and the unreadable-leftover case
-  skip themselves when the tests run as root, so the mutants only those cases kill (N3, N8, N9, N14, R8, R9) are killed
-  only as an ordinary user.
+  skip themselves when the tests run as root. Measured by run 3538 (review 3533, F8): with those cases skipped, as a
+  root run skips them, N3, N8 and the one mutant R8 and R9 name survive, so they are killed only as an ordinary user. N9
+  and N14 are killed with those cases skipped too, by the wiring cases (5 and 2 cases red). This note said all six
+  before; that was read, not run.
 
 - **Characterization first.** Commit `57d8a746c3` pinned today's behaviour on the measured shapes and was green against
   `main` d7c8b5866b. On those shapes, tools, plugins and skill failed, persistence failed through both halves, and the
@@ -204,6 +208,17 @@ Where each count comes from:
   - Fix round 2's ten (R) were measured at `285755f04d`, whose deploy files match `884ceeeb95`'s: each new case was green
     there unmutated and red under its mutant.
   - R1, R2 and R3 are the three mutants review 3528 executed at `e0cd075057`, where all three survived.
+  - **What the count counts** (review 3533, F11). The table's 46 rows are pairs of a mutant and the cases that kill it,
+    not 46 distinct mutants: R9 is R8's mutant measured against the other kill window, and the review reads R8 as N9's
+    mutant and R10 as N11's in other words, so they are 43 distinct mutants at most.
+- **Review 3533's corrections** (run 3538, in tests and words only, a commit of their own, no code line changed by it).
+  The four new or changed cases each went red under their mutant, applied to a scratch copy of the tree at the commit
+  before them and restored byte for byte: a pin whose round is present but damaged (1.5, `"2"`, -3, 7.5, null) reads
+  as round 0 and pilots as round 1 (the mutant reading the round as written: 3 of the 5 rows red); the empty pilot list
+  is back among the damaged-list rows (the mutant reading an empty list as an older row: red); the kill fixture now
+  checks that the quiz root really turned read-only and that the failed save left no row (the fixture's permission
+  change removed: the 4 kill cases red); and a refusal that is not resumable, after the permission's save, closes the
+  week at once on its own word with the permission not given back (R7's mutant: red).
 
 | Mutant | Killed by |
 |---|---|
@@ -247,7 +262,7 @@ Where each count comes from:
 | R4 the refusal of a removed pin removed | a failed week whose pin was removed is refused |
 | R5 the composer accepts any round | the composer refuses a round that is not a non-negative integer |
 | R6 the runner passes the flag a value (`--repilot true`) | the exact argument list: the first pilot's, then the bare flag |
-| R7 the permission given back after a stop that is not resumable | window (a), the stop that is not resumable |
+| R7 the permission given back after a stop that is not resumable | window (a), the driver failure (an exit that is not a refusal); since run 3538 also the refusal that is not resumable, which closes the week on its own word |
 | R8 the permission left on the row before the spawn | window (a), the kill |
 | R9 the same mutant, measured against window (b) | window (b): the kill after the pin moved |
 | R10 a damaged pilot list read as an older row | the damaged-list rows `true` and `{ release }`, which replaced `[]` and `[null]`: those two closed under the older reader too, so they did not discriminate (A7) |
@@ -330,13 +345,19 @@ another release. It is a stand-in: no process is killed.
   on another release.
 - **A kill after the reopening's save and before the permission's save** spends nothing. The next tick runs that same
   pilot, which is already counted, while its release is installed. Later in the act, two windows lose the counted pilot
-  (fix round 2, F1). In both, nothing is spent and no later release reopens the week. Taking the permission off the row
-  before the spawn is what keeps a kill from buying a second pilot on one release, and that bound matters more than the
-  availability it costs. Both windows are pinned by tests as they stand today.
-  - (a) A kill, or a stop that is not resumable, after the permission's save and before the driver has moved the pin. The
-    week closes on the `release-moved` word with the counted pilot unrun.
-  - (b) A kill after the pin is written and before the result. The week closes on the pilot word, and a later release is
-    then refused with the round's own word, `repilot-release-moved`.
+  (fix round 2, F1). The cap of three, never two pilots on one release, and the week's one budget hold in both. Taking the
+  permission off the row before the spawn is what keeps a kill from buying a second pilot on one release, and that bound
+  matters more than the availability it costs. Both windows are pinned by tests as they stand today. (Corrected by run
+  3538 after review 3533, F1, F2 and F4: this list said that in both windows nothing is spent and no later release reopens
+  the week, which holds for window (a) only, and it called a driver failure "a stop that is not resumable".)
+  - (a) A kill of the runner, or a driver failure (an exit that is not a refusal), after the permission's save and before
+    the driver has moved the pin. The week closes on the `release-moved` word with the counted pilot unrun. Nothing is
+    spent and no later release reopens the week. A driver refusal that is not resumable closes the week at once on its own
+    word instead; the counted pilot is equally unrun, and a week closed on any word but the pilot's is never reopened.
+  - (b) A kill after the new pin is written and before the result. The week closes on the pilot word. Whatever that
+    round's box run and probe runs had already spent stays in the week's ledger with no result; nothing more is spent.
+    One later release reopens the week once, takes the last pilot slot and is refused with the round's own word,
+    `repilot-release-moved`; nothing after that reopens it.
 - **The week's first pilot is counted when its refusal returns** (fix round 2, A1). A kill after the driver wrote its failed
   result and before that save, followed by a release move, closes the week on the `release-moved` word, and the week is
   not piloted again. This is fail-closed: nothing is spent.

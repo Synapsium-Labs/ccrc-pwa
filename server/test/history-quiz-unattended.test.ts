@@ -1422,7 +1422,11 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
   async function killedTick(b: Box, now: number): Promise<void> {
     const r = await b.tick({ now });
     expect(r.code, 'fixture: the save after the act failed').toBe(1);
+    // review 3533, F6: exit 1 alone is also a driver failure's; these two tell the kill apart (the root really turned
+    // read-only, and no row the failed save would have written landed)
+    expect(statSync(b.root).mode & 0o777, 'fixture: the stub turned the quiz root read-only').toBe(0o500);
     chmodSync(b.root, 0o700);
+    expect((b.state() as R).last?.word, 'fixture: the save after the act never landed').not.toBe('driver-failed');
     try { unlinkSync(join(b.root, 'unattended.lock')); } catch { /* released */ }
   }
   for (const legacy of [false, true]) {
@@ -1461,7 +1465,9 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
   // fix round 2 (review 3528, F1, a known limit): the two windows after the permission's save, pinned as they stand today. The
   // stub driver answers each later act as the real single-arm module does at that point; the pin on disk says which point.
   const pinOnDisk = (b: Box): R => JSON.parse(readFileSync(join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json'), 'utf8')) as R;
-  for (const how of ['a kill', 'a stop that is not resumable']) {
+  // review 3533, F4: the second variant is a driver FAILURE (an exit that is not a refusal); a refusal that is not resumable is
+  // the case after this loop, and closes the week on its own word at once.
+  for (const how of ['a kill', 'a driver failure']) {
     it.skipIf(how === 'a kill' && process.getuid?.() === 0)(`${how} after the permission's save, before the driver moved the pin: the week closes release-moved with the counted pilot unrun, and no later release reopens it`, async () => {
       const b = await failedOn('v1.0.1');
       const dies = how === 'a kill' ? { exit: 1, stderr: 'killed\n', chmodRoot: true } : { exit: 1, stderr: 'ccrc history-quiz-single: internal error: fixture\n' };
@@ -1483,6 +1489,22 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
       expect(armsCalls(b).length, 'a week closed release-moved is not reopened').toBe(3);
     });
   }
+
+  it('a refusal that is not resumable after the permission\'s save closes the week at once on its own word, the counted pilot unrun', async () => {
+    const b = await failedOn('v1.0.1');
+    b.plan({ arms: [REFUSE('pilot-failed'), REFUSE('version-unmeasured', 'fixture: --version failed')] });
+    setRelease(b, 'v1.0.2');
+    const r = await b.tick({ now: NOW + HOUR });
+    expect(r.code, 'a refusal is no failure').toBe(0);
+    const w = (b.state() as R).weeks[WEEK];
+    expect(w).toMatchObject({ state: 'failed', word: 'version-unmeasured', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+    expect(w.repilot, 'the permission is not given back after a refusal that is not resumable').toBeUndefined();
+    expect(pinOnDisk(b).ccrc_release, 'the driver never moved the pin').toBe('v1.0.1');
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+    setRelease(b, 'v1.0.3');
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).length, 'a week closed on another word than the pilot\'s stays closed').toBe(2);
+  });
 
   it.skipIf(process.getuid?.() === 0)('a kill after the driver wrote the new pin, before its result: the week closes pilot-failed, and a later release is refused with the round\'s own word', async () => {
     const b = await failedOn('v1.0.1');
@@ -1550,7 +1572,8 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
   });
 
   // fix round 1, A2: only a row with no pilot list at all is an older row.
-  for (const damaged of [{}, null, 'x', 5, true, { release: 'v1.0.1' }]) {   // none a list: the older-row reading would re-pilot each
+  // [] is back among them (review 3533, F7): read as an older row, an empty list would re-pilot; the others are none a list.
+  for (const damaged of [{}, null, 'x', 5, true, { release: 'v1.0.1' }, []]) {
     it(`a pilot-failed row whose pilot list is damaged (${JSON.stringify(damaged)}) stays closed on a newer release`, async () => {
       const b = await failedOn('v1.0.1');
       const st = b.state() as R;

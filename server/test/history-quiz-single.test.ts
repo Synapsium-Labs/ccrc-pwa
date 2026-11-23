@@ -994,6 +994,23 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
     expect(existsSync(join(w.out, QS.step0bFailedRel(w.mode, 0) as string)), 'the round 0 result kept').toBe(true);
   });
 
+  // review 3533, F5: a round that is present but damaged reads as round 0, as the absent one does (no writer makes one); the
+  // mutant that reads it as written (`round: p.round`) refuses 1.5, '2' and 7.5 out-refused, so these rows tell the two apart.
+  for (const damaged of [1.5, '2', -3, 7.5, null]) {
+    it(`a pin whose round is present but damaged (${JSON.stringify(damaged)}) reads as round 0: --repilot pilots as round 1`, async () => {
+      const w = await failedWeek();
+      const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+      writeFileSync(pinPath, `${L.canonicalJson({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: damaged }) as string}\n`);
+      expect(json(pinPath).round, 'fixture: the pin carries the damaged round').toEqual(damaged);
+      plantStep0b(w.home, w.mode);
+      setRelease(w.home, 'v9.9.9');
+      const r = await run(w.home, w.argv(['--repilot']), FAKE);
+      expect(r.refusal).toBeNull();
+      expect(json(resultPath(w))).toMatchObject({ round: 1, passed: true });
+      expect(json(pinPath)).toMatchObject({ ccrc_release: 'v9.9.9', round: 1 });
+    });
+  }
+
   it('a pin whose round is past the next one is refused out-refused, and nothing is replaced', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
