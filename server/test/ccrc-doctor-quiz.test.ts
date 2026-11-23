@@ -123,7 +123,7 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
     expect(dead.out[0]).toMatch(/^WARN quiz-weekly: no unattended quiz tick for 13 h and no run is in flight/);
   });
 
-  it('WARN starved for a refused or failed last tick older than two periods with no run in flight, the normal weekly state included (run 3508, F2)', () => {
+  it('a refused or failed last tick older than two periods: WARN starved with no run in flight, the normal weekly state included, and stuck past 24 h with one (run 3508, F2; review 3519 F1)', () => {
     for (const outcome of ['refused', 'failed']) {
       const r = check(box(`ccrc-doctor-qw-starved-${outcome}-`, { record: state(last({ at_ms: Date.now() - 13 * HOUR, outcome, act: 'done', word: 'pilot-failed', detail: 'the week is closed failed' })) }));
       expect(r.code, outcome).toBe(2);
@@ -165,7 +165,7 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
     expect(r30.out[1]).toBe('  remedy: systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service');
   });
 
-  it('no record, and the installed timer unit older than two periods with no run in flight: WARN the timer is not firing (run 3508, ruling e)', () => {
+  it('no record: WARN the timer is not firing once the installed unit is older than two periods with no run in flight, and stuck once a run\'s lock is older than 24 h (run 3508, ruling e; review 3519 F3)', () => {
     const r = check(box('ccrc-doctor-qw-never-', { unitAgeMs: 13 * HOUR }));
     expect(r.code).toBe(2);
     expect(r.out[0]).toBe('WARN quiz-weekly: the quiz timer\'s unit was placed 13 h ago and no unattended tick is recorded, more than two of its periods (12 h), so the timer is not firing');

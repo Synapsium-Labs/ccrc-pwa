@@ -8,7 +8,7 @@ the finding that withdrew the brief's second half.
 
 - **Fault 1, the timer never fired.** `ccd-quiz-weekly.timer` now fires on the wall clock, at 00:17, 06:17, 12:17 and 18:17
   UTC (`OnCalendar=*-*-* 00/6:17:00 UTC`), with no `Persistent=` and with `DeferReactivation=yes`. No number of reloads of
-  the user manager or restarts of the timer can move a calendar elapse.
+  the user manager or restarts of the timer can postpone or starve a calendar slot.
 - **Ruling (e), a starved trigger is visible.** Doctor's `quiz-weekly` line now warns, in words, when no tick has happened
   for two of the timer's periods (12 h) and no run is in flight, and when an installed timer unit has never ticked in that
   time.
@@ -22,19 +22,19 @@ The coordinator measured on the fleet box (read-only): the timer active for half
 elapse always about thirty minutes after the newest reload of the user manager, and hundreds of reloads in eleven hours,
 the longest gap about fourteen minutes.
 
-**Confirmed from systemd's source** (v259, `src/core/timer.c`, the version the fleet box runs), not measured on the box:
+**Read in systemd's source**, single source, not measured on the box: `src/core/timer.c` at v259, the version the fleet box runs, for every row; the stop-and-start half of the `OnCalendar=` row also at v257 (fix round 1), and `src/core/unit-serialize.c` at v259 for the activation time:
 
 | Question | What the code says |
 |---|---|
 | The base of `OnActiveSec=` | `timer_enter_waiting`: the activation time only when the timer's own state is already active, else now. |
 | What a daemon-reload does | `timer_coldplug` runs with the timer's state still dead (deserialisation keeps the saved state aside) and calls `timer_enter_waiting`, so the base is the reload's moment: every reload re-bases `OnActiveSec=` to now plus thirty minutes. |
 | The base of `OnUnitInactiveSec=` | The later of the service's last deactivation and the timer's last trigger; with neither set, that value is never armed. The coordinator read no inactive timestamp on the service and no last trigger on the timer, so on the box it had no base. |
-| The base of `OnCalendar=` | The timer's last trigger, else the time the timer was last activated (`inactive_exit_timestamp`, a unit field serialised across a reload by `unit-serialize.c`), else now. A past elapse is not clamped to now, so it fires at once. The last trigger is serialised across a reload. Whether a stop and start clears it depends on the version: v257's `timer_start` sets it to null, v259's no longer does (both read in fix round 1). |
+| The base of `OnCalendar=` | The timer's last trigger, else the time the timer was last activated (`inactive_exit_timestamp`, a unit field serialised across a reload by `unit-serialize.c`), else now. A past elapse is not clamped to now, so it fires at once. The last trigger is serialised across a reload. Whether a stop and start clears it depends on the version: v257's `timer_start` sets it to null, v259's no longer does (both read in fix round 1). Neither version's `timer_start` resets the activation time, which still holds the previous start's moment when the base is computed. |
 | A slot that falls during a run | The timer stays `running` while the service runs, so no second start (the manual: "in case the unit to activate is already active at the time the timer elapses it is not restarted, but simply left running"); when the run ends, a slot already passed fires at once, unless `DeferReactivation=yes` (systemd 257 and later) counts the next slot from the run's end. |
 | `Persistent=true` | A slot missed while the timer was not active fires at once when the timer is activated. |
 
 **Still a reading, not measured:** that the fleet's reloads are what held this box's timer, rather than restarts of the
-timer itself. Both re-base `OnActiveSec=` the same way in the code, and neither moves a calendar elapse, so the repair does
+timer itself. Both re-base `OnActiveSec=` the same way in the code, and neither postpones or starves a calendar slot, so the repair does
 not depend on which it was.
 
 ### The new trigger, and the three properties the old unit argued for
@@ -73,9 +73,10 @@ the runner's own rule (`pidAlive`): a pid it may signal, or one it may not (EPER
 
 | State | Line |
 |---|---|
-| A record of any outcome (ok, waiting, refused or failed), no run in flight, last tick older than two periods (12 h) | WARN: no unattended quiz tick for N h and no run is in flight, more than two of the timer's periods, so the timer is not firing: starved, stopped, or the box was down (the last tick: week, act, outcome, word) |
-| A fresh refused or failed record, or an old one with a run in flight | WARN with the tick's own week, act, word and detail, as before |
-| A record, a run in flight, last tick older than a run plus two periods (24 h) | WARN: the run is stuck (the old bound, now kept for a run in flight only) |
+| A record of any outcome (ok, waiting, refused or failed), no run in flight, last tick older than two periods (12 h), the timer's cadence readable (with an unreadable cadence or an unloaded reader, an old refused or failed record keeps its own words) | WARN: no unattended quiz tick for N h and no run is in flight, more than two of the timer's periods, so the timer is not firing: starved, stopped, or the box was down (the last tick: week, act, outcome, word) |
+| A fresh refused or failed record, or one younger than 24 h with a run in flight | WARN with the tick's own week, act, word and detail, as before |
+| A record of any outcome, a run in flight, last tick older than a run plus two periods (24 h) | WARN: the run is stuck (the old bound, now kept for a run in flight only, and read before the outcome since fix round 2: a real run cannot outlive its 12 h, so this is a stale lock) |
+| No record, a run in flight whose lock is older than 24 h | WARN: the run is stuck, in the same words (fix round 2) |
 | No record, the installed timer unit older than two periods, no run in flight | WARN: the quiz timer's unit was placed N h ago and no unattended tick is recorded, so the timer is not firing |
 | No record otherwise, or on macOS (no unit) | PASS, as before |
 
@@ -161,6 +162,15 @@ test run, the file restored and compared. The brief's two kept mutants were re-r
 | M1 the trigger back to the active-relative form | killed again on this round's files | `timer-first-run`: the quiz case and the anchor census |
 | M2 the starved reading removed | killed again on this round's files | `ccrc-doctor-quiz`: the starved, refused/failed and junk-lock cases |
 
+**Fix round 2 (review 3519): the two new arms**, measured the same way (the new cases against fix round 1's doctor, then a
+mutant each):
+
+| Guard | Measured | Killed or red by |
+|---|---|---|
+| F3 no record, a run in flight, a lock older than 24 h is stuck | red against fix round 1's doctor (a PASS there), green now; mutant "the lock-age arm removed" killed | the no-record case's stale lock |
+| F1 the stuck bound read before the outcome | red against fix round 1's doctor (the refused words there), green now; mutant "stuck skipped for a refused or failed record" killed | the refused and failed case's stuck arm |
+| F6 the record path's unloaded-reader answer | a new case, green against both heads (the arm was there before; the case only pins it) | the cadence case's unloaded arm |
+
 ## 5. Departures, by slug
 
 - **fallback-path-withdrawn**: rulings (a) and (c) were not built; the coordinator withdrew both on the finding in section 3.
@@ -185,16 +195,21 @@ test run, the file restored and compared. The brief's two kept mutants were re-r
   spanned a slot. The fleet box runs 259.
 - **Once per box, the first reload over the old unit can start a run at once**, during the update that carries this change
   (section 1; a source reading, not measured). Afterwards the last trigger anchors every slot.
-- **A stop and a start of the timer**, by version (fix round 1, F3, re-read): on systemd v257 `timer_start` clears the last
-  trigger, so a restarted timer counts from its new activation and waits for the next slot. On v259, the fleet box's version,
-  `timer_start` keeps the last trigger, so a timer stopped across a slot fires that slot at once when started; a never-fired
-  timer counts from its previous activation and can fire at once too. An install's `enable --now` on an active timer and a
-  reload do not stop it.
+- **A stop and a start of the timer** (a single-source reading of systemd's `timer.c`, not measured): v259's `timer_start`,
+  the fleet box's version, keeps the last trigger, so a timer stopped across a slot fires that slot at once when started.
+  v257's clears it, and then the base is the previous activation time, which neither version resets at a start, so a
+  timer restarted after a slot passed since its earlier start can fire at once there too. An install's `enable --now` on
+  an active timer and a reload do not stop it.
 - **The never-ticked clock** is the installed unit file's age. The update's install spine replaces the file only when its
   bytes differ (`_inst_atomic` skips an identical one), so an unchanged unit keeps its age; a change to the unit, or the
   fallback `deploy/deploy.sh` (its `_unit_atomic` always replaces), resets it.
 - **A recycled pid** in the runner's lock reads as a run in flight, for doctor as for the runner; the 24 h stuck bound then
-  applies.
+  applies, from the last tick, or from the lock when there is no record (fix round 2).
+- **The EPERM reading's edges are not all pinned.** Its `LC_ALL=C` is not pinned, because the doctor fixture already sets
+  that locale; and the may-not-signal case (pid 1) passes through the signalable path in a process namespace where the
+  first process belongs to the suite's user, so there the EPERM arm is not exercised (on CI and the fleet's test lane it is).
+- **A tick time in the future** (a backward clock step) gives a negative age, so nothing reads as starved or stuck until the
+  clock catches up. This was so before this change.
 - **A slot during a running service** is absorbed by systemd itself, which leaves a running unit running (the manual,
   quoted in section 1); no test pins systemd's own behaviour.
 - **The 12 h run deadline** in the stuck bound is restated from `ccd-quiz-weekly.service`'s `TimeoutStartSec=12h`, which no
@@ -215,3 +230,16 @@ test run, the file restored and compared. The brief's two kept mutants were re-r
 
 **A hook refusal.** One edit of this note was refused by the session hook, because its text named the fleet's update
 command in prose; nothing was changed by it. The same text was written describing the command in words.
+
+## 8. Fix round 2 (review 3519, ruled in the coordinator's fix-round mail; the last round)
+
+| Item | What changed |
+|---|---|
+| F3 | With no record and a run in flight, a lock older than a run plus two ticks (24 h) is stuck, in the record path's words; a genuine first run stays a pass. |
+| F1 | The stuck bound is read before the record's outcome, so a run in flight behind an old refused or failed record is stuck, not "the next tick retries". |
+| F4 | Words: the starved reading needs a readable cadence, in the doctor header, section 2's row and the test comment. |
+| F2 | Words: the stop-and-start lines are a single-source reading, not measured; the v257 sentence no longer claims a new activation (neither version resets it); section 1 names the version each half was read in. |
+| F5 | Words: the unit's comment names both fire-at-once cases and does not lay them on the catch-up switch alone; the doctor and test headers say "every tick that reaches its acts" and list the run-in-flight case; the first-run case is retitled to what it checks, and its comment says not measured. |
+| F6 | The lock case is retitled to what it pins (zero, a negative number); a case for the record path's unloaded reader; (b) and (c) are known limits. |
+| F7 | A known limit. |
+| Polish | "postpone or starve" for "move", in the note and the unit. |

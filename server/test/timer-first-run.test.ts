@@ -112,11 +112,11 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
     expect(unit('ccd-land-probe.timer'), 'the timer no longer cites D-1981 where it states the anchor').toContain('D-1981');
   });
 
-  it('the weekly quiz fires on the wall clock, which no reload can starve, and a fresh enable never fires at once (run 3508)', () => {
-    // A fresh enable has no last trigger and counts its first slot from the arming, so it waits for the next slot. NOT pinned
-    // here, because no unit key can say it: once per box, the first reload over the OLD, armed, never-fired unit counts the new
-    // calendar from that old arming time and can fire at once (a reading of systemd v259's timer.c; the unit's comment and the
-    // task note say so).
+  it('the weekly quiz timer carries exactly one wall-clock line, no Persistent=, DeferReactivation=yes and no random delay (run 3508)', () => {
+    // What the keys buy: a fresh enable has no last trigger and counts its first slot from the arming, so it waits for the
+    // next slot. NOT pinned here, because no unit key can say it: once per box, the first reload over the OLD, armed,
+    // never-fired unit counts the new calendar from that old arming time and can fire at once (a reading of systemd v259's
+    // timer.c, not measured on a box; the unit's comment and the task note say so).
     // Measured on a fleet box: its `OnActiveSec=30min` was re-based to "now" at every reload of the user manager (timer.c's
     // coldplug re-arms a monotonic elapse from the dead state, so its base is the reload's moment), and fleet sessions'
     // own unit acts reload that manager every few minutes. The timer stood active for a day and never fired. An
