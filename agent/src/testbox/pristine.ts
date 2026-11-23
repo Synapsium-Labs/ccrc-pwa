@@ -3,8 +3,8 @@
 // given by the caller, in ms since the epoch.
 //
 // The install key is the sha256 of the package's install inputs (the row's `installInputs`: its `package.json` and
-// `package-lock.json`, plus any file the row adds), the node version and the platform: the inputs `server-deps`' CI
-// cache key names, never a branch, a ref or a run. A key is `present` (its pristine install exists), `missing` (a
+// `package-lock.json`, plus any file the row adds; then the files its lifecycle scripts run, D-8966 below), the node
+// version and the platform: the inputs `server-deps`' CI cache key names, never a branch, a ref or a run. A key is `present` (its pristine install exists), `missing` (a
 // build is wanted and not yet queued), `building` (queued or running) or `failed` (the last build exited non-zero,
 // timed out or was killed; the next attempt waits `CCRC_TESTBOX_PRISTINE_RETRY`'s delay for its attempt count, the
 // last delay repeating). A newer key for the same package replaces a failed one. A present key unused for
@@ -62,6 +62,83 @@ export function installKey(inputs: readonly InstallInput[], node: string, platfo
 }
 
 export const INSTALL_KEY = /^[0-9a-f]{64}$/;
+
+// D-8966 (plan docs/superpowers/plans/2026-11-23-testbox-install-inputs-from-scripts.md; spec §2.2, §2.6): a package's
+// install inputs are the row's, plus the files its own lifecycle scripts run. `npm ci` runs those scripts in the
+// pristine build, which holds the inputs only, so a script the row did not name failed every build ("Cannot find
+// module"). The row's list stays what the operator gave; this decides which further paths to look for, and the mirror
+// read keeps those that are regular files at the run's tree. So the script is in the key, a change to it changes the
+// key, and the build lays it out.
+
+/** The lifecycle scripts `npm ci` runs in the package itself, in npm's order. */
+export const LIFECYCLE_HOOKS = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
+
+/** At most this many paths a package's lifecycle scripts add, in the scripts' order: each is one read of the mirror. */
+export const LIFECYCLE_INPUTS_MAX = 16;
+
+export interface LifecycleInputs {
+  /** Paths relative to the repository root, none of them declared, sorted; the caller keeps those that are files. */
+  readonly paths: readonly string[];
+  /** Why something added nothing, or was cut, one line each. */
+  readonly notes: readonly string[];
+}
+
+/** Quoting, expansion, redirection, grouping, a background `&` or a second line: a script whose words a whitespace
+ *  split would misread. */
+const UNFOLLOWED = /['"`$\\<>()\n\r\0]/;
+/** A word that may name a file: no glob, brace, tilde, assignment or other shell character. */
+const PATH_WORD = /^[A-Za-z0-9._@+/-]+$/;
+
+/** A script's words, or `null` when it uses what a whitespace split cannot follow. `&&`, `||`, `;` and `|` separate. */
+function scriptWords(script: string): string[] | null {
+  if (UNFOLLOWED.test(script)) return null;
+  const plain = script.replace(/&&|\|\|/g, ' ');
+  if (plain.includes('&')) return null;
+  return plain.split(/[\s;|]+/).filter((w) => w !== '');
+}
+
+/** The path a word names relative to its package, or `null`: a flag, a `..`, `.` or empty segment (an absolute path's
+ *  first segment is empty), or a bare word with neither a `/` nor a `.` (a command or an argument, not a file). */
+function wordPath(word: string): string | null {
+  if (word.startsWith('-') || !PATH_WORD.test(word)) return null;
+  let w = word;
+  while (w.startsWith('./')) w = w.slice(2);
+  if (!w.includes('/') && !w.includes('.')) return null;
+  return w.split('/').some((s) => s === '' || s === '.' || s === '..') ? null : w;
+}
+
+/** The paths a package's lifecycle scripts may run, from its `package.json` bytes (`null` when the row does not
+ *  declare it). Deterministic: the four hooks in npm's order, their words in order, de-duplicated, the declared ones
+ *  left out, cut at `LIFECYCLE_INPUTS_MAX`, then sorted. What cannot be read adds nothing and says why. */
+export function lifecycleInputPaths(pkg: string, manifest: Uint8Array | null, declared: readonly string[]): LifecycleInputs {
+  const at = `${pkg}/package.json`;
+  const none = (why: string): LifecycleInputs => ({ paths: [], notes: [`${why}; no lifecycle script adds an install input`] });
+  if (manifest === null) return none(`the row's install inputs do not name ${at}`);
+  let v: unknown;
+  try { v = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifest)); } catch { return none(`${at} is not JSON`); }
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return none(`${at} is not an object`);
+  const scripts = (v as Record<string, unknown>).scripts;
+  if (scripts === undefined) return { paths: [], notes: [] };
+  if (typeof scripts !== 'object' || scripts === null || Array.isArray(scripts)) return none(`${at}: scripts is not an object`);
+  const notes: string[] = [];
+  const found: string[] = [];
+  for (const hook of LIFECYCLE_HOOKS) {
+    const s = Object.hasOwn(scripts, hook) ? (scripts as Record<string, unknown>)[hook] : undefined;
+    if (s === undefined) continue;
+    const words = typeof s === 'string' ? scriptWords(s) : null;
+    if (words === null) {
+      notes.push(`${at}: scripts.${hook} ${typeof s === 'string' ? 'uses quoting, expansion or redirection this reader does not follow' : 'is not a string'}; it adds no install input`);
+      continue;
+    }
+    for (const w of words) {
+      const p = wordPath(w);
+      const full = p === null ? null : `${pkg}/${p}`;
+      if (full !== null && !declared.includes(full) && !found.includes(full)) found.push(full);
+    }
+  }
+  if (found.length > LIFECYCLE_INPUTS_MAX) notes.push(`${at}: its lifecycle scripts name ${found.length} paths; the first ${LIFECYCLE_INPUTS_MAX} are kept`);
+  return { paths: found.slice(0, LIFECYCLE_INPUTS_MAX).sort(), notes };
+}
 
 export interface PristineEntry {
   readonly key: string;
