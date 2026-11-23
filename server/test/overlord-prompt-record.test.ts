@@ -673,7 +673,7 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
       return { id: coord.queueDelivery(mail.id, ID, 'ccrc-mail test payload').id };
     };
 
-    it('a wake to the designated session types its line (the time left at typing), moves nothing in the private store, acks on its first delivery and is never replayed', async () => {
+    it('a wake to the designated session types its line (the time left at the mail pass clock), moves nothing in the private store, acks on its first delivery and is never replayed', async () => {
       const om = store();
       const { h, coord, w } = await primed([emptyBox, emptyBox, echoedBox(WAKE_LINE), emptyBox], om);
       designate(coord, ID);
@@ -744,6 +744,25 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
       await w.sweepMail();
       expect(stateOf(coord, id)).toBe('delivered');
       expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes(`delivery ${id}`) && l.includes('ack refused'))).toBe(true);
+    });
+
+    // Review 3506 F1: the recovery measured end to end on the real pass, not by call order. A fixed line whose first delivery moves
+    // nothing (the wake, the spot-probe notice) was delivered once and its ack never landed (the process stopped between
+    // `markDelivered` and the ack). Past the replay window the row is due again; the pass must ack it and type nothing, no line and
+    // no key. Red when the pass's early exit after `finishFixedLineAck` is removed: the row is acked, then the line is typed again.
+    it.each([
+      ['a wake', INBOX_WAKE_SUBJECT, WAKE_BODY],
+      ['a spot-probe notice', SPOT_PROBE_SUBJECT, 'A probe round is open for you. Answer it with `ccrc-api probe`.'],
+    ])('%s delivered once and never acked is replayed past the replay window: acked, and nothing is typed again', async (_what, subject, body) => {
+      const { h, coord, w } = await primed([emptyBox], store());
+      designate(coord, ID);
+      const { id } = queueBody(coord, 'operator', subject, body);
+      expect(coord.markDelivered(id, NOW)).toMatchObject({ changed: true, state: 'delivered' });
+      vi.setSystemTime(NOW + MAIL_REPLAY_MS * 3);
+      await w.sweepMail();
+      expect(stateOf(coord, id)).toBe('acked');
+      expect(literalSends(h.calls)).toEqual([]);
+      expect(keyPresses(h.calls)).toEqual([]);
     });
   });
 
