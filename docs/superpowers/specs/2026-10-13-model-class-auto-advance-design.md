@@ -416,9 +416,13 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
   class's current target becomes one more reason for the automatic roll (`ccd hibernate --roll`, decided in
   `server/src/coord/rollTarget.ts`, with the shared predicate `aliasModelBehind`): once it is idle, it is relaunched, and
   the same conversation resumes on the held id while the class is held, else on the class's resolved, launchable id. The
-  safeguards stand: the alias's id is a target only after a fresh launch has been seen on it (the canary above), a
-  session is behind only when its model is of its class's family and no other class's current or held id, a session with
-  no fresh reading or no routed class is never named, and an id is acted on once per target. A model picked by hand
+  roll's inputs are the session's routed class and its usage model reading rendered strictly after its current pane
+  started (`modelCandidateOf`; there is no further reading-age gate, and an unknown start is no candidate), compared with
+  that class's held or resolved launchable id; the route record's own model id is not an input. The safeguards stand: the
+  alias's id is a target only after a fresh launch has been seen on it (the canary above), a session is behind only when
+  its model is of its class's family and no other class's current or held id, a session with no routed class, or none
+  whose usage reading was rendered after its current pane started, is never named, and an id is acted on once per
+  target. A model picked by hand
   in a running session is therefore never typed over, because nothing is typed. The relaunch moves the session; it is
   not proof that a real release has moved a class on the fleet, which stays with the natural-move check, and any claim
   about session renewal belongs to the renewal programme's evaluation.
