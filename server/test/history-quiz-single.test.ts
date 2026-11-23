@@ -876,6 +876,93 @@ describe('fix rounds 1 and 2: a resumed arms probes step 0b again on a build it 
   });
 });
 
+// ── quiz-pilot-checks ruling 5: `arms --repilot`, the one door that pilots a failed week's --out again ─────────────────
+describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again on its own ledger', () => {
+  const noSkill = stream({ skills: [], session: 'fixture-qs-noskill', calls: [{ command: 'x' }] });
+  const failAll = (w: { home: string; mode: string }): void => plantStep0b(w.home, w.mode, Object.fromEntries((D.STEP0B_PROBES as string[]).map((p) => [p, noSkill])));
+  const resultPath = (w: { out: string; mode: string }): string => join(w.out, 'quiz', 'step0b', `${w.mode}.json`);
+  async function failedWeek() {
+    const w = await week();
+    failAll(w);
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal?.word, 'fixture: the first pilot failed').toBe('pilot-failed');
+    return w;
+  }
+
+  it('CONTROL: without --repilot a failed pilot still refuses pilot-failed, and nothing spawns', async () => {
+    const w = await failedWeek();
+    const before = runs(w.home).length;
+    expect((await run(w.home, w.argv(), FAKE)).refusal?.word).toBe('pilot-failed');
+    expect(runs(w.home).length).toBe(before);
+  });
+
+  it('on a new release: the failed result is kept, the week is re-pinned, the pilot runs as round 1, passes, and the arms run', async () => {
+    const w = await failedWeek();
+    const failedBytes = readFileSync(resultPath(w));
+    plantStep0b(w.home, w.mode);
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toBeNull();
+    expect(readFileSync(join(w.out, QS.step0bFailedRel(w.mode, 0) as string)).equals(failedBytes), 'the failed round 0 result is kept as it was').toBe(true);
+    expect(json(resultPath(w))).toMatchObject({ round: 1, passed: true });
+    expect(json(join(w.out, QS.RELEASE_PIN_FILE as string)).ccrc_release).toBe('v9.9.9');
+    expect(json(join(w.out, 'quiz', 'arms-summary.json'))).toMatchObject({ stop: null, ccrc_release: 'v9.9.9' });
+    expect(questionRuns(w.home).length, 'the arms ran after the passing pilot').toBeGreaterThan(0);
+  });
+
+  it('both pilots spend on the week\'s one ledger, so the first pilot\'s spend counts toward the week\'s --budget', async () => {
+    const w = await failedWeek();
+    const firstPilot = D.spentSoFar(w.out) as number;
+    expect(firstPilot, 'fixture: the first pilot spent').toBeGreaterThan(0);
+    plantStep0b(w.home, w.mode);
+    setRelease(w.home, 'v9.9.9');
+    await run(w.home, w.argv(['--repilot']), FAKE);
+    const names = (D.spendLinesOf(w.out) as R[]).map((l) => l.name as string);
+    expect(names.some((n) => n.includes('.r0/')) && names.some((n) => n.includes('.r1/')), 'both rounds are on this --out\'s ledger').toBe(true);
+    expect(D.spentSoFar(w.out) as number).toBeGreaterThan(firstPilot);
+  });
+
+  it('a re-pilot that fails again refuses pilot-failed and keeps both failed results', async () => {
+    const w = await failedWeek();
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal?.word).toBe('pilot-failed');
+    expect(json(resultPath(w))).toMatchObject({ round: 1, passed: false });
+    expect(existsSync(join(w.out, QS.step0bFailedRel(w.mode, 0) as string))).toBe(true);
+    expect(questionRuns(w.home)).toEqual([]);
+  });
+
+  it('with a passed result here, --repilot changes nothing: the arms run as any arms does', async () => {
+    const w = await week();
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toBeNull();
+    expect(json(resultPath(w))).toMatchObject({ round: 0, passed: true });
+    expect(existsSync(join(w.out, QS.step0bFailedRel(w.mode, 0) as string))).toBe(false);
+  });
+
+  it('refuses out-refused when an arm batch was planned on the --out: a week\'s arms never span two releases', async () => {
+    const w = await week({ budget: '600' });
+    expect((await run(w.home, w.argv(), FAKE)).refusal?.word, 'fixture: the arms started and stopped at the budget').toBe('budget-exhausted');
+    expect(D.readArmManifests(w.out, 'quiz').length, 'fixture: an arm batch was planned').toBeGreaterThan(0);
+    // The shape a re-probe on a new build leaves when it fails after arms ran (the budget stop leaves no room to spawn one
+    // here): the result is this setup's, its pilot failed, and arm batches stand beside it.
+    writeFileSync(resultPath(w), `${L.canonicalJson({ ...json(resultPath(w)), round: 1, passed: false }) as string}\n`);
+    expect((await run(w.home, w.argv(), FAKE)).refusal?.word, 'CONTROL: without --repilot it refuses as a failed pilot').toBe('pilot-failed');
+    const pinBefore = readFileSync(join(w.out, QS.RELEASE_PIN_FILE as string));
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/^--repilot: an arm batch was planned/) });
+    expect(readFileSync(join(w.out, QS.RELEASE_PIN_FILE as string)).equals(pinBefore), 'the pin is untouched').toBe(true);
+  });
+
+  it('--repilot is an arms flag only', async () => {
+    const w = await week();
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    const r = await run(w.home, ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', 'a'.repeat(64), '--repilot'], FAKE);
+    expect(r.refusal).toMatchObject({ word: 'args-invalid', detail: '--repilot is not a judge flag' });
+  });
+});
+
 describe('fix round 1: report recomputes the summary from the answer records (F5)', () => {
   it('an answer record edited after the judge refuses arms-summary-mismatch before any scoring, and no report is written', async () => {
     const f = await reportFixture();
