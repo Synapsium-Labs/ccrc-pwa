@@ -1,8 +1,10 @@
 // Programme model-class-advance, wave R4 (review F3): the audit line of `POST /api/models/:lane` through the REAL wiring.
 // `lane-models-post.test.ts` and the hold-race suite inject their own `actorOf`, so neither can see the registration in
-// `server.ts`. This one builds the whole server with sign-in armed, signs a device in through the session store, POSTs a hold
+// `server.ts`. This one builds the whole server with sign-in armed, signs a device in through the session store, POSTs a revert
 // and reads the one `console.warn` line the door writes: it must name the device the gate measured (`device:<label>`,
-// D-5229) and never the session cookie. The fake `io` answers the verb and the fresh read; no file, no agent, no `ccrc`.
+// D-5229) and never the session cookie. The door reads the lane before it writes (revert-holds-until-newer, D-8757), and a
+// refusal of that read writes no line: the audit line is one per write op asked. The fake `io` answers the capability read, the
+// verb and the fresh read; no file, no agent, no `ccrc`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -44,8 +46,13 @@ const CAT = {
 const exited = (stdout: object): ModelsAsked => ({ kind: 'exited', code: 0, stdout: `${JSON.stringify(stdout)}\n` });
 const SHOW = exited({
   ok: true, op: 'show', id: LANE, anthropic: false, registry: REG, labels: laneClassModels(parseRegistry(REG), parseCatalogue(CAT)), windowNotices: [],
+  revertHoldEnds: true,
 });
-const HOLD = exited({ ok: true, op: 'hold', class: C1, changed: true, id: LANE });
+/** An older box's `show`: no `revertHoldEnds`, so the door refuses before it writes. */
+const SHOW_OLD = exited({
+  ok: true, op: 'show', id: LANE, anthropic: false, registry: REG, labels: laneClassModels(parseRegistry(REG), parseCatalogue(CAT)), windowNotices: [],
+});
+const REVERT = exited({ ok: true, op: 'revert', class: C1, id: LANE });
 
 const spyWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 const stubPty = (): PtyLike => ({ onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {} });
@@ -56,7 +63,7 @@ describe('POST /api/models/:lane, built through buildServer with sign-in armed: 
   beforeEach(() => { warn = spyWarn(); });
   afterEach(async () => { warn.mockRestore(); if (app) await app.close(); app = undefined; });
 
-  async function signedIn(label: string): Promise<{ cookie: string; token: string; asked: string[] }> {
+  async function signedIn(label: string, show: ModelsAsked = SHOW): Promise<{ cookie: string; token: string; asked: string[] }> {
     const home = mkTmp('ccrc-lane-models-audit-');
     seedRoster(home, ROSTER);
     const base0 = testDeps(home);
@@ -70,7 +77,7 @@ describe('POST /api/models/:lane, built through buildServer with sign-in armed: 
     const asked: string[] = [];
     const io: FleetIO = {
       ...base.io,
-      models: async (lane, action) => { asked.push(`${lane} ${action}`); return action === 'show' ? SHOW : HOLD; },
+      models: async (lane, action) => { asked.push(`${lane} ${action}`); return action === 'show' ? show : REVERT; },
     };
     const deps: Deps = { ...base, io, cfg: { ...base.cfg, authEnabled: true, cookieSecure: false }, spawnPty: stubPty };
     app = await buildServer(deps);
@@ -79,14 +86,14 @@ describe('POST /api/models/:lane, built through buildServer with sign-in armed: 
   }
   const audit = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ccrc-server: models:'));
 
-  it('one hold: 200, one audit line, "by device:<the label the session was created with>", no cookie and no token in it', async () => {
+  it('one revert: 200, one audit line, "by device:<the label the session was created with>", no cookie and no token in it', async () => {
     const s = await signedIn(LABEL);
     const res = await app!.inject({
-      method: 'POST', url: `/api/models/${LANE}`, headers: { cookie: s.cookie }, payload: { action: 'hold', class: C1 },
+      method: 'POST', url: `/api/models/${LANE}`, headers: { cookie: s.cookie }, payload: { action: 'revert', class: C1 },
     });
     expect(res.statusCode, res.body).toBe(200);
-    expect(s.asked, 'the act, then the fresh read').toEqual([`${LANE} hold`, `${LANE} show`]);
-    expect(audit()).toEqual([`ccrc-server: models: hold ${LANE} ${C1} by device:${LABEL} -> done`]);
+    expect(s.asked, 'the capability read, the act, then the fresh read').toEqual([`${LANE} show`, `${LANE} revert`, `${LANE} show`]);
+    expect(audit()).toEqual([`ccrc-server: models: revert ${LANE} ${C1} by device:${LABEL} -> done`]);
     const line = audit()[0]!;
     expect(line).not.toContain(s.token);
     expect(line).not.toContain(SESSION_COOKIE);
@@ -96,15 +103,26 @@ describe('POST /api/models/:lane, built through buildServer with sign-in armed: 
   it('a label with a control character is flattened to one line (deviceActor, the one writer of the actor)', async () => {
     const s = await signedIn(LABEL_WITH_BREAK);
     const res = await app!.inject({
-      method: 'POST', url: `/api/models/${LANE}`, headers: { cookie: s.cookie }, payload: { action: 'hold', class: C1 },
+      method: 'POST', url: `/api/models/${LANE}`, headers: { cookie: s.cookie }, payload: { action: 'revert', class: C1 },
     });
     expect(res.statusCode, res.body).toBe(200);
-    expect(audit()).toEqual([`ccrc-server: models: hold ${LANE} ${C1} by device:${LABEL} -> done`]);
+    expect(audit()).toEqual([`ccrc-server: models: revert ${LANE} ${C1} by device:${LABEL} -> done`]);
+  });
+
+  it('a box that does not prove the capability is refused before any write: 501, one read, and NO audit line', async () => {
+    const s = await signedIn(LABEL, SHOW_OLD);
+    const res = await app!.inject({
+      method: 'POST', url: `/api/models/${LANE}`, headers: { cookie: s.cookie }, payload: { action: 'revert', class: C1 },
+    });
+    expect(res.statusCode, res.body).toBe(501);
+    expect(res.json()).toEqual({ ok: false, error: 'unsupported', cause: 'revert-hold-ends' });
+    expect(s.asked, 'only the capability read: nothing was written').toEqual([`${LANE} show`]);
+    expect(audit(), 'the audit line is one per write op asked').toEqual([]);
   });
 
   it('with no session the gate refuses first: nothing is asked of the op and nothing is audited', async () => {
     const s = await signedIn(LABEL);
-    const res = await app!.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: C1 } });
+    const res = await app!.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'revert', class: C1 } });
     expect(res.statusCode).toBe(401);
     expect(s.asked).toEqual([]);
     expect(audit()).toEqual([]);
