@@ -802,7 +802,7 @@ describe('ModelsSheet: an Anthropic lane', () => {
     expect(text).not.toMatch(/to hold|was not held|not held|refresh/i);
   });
 
-  it('a revertable held Anthropic class offers Revert where the read proves holds end, with its hold facts, hold sentence and previous kept', async () => {
+  it('a revertable held Anthropic class offers Revert where the read proves holds end, with its hold facts and hold sentence, and no predicted model', async () => {
     mount(aread({}, aadvance({ opus: aclass('opus', { hold: HELD, revertable: true, previous: { model: 'claude-opus-9-0', effort: null } }) })), { anthropic: true });
     await ready();
     expect(screen.getAllByRole('button', { name: /^Revert the/ }).map((b) => b.getAttribute('aria-label'))).toEqual(['Revert the opus class']);
@@ -810,8 +810,26 @@ describe('ModelsSheet: an Anthropic lane', () => {
     expect(fact('opus', 'held')).toBe('Held at claude-opus-9-1.');
     expect(fact('opus', 'supervisor')).toBe(SUPERVISOR_RESIDUAL_WORDS);
     expect(rowOf('opus').textContent).toContain(`Held by hand since 2026-11-18 08:00Z. ${ENDS}`);
-    expect(rowOf('opus').textContent).toMatch(/a revert would put back claude-opus-9-0/i);
+    // F1 (call 555): after a shell Release the op may restore another id than `previous`, so the card predicts no model.
+    expect(rowOf('opus').textContent).not.toMatch(/a revert would put back/i);
     expect(rowOf('haiku').textContent).not.toMatch(/a revert would put back/i);
+  });
+
+  it('an Anthropic Revert confirm names the class, the hold and its ending, and predicts no model (F1, D-8857)', async () => {
+    // An otherwise eligible class whose `previous` differs from the alias's id: after a shell Release the op can put back the
+    // released hold's id instead, which the read cannot show, so the confirm names no target; the post-act read shows it.
+    const adv = aadvance({ opus: aclass('opus', { revertable: true, previous: { model: 'claude-opus-9-0', effort: null } }) });
+    mount(aread({}, adv), { anthropic: true });
+    await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Revert the opus class' }));
+    const dialog = await screen.findByRole('dialog', { name: /revert the opus class\?/i });
+    const text = dialog.textContent ?? '';
+    expect(text).toContain('opus');
+    expect(text).toContain('lane-a');
+    expect(text).toContain('The hold ends by itself once a newer model appears, so nothing needs doing to lift it.');
+    expect(text).not.toContain('claude-opus-9-0');
+    expect(text).not.toMatch(/put back claude-/i);
+    expect(text).toMatch(/may keep their current model until they are relaunched/i);
   });
 
   it('without the proof the same class has no Revert, keeps its hold facts, promises no ending, and the lane says why', async () => {

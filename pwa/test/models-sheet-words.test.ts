@@ -260,6 +260,18 @@ describe('classActs and revertStillOffered', () => {
     expect(revertConsequence('lane-a', 'opus', null, { model: null, effort: null })[0]).toContain('Put back an empty class');
     expect(revertConsequence('lane-a', 'opus', null, { model: null, effort: null })[2]).toContain('replaces an empty class');
   });
+  it('on an Anthropic lane the revert consequence names the class and the self-ending hold, and no model it cannot prove (F1, D-8857)', () => {
+    const lines = revertConsequence('lane-a', 'opus', 'm-now', { model: 'm-before', effort: null }, true);
+    const all = lines.join(' ');
+    expect(all).toContain('opus');
+    expect(all).toContain('lane-a');
+    expect(lines).toContain('The hold ends by itself once a newer model appears, so nothing needs doing to lift it.');
+    expect(lines).toContain('Sessions already running may keep their current model until they are relaunched.');
+    expect(all).not.toContain('m-before');
+    expect(all).not.toMatch(/release/i);
+    // a Codex lane keeps its exact target
+    expect(revertConsequence('lane-a', 'opus', 'm-now', { model: 'm-before', effort: null }, false)[0]).toBe('Put back m-before and hold opus on lane-a.');
+  });
 });
 
 describe('what a class card says about its hold, its previous and its revert', () => {

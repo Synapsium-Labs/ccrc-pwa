@@ -382,15 +382,26 @@ export const revertAriaLabel = (cls: ModelClass): string => `Revert the ${cls} c
 export const revertTitle = (cls: ModelClass): string => `Revert the ${cls} class?`;
 /** `previous` is the one on record: a revert whose class has none is not offered, so there is no sentence for it (F13). */
 export function revertConsequence(
-  lane: string, cls: ModelClass, current: string | null, previous: Previous,
+  lane: string, cls: ModelClass, current: string | null, previous: Previous, anthropic = false,
 ): string[] {
+  // F1 (call 555, D-8857): on an Anthropic lane, after a shell Release and before the next refresh settles the alias's move,
+  // the op puts back the released hold's id rather than `previous`, and the read carries nothing that shows it. So that
+  // confirm names the class, the hold and its ending, and no model; the read after the act shows the model it put back.
+  if (anthropic) {
+    return [
+      `Put the ${cls} class on ${lane} back to an earlier model and hold it there. The fleet box picks that model from its own record, and the sheet shows it once it has read the lane again.`,
+      HOLD_ENDS_CONFIRM,
+      MODELS_CONFIRM_SESSIONS,
+    ];
+  }
   return [
     `Put back ${previous.model ?? 'an empty class'} and hold ${cls} on ${lane}.`,
-    'The hold ends by itself once a newer model appears, so nothing needs doing to lift it.',
+    HOLD_ENDS_CONFIRM,
     `As last read, that replaces ${current ?? 'an empty class'}.`,
     MODELS_CONFIRM_SESSIONS,
   ];
 }
+const HOLD_ENDS_CONFIRM = 'The hold ends by itself once a newer model appears, so nothing needs doing to lift it.';
 
 /** What was done, said once the box has answered (the live region's status). A revert holds the class, and the hold ends by
  *  itself (the server refused to send it where the read did not prove that). */

@@ -249,7 +249,8 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
                       <p>{familyWords(adv.family)}</p>
                       <p>{holdWords(adv.hold, endsHold)}</p>
                       <p>{lastMoveWords(adv.lastMove)}</p>
-                      {revert && previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
+                      {/* Codex only: an Anthropic revert may put back another id than `previous` (F1, D-8857), so none is predicted. */}
+                      {revert && !anthropic && previousWords(adv.previous) !== null && <p>{previousWords(adv.previous)}</p>}
                     </div>
                   )}
                   {revert && (
@@ -272,7 +273,7 @@ export function ModelsSheet({ lane, anthropic = false, open, onClose, offline, a
           open
           onClose={() => setConfirming(null)}
           title={revertTitle(confirming)}
-          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious)}
+          consequence={revertConsequence(lane, confirming, confirmRead.classes[confirming].model, confirmPrevious, anthropic)}
           confirmLabel={MODELS_REVERT_CONFIRM}
           onConfirm={() => confirmRevert(confirming)}
         />

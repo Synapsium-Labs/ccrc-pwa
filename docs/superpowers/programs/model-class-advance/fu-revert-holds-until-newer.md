@@ -38,7 +38,8 @@ launch, refresh or doctor policy.
 - **The Models sheet offers Revert only** (`pwa/src/accounts/modelsSheetWords.ts`, `ModelsSheet.tsx`). No Hold and no
   Release control, sentence or remedy. Revert is offered on Codex and Anthropic lanes alike (D-8930's withholding ends)
   where `revertHoldEndsOn(read)`, the one predicate, holds (the read is `read` and carries literal `true`), and the class is
-  revertable with a previous model; the busy and offline guards are unchanged and cover every class. The PWA's one reader of
+  revertable with a previous model (the card's "A revert would put back …" line now shows only where Revert is offered, on a
+  Codex lane); the busy and offline guards are unchanged and cover every class. The PWA's one reader of
   the server's wire (`pwa/src/lib/models.ts#asLaneModelsRead`) keeps `revertHoldEnds` only as literal `true`.
 - **The words.** A held row says who made the hold ("Held by a revert since …" or "Held by hand since …") and, where the box
   ends holds, one shared sentence: "It ends by itself once a newer model appears; nothing needs doing." It names no model and
@@ -47,6 +48,11 @@ launch, refresh or doctor policy.
   advance record read, the lane says "This fleet box's ccrc does not end a revert's hold by itself, so Revert is not
   offered. Updating the fleet box brings it back." Existing holds, including ones the shell wrote, stay visible there with
   no ending sentence and no remedy. Degraded, waiting and transient readings are unchanged.
+- **Fix round 1 (call 555, review 3487 F1).** On an Anthropic lane the Revert confirm names the class, the hold and its
+  automatic ending, and no model: "Put the <class> class on <lane> back to an earlier model and hold it there. The fleet box
+  picks that model from its own record, and the sheet shows it once it has read the lane again." The card no longer says "A
+  revert would put back …" there either. A Codex lane keeps its exact target in both places ("Put back <model> and hold …").
+  The read after the act shows the model the revert put back. No wire, gate, writer, shell verb or hold policy changed.
 - **D-8757 (`ccrcdir-param-drop`).** `readLaneModels(io, lane, opts?)`: the unread directory parameter is gone, with the
   route's `ccrcDir` dependency and every caller argument. The two caller lines in files held by other sessions changed only
   by the exact replacements their holders consented to (the GET read and the door's wiring and comment in `server.ts`; the
@@ -91,7 +97,7 @@ Each row edited one source line in place, ran the named tests, and restored the 
 | P3 | the capability predicate is inferred from a read alone | red (5) |
 | P4 | a held row promises its ending on a box that does not end holds | red (3) |
 | P5 | the lane note on an older box is never drawn | red (3) |
-| P6 | the confirm's re-check ignores a read that lost the capability | red (1) |
+| P6 | the withdrawal of an open confirm ignores a read that lost the capability | red (1): it covers withdrawing a confirm that is no longer eligible, not the Yes handler's defensive re-check, which the render guard makes unreachable |
 
 ## Known limits, for the ledger
 
@@ -100,6 +106,12 @@ Each row edited one source line in place, ran the named tests, and restored the 
 - On the agent arm a `GET` whose `show` is still in flight makes the capability read answer `busy`, so a revert tapped at
   that moment is refused `busy` before any write, one step earlier than before; the sheet reads again after every act.
 - A revert now costs two `show`s (the capability read and the post-act read).
+- The narrow post-Release window (D-8857): after a shell Release, and before the next trustworthy refresh records the alias's
+  move, an Anthropic Revert puts back the released hold's id when the alias has moved off it, not the read's `previous`. The
+  act is correct and the read after it shows what happened; the read carries no release evidence, so the Anthropic confirm and
+  card predict no model (fix round 1).
+- An older console reads the new refusal cause `revert-hold-ends` (501 `unsupported`) as its generic sentence that the fleet
+  agent predates the act: the same remedy (update the fleet box), and nothing written.
 - An older console tapping Hold or Release on the new door is refused as a bad request (`bad-action`). It says nothing was
   changed and re-reads, but its own sentence for that word reads "That action is not hold, release or revert", which is
   inexact for those two; a reload brings the new sheet, which offers neither.
