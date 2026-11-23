@@ -371,7 +371,8 @@ describe('the scanner is looking at something', () => {
     // 76 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B, Settings › Automation › Auto memory for
     // plain sessions): session-gated, NOT EXEMPT, no box token.
     // 78 since `GET`/`POST /api/coord/coordinator-advisor` (the coordinator advisor, D-8967): session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(78);
+    // 77 since the allocator's POST /api/ledger/deviations was deleted (a box-token lane IN EXEMPT).
+    expect(scanRoutes('coord/routes.ts').length).toBe(77);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -800,7 +801,9 @@ describe('the scanner is looking at something', () => {
     // the HTTP half 304 -> 306, the gated count 191 -> 193, the exempt-HTTP count stays 113.
     // 310 since the authority witness door, `POST /api/overlord/witness` in `coord/overlordRoutes.ts`, session-gated with no step-up
     // and NOT EXEMPT (in FLAG_AWARE): the HTTP half 306 -> 307, the gated count 193 -> 194, the exempt-HTTP count stays 113.
-    expect(ROUTES.length).toBe(310);
+    // 309 since the allocator's POST /api/ledger/deviations was deleted (a box-token lane IN EXEMPT): the HTTP half 307 -> 306, the
+    // gated count stays 194 (306 - 112), the exempt-HTTP count 113 -> 112.
+    expect(ROUTES.length).toBe(309);
     expect(scanRoutes('poolRunwayRoute.ts').length).toBe(1);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
@@ -992,7 +995,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 310 scanned + the static wildcard when the bundle is built.
+    // 309 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1155,7 +1158,6 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/landing/entries', 'POST /api/landing/order',
       // Delegation wave 5 PR8: a lease parent's Retain, box-token gated, cookieless through `ccrc-api` (gate.ts reason 2).
       'POST /api/leases/:lease/retain',
-      'POST /api/ledger/deviations',
       'POST /api/linear/proxy/issues',
       'POST /api/linear/proxy/issues/:id',
       'POST /api/linear/proxy/issues/:id/comments',
@@ -1233,7 +1235,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and one hundred and three with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live, the Overlord\'s inbox doors and its history door', () => {
+  it('the thirty-eight box-token lanes in EXEMPT are those coord routes, and one hundred and two with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door, the quiz record door, its confirmation, its tick report, the coordinator\'s Live, the Overlord\'s inbox doors and its history door', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1280,7 +1282,7 @@ describe('EXEMPT is complete in both directions', () => {
     // POST /api/claims + POST /api/claims/:id/release joined the plain
     // box-token lanes (POST /api/claims/:id/break is deliberately NOT here —
     // it is UNGATED, the abandon-door shape, and not EXEMPT either); and the
-    // allocator pair, POST /api/ledger/deviations + GET /api/ledger, are
+    // allocator pair, POST /api/ledger/deviations (since deleted) + GET /api/ledger, were
     // plain box-token lanes too (requireMailToken — the fleet host is the
     // caller, with no cookie jar). The scan reads the SOURCE rather than
     // trusting the table, which is the whole point — an exemption whose
@@ -1293,7 +1295,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/testbox',
       'POST /api/approvals',
       'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/coordinators/:session/intent', 'POST /api/landing/entries',
-      'POST /api/landing/order', 'POST /api/leases/:lease/retain', 'POST /api/ledger/deviations',
+      'POST /api/landing/order', 'POST /api/leases/:lease/retain',
       'POST /api/mail', 'POST /api/mail/:id/ack',
       // W3 Q3f (D-7030): the question family's claimant pair, box-token lanes like the four doors they share cores with.
       'POST /api/questions/:id/release', 'POST /api/questions/:id/rule',
@@ -1797,7 +1799,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 307 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 306 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1861,7 +1863,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 307 HTTP routes, not the 113 exempt.
+          //    is not itself flag-aware — the assertion that covers all 306 HTTP routes, not the 112 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

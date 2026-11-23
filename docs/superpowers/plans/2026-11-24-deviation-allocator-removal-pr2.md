@@ -38,21 +38,20 @@ PR 1 (`docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md`
 3. A `ccrc-api ledger …` call from an old skill copy on a box → the client answers its unknown-verb error, not a crash.
 4. The backup and restore set (`ccrc backup`, coordination restore) naming the alloc log → if it does, drop it from
    the set with the reader; if not, nothing.
-5. `GET /api/ledger` from the PWA → no PWA reader exists (measured 2026-11-24), so nothing on the console breaks.
+5. `GET /api/ledger` STAYS (D-10001): it is the box-token proof door of `ccrc-token-sync`. No PWA reader exists (measured 2026-11-24), and nothing on the console is touched.
 
 ---
 
 ### Task 1: The doors
 
-**Files:** `server/src/coord/routes.ts` (both ledger routes), `server/src/auth/gate.ts` (their EXEMPT rows),
-`ccd/ccrc-api` (`ledger.list`, `ledger.allocate` rows and help), `server/src/server.ts` (route lists naming
-`/api/ledger`), `CLAUDE.md` (the box-token route list: drop `POST /api/ledger/deviations` and `GET /api/ledger`),
-`README.md` (the `ledger list|allocate` verb line and any route table), and every census that lists them
+**Files:** `server/src/coord/routes.ts` (`POST /api/ledger/deviations` only; `GET /api/ledger` stays, D-10001), `server/src/auth/gate.ts` (its EXEMPT row),
+`ccd/ccrc-api` (the `ledger.allocate` row, help, `--by` flag and body fill; `ledger.list` stays), `server/src/watch.ts` (the message naming the route), `CLAUDE.md` (the box-token route list: drop `POST /api/ledger/deviations`),
+`README.md` (the verb line becomes `ledger list`), and every census that lists them
 (`box-token-census`, `auth-gate`, `coord-routes-single-file`, `overlord-other-lanes-census`, `ccrc-api*`, others
 `git grep -l "api/ledger" server/test` names).
 
-- [ ] **Step 1:** Change the censuses and route tests first so they expect the routes and verbs gone (a request to
-  either path answers 404; `ccrc-api ledger list` exits with the client's unknown-verb answer).
+- [ ] **Step 1:** Change the censuses and route tests first so they expect the POST route and the `allocate` verb gone (a POST to
+  `/api/ledger/deviations` answers 404; `ccrc-api ledger allocate` exits with the client's unknown-verb answer; `GET /api/ledger` and `ledger list` are unchanged).
 - [ ] **Step 2:** Run them — expect FAIL.
 - [ ] **Step 3:** Delete the routes, the gate rows, the client rows, the doc mentions.
 - [ ] **Step 4:** Run every suite `git grep -l "api/ledger\|ledger\.list\|ledger\.allocate" server/test` lists, plus
@@ -86,4 +85,4 @@ PR 1 (`docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md`
 
 ## Deviations found
 
-(none yet)
+- **D-10001** — The spec's item 4 removes `GET /api/ledger` too, but it is the box-token proof door of `ccrc-token-sync` (a 400 without `project` proves the token), so it stays, with its EXEMPT row, census entries and `ledger.list`, until the proof moves to another route with a rollout order of its own (Task 1). Task 2 keeps the store methods that read serves.

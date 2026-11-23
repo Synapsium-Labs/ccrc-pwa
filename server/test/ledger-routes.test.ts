@@ -1,9 +1,8 @@
-// The allocator's door is RETIRED (docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md):
-// POST /api/ledger/deviations keeps its box-token check and answers 410, writing nothing.
-// GET /api/ledger (a read of history) is unchanged. The store's allocation is
+// The allocator's door is REMOVED (docs/superpowers/plans/2026-11-24-deviation-allocator-removal-pr2.md):
+// POST /api/ledger/deviations answers 404. GET /api/ledger (a read of history, and the box-token proof door of
+// ccrc-token-sync) is unchanged. The store's allocation is
 // ledger-race.test.ts's and ledger-store.test.ts's.
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { LEDGER_STALE_MS } from '../../shared/api.js';
@@ -23,9 +22,6 @@ const openApp = async (over: Partial<Deps> = {}, home: string = mkTmp('ccrc-ledg
   return { app, coord, home };
 };
 
-const alloc = (app: FastifyInstance, body: Record<string, unknown>,
-               headers: Record<string, string> = tok) =>
-  app.inject({ method: 'POST', url: '/api/ledger/deviations', headers, payload: body });
 const ledger = (app: FastifyInstance, qs: string, headers: Record<string, string> = tok) =>
   app.inject({ method: 'GET', url: `/api/ledger${qs}`, headers });
 
@@ -42,26 +38,17 @@ describe('the ledger routes', () => {
     return w;
   };
 
-  it('POST answers 410 retired with the next-deviation pointer, and writes nothing', async () => {
-    const w = await seeded();
-    const before = (await ledger(app!, '?project=demo')).json();
-    const logPath = path.join(w.home, '.ccrc', 'ledger-alloc.log');
-    const logBefore = existsSync(logPath);
-    const res = await alloc(app!, { project: 'demo', count: 3, title: 'block', byId: 'demo-coordinator' });
-    expect(res.statusCode).toBe(410);
-    expect(res.json()).toEqual({ ok: false, error: 'retired',
-      detail: 'deviation numbers are self-assigned: the highest D-N defined on main and your branch, plus one, from 10000 (ccrc: cd server && npm run next-deviation)' });
-    expect((res.json() as { detail: string }).detail).toContain('next-deviation');
-    expect((await ledger(app!, '?project=demo')).json()).toEqual(before);
-    expect(existsSync(logPath)).toBe(logBefore);
-    // An unseeded project is not seeded by the call either.
-    expect((await alloc(app!, { project: 'fresh', count: 1, title: 'x' })).statusCode).toBe(410);
-    expect(w.coord.ledgerFloor('fresh')).toBeNull();
+  it('POST /api/ledger/deviations is gone: 404 with and without the box token', async () => {
+    await seeded();
+    for (const headers of [tok, {}]) {
+      const res = await app!.inject({ method: 'POST', url: '/api/ledger/deviations', headers,
+        payload: { project: 'demo', count: 1, title: 'x' } });
+      expect(res.statusCode).toBe(404);
+    }
   });
 
-  it('POST still fails shut without the box token (401 before 410)', async () => {
+  it('GET still fails shut without the box token', async () => {
     await openApp().then((w) => { app = w.app; });
-    expect((await alloc(app!, { project: 'demo', count: 1, title: 'x' }, {})).statusCode).toBe(401);
     expect((await ledger(app!, '?project=demo', {})).statusCode).toBe(401);
   });
 

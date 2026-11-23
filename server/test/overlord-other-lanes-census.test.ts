@@ -292,7 +292,6 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/runs/:id/advance': ['launch-profile', 'box token only; no caller identity (residual)'],
   'POST /api/runs/:id/route': ['launch-profile', 'box token only; no caller identity (residual)'],
   'POST /api/runs/:id/items': ['launch-profile', 'box token only; no caller identity (residual)'],
-  'POST /api/ledger/deviations': ['launch-profile', 'an optional unattributed `byId`; a refusal by id is bypassed by leaving it out (residual)'],
   'POST /api/notify': ['launch-profile', 'ccd notify.sh on the fleet host, box token only, no caller identity'],
   'POST /api/testbox/tools-sync': ['launch-profile', 'no body, box token or a session; it sends the box only the fleet host\'s own versions'],
   'POST /api/token/claim': ['launch-profile', 'a single-use code sent over the agent link; no session holds one'],

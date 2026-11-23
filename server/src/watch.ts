@@ -8093,7 +8093,7 @@ export class FleetWatcher {
         console.warn(
           `ccrc-server: ${orphans.length} deviation number(s) defined in ${project}'s plans were ` +
           'never allocated: ' + orphans.map((o) => `D-${o.n} (${o.files.join(', ')})`).join('; ') +
-          ' — allocate through POST /api/ledger/deviations and define in the same act');
+          ' — take numbers with `npm run next-deviation` in server/ and define in the same act');
       }
     }
     const stale = store.staleAllocations(now - LEDGER_STALE_MS);

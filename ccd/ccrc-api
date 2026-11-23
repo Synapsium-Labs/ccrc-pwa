@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, one-hundred-and-two rows, and nothing else; the
+#   * The route comes from ROUTES below, one-hundred-and-one rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -108,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# One-hundred-and-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# One-hundred-and-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -169,7 +169,6 @@ declare -A ROUTES=(
   [claims.take]='POST|/api/claims|no|-'
   [claims.release]='POST|/api/claims/{id}/release|yes|-'
   [ledger.list]='GET|/api/ledger|no|project'
-  [ledger.allocate]='POST|/api/ledger/deviations|no|-'
   # The landing line's read (landing order wave 5e, D-7625): one project's entries, flags and order.
   [landing.show]='GET|/api/landing|no|project,pr'
   # The landing line's two attributed writes (landing order wave 5f): the caller's own body, byId/byUuid included, rides
@@ -485,7 +484,6 @@ usage() {
     printf '  %-18s %s\n' '' '`probe answer --json -` answers every question of the round in one call (no id: the pane'"'"'s)'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
-    printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
     printf '  %-18s %s\n' '' 'mail send --key <k> sends an idempotency key: a retry under the same key answers the first mail,'
     printf '  %-18s %s\n' '' 'whatever became of its delivery, and a key never expires, so a deliberate resend needs a new key'
   } >&2
@@ -549,11 +547,7 @@ read_token() {   # sets TOKEN, or refuses (D-2724). Never call it in $( ).
 # "run me inside a session" against "your environment is lying" — and collapsing
 # them is the overloaded value this repo forbids at a seam.
 #
-# THERE IS ONE FLAG, AND IT DECLARES RATHER THAN FORGES. `--by <id>`, on the
-# `ledger allocate` row alone, names a caller that HAS no pane — a contributor at
-# a shell or in CI, whom CONTRIBUTING.md sends to this allocator and for whom
-# auth/gate.ts's EXEMPT entry keeps the door open. It is refused on every other
-# row, and a session in a pane is filled from its pane. What is still
+# THERE IS NO FLAG THAT NAMES A CALLER. A session in a pane is filled from its pane, and what is
 # deliberately absent is any way to answer AS another session on a route that
 # checks attribution. `coordinators intent` takes a second word of the same kind,
 # `--session`, and it is an ASSERTION, never a selector: `parse_intent` refuses
@@ -586,8 +580,7 @@ derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call i
 
 # Adds `"<field>":"<value>"` as the FIRST key of the JSON object in `$body`
 # (main's local, read and rewritten here). Used by both body fills below.
-# `<value>` is always SAFE_RE-checked before it reaches this function (a `--by`
-# value, a derived id or a derived uuid), so it admits no quote and no backslash
+# `<value>` is always SAFE_RE-checked before it reaches this function (a derived id or a derived uuid), so it admits no quote and no backslash
 # and cannot escape the string it lands in. The third argument is the
 # `bad-body` detail for a body that is not an object.
 splice_body_field() {   # field, value, not-an-object detail
@@ -1212,7 +1205,7 @@ main() {
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
   fi
 
-  local body_src='' query='' by='' ask_parent='' mail_key=''
+  local body_src='' query='' ask_parent='' mail_key=''
   while (( $# )); do
     case "$1" in
       --json)
@@ -1225,11 +1218,6 @@ main() {
         [[ "$key" == 'mail.send' ]] || refuse 'bad-args' "$group $verb takes no --key"
         [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-key' '--key value is not a plain value (letters, digits, _ and -)'
         mail_key="$2"; shift 2 ;;
-      --by)
-        [[ $# -ge 2 ]] || refuse 'bad-args' '--by needs a value'
-        [[ "$key" == 'ledger.allocate' ]] || refuse 'bad-args' "$group $verb takes no --by"
-        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-by' '--by value is not a plain session id'
-        by="$2"; shift 2 ;;
       --*)
         local k="${1#--}" v
         [[ $# -ge 2 ]] || refuse 'bad-args' "--$k needs a value"
@@ -1280,61 +1268,7 @@ main() {
     append_body_field 'clientKey' "$mail_key" 'the mail body is not a JSON object; clientKey cannot be added'
   fi
 
-  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites three more: the intent
-  # row's (above, replaced whole), `runs.open`'s (below) and the claimant rows'
-  # `kind` (below, D-7322). Measured
-  # 2026-09-02: at least 101 of this project's allocations already carry an empty
-  # holder, because the documented body omits `byId` and the route stores
-  # `byId ?? ''` — an omitted field and an explicit empty string reaching one
-  # column. That 101 is a FLOOR that can only grow, which is why it may stand
-  # here: nothing in the tree UPDATEs `allocatedTo`, and `LedgerLog.append` has
-  # already put each of those lines in the append-only log, so no repair can
-  # lower it. The route may not change (operator ruling), so the fill happens
-  # here: from the pane, or from `--by`, or not at all.
-  #
-  # NEVER AN OVERRIDE. If the body already names `byId` it is left alone. The
-  # test is TEXTUAL, over a whitespace-stripped COPY (so `"byId" : ""` reads the
-  # same as `"byId":""`), and it errs toward not touching the body — the safe
-  # direction, since duplicate keys resolve last-wins and a splice would silently
-  # change precedence. A blank one is REFUSED rather than passed through: that is
-  # exactly what a derivation that failed on the caller's side produces.
-  #
-  # THE TEXTUAL TEST'S LIMITS, STATED RATHER THAN HIDDEN. A substring is not a
-  # JSON key, and three bodies show where the two part company — each measured
-  # 2026-09-03 against a loopback server, each re-permitting this block's own
-  # defect for that one body. A NESTED key (`{"project":"p","meta":{"byId":"x"}}`)
-  # and a WHITESPACE-PADDED one (`{"byId ":"sneaky",...}`) both read as "the
-  # caller has spoken", so the fill is SILENTLY suppressed and a body with no
-  # top-level `byId` goes on the wire. A `\u`-ESCAPED key (`{"\u0062yId":"",...}`)
-  # reads the other way, as absent: the splice fires and the wire body
-  # last-wins-parses to `{"byId":""}`, which is the blank refusal bypassed.
-  # None of the three is a forgery door — the caller already owns the body it
-  # hands us, and identity here is attribution — so the cost is an unattributed
-  # or blank row, the same one this block exists to stop, for that body only.
-  # Where the escaping runs the other way the test holds: a `\"byId\":` inside a
-  # title fills normally (the backslashes survive the strip and break both
-  # substrings), and the same text UNESCAPED is an invalid body that trips the
-  # blank refusal loudly.
-  #
-  # THE SPLICE IS SAFE BECAUSE OF SAFE_RE. Both `$by` and the derived id admit no
-  # quote and no backslash, so neither can escape the JSON string it lands in.
-  if [[ "$key" == 'ledger.allocate' && -n "$body" ]]; then
-    local nb="${body//[[:space:]]/}"
-    case "$nb" in
-      *'"byId":""'*)
-        refuse 'bad-body' 'the body names an EMPTY byId; the allocator would store it as no holder at all' ;;
-    esac
-    case "$nb" in
-      *'"byId":'*) : ;;                      # the caller has spoken
-      *)
-        local who
-        if [[ -n "$by" ]]; then who="$by"; else derive_identity; who="$DERIVED_ID"; fi
-        splice_body_field 'byId' "$who" \
-          'the allocate body is not a JSON object; byId cannot be added' ;;
-    esac
-  fi
-
-  # THE SECOND BODY THIS CLIENT FILLS: a run's claimant sends its own identity
+  # A BODY THIS CLIENT FILLS: a run's claimant sends its own identity
   # (D-5298; coordinator-first routing, spec §6.4). `POST /api/runs` is where a
   # coordinator becomes a child's parent, and the server checks the claimant with
   # `requireAttribution` against `claimedByUuid`. The coordinator skill's body

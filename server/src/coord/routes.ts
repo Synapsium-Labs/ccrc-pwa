@@ -4339,20 +4339,6 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/ledger/deviations` — RETIRED: deviation numbers are self-assigned
-   * (docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md).
-   * The box-token check stays (the EXEMPT row and the census stay true until
-   * PR 2 deletes the route); the answer is 410 and nothing is written.
-   */
-  app.post('/api/ledger/deviations', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'POST /api/ledger/deviations')) return;
-    return refuseRoute(reply, 'retired',
-      { detail: 'deviation numbers are self-assigned: the highest D-N defined on main and your branch, plus one, '
-        + 'from 10000 (ccrc: cd server && npm run next-deviation)' });
-  });
-
-  /**
    * `GET /api/ledger?project=` — the allocation record and the floor, read
    * cookieless from the fleet host (box token, the `GET /api/mail` convention:
    * a read with no attribution to check). Per-project, REQUIRED: `ledger_alloc`
