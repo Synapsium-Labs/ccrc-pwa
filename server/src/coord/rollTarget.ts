@@ -50,8 +50,20 @@
  * renewal lane renews it from canonical state instead (the new install it would have answered is `renewalDue`'s
  * `new-install` soft row). A session whose long-life cannot be read is held (`role-unknown`). While the row is shadow every
  * session is judged as before (slug roll-skips-long-lived-when-live).
+ *
+ * AN ENTRY IDENTITY THAT STAYS PENDING (D-8955): a spawn writes a `pending` entry line before its pane exists, and the pane
+ * replaces it with where it entered. A pane whose writer never ran (a spawn whose command lost its text on the way) leaves
+ * the line pending for good, and ccd then holds every child reclaim on the box that could share its tree, because it cannot
+ * place that row. ccd's own remedy is to stop and start the session, which is what a roll is. So a session the cleanup
+ * lanes have named `entry-pending` for `ENTRY_PENDING_ROLL_MS`, whose current process was already running when they first
+ * named it, is behind as well, and every gate below still holds it, but only once a read taken past its spawn's first seconds
+ * named it too (`entryPendingStuck`). A process that started after the first naming is not rolled for it: that restart
+ * already happened, so one pending episode rolls a session at most once in one server process, and the disk lane's stall
+ * alert tells the operator if it stays pending. The episodes are in the server's memory, so a server restart forgets them:
+ * a session still pending after its roll can be rolled once more after each server restart (review 8).
  */
 import type { SessionRole } from '../../../shared/api.js';
+import type { EntryPendingEpisode } from '../cleanupHeldBy.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
 import { ROLE_AMBIGUITIES, type RoleReading } from '../roleOf.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeBuildFact, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
@@ -64,6 +76,11 @@ import type { FleetSession } from '../../../shared/api.js';
 export const ROLL_QUIET_MS = 90 * 60_000;
 /** Hibernation counts as the roll: a coordinator hibernation will take within this is left to it (ruling 3). */
 export const ROLL_HIBERNATION_LEAD_MS = 30 * 60_000;
+/** D-8955: a session's entry identity named pending this long, on the process that runs now, is a roll reason. */
+export const ENTRY_PENDING_ROLL_MS = 10 * 60_000;
+/** D-8955: a pane writes its entry in its first seconds; a read taken this long after the process started is past that. It
+ *  covers the coord frame's lag behind an audit (one tick) as well. */
+export const ENTRY_PENDING_SPAWN_GRACE_MS = 2 * 60_000;
 /** The `compacting` hold's window (spec §7.2): a live status that moved this recently holds. */
 export const ROLL_COMPACT_QUIET_MS = 10 * 60_000;
 /** The roll's idle gate (D-7562, the operator's ruling of 2026-10-30): an open run the coordinator claims and a live claim
@@ -248,6 +265,9 @@ export interface AutoRollInput {
   /** Typed-repick: the target this session was last rolled for on its model, by this server process; null when none. A
    *  session already rolled for the same target is not behind on its model (its relaunch kept the old id). */
   readonly rolledModelFor: string | null;
+  /** D-8955: this row's `entry-pending` episode as the roll's passes saw it (`entryPendingEpisodesOf`), or null when no
+   *  read names it so. */
+  readonly entryPending: EntryPendingEpisode | null;
   /** `$REG/<id>.no-roll` and `$REG/<id>.no-hibernate`. Only `.no-roll` opts out of the roll (D-7458): the act,
    *  `ccd hibernate --roll`, refuses `.no-roll` and not `.no-hibernate`. `.no-hibernate` says only that hibernation
    *  will never take the session, so `hibernation-due` never holds it. */
@@ -262,8 +282,10 @@ export interface AutoRollInput {
 }
 
 export type AutoRollVerdict =
-  /** `model`: present when the session is behind its class's model, the class and the target it is rolled for. */
-  | { readonly act: 'roll'; readonly idleMs: number; readonly model?: { readonly class: ModelClass; readonly from: string; readonly to: string } }
+  /** `model`: present when the session is behind its class's model, the class and the target it is rolled for.
+   *  `entryPending`: present when its entry identity stayed pending (D-8955). */
+  | { readonly act: 'roll'; readonly idleMs: number; readonly model?: { readonly class: ModelClass; readonly from: string; readonly to: string };
+      readonly entryPending?: true }
   | { readonly act: 'measure' }
   /** Behind on nothing it has read, every other gate passed, and its lane's models not read yet: read them, then ask again. */
   | { readonly act: typeof READ_MODELS }
@@ -275,6 +297,14 @@ export type AutoRollVerdict =
  *  completed. The roll's `current` is its negation; the generations lane's `installBehind` reads it as it is. */
 export function startedBeforeRelease(startedAt: number, release: number): boolean {
   return startedAt < release;
+}
+
+/** D-8955: the entry identity has stood pending for the window; the process that runs now was already running when it was
+ *  first named pending (so it is that process's spawn whose entry was never recorded); and a read taken past that spawn's
+ *  window named it (`freshAfter`), so it is not a naming from the spawn's own first seconds (review 3). */
+export function entryPendingStuck(e: EntryPendingEpisode | null, startedAt: number, now: number): boolean {
+  return e !== null && startedAt <= e.since && e.freshAfter !== null && e.freshAfter >= startedAt + ENTRY_PENDING_SPAWN_GRACE_MS
+    && now - e.since >= ENTRY_PENDING_ROLL_MS;
 }
 
 /** Roll this session onto the current release and build now? */
@@ -289,7 +319,8 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.startedAt === null) return { act: 'skip', reason: 'start-unmeasured' };
   const buildBehind = i.build.kind === 'behind' && i.build.reach !== null && i.rolledFor !== i.build.reach;
   const modelBehind = i.model.kind === 'behind' && i.rolledModelFor !== i.model.to;
-  const behind = startedBeforeRelease(i.startedAt, i.release) || buildBehind || modelBehind;
+  const pending = entryPendingStuck(i.entryPending, i.startedAt, i.now);
+  const behind = startedBeforeRelease(i.startedAt, i.release) || buildBehind || modelBehind || pending;
   // Behind on nothing read, but maybe on its model: every gate below holds it as current, never as a skip, since it may
   // not be behind at all; past them all, the lane's models are read.
   const maybe = !behind && i.model.kind === 'unread';
@@ -308,8 +339,9 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   }
   if (i.statusUpdatedAt === null || i.now - i.statusUpdatedAt < ROLL_COMPACT_QUIET_MS) return skip({ act: 'skip', reason: 'compacting' });
   if (maybe) return { act: READ_MODELS };
+  const why = pending ? { entryPending: true as const } : {};
   if (modelBehind && i.model.kind === 'behind') {
-    return { act: 'roll', idleMs: gate.idleMs, model: { class: i.model.class, from: i.model.from, to: i.model.to } };
+    return { act: 'roll', idleMs: gate.idleMs, model: { class: i.model.class, from: i.model.from, to: i.model.to }, ...why };
   }
-  return { act: 'roll', idleMs: gate.idleMs };
+  return { act: 'roll', idleMs: gate.idleMs, ...why };
 }
