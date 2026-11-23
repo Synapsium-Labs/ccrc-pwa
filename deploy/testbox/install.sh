@@ -416,10 +416,27 @@ for d in results logs out registry handover; do dir 0750 "$SVC" "$SVC" "$ROOT/$d
 for ((i = 1; i <= RUNS; i++)); do dir 0750 "$SVC" "$SVC" "$ROOT/out/$i"; done
 dir 0750 "$SVC" "$SVC" "$ROOT/out/install"
 
-# The push user's one key (spec §2.1): its forced command and the repository table it checks.
+# The push user's one key (spec §2.1): its forced command and the repository table it checks. sshd runs a forced
+# command through the login shell, `git-shell -c "<command>"`, and git-shell runs no command whose first word holds a
+# slash: it runs a bare name from $HOME/git-shell-commands only. So the forced command is named there, as push-command,
+# a link to the installed release's script through installed, so a tool sync's switch moves it with the hook and the
+# units; a copy would stay the older release's until the next --reapply (D-8956).
 dir 0755 root root "$SYSROOT/var/lib/$PUSH"
 dir 0755 root root "$SYSROOT/var/lib/$PUSH/.ssh"
-printf 'restrict,command="%s %s" %s\n' "$TREE/deploy/testbox/git/push-command" "$REPOS" "$PUSH_KEY" > "$WORK/authorized_keys"
+dir 0755 root root "$SYSROOT/var/lib/$PUSH/git-shell-commands"
+pc=$SYSROOT/var/lib/$PUSH/git-shell-commands/push-command
+if [ "$(readlink -- "$pc" 2>/dev/null)" != "$TREE/deploy/testbox/git/push-command" ]; then
+  # The swap replaces a link or a file. mv would move the new link into a directory, and follows a link to one, so a
+  # directory is refused by name and a link to one removed first (BSD mv has no -T, and the fixture box runs there too).
+  for p in "$pc" "$pc.new"; do
+    if [ -d "$p" ] && [ ! -L "$p" ]; then fail "$p is a directory, not the forced command's link; remove it and run the installer again"; fi
+  done
+  if [ -L "$pc" ] && [ -d "$pc" ]; then rm -f -- "$pc" || fail "cannot remove $pc"; fi
+  rm -f -- "$pc.new" || fail "cannot remove $pc.new"
+  ln -s "$TREE/deploy/testbox/git/push-command" "$pc.new" || fail "cannot link $pc"
+  mv -f -- "$pc.new" "$pc" || fail "cannot link $pc"
+fi
+printf 'restrict,command="push-command %s" %s\n' "$REPOS" "$PUSH_KEY" > "$WORK/authorized_keys"   # D-8956
 put 0644 "$WORK/authorized_keys" "$SYSROOT/var/lib/$PUSH/.ssh/authorized_keys"
 
 # The repository rows and their mirrors (spec §2.1 "The mirror"): a bare repository the service fetches into on its
