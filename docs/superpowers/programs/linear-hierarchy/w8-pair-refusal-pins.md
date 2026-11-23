@@ -7,8 +7,10 @@ Linear hierarchy wave 8, D-8808 and D-8809. No new deviation, and no change to `
 On the linking and call doors, `ccd/ccrc-api` refuses a body that names its own `byId` or `byUuid` with a text test: a
 substring match (`"byId":` or `"byUuid":`) over a copy of the body with all whitespace removed. So a key nested at any depth,
 and a key padded with whitespace, both match and are refused `bad-body`, unsent. Fix round 2 of review 3271 corrected the
-comment and the note to say so, but no test pinned either spelling on any door. Deleting the whitespace strip, or anchoring the
-match to the head of the body, would have kept every existing case green.
+comment and the note to say so, but no test pinned the nested spelling on any door, and only one padded form (padded around
+the colon) was pinned. Review 3494 measured that: deleting the whitespace strip already turned 11 older cases red, while
+anchoring the match to the head of the body kept every existing case green. (Corrected on the coordinator's ledger PR; the
+test file's comment still carries the broader wording.)
 
 ## What was built
 

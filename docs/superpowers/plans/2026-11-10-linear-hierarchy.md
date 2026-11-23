@@ -469,7 +469,8 @@ number from `POST /api/ledger/deviations`.
   a named one must hold the key (`team-unknown`), and a named one whose slot cannot be read is `unavailable`. A cleared key
   reads no store. With the workspace absent, saving an unchanged key keeps the stored workspace (including none) without
   reading the store; a later use of an unpinned key can refuse `team-ambiguous`. If the key changed and the stored workspace
-  holds the new key, omitting the workspace uses that stored workspace even when another slot is unread (review 3307 F3).
+  holds the new key, omitting the workspace uses that stored workspace even when another slot is unread (review 3307 F3);
+  while the stored workspace itself cannot be read, that write is `unavailable` (run 3326's note).
   For a write that resolves without a workspace pin, two readable holders give `team-ambiguous`; otherwise an unreadable
   store or an unread slot gives `unavailable` (since run 3279). With every slot read, one holder is selected, and no holder
   or no connected workspace leaves the key stored with no workspace. Explicit `workspace: null` is not omission: even for an
@@ -552,7 +553,10 @@ number from `POST /api/ledger/deviations`.
   run 3238, `w8-overlord-skill` by run 3251, `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
   suggest and confirm doors and the call record) by run 3264, and `w8-confirm-unmeasured` (the team doors answer
   `unavailable` when a workspace the pair depends on cannot be read, and the suggest and confirm doors `not-configured` when
-  none is connected) by run 3279. Record: the wave 8 note.
+  none is connected) by run 3279, `w8-linking-measurement-record` (workspace selection stated once, one refusal vocabulary
+  per team door) by run 3326 (#3242), `w8-suggest-workspace-id` (the `team-ambiguous` detail names each holder by the id
+  the suggest door accepts) by run 3476 (#3245), and `w8-pair-refusal-pins` by run 3492 (#3247). Record: the wave 8 note
+  and the notes beside it.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
   with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`

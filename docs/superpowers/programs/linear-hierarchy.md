@@ -62,6 +62,10 @@ They decide every question the plan leaves open.
 | 8 overlord door | the Overlord skill's door table names `link_team`, and says when the Overlord leaves a team candidate for the operator (`w8-overlord-skill`) | D-8808, D-8809 | #3177 | **merged** 2026-11-22 as `d899d4fb1` (head `575d1b80c`, by the merge queue; run 3251 closed done): three review rounds (3253, 3260, 3261); accepted at the cap, one false note sentence corrected by run 3264 |
 | 8 pair last | the client puts the pane's pair last on the linking suggest, linking confirm and call record doors (`w8-suggest-pair-last`) | D-8808, D-8809 | #3179 | **merged** 2026-11-22 as `3af4842d5` (head `b46aa17bc`, by the merge queue after one flake ejection, re-run green alone; run 3264 closed done): three review rounds (3266, 3271, 3274); accepted at the cap, two refusal pins carried to `w8-pair-refusal-pins` |
 | 8 workspace measurement | suggest, confirm and operator write distinguish an unread workspace from a measured absence (`w8-confirm-unmeasured`) | D-8808, D-8809 | #3182 | **merged** 2026-11-22 as `8cae33f869` (head `9a1329d4a1`, by the merge queue; run 3279 closed done): reviews 3286 and 3307 |
+| 7 map identifier | the pilot's map proposal accepts a visible issue identifier and resolves it within the proposal's own scoped read (`w7-map-identifier`) | D-8186 | #3212 | **merged** 2026-11-22 as `db5861f14d` (head `41af14fd08`, by the merge queue; run 3310 closed done): reviews 3350 (fix round for a same-team second workspace test and a lowercase successor) and 3383 (accepted; one advisory kept as a known limit) |
+| 8 measurement record | workspace selection stated once; one refusal vocabulary per team door, guides checked against it (`w8-linking-measurement-record`) | D-8808, D-8809 | #3242 | **merged** 2026-11-23 as `c70b7a8691` (head `7b55213a2c`, by the merge queue; run 3326 closed done): reviews 3443 (fix round: single-definition rows, a duplicate-word guard, the wire comment) and 3465 (accepted) |
+| 8 workspace id | the `team-ambiguous` detail names each holding workspace by the id the suggest door accepts; the confirm door lists them without a resend instruction (`w8-suggest-workspace-id`) | D-8808, D-8809 | #3245 | **merged** 2026-11-23 as `216a2b3f51` (head `b0ba4ab60b`, by the merge queue; run 3476 closed done): reviews 3482 (fix round: the confirm door's detail, the bound of eight, the sort test) and 3485 (accepted) |
+| 8 pair pins | nested and padded identity keys are pinned as refused on the eleven client doors that carry the text test (`w8-pair-refusal-pins`) | D-8808, D-8809 | #3247 | **merged** 2026-11-23 as `7396e609e8` (head `c3d680afa6`, by the merge queue; run 3492 closed done): review 3494 (accepted; the note's red-first wording corrected here) |
 | 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence (built, off), a coordinator's suggestion, the Overlord's link as a call made for the operator, the console | D-8808, D-8809 | #3123 | **merged** 2026-11-21 as `6c3ea2c55` (head `dbc6483eb`, by the merge queue; run 2862 closed done): three review rounds (2971, 2997, 3020); accepted at the cap, migration **116**; six follow-up tickets, one dropped as built |
 
 ## Decisions & deviations
@@ -416,17 +420,16 @@ Reviewers of every wave get these.
 
 ## Next-wave brief
 
-The original pilot started after the guarded rollout (#3145, #3150; item 533) but has no submitted map yet. Run 3310
-(`w7-map-identifier`) repairs the proposal contract (call 261): the owner can propose using the visible identifier, and
-ccrc resolves it within the proposal's existing scoped read. The same pilot resumes only after the repair is measured
-on the running server. Map and report decisions stay in the console; deliver this pilot's report before starting any
-other team. The separate one-time read-only capture for Task 8.3 stays within item 498's ruling; `w8-attached-wire` waits
-for its scrubbed fixture.
+The original pilot started after the guarded rollout (#3145, #3150; item 533) but has no submitted map yet. The proposal
+contract repair (#3212, run 3310, call 261) is merged and ships in v0.0.1408 and later. The same pilot resumes only once
+the running server is measured on such a build; then its owner resubmits the map. Map and report decisions stay in the
+console; deliver this pilot's report before starting any other team.
 
-Call 272 accepted #3182 after review 3307 verified the stored-empty case and evidence retention. The dated plan and
-wave 8 note record the named, omitted and explicit-null distinctions without changing behavior. Run 3326
-(`w8-linking-measurement-record`) carries the policy comment and the handler-derived suggestion refusal and remedy pins.
+Wave 8's follow-ups are merged: #3242 (`w8-linking-measurement-record`), #3245 (`w8-suggest-workspace-id`) and #3247
+(`w8-pair-refusal-pins`). Known limits they leave, each recorded by its accepting call: no route pin of the suggest
+door's `team-ambiguous` lead, a ninth or later holder counted but not named, the omitted-workspace changed-key unreadable
+case without a separating test, and one no-op prose case in the pair pins.
 
-Other open follow-ups: `w8-suggest-workspace-id` (help a coordinator obtain the workspace id the `team-ambiguous`
-remedy asks for, review 3248 F1 and F2) and `w8-pair-refusal-pins` (pin nested and padded identity-key refusals on the
-linking and call doors, review 3274 F1).
+Remaining: `w8-attached-wire` (run 3498, planned) needs the one live read-only capture item 498 allows and a scrubbed
+fixture from it, using only the central key ccrc already holds. How that capture is taken is decided before the run is
+dispatched; nothing else reads Linear live.
