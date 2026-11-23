@@ -8,7 +8,7 @@
 // runs a writing form of `ccrc history`, and no fixture names a real account, host or path.
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
@@ -977,6 +977,60 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
     const r = await run(w.home, w.argv(['--repilot']), FAKE);
     expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/is not this run's pin/) });
     expect(readFileSync(pinPath).equals(before)).toBe(true);
+  });
+
+  // fix round 2 (review 3528, F2): the pin reader's and the composer's own guards, each with a case that fails on removal.
+  it('a pin with no round, as older code wrote it, reads as round 0: --repilot pilots as round 1 on the new release', async () => {
+    const w = await failedWeek();
+    const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+    writeFileSync(pinPath, `${L.canonicalJson({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP }) as string}\n`);
+    expect(json(pinPath).round, 'fixture: the pin carries no round').toBeUndefined();
+    plantStep0b(w.home, w.mode);
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toBeNull();
+    expect(json(resultPath(w))).toMatchObject({ round: 1, passed: true });
+    expect(json(pinPath)).toMatchObject({ ccrc_release: 'v9.9.9', round: 1 });
+    expect(existsSync(join(w.out, QS.step0bFailedRel(w.mode, 0) as string)), 'the round 0 result kept').toBe(true);
+  });
+
+  it('a pin whose round is past the next one is refused out-refused, and nothing is replaced', async () => {
+    const w = await failedWeek();
+    const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+    writeFileSync(pinPath, QS.releasePinText(w.s.sha, STAMP, 2) as string);
+    const pin = readFileSync(pinPath);
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/names round 2, past the next round 1/) });
+    expect(readFileSync(pinPath).equals(pin)).toBe(true);
+    expect(existsSync(join(w.out, QS.step0bFailedRel(w.mode, 0) as string))).toBe(false);
+  });
+
+  it('a pin of another kind is refused by the pin reader, even with this setup\'s sha', async () => {
+    const w = await failedWeek();
+    const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
+    writeFileSync(pinPath, `${L.canonicalJson({ kind: 'not-the-pin', v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: 0 }) as string}\n`);
+    const pin = readFileSync(pinPath);
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/is not this run's pin/) });
+    expect(readFileSync(pinPath).equals(pin)).toBe(true);
+  });
+
+  it('a failed week whose pin was removed is refused out-refused: --repilot never pins a week afresh', async () => {
+    const w = await failedWeek();
+    rmSync(join(w.out, QS.RELEASE_PIN_FILE as string));
+    setRelease(w.home, 'v9.9.9');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/^--repilot: no quiz\/arms-release\.json beside a failed step 0b/) });
+    expect(existsSync(join(w.out, QS.RELEASE_PIN_FILE as string)), 'nothing was written').toBe(false);
+  });
+
+  it('the composer refuses a round that is not a non-negative integer', () => {
+    for (const bad of [-1, 1.5, Number.NaN, '1', null, undefined]) {
+      expect(() => QS.releasePinText('a'.repeat(64), 'v1', bad), String(bad)).toThrow(TypeError);
+    }
+    expect(QS.releasePinText('a'.repeat(64), 'v1', 0), 'CONTROL').toMatch(/"round":0/);
   });
 
   // fix round 1, F2: a re-pilot round that stopped before its result was written resumes only on its own release.

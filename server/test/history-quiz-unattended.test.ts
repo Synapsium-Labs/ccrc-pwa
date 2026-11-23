@@ -1343,6 +1343,8 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     expect(arms.length).toBe(2);
     expect(arms[0]!.argv).not.toContain('--repilot');
     expect(arms[1]!.argv).toContain('--repilot');
+    // fix round 2 (review 3528, F2): the exact argument list: the first pilot's, then the bare flag and nothing after it
+    expect(arms[1]!.argv, 'the re-pilot passes the bare flag, never a value').toEqual([...arms[0]!.argv, '--repilot']);
     expect(arms[1]!.argv[arms[1]!.argv.indexOf('--out') + 1], 'the same week directory, so the same ledger and --budget').toBe(join(b.root, 'weeks', WEEK));
     const w = (b.state() as R).weeks[WEEK];
     expect(w).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2', at_ms: NOW + HOUR }] });
@@ -1456,6 +1458,58 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     });
   }
 
+  // fix round 2 (review 3528, F1, a known limit): the two windows after the permission's save, pinned as they stand today. The
+  // stub driver answers each later act as the real single-arm module does at that point; the pin on disk says which point.
+  const pinOnDisk = (b: Box): R => JSON.parse(readFileSync(join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json'), 'utf8')) as R;
+  for (const how of ['a kill', 'a stop that is not resumable']) {
+    it.skipIf(how === 'a kill' && process.getuid?.() === 0)(`${how} after the permission's save, before the driver moved the pin: the week closes release-moved with the counted pilot unrun, and no later release reopens it`, async () => {
+      const b = await failedOn('v1.0.1');
+      const dies = how === 'a kill' ? { exit: 1, stderr: 'killed\n', chmodRoot: true } : { exit: 1, stderr: 'ccrc history-quiz-single: internal error: fixture\n' };
+      // the real driver, with the pin still on v1.0.1 and v1.0.2 installed, refuses release-moved before step 0b (pinArmsRelease)
+      b.plan({ arms: [REFUSE('pilot-failed'), dies, REFUSE('release-moved', 'this week\'s arms ran on v1.0.1, this node now runs v1.0.2')] });
+      setRelease(b, 'v1.0.2');
+      if (how === 'a kill') await killedTick(b, NOW + HOUR);
+      else expect((await b.tick({ now: NOW + HOUR })).code, 'fixture: driver-failed').toBe(1);
+      const saved = (b.state() as R).weeks[WEEK];
+      expect(saved).toMatchObject({ state: 'running', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      expect(saved.repilot, 'the permission left the row before the spawn').toBeUndefined();
+      expect(pinOnDisk(b).ccrc_release, 'the driver never moved the pin').toBe('v1.0.1');
+      await b.tick({ now: NOW + 2 * HOUR, deps: { isAlive: () => false } });
+      const arms = armsCalls(b);
+      expect(arms.map((c) => c.argv.includes('--repilot'))).toEqual([false, true, false]);
+      expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'release-moved', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      setRelease(b, 'v1.0.3');
+      await b.tick({ now: NOW + 3 * HOUR });
+      expect(armsCalls(b).length, 'a week closed release-moved is not reopened').toBe(3);
+    });
+  }
+
+  it.skipIf(process.getuid?.() === 0)('a kill after the driver wrote the new pin, before its result: the week closes pilot-failed, and a later release is refused with the round\'s own word', async () => {
+    const b = await failedOn('v1.0.1');
+    const pinPath = join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json');
+    b.plan({ arms: [
+      REFUSE('pilot-failed'),
+      { exit: 1, stderr: 'killed\n', chmodRoot: true, writes: [[pinPath, QS.releasePinText('f'.repeat(64), 'v1.0.2', 1) as string]] },
+      // the real driver on v1.0.2 without --repilot: the pin matches, the round 0 result failed, so pilot-failed
+      REFUSE('pilot-failed'),
+      // the real driver on v1.0.3 with --repilot: round 1 is under way on v1.0.2, so repilot-release-moved
+      REFUSE('repilot-release-moved', 'step 0b round 1 is under way on v1.0.2, this node now runs v1.0.3: one pilot never spans two releases'),
+    ] });
+    setRelease(b, 'v1.0.2');
+    await killedTick(b, NOW + HOUR);
+    expect(pinOnDisk(b)).toMatchObject({ ccrc_release: 'v1.0.2', round: 1 });
+    await b.tick({ now: NOW + 2 * HOUR, deps: { isAlive: () => false } });
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+    setRelease(b, 'v1.0.3');
+    await b.tick({ now: NOW + 3 * HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true, false, true]);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'repilot-release-moved',
+      pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }, { release: 'v1.0.3' }] });
+    setRelease(b, 'v1.0.4');
+    await b.tick({ now: NOW + 4 * HOUR });
+    expect(armsCalls(b).length, 'nothing reopens it').toBe(4);
+  });
+
   // fix round 1, F2: the permission is for one pilot on one release; a resumable stop gives it back for that release only.
   it('a re-pilot that stopped resumably is resumed on its own release with --repilot', async () => {
     const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
@@ -1496,7 +1550,7 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
   });
 
   // fix round 1, A2: only a row with no pilot list at all is an older row.
-  for (const damaged of [{}, null, 'x', 5, [], [null]]) {
+  for (const damaged of [{}, null, 'x', 5, true, { release: 'v1.0.1' }]) {   // none a list: the older-row reading would re-pilot each
     it(`a pilot-failed row whose pilot list is damaged (${JSON.stringify(damaged)}) stays closed on a newer release`, async () => {
       const b = await failedOn('v1.0.1');
       const st = b.state() as R;
