@@ -408,37 +408,72 @@ export function serializeAliases(a) {
 
 // ── A SESSION BEHIND ITS CLASS'S ALIAS (Task A2.5) ──────────────────────────────────────────────────────────────────
 
+/** `(view, seen) => id | null`: the id a launch of the class lands on now, which a session of it is behind when it runs
+ *  another: the hold's `model` while a hold stands (none when the hold names none), else the alias's id when the lane's
+ *  build can launch it, and, under `seen`, only once a launch has been seen on it (spec §2.5.6's canary: the newest kept
+ *  launch reading IS the class's current id). */
+function aliasTargetOf(view, seen) {
+  if (view.hold !== null) return view.hold.model;
+  if (view.id === null || !view.launchable) return null;
+  return seen && view.seenId !== view.id ? null : view.id;
+}
+
+/** `(session, classes, {seen}) => {class, from, to} | null`: THE ONE test of whether a running session of an Anthropic lane
+ *  is on a model its class has left, AGE ASIDE (model-class follow-up typed-repick). Doctor's `aliasSessionBehind` asks it
+ *  with `seen: false` and adds its own time rules; the automatic roll (`server/src/coord/rollTarget.ts`) asks it with
+ *  `seen: true` and adds none. Pure. `session` is `{cls, model}`: the class of the session's routing record (null: none)
+ *  and its last main-loop model. `classes` is each class's `AliasClassView` (see the `.d.mts`). Behind means ALL of:
+ *   1. the session has a class, and the class a view;
+ *   2. the class has a target (`aliasTargetOf`);
+ *   3. the session's model, through `bareModelId`, is not that target;
+ *   4. that model belongs to the session's own class (`familyClassOf`) and is no other class's current or held id: a
+ *      session whose operator picked another class by hand is not behind. */
+export function aliasModelBehind(session, classes, { seen }) {
+  if (session.cls === null) return null;
+  const own = classes[session.cls];
+  if (own === null || own === undefined) return null;
+  const to = aliasTargetOf(own, seen);
+  if (to === null) return null;
+  const from = bareModelId(session.model);
+  if (from === to || familyClassOf(from) !== session.cls) return null;
+  for (const c of CLASSES) {
+    const other = classes[c];
+    if (c !== session.cls && other !== null && other !== undefined && (other.id === from || other.heldId === from)) return null;
+  }
+  return { class: session.cls, from, to };
+}
+
+/** An aliases file's class row as `aliasModelBehind` reads it, with the hold that stands on it (`undefined` or null: none). */
+const viewOfAliasClass = (k, hold) => ({
+  id: k.id,
+  launchable: k.unlaunchable === null,
+  seenId: k.seenId,
+  hold: hold === null || hold === undefined ? null : { model: typeof hold.model === 'string' ? hold.model : null },
+  heldId: k.heldRow === null ? null : k.heldRow.id,
+});
+
 /** `(session, cls, adv, lane, nowMs) => AliasBehind | null`: whether ONE running session of an Anthropic lane is still on
  *  a model its class has left (the Anthropic arm of `sessionBehind`, `shared/model-advance.mjs`, which needs a registry
  *  this lane has none of). Pure: it reads no file and no clock. `session.cls` is the class word of the session's routing
  *  record (the class ccd composed and served); `cls` is that class's row of the aliases file, `adv` its advance entry and
- *  `lane` the whole aliases file. Behind means ALL of:
- *   1. the session has a class (`session.cls` a class, and `cls` its row);
- *   2. the class's expected id: the hold's `model` while a hold stands, whatever `unobserved` says; else the aliases `id`,
- *      none when `id` is null or `unlaunchable` is set;
- *   3. the session's model, through `bareModelId`, is not that id;
- *   4. that model belongs to the session's own class (`familyClassOf`) and is no other class's current or held id: a
- *      session whose operator picked another class by hand is not behind;
+ *  `lane` the whole aliases file. Behind means `aliasModelBehind` (rules 1 to 4: the target is the hold's `model` while a
+ *  hold stands, whatever `unobserved` says; else the aliases `id`, none when `id` is null or `unlaunchable` is set; no
+ *  seen rule here) and:
  *   5. with a turn marker (`turnAtMs`), the render came strictly after the turn began; with none, the turn is the render;
  *   6. the move, `movedAt` (the hold's `at` while held, else the later of the class's `idSince` and its `releasedAt`), is
  *      at least `BEHIND_AFTER_MS` before `nowMs`, and the turn began strictly after it.
  *  Every time test is written as a comparison that HOLDS for evidence, negated, so a NaN fails it. */
 export function aliasSessionBehind(session, cls, adv, lane, nowMs) {
   if (session.cls === null || cls === null) return null;
+  const classes = {};
+  for (const c of CLASSES) classes[c] = c === session.cls ? viewOfAliasClass(cls, adv.hold) : viewOfAliasClass(lane.classes[c], null);
+  const b = aliasModelBehind(session, classes, { seen: false });
+  if (b === null) return null;
   const held = adv.hold !== null && adv.hold !== undefined;
-  if (held && typeof adv.hold.model !== 'string') return null;
-  const to = held ? adv.hold.model : (cls.unlaunchable !== null ? null : cls.id);
-  if (to === null) return null;
-  const from = bareModelId(session.model);
-  if (from === to || familyClassOf(from) !== session.cls) return null;
-  for (const c of CLASSES) {
-    const other = lane.classes[c];
-    if (c !== session.cls && (other.id === from || (other.heldRow !== null && other.heldRow.id === from))) return null;
-  }
   if (session.turnAtMs !== null && !(session.renderMs > session.turnAtMs)) return null;
   const turnMs = session.turnAtMs ?? session.renderMs;
   const since = held ? adv.hold.at : [cls.idSince, adv.releasedAt].filter(isAt).sort().pop();
   const movedMs = Date.parse(since);
   if (!(movedMs <= nowMs - BEHIND_AFTER_MS) || !(turnMs > movedMs)) return null;
-  return { class: session.cls, from, to, movedAt: since, turnAt: isoSeconds(turnMs), renderAt: isoSeconds(session.renderMs) };
+  return { ...b, movedAt: since, turnAt: isoSeconds(turnMs), renderAt: isoSeconds(session.renderMs) };
 }

@@ -122,6 +122,27 @@ export declare function rowLaunchable(row: AliasRow | null, laneVersion: string 
 export declare function heldUnobserved(evidenceAt: string | null, hold: { at: string } | null | undefined): boolean;
 
 // ── a session behind its class's alias (Task A2.5) ──
+/** One class as `aliasModelBehind` reads it, from whichever reading the caller has (an aliases file and its advance
+ *  entry for doctor, the lane-models read for the roll). `id`: the alias's current id (null: none, or unknown); `launchable`:
+ *  the lane's build can launch `id`; `seenId`: the newest kept alias-launch reading; `hold`: null when no hold stands, else
+ *  the id it holds (null: the hold names none, so the class has no target); `heldId`: the held id the hand-pick rule reads
+ *  on ANOTHER class (null: none). */
+export interface AliasClassView {
+  id: string | null;
+  launchable: boolean;
+  seenId: string | null;
+  hold: { model: string | null } | null;
+  heldId: string | null;
+}
+/** The age-free half of `AliasBehind`. */
+export interface AliasModelBehind { class: ModelClass; from: string; to: string }
+/** Is this session on a model its class has left, age aside? `seen`: the alias's id is a target only once a launch has been
+ *  seen on it (the roll); doctor asks without it. */
+export declare function aliasModelBehind(
+  session: { cls: ModelClass | null; model: string },
+  classes: Readonly<Partial<Record<ModelClass, AliasClassView | null>>>,
+  opts: { seen: boolean },
+): AliasModelBehind | null;
 /** One running session's evidence: the class its routing record served (null: none, or `default`), the model its status
  *  line last rendered, the render's time and the turn marker's `turnAt` (null when the session has no marker), both in
  *  epoch milliseconds. */
