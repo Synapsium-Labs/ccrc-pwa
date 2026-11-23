@@ -366,7 +366,9 @@ const SUGGEST_REMEDIES: Readonly<Record<TeamSuggestRefusal, string>> = {
   'team-set': 'the project already has a key; a project whose key the operator cleared still takes suggestions.',
   'team-unknown': 'no connected workspace has that team, or the named workspace does not; the workspace the pair depends on was '
     + 'read. Check the key, and the workspace if you named one, before you send again.',
-  'team-ambiguous': 'no workspace named and the key is in more than one connected workspace: send it again with `workspace`.',
+  // w8-suggest-workspace-id (D-8808): the detail names each holding workspace by the id the door accepts.
+  'team-ambiguous': 'no workspace named and the key is in more than one connected workspace: send it again with `workspace` set '
+    + 'to one of the workspaces the detail names.',
   'not-configured': 'no Linear workspace is connected: do not retry; tell the operator.',
   'linear-text-public': 'the reason names a ticket id or another name that may not be shown publicly: reword it and send again.',
   'no-project': 'ccrc has no row for that project: check the project\'s name.',
@@ -439,6 +441,11 @@ describe('the linking suggest section (D-8808, D-8809)', () => {
   it('says who may suggest: a session that claims an open run, a programme\'s coordinator', () => {
     expect(suggestSection()).toContain('`not-a-coordinator`: the session claims no open run: only a programme\'s coordinator suggests.');
     expect(suggestSection()).toContain('`run-unreadable`: the open run claimants could not be read: try again.');
+  });
+
+  it('says where the workspace id comes from: the team-ambiguous refusal\'s detail (w8-suggest-workspace-id, D-8808)', () => {
+    expect(suggestSection()).toContain('add `"workspace":"<Linear workspace id>"` only when the key exists in more than one connected '
+      + 'workspace (the `team-ambiguous` refusal\'s detail names them by that id, up to eight, and counts the rest)');
   });
 
   it('says one suggestion each: a resend replaces the session\'s earlier one', () => {

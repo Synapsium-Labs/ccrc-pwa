@@ -453,7 +453,9 @@ const CONFIRM_REMEDIES: Readonly<Record<Exclude<TeamConfirmRefusal, 'bad-request
   'team-unknown': 'its detail says which of two causes. Either the pair is not a current candidate, so there is nothing to '
     + 'confirm and you drop it; or the workspace the pair depends on was read and does not hold it now, and the candidate stays '
     + 'on the card, so leave it for the operator, name it in your brief, and do not retry it in a loop.',
-  'team-ambiguous': 'two workspaces hold the key, so leave it for the operator.',
+  // w8-suggest-workspace-id (D-8808, D-8809; review 3482 F1, F6): the confirm door's detail lists the holders by id, up to eight.
+  'team-ambiguous': 'more than one workspace holds the key and the candidate names none of them, so leave it for the operator and '
+    + 'name in your brief the workspaces its detail lists (up to eight, and a count of the rest).',
   'no-project': 'the server has no such project, so drop it.',
   'unavailable': 'the Linear store, or a workspace the pair depends on, could not be read, so try once more on a later turn, '
     + 'then tell the operator.',
