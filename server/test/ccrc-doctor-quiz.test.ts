@@ -1,9 +1,10 @@
 // Doctor's `quiz-weekly` check (Overlord W1a): the EFFECT of the weekly replay quiz's timer, read from the record its runner
 // rewrites every tick (`~/.ccrc/quiz/unattended.json`, its `last` block) and never written. A record that is not JSON or not the
-// runner's kind WARNs unreadable; a refused or failed last tick WARNs naming its week, act, word and detail (cut to 200
+// runner's kind WARNs unreadable; a fresh refused or failed last tick WARNs naming its week, act, word and detail (cut to 200
 // characters); a good one PASSes naming the week and its state; it SKIPs on a server-role box and answers PASS on Darwin, where no
 // record exists. Run 3508, ruling (e): a starved trigger is said in words. With no run in flight (the runner's lock names no live
-// pid), a last tick older than two of the shipped timer's periods (12 h) WARNs that the timer is not firing, and so does no record
+// pid, the runner's own pidAlive rule: a pid it may not signal is alive), a last tick older than two of the shipped timer's periods
+// (12 h) WARNs that the timer is not firing whatever its outcome (a refused or failed one included, F2), and so does no record
 // at all once the installed timer unit is older than that; with a run in flight the bound is a run plus two ticks (24 h), past
 // which the run is stuck. Fixture HOMEs only (`healthy()`); the check runs alone, sourced, as the pane-scope-stop suite runs its own.
 import { describe, expect, it } from 'vitest';
@@ -29,7 +30,7 @@ const last = (o: Partial<Last> = {}): Last =>
 /** A pid no process holds: a child that has already exited (its pid is not reused this soon). */
 const deadPid = (): number => { const r = spawnSync('true'); expect(r.pid).toBeGreaterThan(0); return r.pid!; };
 
-function box(prefix: string, o: { record?: string; env?: string[]; lockPid?: number; unitAgeMs?: number } = {}): string {
+function box(prefix: string, o: { record?: string; env?: string[]; lockPid?: number | string; unitAgeMs?: number } = {}): string {
   const home = healthy(prefix);
   if (o.env) appendFileSync(join(home, '.ccrc', 'ccrc.env'), o.env.map((l) => `${l}\n`).join(''));
   if (o.record !== undefined || o.lockPid !== undefined) mkdirSync(join(home, '.ccrc', 'quiz'), { recursive: true });
@@ -45,8 +46,8 @@ function box(prefix: string, o: { record?: string; env?: string[]; lockPid?: num
   }
   return home;
 }
-function check(home: string, os = 'linux'): { out: string[]; code: number } {
-  const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\nCCD_OS=${os}; _check_quiz-weekly`],
+function check(home: string, os = 'linux', pre = ''): { out: string[]; code: number } {
+  const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n${pre}CCD_OS=${os}; _check_quiz-weekly`],
     { env: doctorEnv(home), encoding: 'utf8', timeout: 30_000 });
   const out = (r.stdout ?? '').split('\n');
   expect(out.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) quiz-weekly: /.test(l)), `a quiz-weekly line: ${r.stdout}${r.stderr}`).toBe(0);
@@ -103,10 +104,11 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
   });
 
   const STARVED_REMEDY = '  remedy: systemctl --user list-timers ccd-quiz-weekly.timer (its NEXT and LAST); systemctl --user status ccd-quiz-weekly.timer; journalctl --user -u ccd-quiz-weekly.service';
-  it('WARN starved for a last tick older than two periods (12 h) with no run in flight, even when it was ok (run 3508, ruling e)', () => {
+  const STARVED = 'WARN quiz-weekly: no unattended quiz tick for 13 h and no run is in flight, more than two of the timer\'s periods (12 h), so the timer is not firing: starved, stopped, or the box was down';
+  it('WARN starved for an ok last tick older than two periods (12 h) with no run in flight (run 3508, ruling e)', () => {
     const r = check(box('ccrc-doctor-qw-starved-', { record: state(last({ at_ms: Date.now() - 13 * HOUR })) }));
     expect(r.code).toBe(2);
-    expect(r.out[0]).toBe('WARN quiz-weekly: no unattended quiz tick for 13 h and no run is in flight, more than two of the timer\'s periods (12 h), so the timer is not firing: starved, stopped, or the box was down');
+    expect(r.out[0]).toBe(`${STARVED} (the last tick: week 2026-W47, act arms, outcome ok, word -)`);
     expect(r.out[1]).toBe(STARVED_REMEDY);
     // 11 h is still inside the bound
     expect(check(box('ccrc-doctor-qw-fresh-', { record: state(last({ at_ms: Date.now() - 11 * HOUR })) })).code).toBe(0);
@@ -114,6 +116,33 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
     const dead = check(box('ccrc-doctor-qw-deadlock-', { record: state(last({ at_ms: Date.now() - 13 * HOUR })), lockPid: deadPid() }));
     expect(dead.code).toBe(2);
     expect(dead.out[0]).toMatch(/^WARN quiz-weekly: no unattended quiz tick for 13 h and no run is in flight/);
+  });
+
+  it('WARN starved for a refused or failed last tick older than two periods with no run in flight, the normal weekly state included (run 3508, F2)', () => {
+    for (const outcome of ['refused', 'failed']) {
+      const r = check(box(`ccrc-doctor-qw-starved-${outcome}-`, { record: state(last({ at_ms: Date.now() - 13 * HOUR, outcome, act: 'done', word: 'pilot-failed', detail: 'the week is closed failed' })) }));
+      expect(r.code, outcome).toBe(2);
+      expect(r.out[0], outcome).toBe(`${STARVED} (the last tick: week 2026-W47, act done, outcome ${outcome}, word pilot-failed)`);
+      expect(r.out[1], outcome).toBe(STARVED_REMEDY);
+      // with a run in flight, the same old record is the tick's own refusal, as before
+      const live = check(box(`ccrc-doctor-qw-flight-${outcome}-`, { record: state(last({ at_ms: Date.now() - 13 * HOUR, outcome, act: 'done', word: 'pilot-failed', detail: 'd' })), lockPid: process.pid }));
+      expect(live.out[0], outcome).toBe(`WARN quiz-weekly: the last unattended quiz tick ${outcome}: week 2026-W47, act done, word pilot-failed, detail: d`);
+    }
+  });
+
+  it('a lock that names no pid (zero, a negative, junk) is no run in flight (run 3508, F6)', () => {
+    for (const lock of ['0', '-1', '12abc', '']) {
+      const r = check(box(`ccrc-doctor-qw-junklock-${lock === '' ? 'empty' : lock.replace(/[^a-z0-9]/g, 'x')}-`, { record: state(last({ at_ms: Date.now() - 13 * HOUR })), lockPid: lock }));
+      expect(r.code, JSON.stringify(lock)).toBe(2);
+      expect(r.out[0], JSON.stringify(lock)).toMatch(/^WARN quiz-weekly: no unattended quiz tick for 13 h and no run is in flight/);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a lock naming a live process this user may not signal is a run in flight, by the runner\'s own rule (run 3508, F5)', () => {
+    // pid 1 belongs to root: kill -0 answers EPERM for an unprivileged user, which the runner's pidAlive reads as alive.
+    const r = check(box('ccrc-doctor-qw-epermlock-', { record: state(last({ at_ms: Date.now() - 13 * HOUR })), lockPid: 1 }));
+    expect(r.code).toBe(0);
+    expect(r.out[0]).toBe('PASS quiz-weekly: the last unattended quiz tick (arms, ok) was 13 h ago: week 2026-W47 is running; a run is in flight');
   });
 
   it('with a run in flight (the lock names a live pid), a long act is no starvation: WARN stuck only past a run plus two ticks (24 h)', () => {
@@ -140,6 +169,10 @@ describe('quiz-weekly: the weekly runner\'s record, read and never written (Over
     const home = box('ccrc-doctor-qw-never-notimer-', { unitAgeMs: 13 * HOUR });
     writeShippedTimer(join(home, 'ccrc'), 'ccd-quiz-weekly.timer', null);
     expect(check(home).out[0]).toMatch(/^WARN quiz-weekly: ccd-quiz-weekly\.timer's cadence could not be read from the shipped unit file \(.*\), so the starved-timer bound is unmeasured$/);
+    // and a check table sourced without ccrc's timer reader is a FAIL naming the bug (run 3508, F6)
+    const unloaded = check(box('ccrc-doctor-qw-never-unloaded-', { unitAgeMs: 13 * HOUR }), 'linux', 'unset BOX_TREE_DIR; ');
+    expect(unloaded.code).toBe(1);
+    expect(unloaded.out[0]).toBe('FAIL quiz-weekly: ccrc\'s own timer reader is not loaded, so the starved-timer bound was never measured');
   });
 
   it('the stale bound is read from the shipped timer: a removed one is named, never a literal (D-7054)', () => {

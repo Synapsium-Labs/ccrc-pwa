@@ -29,8 +29,8 @@ the longest gap about fourteen minutes.
 | The base of `OnActiveSec=` | `timer_enter_waiting`: the activation time only when the timer's own state is already active, else now. |
 | What a daemon-reload does | `timer_coldplug` runs with the timer's state still dead (deserialisation keeps the saved state aside) and calls `timer_enter_waiting`, so the base is the reload's moment: every reload re-bases `OnActiveSec=` to now plus thirty minutes. |
 | The base of `OnUnitInactiveSec=` | The later of the service's last deactivation and the timer's last trigger; with neither set, that value is never armed. The coordinator read no inactive timestamp on the service and no last trigger on the timer, so on the box it had no base. |
-| The base of `OnCalendar=` | The timer's last trigger, else the time the timer was activated, else now. The last trigger is serialised across a reload and is not cleared by a stop and start. |
-| A slot that falls during a run | The timer stays `running` while the service runs, so no second start; when the run ends, a slot already passed fires at once, unless `DeferReactivation=yes` (systemd 257 and later) counts the next slot from the run's end. |
+| The base of `OnCalendar=` | The timer's last trigger, else the time the timer was last activated (`inactive_exit_timestamp`, a unit field serialised across a reload by `unit-serialize.c`), else now. A past elapse is not clamped to now, so it fires at once. The last trigger is serialised across a reload. Whether a stop and start clears it depends on the version: v257's `timer_start` sets it to null, v259's no longer does (both read in fix round 1). |
+| A slot that falls during a run | The timer stays `running` while the service runs, so no second start (the manual: "in case the unit to activate is already active at the time the timer elapses it is not restarted, but simply left running"); when the run ends, a slot already passed fires at once, unless `DeferReactivation=yes` (systemd 257 and later) counts the next slot from the run's end. |
 | `Persistent=true` | A slot missed while the timer was not active fires at once when the timer is activated. |
 
 **Still a reading, not measured:** that the fleet's reloads are what held this box's timer, rather than restarts of the
@@ -41,7 +41,7 @@ not depend on which it was.
 
 | Property | How the calendar unit keeps it |
 |---|---|
-| No run at once on top of a deploy's sweep (D-1981) | No `Persistent=`. A first activation bases the next slot on the activation time, so an install's `enable --now` waits for the next slot. |
+| No run at once on top of a deploy's sweep (D-1981) | No `Persistent=`. A fresh enable has no last trigger and bases the next slot on its own activation, so an install's `enable --now` waits for the next slot. **Once per box, the first reload over the already-armed OLD unit can fire at once** (review 3513 F1, a reading of v259's source, not measured on a box): the old timer has never fired, so it has no last trigger, and the new calendar counts from its old activation time, whose first slot is past. After that fire the last trigger anchors every later slot. The coordinator ruled the one run acceptable (niced, memory-capped, under the runner's lock and the week's one budget, on a box overdue for a tick) and no settle step for it. |
 | No second run stacked behind a long one | The timer stays `running` while a run lasts; `DeferReactivation=yes` counts the next slot from the run's end. The runner's own lock still refuses a second runner. |
 | A stopped week resumed within about six hours | Four slots a day, so the next slot is at most six hours away; no catch-up is needed, which is why `Persistent=` stays off. |
 
@@ -65,12 +65,16 @@ line.
 
 ## 2. Ruling (e): what doctor says now
 
-The runner rewrites its record at the end of every tick, including a tick with nothing to do, so a firing timer refreshes
-`last.at_ms` once a period. Doctor reads the runner's lock (`unattended.lock`, its pid) to tell a run in flight from none.
+Every tick that reaches the runner's acts rewrites its record, a tick with nothing to do, a closed-failed week and a latched
+refusal included, so a firing timer refreshes `last.at_ms` once a period. The ticks that write none are the early refusals
+(`in-session`, `in-pane`, `home-unset`), a `locked` tick (a run is in flight) and `state-unreadable` (doctor has its own
+warning for that record). Doctor reads the runner's lock (`unattended.lock`, its pid) to tell a run in flight from none, by
+the runner's own rule (`pidAlive`): a pid it may signal, or one it may not (EPERM), is alive.
 
 | State | Line |
 |---|---|
-| A record, no run in flight, last tick older than two periods (12 h) | WARN: no unattended quiz tick for N h and no run is in flight, more than two of the timer's periods, so the timer is not firing: starved, stopped, or the box was down |
+| A record of any outcome (ok, waiting, refused or failed), no run in flight, last tick older than two periods (12 h) | WARN: no unattended quiz tick for N h and no run is in flight, more than two of the timer's periods, so the timer is not firing: starved, stopped, or the box was down (the last tick: week, act, outcome, word) |
+| A fresh refused or failed record, or an old one with a run in flight | WARN with the tick's own week, act, word and detail, as before |
 | A record, a run in flight, last tick older than a run plus two periods (24 h) | WARN: the run is stuck (the old bound, now kept for a run in flight only) |
 | No record, the installed timer unit older than two periods, no run in flight | WARN: the quiz timer's unit was placed N h ago and no unattended tick is recorded, so the timer is not firing |
 | No record otherwise, or on macOS (no unit) | PASS, as before |
@@ -144,6 +148,19 @@ plugin, so even a plugins check that admits the build's own would still refuse i
 The brief's other two mutants (the fallback path removed, and the one-budget bound loosened) have nothing to mutate: their
 code was not built, by the coordinator's ruling.
 
+**Fix round 1 (review 3513): the new guards, each measured.** The new cases were run against the reviewed head's doctor
+(red) and against this round's (green); the guards that existed before got a mutant each, applied to the file, its named
+test run, the file restored and compared. The brief's two kept mutants were re-run on this round's files and are killed.
+
+| Guard | Measured | Killed or red by |
+|---|---|---|
+| F2 an old refused or failed record with no run in flight says starved | red against the reviewed head, green now; mutant "starved arm only for an ok record" killed | the refused and failed case |
+| F5 a pid the user may not signal is a run in flight | red against the reviewed head, green now; mutant "EPERM arm removed" killed | the EPERM case (pid 1; skipped when the suite runs as root, where every pid can be signalled) |
+| F6 the pid shape guard | mutant "the regex removed" killed (a lock of `0` or `-1` then reads as in flight) | the junk-lock case |
+| F6 the no-record path's unloaded-reader answer | mutant "the rc 3 arm removed" killed | the never-ticked case's unloaded arm |
+| M1 the trigger back to the active-relative form | killed again on this round's files | `timer-first-run`: the quiz case and the anchor census |
+| M2 the starved reading removed | killed again on this round's files | `ccrc-doctor-quiz`: the starved, refused/failed and junk-lock cases |
+
 ## 5. Departures, by slug
 
 - **fallback-path-withdrawn**: rulings (a) and (c) were not built; the coordinator withdrew both on the finding in section 3.
@@ -152,8 +169,9 @@ code was not built, by the coordinator's ruling.
   census's abstainers.
 - **period-reader-hourly-utc**: `_timer_period_s` reads one more spelling, the only one the quiz timer uses, and refuses a
   local-time one, another start hour or a step that does not divide the day.
-- **doctor-reads-the-runner-lock**: doctor reads the runner's lock file to tell a run in flight, by its pid, as the runner's
-  own stale-lock rule does. It never takes or removes the lock.
+- **doctor-reads-the-runner-lock**: doctor reads the runner's lock file to tell a run in flight, by its pid, by the runner's
+  own `pidAlive` rule (since fix round 1, F5: a pid it may not signal counts as alive, as the runner counts it). It never
+  takes or removes the lock.
 - **doctor-unit-age-as-armed-since**: with no record, the installed unit file's age stands for how long the timer has been
   armed.
 
@@ -165,7 +183,35 @@ code was not built, by the coordinator's ruling.
   word. A week still spends at most one budget, because a week closed on that word is not retried, as today.
 - A systemd older than 257 ignores `DeferReactivation=` with a warning, and starts one run at once behind a run that
   spanned a slot. The fleet box runs 259.
-- A timer stopped across a slot and started again fires that slot at once, because systemd keeps the last trigger across a
-  stop. An install's `enable --now` on an active timer and a reload do not stop it.
-- Every `ccrc update` re-places the unit file, so the never-ticked warning's clock restarts at each update.
-- A lock whose pid was recycled by another process reads as a run in flight; the 24 h stuck bound then applies.
+- **Once per box, the first reload over the old unit can start a run at once**, during the update that carries this change
+  (section 1; a source reading, not measured). Afterwards the last trigger anchors every slot.
+- **A stop and a start of the timer**, by version (fix round 1, F3, re-read): on systemd v257 `timer_start` clears the last
+  trigger, so a restarted timer counts from its new activation and waits for the next slot. On v259, the fleet box's version,
+  `timer_start` keeps the last trigger, so a timer stopped across a slot fires that slot at once when started; a never-fired
+  timer counts from its previous activation and can fire at once too. An install's `enable --now` on an active timer and a
+  reload do not stop it.
+- **The never-ticked clock** is the installed unit file's age. The update's install spine replaces the file only when its
+  bytes differ (`_inst_atomic` skips an identical one), so an unchanged unit keeps its age; a change to the unit, or the
+  fallback `deploy/deploy.sh` (its `_unit_atomic` always replaces), resets it.
+- **A recycled pid** in the runner's lock reads as a run in flight, for doctor as for the runner; the 24 h stuck bound then
+  applies.
+- **A slot during a running service** is absorbed by systemd itself, which leaves a running unit running (the manual,
+  quoted in section 1); no test pins systemd's own behaviour.
+- **The 12 h run deadline** in the stuck bound is restated from `ccd-quiz-weekly.service`'s `TimeoutStartSec=12h`, which no
+  timer file carries; nothing ties the two (this was so before this change, and the comment at the bound names it).
+
+## 7. Fix round 1 (review 3513, ruled in the coordinator's fix-round mail)
+
+| Item | What changed |
+|---|---|
+| F1 | No settle step, by ruling. The unit's comment, section 1's table, the first-run test's title and the known limits now say that a fresh enable never fires at once and that the first reload over the old, armed unit can, once. Re-read in v259's source: with no last trigger the calendar base is `inactive_exit_timestamp`, which `unit-serialize.c` carries across a reload. |
+| F2 | Doctor reads the age before the outcome: an old record of any outcome with no run in flight says starved, naming the last tick's outcome and word, while a fresh refused or failed record reads as before. The comment, section 2 and the test titles say so. |
+| F3 | Re-read in both versions: v257's `timer_start` sets the last trigger to null, v259's does not. Both readings were right for the version read; the note now says which version does what. |
+| F4 | The install spine skips an identical unit file, so the never-ticked clock keeps its age across an update that does not change the unit. |
+| F5 | Doctor's in-flight read follows the runner's `pidAlive`: EPERM, read under `LC_ALL=C` from `kill -0`, counts as alive. |
+| F6 | Cases for a lock of zero, a negative, junk and empty, and for the unloaded reader on the no-record path. A slot during a running service is a known limit. |
+| F7, F8 | The anchor census's comment names both calendar abstainers; doctor's services comment says two periods; section 2 names the ticks that write no record. |
+| F9 | A known limit. |
+
+**A hook refusal.** One edit of this note was refused by the session hook, because its text named the fleet's update
+command in prose; nothing was changed by it. The same text was written describing the command in words.

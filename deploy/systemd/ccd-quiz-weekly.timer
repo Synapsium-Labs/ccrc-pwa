@@ -16,8 +16,11 @@ Description=Run the weekly replay quiz unattended, four times a day on the wall 
 OnCalendar=*-*-* 00/6:17:00 UTC
 # NO `Persistent=`, deliberately, for ccd-land-probe.timer's reason (D-1981): with it, a timer armed or re-armed after a
 # missed slot (an install's or a deploy's `enable --now`, a box that was down) fires AT ONCE, on top of the deploy's
-# supervisor sweep. Without it a missed slot is simply skipped, and the next slot, at most six hours away, resumes the
-# week; that is the bound a stopped week was promised, so no catch-up is needed.
+# supervisor sweep. Without it a FRESH enable never fires at once: with no last trigger the first slot is counted from the
+# arming, and the next slot, at most six hours away, resumes the week; that is the bound a stopped week was promised, so
+# no catch-up is needed. ONCE PER BOX, the first reload over the OLD unit can fire at once (a reading of systemd v259's
+# timer.c, not measured on a box): an old timer that was armed and never fired has no last trigger, so the new calendar
+# counts from its old arming time, whose first slot is already past. After that first fire the last trigger anchors it.
 # `DeferReactivation=` (systemd 257 and later): the next slot is counted from the END of the last run, so a run that
 # takes hours and spans a slot never has a second run started the moment it ends. An older systemd ignores the key with
 # a warning and starts one run at once behind a run that spanned a slot; the runner's week bound (one --budget a week)
