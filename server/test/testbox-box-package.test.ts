@@ -119,7 +119,7 @@ describe('the static units equal spec §2.3, literally (D-7409, D-7451, D-7501)'
       '[Service] ExecStartPre=+@@TREE@@/deploy/testbox/bin/prestart @@ROOT@@/specs/%i',
       '[Service] ExecStart=@@TREE@@/deploy/testbox/bin/prepare @@ROOT@@/specs/%i',
       '[Service] StandardOutput=truncate:@@ROOT@@/out/%i/prepare.stdout', '[Service] StandardError=truncate:@@ROOT@@/out/%i/prepare.stderr',
-      ...LOOPBACK, ...SANDBOX('@@ROOT@@/runs/%i/run'),
+      ...LOOPBACK, ...SANDBOX('-@@ROOT@@/runs/%i/run'),
     ]);
   });
 
@@ -136,12 +136,12 @@ describe('the static units equal spec §2.3, literally (D-7409, D-7451, D-7501)'
   it('install: the install user, its slice, install-pre, runner and install-post, the prepare\'s network and the sandbox for install/run', () => {
     expect(unit('ccrc-testbox-install.service')).toEqual([
       '[Unit] Description=ccrc test box: a pristine install',
-      '[Service] Type=exec', '[Service] User=ccrc-tb-install', '[Service] Slice=ccrc-testbox-install.slice',
+      '[Service] Type=oneshot', '[Service] User=ccrc-tb-install', '[Service] Slice=ccrc-testbox-install.slice',
       '[Service] ExecStartPre=+@@TREE@@/deploy/testbox/bin/install-pre @@ROOT@@/specs/install',
       '[Service] ExecStart=@@TREE@@/deploy/testbox/bin/runner @@ROOT@@/specs/install',
       '[Service] ExecStartPost=+@@TREE@@/deploy/testbox/bin/install-post @@ROOT@@/specs/install',
       '[Service] StandardOutput=truncate:@@ROOT@@/out/install/stdout', '[Service] StandardError=truncate:@@ROOT@@/out/install/stderr',
-      ...LOOPBACK, ...SANDBOX('@@ROOT@@/install/run'),
+      ...LOOPBACK, ...SANDBOX('-@@ROOT@@/install/run'),
     ]);
   });
 
@@ -170,6 +170,27 @@ describe('the static units equal spec §2.3, literally (D-7409, D-7451, D-7501)'
 
   it('no unit sets ProcSubset (it would hide /proc/meminfo and /proc/stat, spec §2.3)', () => {
     for (const f of readdirSync(SYSTEMD)) expect(unit(f).filter((l) => l.includes('ProcSubset')), f).toEqual([]);
+  });
+
+  it('no unit has a Condition…= (a skipped start would read as a collected pass, agent/src/testbox/systemd.ts#unitEnd)', () => {
+    for (const f of readdirSync(SYSTEMD)) expect(unit(f).filter((l) => /^\[Unit\] Condition/.test(l)), f).toEqual([]);
+  });
+
+  it('a unit with an ExecStartPost= is Type=oneshot, so the post step runs after the main has exited 0 (D-8964)', () => {
+    // Under Type=exec the install's post step ran as soon as `npm ci` was started, found no node_modules and failed the
+    // unit, which killed the install: measured on the test box, every pristine build failed that way.
+    const posts = readdirSync(SYSTEMD).filter((f) => unit(f).some((l) => l.startsWith('[Service] ExecStartPost=')));
+    expect(posts).toEqual(['ccrc-testbox-install.service']);
+    for (const f of posts) expect(unit(f), f).toContain('[Service] Type=oneshot');
+  });
+
+  it('the run directory a privileged first step creates is an optional ReadWritePaths (`-`), so the namespace of that step does not need it (spec §2.3)', () => {
+    // On systemd 259 the namespace is set up for the `+` step too, and a missing path fails it with 226/NAMESPACE before
+    // the step can create the directory (measured on the test box). run@ starts after the prepare made it, so it keeps
+    // the strict form: a run whose directory is gone fails to start.
+    expect(unit('ccrc-testbox-prepare@.service')).toContain('[Service] ReadWritePaths=-@@ROOT@@/runs/%i/run');
+    expect(unit('ccrc-testbox-install.service')).toContain('[Service] ReadWritePaths=-@@ROOT@@/install/run');
+    expect(unit('ccrc-testbox-run@.service')).toContain('[Service] ReadWritePaths=@@ROOT@@/runs/%i/run');
   });
 
   it('census (D-7451): no file under deploy/testbox/ has an EnvironmentFile= line or a CCRC_TESTBOX_* Environment= line', () => {
@@ -587,7 +608,7 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     expect(drop('ccrc-testbox-prepare@.service')).toEqual(['[Service] User=ccrc-tb-%i', '[Service] IPAddressAllow=127.0.0.2/32', '[Service] RuntimeMaxSec=1h']);
     expect(drop('ccrc-testbox-run@.service')).toEqual(['[Service] User=ccrc-tb-%i', '[Service] RuntimeMaxSec=1h']);
     expect(drop('ccrc-testbox-clean@.service')).toEqual(['[Service] RuntimeMaxSec=1h']);
-    expect(drop('ccrc-testbox-install.service')).toEqual(['[Service] User=ccrc-tb-install', '[Service] IPAddressAllow=127.0.0.2/32', '[Service] RuntimeMaxSec=1h']);
+    expect(drop('ccrc-testbox-install.service')).toEqual(['[Service] User=ccrc-tb-install', '[Service] IPAddressAllow=127.0.0.2/32', '[Service] TimeoutStartSec=1h']);
     for (const s of ['ccrc-testbox-run-.slice', 'ccrc-testbox-install.slice']) {
       expect(drop(s)).toEqual(['[Slice] MemoryMax=4G', '[Slice] MemorySwapMax=1G', '[Slice] CPUQuota=200%']);
     }

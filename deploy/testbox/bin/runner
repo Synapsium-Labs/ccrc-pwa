@@ -38,4 +38,11 @@ done < "$spec"
 case $cwd in /*) ;; *) die "the command directory is not absolute: $cwd" ;; esac
 cd -- "$cwd" || die "no command directory: $cwd"
 
+# The spec's TMPDIR, made inside the unit's private /tmp, as the prepare makes it in its own (D-8963): every
+# unit has a /tmp of its own (PrivateTmp=yes), so the prepare's never reaches the run, and without this every test that
+# makes a temporary directory failed on the box with ENOENT.
+for e in ${envs[@]+"${envs[@]}"}; do
+  case $e in TMPDIR=/*) mkdir -p -- "${e#TMPDIR=}" 2>/dev/null || die "cannot make ${e#TMPDIR=}" ;; esac
+done
+
 exec env -i ${envs[@]+"${envs[@]}"} "${argv[@]}"

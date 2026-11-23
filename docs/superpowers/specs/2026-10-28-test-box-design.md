@@ -347,7 +347,8 @@ concurrent run takes a free run user `ccrc-tb-<k>`, `k` from 1 to that count; th
 run's directory is `<CCRC_TESTBOX_ROOT>/runs/<k>/run`, a fixed path, so socket paths built from it are the same length
 every time. `runs/<k>` itself is root's (0755) and the run writes only `runs/<k>/run`: the prepare unit's one
 privileged step (`ExecStartPre=+`, a fixed script) refuses to start when `run` already exists and otherwise creates it
-owned by the run user, mode 0700, and `run` is the units' only `ReadWritePaths` (§2.3). So a run cannot leave a
+owned by the run user, mode 0700, and `run` is the units' only `ReadWritePaths` (§2.3; optional, `-`, in the prepare
+unit, whose privileged step must start before `run` exists). So a run cannot leave a
 sibling of `run` that the cleanup would miss, or replace `run` with a link. It holds `checkout/` (the shared checkout,
 its `node_modules` and build outputs), `home/` (the npm cache is `home/.npm`, set by the box's `npmrc`, below) and the
 reporter file `report.json`.
@@ -399,7 +400,9 @@ run in every way that matters for carry-over:
 - **the same caps**: the unit runs in its own slice with the per-run `MemoryMax`, `MemorySwapMax` and CPU quota (§4),
   with `PrivateTmp=yes` and `RemoveIPC=yes`, and counts as one run against `CCRC_TESTBOX_RUNS`; at most one runs at a
   time;
-- **root cleanup**: on success a fixed privileged post-step, which reads only the key the service wrote, moves the
+- **root cleanup**: on success a fixed privileged post-step (`ExecStartPost=+` of a `Type=oneshot` unit, so it runs only
+  once `npm ci` has exited 0, and the unit's bound is `TimeoutStartSec=`, D-8964), which reads only the
+  key the service wrote, moves the
   package's `node_modules` to `<CCRC_TESTBOX_ROOT>/pristine/<key>` owned by root, so no run or later install can change
   it, with npm's modes kept so a run's clone is writable by its owner as a local install is; then, success or not,
   `ccrc-testbox-clean@install` removes `install/run` as the run cleanup does.
@@ -455,7 +458,9 @@ user namespace. A reflink clone is a private, writable, ordinary directory that 
 **Temp.** Both units run with `PrivateTmp=yes`: each unit instance gets its own empty, writable `/tmp` and `/var/tmp`,
 removed by systemd when the unit stops. So the suites that bind sockets under a literal `/tmp` (§1.2) and tmux's
 default `/tmp/tmux-<uid>` work as they do locally, and concurrent runs cannot see each other's `/tmp`. The run's
-`TMPDIR` is a short directory inside that private `/tmp` (config, default `/tmp/r`): the suites' run-tmp parent puts a
+`TMPDIR` is a short directory inside that private `/tmp` (config, default `/tmp/r`), made by each unit's own script
+before its command (the prepare's for its steps, the runner's for the run and the install), since one unit's private
+`/tmp` is never another's (D-8963): the suites' run-tmp parent puts a
 `live.sock` under `realpath(TMPDIR)` and refuses a path past the `sun_path` cap (`RUN_SUN_PATH_MAX`), so the box's
 `TMPDIR` is never longer than the shortest `TMPDIR` a fleet session uses, and the parity fixture in §5 binds a socket at
 the longest name the suites build, under `TMPDIR` and under `/tmp`, on both sides. `/tmp` on a tmpfs
@@ -488,7 +493,16 @@ and never as the service.
   memory in `/dev/shm`, message queues and System V objects are removed when the unit stops; `PrivateDevices` still
   shares the host's `/dev/shm`, so without it a segment could outlive the run directory), `ProtectSystem=strict` with
   `runs/%i/run` as the only `ReadWritePaths`, and a fixed `ExecStart` of the service's runner script; the install unit
-  sets the same for `install/run`. The run's argv and environment reach the runner as a spec file the service writes
+  sets the same for `install/run`. In the prepare and install units that path is optional (`ReadWritePaths=-…`,
+  D-8961): the system manager sets up the mount namespace for the privileged first step too, and on systemd 259 a
+  path that does not exist yet failed it with `226/NAMESPACE` before the step could create it. The main step starts after
+  the first step made the directory, so it still has exactly that one writable path; a first step that refused (the
+  directory already there) fails the unit before the main step runs. The run unit keeps the strict form, since the
+  prepare made `run` before it. The service reads a unit's end from `systemctl start --wait` and `show`; the system
+  manager unloads a unit once it is inactive, so after a pass `show` gives a freshly loaded unit's defaults
+  (`ExecMainCode=0`, `Result=success`), and that, with `start` exiting 0, is a pass (D-8962). A unit
+  that failed stays loaded and `start --wait` exits non-zero for it. No unit has a `Condition…=`, whose skip would
+  answer the same. The run's argv and environment reach the runner as a spec file the service writes
   under `<CCRC_TESTBOX_ROOT>/specs/<k>`, readable but not writable by the run user. A polkit rule lets the service user
   `start`, `stop` and read the state of units whose name matches
   `^ccrc-testbox-((prepare|run)@[0-9]+|clean@([0-9]+|install)|install|tools)\.service$`, and nothing else. `IPAddressDeny` needs the system
