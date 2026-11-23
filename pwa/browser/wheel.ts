@@ -173,11 +173,12 @@ export async function reveal(page: Page, kind: Kind): Promise<void> {
   if (centred < 3) throw new Error(`the ${kind} target could not be centred in the transcript (harness failure)`);
 }
 
-/** Open the Bash card whose summary holds `command`: Refined first opens the run's group, then the card's own row
- *  (Instrument draws it directly). Every collapsed group in reach is opened until the card is mounted. */
+/** Open the Bash card whose summary holds `command`: its stretch's tool-activity row first (both skins, desktop polish
+ *  wave 168), then in Refined the run's group, then the card's own row. Every closed activity row and group in reach is
+ *  opened until the card is mounted. */
 export async function openCard(page: Page, command: string): Promise<void> {
   const card = page.locator('.toolcard', { has: page.locator('.tool-sum', { hasText: command }) });
-  const groups = page.locator('.ref-tool-group-row[aria-expanded="false"]');
+  const groups = page.locator('.tool-activity-row[aria-expanded="false"], .ref-tool-group-row[aria-expanded="false"]');
   for (let i = 0; i < 80 && (await card.count()) === 0; i += 1) {
     if ((await groups.count()) > 0) {
       await groups.first().scrollIntoViewIfNeeded();
