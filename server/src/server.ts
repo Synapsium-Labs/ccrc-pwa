@@ -1475,7 +1475,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { lane } = req.params as { lane: string };
     if (!deps.cfg.roster.byId.has(lane)) return refuseRoute(reply, 'not-found');
     reply.header('cache-control', 'no-store');
-    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, deps.cfg.ccrcDir, lane) };
+    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, lane) };
     return answer;
   });
 
@@ -2172,10 +2172,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
-  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Hold, Release and Revert, registered
+  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Revert only, registered
   // from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`MODELS_DOORS`) read by name.
   registerLaneModelsRoutes(app, {
-    io: deps.io, ccrcDir: deps.cfg.ccrcDir, hasLane: (l) => deps.cfg.roster.byId.has(l),
+    io: deps.io, hasLane: (l) => deps.cfg.roster.byId.has(l),
     actorOf: (req) => deviceActor(sessionAuth(req).device),
   });
   // The approval census's read (approvals plan 2026-11-18, Task 1.4): session-gated, no box token, registered from its own

@@ -69,7 +69,7 @@ describe('POST /api/models/:lane', () => {
     };
     const app = Fastify();
     registerLaneModelsRoutes(app, {
-      io, ccrcDir: base.cfg.ccrcDir, hasLane: over.hasLane ?? ((l) => l === 'lane-a'),
+      io, hasLane: over.hasLane ?? ((l) => l === 'lane-a'),
       actorOf: (req) => `device:${String(req.headers['x-test-device'] ?? 'unmeasured')}`,
     });
     apps.push(app);
@@ -293,15 +293,15 @@ describe('the fresh read after the act never joins a show already in flight (F2,
       },
     };
     const app = Fastify();
-    registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
+    registerLaneModelsRoutes(app, { io, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
     apps.push(app);
-    return { app, io, ccrcDir: base.cfg.ccrcDir, events, shows };
+    return { app, io, events, shows };
   }
 
   it('a show begun before the act is still running when the act settles: the POST\'s models come from a show begun AFTER the act', async () => {
     const t = handRig();
     // the GET's show, in flight and unresolved: it reads the old state
-    const get = readLaneModels(t.io, t.ccrcDir, 'lane-a');
+    const get = readLaneModels(t.io, 'lane-a');
     expect(t.events).toEqual(['show']);
     const posted = t.app.inject({
       method: 'POST', url: '/api/models/lane-a', headers: { 'content-type': 'application/json' },
@@ -332,8 +332,8 @@ describe('the fresh read after the act never joins a show already in flight (F2,
 
   it('CONTROL: two plain reads still share one show (the GET keeps coalescing)', async () => {
     const t = handRig();
-    const a = readLaneModels(t.io, t.ccrcDir, 'lane-a');
-    const b = readLaneModels(t.io, t.ccrcDir, 'lane-a');
+    const a = readLaneModels(t.io, 'lane-a');
+    const b = readLaneModels(t.io, 'lane-a');
     expect(t.events).toEqual(['show']);
     t.shows[0]!(exited(SHOW));
     expect(await a).toEqual(await b);
@@ -368,9 +368,9 @@ describe('the fresh read after the act never joins a show already in flight (F2,
     const base = testDeps(home);
     const io = localIOFor(home);
     const app = Fastify();
-    registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
+    registerLaneModelsRoutes(app, { io, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
     apps.push(app);
-    const get = readLaneModels(io, base.cfg.ccrcDir, 'lane-a');
+    const get = readLaneModels(io, 'lane-a');
     await sleep(300);
     expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the GET\'s show began').toHaveLength(1);
     const posted = app.inject({

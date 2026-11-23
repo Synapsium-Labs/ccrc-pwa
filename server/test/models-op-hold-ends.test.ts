@@ -269,9 +269,9 @@ describe('the Codex arm: a held class and the advance step', () => {
     const body = op(NOW, 'show', '--file', rosterPath(), '--id', 'lane-a').body;
     const ioOf = (b: Record<string, unknown>): FleetIO =>
       ({ models: async () => ({ kind: 'exited', code: 0, stdout: `${JSON.stringify(b)}\n` }) }) as unknown as FleetIO;
-    expect(await readLaneModels(ioOf(body), '', 'lane-a', { fresh: true })).toMatchObject({ kind: 'read', revertHoldEnds: true });
+    expect(await readLaneModels(ioOf(body), 'lane-a', { fresh: true })).toMatchObject({ kind: 'read', revertHoldEnds: true });
     for (const v of [undefined, false, 'yes']) {
-      const read = await readLaneModels(ioOf({ ...body, revertHoldEnds: v }), '', 'lane-a', { fresh: true });
+      const read = await readLaneModels(ioOf({ ...body, revertHoldEnds: v }), 'lane-a', { fresh: true });
       expect(read.kind).toBe('read');
       expect(read).not.toHaveProperty('revertHoldEnds');
     }

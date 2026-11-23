@@ -48,7 +48,6 @@ import { refuseRoute } from './refuse.js';
  */
 export interface LaneModelsRouteDeps {
   readonly io: FleetIO;
-  readonly ccrcDir: string;
   /** Whether the roster holds this lane. */
   readonly hasLane: (lane: string) => boolean;
   /** The device label the gate measured, as `device:<label>` (or the gate's own `unmeasured`); never a session id. */
@@ -63,7 +62,7 @@ export function registerLaneModelsRoutes(app: FastifyInstance, deps: LaneModelsR
     if (!parsed.ok) return refuseRoute(reply, 'bad-request', { why: parsed.why });
     const { action, cls } = parsed;
     // The capability read, fresh, before any write: a refusal here asks the op nothing and writes no audit line.
-    const gate = revertGateVerdict(await readLaneModels(deps.io, deps.ccrcDir, lane, { fresh: true }));
+    const gate = revertGateVerdict(await readLaneModels(deps.io, lane, { fresh: true }));
     if (gate.kind === 'refuse') return refuseRoute(reply, gate.error, gate.extra);
     // The act. A rejected promise is a contract breach of the seam: the frame may have left, so it reads as lost.
     let asked: ModelsAsked;
@@ -74,7 +73,7 @@ export function registerLaneModelsRoutes(app: FastifyInstance, deps: LaneModelsR
     reply.header('cache-control', 'no-store');
     return {
       ok: true, lane, action, class: cls, changed: verdict.changed, partial: verdict.partial,
-      models: await readLaneModels(deps.io, deps.ccrcDir, lane, { fresh: true }),
+      models: await readLaneModels(deps.io, lane, { fresh: true }),
     };
   });
 }

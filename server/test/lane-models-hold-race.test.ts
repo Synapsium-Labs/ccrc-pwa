@@ -5,8 +5,9 @@
 // That is `localModels` (its `modelsEnv`, its bounded port, its `not-started` catch) running for real, against the REAL
 // `ccd/ccrc` behind `_inst_shim`'s own launcher bytes, the real lane-files lock, and a real
 // `flock` holder in another process (an inert `sh -c 'echo held; read _'`, so it stands in for ANY writer holding the lock,
-// not for the commit itself). The door is registered over the same io only to prove it refuses a hold. `modelsEnv` copies PATH and LANG from `process.env`, so each case points those two at this
-// suite's contained environment for its duration and restores them after. That does NOT keep the poisoned gh and curl first:
+// not for the commit itself). The door is registered over the same io only to prove it refuses a hold. `modelsEnv` copies
+// PATH and LANG from `process.env`, so each case points those two at this suite's contained environment for its duration
+// and restores them after. That does NOT keep the poisoned gh and curl first:
 // `modelsEnv` (agent/src/modelsop.ts) puts node's own directory ahead of PATH, so where node is /usr/bin/node the real
 // gh and curl sit ahead of the poisoned copies. It makes no difference here, and the header says so rather than claim a
 // guard: the hold/release/revert path (`ccrc models <lane> hold|release|revert`, `_models_answer_locked` and
@@ -18,7 +19,7 @@
 //  2. hold first: the locked commit moves to the newer candidate and records that it ended the hold;
 //  3. commit first: the hand hold survives on the moved class;
 //  4. released together from one held lock, both writers leave the end state that the commit's persisted move proves;
-//  5. a lock held past the verb's wait refuses the hold `lock-busy` (exit 1, a refusal body) and writes nothing;
+//  5. a lock held past the verb's wait refuses the hold `lock-busy` (exit 1 or 2, a refusal body) and writes nothing;
 //  6. the door refuses a `hold` `bad-action` and the advance file stays as it was.
 // They do NOT run the hourly step itself: the test invokes its locked commit verb. The ordered cases prove both outcomes;
 // the concurrent case does not depend on which waiter the kernel wakes first.
@@ -149,7 +150,7 @@ describe('a hand hold against the lane-files lock: the real local arm (localIOFo
     const io = localIOFor(b.home);
     const app = Fastify();
     registerLaneModelsRoutes(app, {
-      io, ccrcDir: join(b.home, '.ccrc'), hasLane: (l) => ROSTER.accounts.some((a) => a.id === l),
+      io, hasLane: (l) => ROSTER.accounts.some((a) => a.id === l),
       actorOf: () => 'device:race-test',
     });
     apps.push(app);
@@ -203,7 +204,7 @@ describe('a hand hold against the lane-files lock: the real local arm (localIOFo
     expect(res.code, JSON.stringify(res.body)).toBe(0);
     expect(res.body).toMatchObject({ ok: true, op: 'hold', id: LANE, class: CLS, changed: true });
     // the lane read afresh, as the door's own read after an act does: the lane's classes and its advance state, the hold in it
-    const models = await readLaneModels(io, join(b.home, '.ccrc'), LANE, { fresh: true });
+    const models = await readLaneModels(io, LANE, { fresh: true });
     if (models.kind !== 'read') throw new Error(`the fresh read was ${models.kind}`);
     expect(models.advance?.state).toBe('ok');
     expect(models.advance?.classes?.[CLS]?.hold).toMatchObject({ by: 'hand' });

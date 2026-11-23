@@ -102,7 +102,7 @@ describe('POST /api/models/:lane: the capability read before the revert', () => 
       },
     };
     const app = Fastify();
-    registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: (l) => l === LANE, actorOf: () => 'device:phone-a' });
+    registerLaneModelsRoutes(app, { io, hasLane: (l) => l === LANE, actorOf: () => 'device:phone-a' });
     apps.push(app);
     return { app, events, calls };
   }
@@ -172,7 +172,7 @@ describe('POST /api/models/:lane: the capability read before the revert', () => 
       const events: string[] = [];
       const io: FleetIO = { ...base.io, models: async (_l, action) => { events.push(action); throw new Error('boom'); } };
       const app = Fastify();
-      registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: () => true, actorOf: () => 'device:phone-a' });
+      registerLaneModelsRoutes(app, { io, hasLane: () => true, actorOf: () => 'device:phone-a' });
       apps.push(app);
       const res = await app.inject({
         method: 'POST', url: `/api/models/${LANE}`, headers: { 'content-type': 'application/json' }, payload: JSON.stringify(REVERT),
