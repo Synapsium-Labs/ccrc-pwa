@@ -5,13 +5,15 @@
 // A text paste of `CHIP_MIN_CHARS` characters or more, or of more than `CHIP_MAX_PLAIN_LINES` lines, enters the draft
 // as a label, `[Pasted text #N +L lines]`, at the caret. The full text is kept in a `PasteChips` table keyed by N.
 //
-// IDENTITY IS THE INSERTED OCCURRENCE, NEVER THE LABEL'S TEXT (review 3457 F4, A1). A `Draft` is the field's value
-// plus the spans where the composer itself put a label (`Occurrence`); every change keeps, moves or drops those spans
-// by position (`applyChange`). Text that merely looks like a label (typed, pasted from another draft, or exposed by
-// expanding a chip whose text contains one) is ordinary text and is sent as written. The one place a label's text is
-// read back is the browser's own undo and redo (`history`): when they bring back the label of a chip of this draft that
-// has no occurrence, that label is the chip again, so undoing a removal, an expansion or a repair never leaves a label
-// without its text.
+// IDENTITY IS THE INSERTED OCCURRENCE, NEVER THE LABEL'S TEXT (review 3457 F4, A1; review 3469 F1-F3). A `Draft` is the
+// field's value plus the spans where the composer itself put a label (`Occurrence`); every change keeps, moves or drops
+// those spans by position (`applyChange`). Text that merely looks like a label (typed, pasted from another draft, or
+// exposed by expanding a chip whose text contains one) is ordinary text and is sent as written. No label's text is ever
+// searched for:
+// - a chip the composer inserts is placed where its plan put the label (`planPaste`'s `attach`);
+// - the browser's own undo and redo bring back a draft the field has already held, with exactly its occurrences: the
+//   composer keeps the drafts it has held in the browser's undo order (`DraftLog`), and an undo or redo takes the one
+//   whose value the browser restored (`logStep`). When none is held, the composer cancels the step before it lands.
 //
 // Never lose pasted text silently:
 // - The table only grows within a draft, so a chip's text outlives its occurrence (for undo, above). The composer
@@ -19,8 +21,9 @@
 // - An edit that would break a label without removing all of it is planned before it lands (`planInput`): typing or
 //   deleting inside a label expands it to its full text instead, and a selection that starts or ends inside one keeps
 //   that chip's text. Backspace right after a label, or Delete right before one, removes the whole label and its text.
-// - An edit that lands anyway (one `planInput` could not plan: an input method's composition, a drop) is repaired after
-//   it lands, with the same result (`applyChange`'s `repair`).
+// - A word delete is planned the same way, over the range the browser itself would delete (`planWordDelete`).
+// - An edit that lands anyway (one that cannot be planned: an input method's composition, which cannot be cancelled, a
+//   drop, a line delete) is repaired after it lands, with the same result (`applyChange`'s `repair`).
 // - Copying or cutting a selection that holds a chip gives the clipboard the chip's full text, never its label
 //   (`selectionText`), so no other draft can read a label as its own chip.
 
@@ -145,6 +148,27 @@ export const removeChip = (draft: Draft, n: number): Plan | null => {
   return o === undefined ? null : { start: o.start, end: o.end, text: '' };
 };
 
+/** A paste of `text` (normalized) over [selStart, selEnd): a long text becomes the next chip, and its label is the
+ *  insert; the plan is `planInput`'s when the paste touches a label, else the label goes in at the selection. `attach`
+ *  is the new chip's occurrence where the plan puts its label: at the plan's end, after any chip text the plan keeps.
+ *  A short paste that touches no label has no plan: the browser's own, as it always was. */
+export const planPaste = (
+  draft: Draft,
+  selStart: number,
+  selEnd: number,
+  text: string,
+  chips: PasteChips,
+): { chips: PasteChips; plan: Plan | null; attach: Occurrence | null } => {
+  if (!shouldChip(text)) {
+    return { chips, plan: planInput(draft, selStart, selEnd, 'insertFromPaste', text, chips), attach: null };
+  }
+  const added = addChip(chips, text);
+  const plan = planInput(draft, selStart, selEnd, 'insertFromPaste', added.token, added.chips)
+    ?? { start: selStart, end: selEnd, text: added.token };
+  const end = plan.start + plan.text.length;
+  return { chips: added.chips, plan, attach: { n: added.n, start: end - added.token.length, end } };
+};
+
 /** The clipboard's text for a copy or cut of [start, end): the selection with every chip it touches given as that
  *  chip's full text. Null when it touches none, so the browser copies as it always has. */
 export const selectionText = (draft: Draft, start: number, end: number, chips: PasteChips): string | null => {
@@ -204,6 +228,23 @@ export const planInput = (
   return { start: o.start, end: o.end, text: whole ? '' : textOf(chips, o.n) };
 };
 
+/** A word delete (Ctrl+Backspace, Ctrl+Delete; Option on a Mac) with the caret at `caret`. With the caret touching or
+ *  inside a label it is Backspace's or Delete's plan (`planInput`). Otherwise `range` is what the browser itself would
+ *  delete (the composer asks the browser to extend its selection by a word; a textarea exposes no target range), and
+ *  the plan is that of a selection over it: a label it reaches into keeps its text. Null leaves the delete to the
+ *  browser: it removes no part of a label, or whole labels only. */
+export const planWordDelete = (
+  draft: Draft,
+  caret: number,
+  range: { readonly start: number; readonly end: number } | null,
+  backward: boolean,
+  chips: PasteChips,
+): Plan | null => {
+  const touching = planInput(draft, caret, caret, backward ? 'deleteContentBackward' : 'deleteContentForward', null, chips);
+  if (touching !== null || range === null || range.start >= range.end) return touching;
+  return planInput(draft, range.start, range.end, backward ? 'deleteContentBackward' : 'deleteContentForward', null, chips);
+};
+
 /** One edit, as a replacement of prev[start, prevEnd) by next[start, nextEnd). */
 export interface Edit {
   readonly start: number;
@@ -238,13 +279,15 @@ export const locateEdit = (prev: string, next: string, caret: number): Edit => {
   return { start, prevEnd: prev.length - suffix, nextEnd: next.length - suffix };
 };
 
-/** How a change arrived: `attach` is the chip whose label the composer itself just inserted; `history` says the
- *  browser's undo or redo made it; `edit` is the range the composer itself replaced, when it made the change, which
- *  places it exactly where text that starts like the label it replaces would mislead `locateEdit`. */
+/** How a change arrived: `attach` is the occurrence of the label the composer itself just inserted, where its plan put
+ *  it; `edit` is the range the composer itself replaced, when it made the change, which places it exactly where text
+ *  that starts like the text it replaces would mislead `locateEdit`; `repair: false` drops an occurrence the change
+ *  broke instead of writing its text back (a change the composer cannot place: an undo or redo to a draft it never
+ *  held, which the composer cancels before it lands, so this is the defence behind that). */
 export interface ChangeHow {
-  readonly attach?: number | null;
-  readonly history?: boolean;
+  readonly attach?: Occurrence | null;
   readonly edit?: { readonly start: number; readonly end: number } | null;
+  readonly repair?: boolean;
 }
 
 /** The edit `how.edit` names, when `next` is exactly `prev` with that range replaced. */
@@ -273,7 +316,7 @@ export const applyChange = (
   const inserted = next.slice(start, nextEnd);
   const left = prev.occ.find((o) => o.start < start && start < o.end);
   const right = prev.occ.find((o) => o !== left && o.start < prevEnd && prevEnd < o.end);
-  if (left !== undefined || right !== undefined) {
+  if ((left !== undefined || right !== undefined) && how.repair !== false) {
     const from = left?.start ?? start;
     const to = right?.end ?? (left !== undefined && prevEnd < left.end ? left.end : prevEnd);
     const head = prev.value.slice(0, from) + (left ? textOf(chips, left.n) : '') + inserted;
@@ -291,24 +334,49 @@ export const applyChange = (
     else if (o.start >= prevEnd) occ.push({ ...o, start: o.start + delta, end: o.end + delta });
     // else: the edit removed it whole
   }
-  const live = new Set(occ.map((o) => o.n));
-  // A label counts as brought back when it overlaps what the change inserted: the located edit can start inside it,
-  // where the text before the change began the same way.
-  const attach = (n: number): void => {
-    if (live.has(n)) return;
-    const label = labelOf(chips, n);
-    if (label === '' || nextEnd <= start) return;
-    for (let at = next.indexOf(label, Math.max(0, start - label.length + 1)); at >= 0 && at < nextEnd;
-      at = next.indexOf(label, at + 1)) {
-      const end = at + label.length;
-      if (occ.some((o) => o.start < end && at < o.end)) continue;
-      occ.push({ n, start: at, end });
-      live.add(n);
-      return;
-    }
-  };
-  if (how.attach !== undefined && how.attach !== null) attach(how.attach);
-  if (how.history === true) for (const n of chips.keys()) attach(n);
-  occ.sort((a, b) => a.start - b.start);
+  // The label the composer just inserted, at the position its plan put it: never found by its text.
+  const a = how.attach;
+  if (a !== undefined && a !== null && a.start >= start && a.end <= nextEnd && next.slice(a.start, a.end) === labelOf(chips, a.n)
+    && !occ.some((o) => o.n === a.n || (o.start < a.end && a.start < o.end))) {
+    occ.push(a);
+  }
+  occ.sort((x, y) => x.start - y.start);
   return { draft: { value: next, occ }, repair: null };
+};
+
+/** The drafts the field has held, oldest first, in the browser's undo order: every change the composer sees appends
+ *  one, dropping those after `at`, as a new edit drops the browser's redo entries; an undo or redo moves `at`. Each
+ *  keystroke is one entry, where the browser's undo takes a run of typing in one step, so a step looks for the nearest
+ *  held draft whose value is the one the browser restored. */
+export interface DraftLog {
+  readonly drafts: readonly Draft[];
+  readonly at: number;
+}
+
+/** How many drafts the log keeps; an undo past the oldest is cancelled (`canStep`). */
+export const DRAFT_LOG_CAP = 1000;
+
+export const startLog = (draft: Draft = emptyDraft()): DraftLog => ({ drafts: [draft], at: 0 });
+
+/** The draft the log stands at. */
+export const logDraft = (log: DraftLog): Draft => log.drafts[log.at] ?? emptyDraft();
+
+/** A change that is no undo or redo: `draft` is held next, and nothing after it can be redone. */
+export const logChange = (log: DraftLog, draft: Draft): DraftLog => {
+  const drafts = [...log.drafts.slice(0, log.at + 1), draft];
+  const over = Math.max(0, drafts.length - DRAFT_LOG_CAP);
+  return { drafts: drafts.slice(over), at: drafts.length - 1 - over };
+};
+
+/** Whether the log holds a draft an undo (`back`) or a redo could bring back. */
+export const canStep = (log: DraftLog, back: boolean): boolean => (back ? log.at > 0 : log.at < log.drafts.length - 1);
+
+/** The browser's undo (`back`) or redo restored `value`: the log at the nearest held draft with exactly that value,
+ *  before the current one for an undo and after it for a redo; its occurrences are where they were. Null when none
+ *  is held. */
+export const logStep = (log: DraftLog, value: string, back: boolean): DraftLog | null => {
+  for (let j = back ? log.at - 1 : log.at + 1; back ? j >= 0 : j < log.drafts.length; j += back ? -1 : 1) {
+    if (log.drafts[j]?.value === value) return { drafts: log.drafts, at: j };
+  }
+  return null;
 };

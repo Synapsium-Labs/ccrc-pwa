@@ -2,14 +2,15 @@
 // the draft as a `[Pasted text #N +L lines]` label at the caret, and the full text rides beside the draft. This file
 // pins the pure L1 half (`pwa/src/session/pasteChips.ts`): when a paste becomes a chip, the label grammar, chip
 // identity by inserted occurrence (review 3457 F4, A1), expansion into the send payload byte for byte, the plans that
-// keep an edit from breaking a label, the repair of one that lands anyway, the clipboard's text, and undo's return of a
-// label. The composer half is `composer-paste-chips.test.tsx`; the browser half is `browser/paste-chips.browser.test.ts`.
+// keep an edit from breaking a label, the repair of one that lands anyway, the clipboard's text, and the browser's undo
+// and redo restoring a held draft by position (review 3469 F1-F3), never by a label's text. The composer half is `composer-paste-chips.test.tsx`; the browser half is `browser/paste-chips.browser.test.ts`.
 import { describe, expect, it } from 'vitest';
 import {
   CHIP_MIN_CHARS,
   CHIP_MAX_PLAIN_LINES,
-  addChip,
+  DRAFT_LOG_CAP,
   applyChange,
+  canStep,
   chipToken,
   emptyChips,
   emptyDraft,
@@ -19,12 +20,19 @@ import {
   linesWord,
   liveChips,
   locateEdit,
+  logChange,
+  logDraft,
+  logStep,
   normalizePaste,
   planInput,
+  planPaste,
+  planWordDelete,
   removeChip,
   selectionText,
   shouldChip,
+  startLog,
   type Draft,
+  type DraftLog,
   type PasteChips,
   type Plan,
 } from '../src/session/pasteChips';
@@ -40,18 +48,21 @@ const type = (s: Pick<S, 'draft' | 'chips'>, at: number, text: string, end = at)
   return applyChange(s.draft, next, at + text.length, s.chips).draft;
 };
 
-/** Paste `text` as a chip at [at, end): the composer's own sequence (register the chip, insert its label, attach). */
+/** Paste a long `text` over [at, end): the composer's own sequence (`planPaste`, then its plan performed with the new
+ *  chip's occurrence where the plan put its label). */
 const paste = (s: Pick<S, 'draft' | 'chips'>, at: number, text: string, end = at): S => {
-  const added = addChip(s.chips, text);
-  const next = s.draft.value.slice(0, at) + added.token + s.draft.value.slice(end);
-  const r = applyChange(s.draft, next, at + added.token.length, added.chips, { attach: added.n, edit: { start: at, end } });
-  return { draft: r.draft, chips: added.chips, token: added.token, n: added.n };
+  const p = planPaste(s.draft, at, end, text, s.chips);
+  const plan = p.plan!;
+  const next = s.draft.value.slice(0, plan.start) + plan.text + s.draft.value.slice(plan.end);
+  const r = applyChange(s.draft, next, plan.start + plan.text.length, p.chips, { attach: p.attach, edit: { start: plan.start, end: plan.end } });
+  const n = p.attach!.n;
+  return { draft: r.draft, chips: p.chips, token: chipToken(n, lineCount(text)), n };
 };
 
 /** Perform a plan as the browser's own edit, the caret after the inserted text. */
-const perform = (s: Pick<S, 'draft' | 'chips'>, plan: Plan, history = false): Draft => {
+const perform = (s: Pick<S, 'draft' | 'chips'>, plan: Plan): Draft => {
   const next = s.draft.value.slice(0, plan.start) + plan.text + s.draft.value.slice(plan.end);
-  return applyChange(s.draft, next, plan.start + plan.text.length, s.chips, { history, edit: { start: plan.start, end: plan.end } }).draft;
+  return applyChange(s.draft, next, plan.start + plan.text.length, s.chips, { edit: { start: plan.start, end: plan.end } }).draft;
 };
 
 const start = (): Pick<S, 'draft' | 'chips'> => ({ draft: emptyDraft(), chips: emptyChips() });
@@ -183,6 +194,29 @@ describe('identity is the inserted occurrence, never the label’s text (F4, A1)
     expect(expanded.value).toBe(`${one.token}${innerText}`);
     expect(expandDraft(expanded, two.chips)).toBe(sent);
     expect(liveChips(expanded, two.chips).map((c) => c.n)).toEqual([1]);
+  });
+
+  it('a long paste inside a label whose text holds the new label binds the label the paste appended (review 3469 F2)', () => {
+    const next = lines(20, 'next');
+    const nextToken = chipToken(2, 20);
+    const holderText = `holder\n${lines(9, 'h')}\n${nextToken}\n${lines(9, 't')}`;
+    const one = paste(start(), 0, holderText);
+    const p = planPaste(one.draft, 5, 5, next, one.chips);
+    expect(p.plan).toEqual({ start: 0, end: one.token.length, text: `${holderText}${nextToken}` });
+    expect(p.attach).toEqual({ n: 2, start: holderText.length, end: holderText.length + nextToken.length });
+    const two = paste(one, 5, next);
+    expect(two.draft.occ).toEqual([p.attach]);
+    expect(expandDraft(two.draft, two.chips)).toBe(`${holderText}${next}`);
+  });
+
+  it('a stated occurrence attaches only where its label is (no search elsewhere)', () => {
+    const s = paste(start(), 0, lines(14));
+    const removed = perform(s, removeChip(s.draft, 1)!);
+    const next = `x${s.token}`;
+    const wrong = applyChange(removed, next, next.length, s.chips, { attach: { n: 1, start: 0, end: s.token.length }, edit: { start: 0, end: 0 } });
+    expect(wrong.draft.occ).toEqual([]);
+    const right = applyChange(removed, next, next.length, s.chips, { attach: { n: 1, start: 1, end: 1 + s.token.length }, edit: { start: 0, end: 0 } });
+    expect(right.draft.occ).toEqual([{ n: 1, start: 1, end: 1 + s.token.length }]);
   });
 
   it('a label inside a pasted text stays literal after a repair exposes it', () => {
@@ -334,38 +368,150 @@ describe('an edit that lands inside a label anyway is repaired', () => {
   });
 });
 
-describe('the browser’s undo and redo bring a chip back with its text', () => {
-  it('undo of a removal, an Expand or a repair re-attaches the label it brings back', () => {
+/** A draft and the composer's log of held drafts (`DraftLog`), as the composer keeps them. */
+interface L { draft: Draft; chips: PasteChips; log: DraftLog }
+const logged = (s: Pick<S, 'draft' | 'chips'>, log: DraftLog = startLog()): L => ({ draft: s.draft, chips: s.chips, log: logChange(log, s.draft) });
+const then = (l: L, draft: Draft, chips = l.chips): L => ({ draft, chips, log: logChange(l.log, draft) });
+/** The browser's undo (`back`) or redo restored `value`, and nothing else: no range, no caret. */
+const step = (l: L, value: string, back: boolean): L => {
+  const log = logStep(l.log, value, back);
+  expect(log, `a held draft with value ${JSON.stringify(value.slice(0, 40))}`).not.toBeNull();
+  return { ...l, log: log!, draft: logDraft(log!) };
+};
+
+describe('the browser’s undo and redo restore a held draft by position, never by a label’s text', () => {
+  it('undo and redo of a removal and of an Expand restore the drafts they left', () => {
     const s = paste({ draft: emptyDraft('ab'), chips: emptyChips() }, 1, lines(30));
-    const removed: S = { ...s, draft: perform(s, removeChip(s.draft, 1)!) };
-    // Undo: the browser puts the label back and selects it.
-    const undone = applyChange(removed.draft, s.draft.value, 1 + s.token.length, s.chips, { history: true }).draft;
-    expect(undone.occ).toEqual(s.draft.occ);
-    expect(expandDraft(undone, s.chips)).toBe(`a${lines(30)}b`);
-    const expanded = perform(s, expandChip(s.draft, 1, s.chips)!);
-    const back = applyChange(expanded, s.draft.value, 1 + s.token.length, s.chips, { history: true }).draft;
-    expect(back.occ).toEqual(s.draft.occ);
+    let l = logged(s, startLog(emptyDraft('ab')));
+    l = then(l, perform(s, removeChip(s.draft, 1)!));
+    l = step(l, s.draft.value, true);
+    expect(l.draft).toEqual(s.draft);
+    expect(expandDraft(l.draft, l.chips)).toBe(`a${lines(30)}b`);
+    l = step(l, 'ab', false);
+    expect(l.draft.occ).toEqual([]);
+    l = step(l, s.draft.value, true);
+    const expanded = perform(l, expandChip(l.draft, 1, l.chips)!);
+    l = then(l, expanded);
+    l = step(l, s.draft.value, true);
+    expect(l.draft).toEqual(s.draft);
+    l = step(l, expanded.value, false);
+    expect(l.draft).toEqual(expanded);
   });
 
-  it('undo of an Expand re-attaches even where the chip’s text begins like its label', () => {
-    const one = paste(start(), 0, lines(13, 'one'));
-    const two = paste(one, one.draft.value.length, `${one.token}\n${long(800, 'w')}`);
-    const expanded = perform(two, expandChip(two.draft, 2, two.chips)!);
-    // Undo: the browser restores #2's label and selects it, so the caret is at its end.
-    const back = applyChange(expanded, two.draft.value, two.draft.value.length, two.chips, { history: true }).draft;
-    expect(back.occ).toEqual(two.draft.occ);
-    // Without the stated range, Expand's own change would read as an edit inside #2's label.
-    const next = `${one.token}${one.token}\n${long(800, 'w')}`;
-    expect(applyChange(two.draft, next, next.length, two.chips).repair).not.toBeNull();
-    expect(applyChange(two.draft, next, next.length, two.chips, { edit: { start: one.token.length, end: two.draft.value.length } }).repair).toBeNull();
+  it('F1: redo of an Expand whose text starts with [ gives that text once (no repair, no doubling)', () => {
+    const text = `[12:00:01] log head\n${lines(20, 'br')}`;
+    const s = paste({ draft: emptyDraft('ab'), chips: emptyChips() }, 1, text);
+    let l = logged(s, startLog(emptyDraft('ab')));
+    const expanded = perform(l, expandChip(l.draft, 1, l.chips)!);
+    expect(expanded.value).toBe(`a${text}b`);
+    l = then(l, expanded);
+    l = step(l, s.draft.value, true);
+    expect(l.draft.occ).toEqual(s.draft.occ);
+    l = step(l, `a${text}b`, false);
+    expect(l.draft).toEqual({ value: `a${text}b`, occ: [] });
+    expect(expandDraft(l.draft, l.chips)).toBe(`a${text}b`);
   });
 
-  it('only the browser’s history re-attaches: a typed label stays literal, and a live chip is never doubled', () => {
+  it('F3 (a): Expand, delete everything, undo: the live chip returns where it was, not inside the expanded text', () => {
+    const nextToken = chipToken(2, 20);
+    const holderText = `holder\n${lines(9, 'h')}\n${nextToken}\n${lines(9, 't')}`;
+    const one = paste(start(), 0, holderText);
+    const two = paste(one, one.draft.value.length, lines(20, 'next'));
+    let l = logged(two);
+    const expanded = perform(l, expandChip(l.draft, 1, l.chips)!);
+    expect(expanded.occ).toEqual([{ n: 2, start: holderText.length, end: holderText.length + nextToken.length }]);
+    l = then(l, expanded);
+    l = then(l, applyChange(l.draft, '', 0, l.chips).draft);
+    l = step(l, expanded.value, true);
+    expect(l.draft).toEqual(expanded);
+    expect(expandDraft(l.draft, l.chips)).toBe(`${holderText}${lines(20, 'next')}`);
+    l = step(l, '', false);
+    l = step(l, expanded.value, true);
+    expect(l.draft).toEqual(expanded);
+  });
+
+  it('F3 (b): a removed chip stays removed through undo and redo of an Expand that exposes its label', () => {
+    const nextToken = chipToken(2, 20);
+    const holderText = `holder\n${lines(9, 'h')}\n${nextToken}\n${lines(9, 't')}`;
+    const one = paste(start(), 0, holderText);
+    const two = paste(one, one.draft.value.length, lines(20, 'next'));
+    let l = logged(two);
+    l = then(l, perform(l, removeChip(l.draft, 2)!));
+    const expanded = perform(l, expandChip(l.draft, 1, l.chips)!);
+    l = then(l, expanded);
+    l = step(l, one.token, true);
+    expect(l.draft.occ.map((o) => o.n)).toEqual([1]);
+    l = step(l, holderText, false);
+    expect(l.draft).toEqual({ value: holderText, occ: [] });
+    expect(expandDraft(l.draft, l.chips)).toBe(holderText);
+  });
+
+  it('one value held both as a chip and as a typed label: each step returns the draft the browser restored', () => {
+    const s = paste(start(), 0, lines(30));
+    let l = logged(s);
+    l = then(l, applyChange(l.draft, '', 0, l.chips).draft); // select all, Backspace
+    for (let i = 1; i <= s.token.length; i += 1) l = then(l, applyChange(l.draft, s.token.slice(0, i), i, l.chips).draft); // typed by hand
+    expect(l.draft).toEqual({ value: s.token, occ: [] });
+    l = step(l, '', true); // the browser undoes the typing in one step
+    l = step(l, s.token, true); // and then the delete: the chip
+    expect(l.draft).toEqual(s.draft);
+    l = step(l, '', false);
+    l = step(l, s.token, false); // redo of the typing: literal again
+    expect(l.draft).toEqual({ value: s.token, occ: [] });
+    expect(expandDraft(l.draft, l.chips)).toBe(s.token);
+    // One more keystroke, then its undo: the nearest held draft with that value is the typed one, not the older chip.
+    l = then(l, applyChange(l.draft, `${s.token}!`, s.token.length + 1, l.chips).draft);
+    l = step(l, s.token, true);
+    expect(l.draft).toEqual({ value: s.token, occ: [] });
+  });
+
+  it('a change drops what could be redone; a value never held is no step; the log keeps its newest drafts', () => {
+    let log = logChange(logChange(startLog(), emptyDraft('a')), emptyDraft('ab'));
+    expect(canStep(log, true)).toBe(true);
+    expect(canStep(log, false)).toBe(false);
+    log = logStep(log, 'a', true)!;
+    expect(canStep(log, false)).toBe(true);
+    expect(logStep(log, 'zz', false)).toBeNull();
+    log = logChange(log, emptyDraft('ac'));
+    expect(log.drafts.map((d) => d.value)).toEqual(['', 'a', 'ac']);
+    expect(canStep(log, false)).toBe(false);
+    for (let i = 0; i < DRAFT_LOG_CAP + 5; i += 1) log = logChange(log, emptyDraft(String(i)));
+    expect(log.drafts).toHaveLength(DRAFT_LOG_CAP);
+    expect(log.at).toBe(DRAFT_LOG_CAP - 1);
+    expect(logDraft(log).value).toBe(String(DRAFT_LOG_CAP + 4));
+  });
+
+  it('no change re-attaches a label by its text: a label typed back after a removal stays literal', () => {
     const s = paste(start(), 0, lines(30));
     const removed = perform(s, removeChip(s.draft, 1)!);
     expect(applyChange(removed, s.token, s.token.length, s.chips).draft.occ).toEqual([]);
-    const twice = applyChange(s.draft, `${s.token}${s.token}`, 2 * s.token.length, s.chips, { history: true }).draft;
-    expect(twice.occ).toHaveLength(1);
+  });
+
+  it('a change that cannot be placed drops an occurrence it broke instead of writing its text (repair: false)', () => {
+    const s = paste({ draft: emptyDraft('ab'), chips: emptyChips() }, 1, lines(14));
+    const next = `${s.draft.value.slice(0, 6)}X${s.draft.value.slice(6)}`;
+    expect(applyChange(s.draft, next, 7, s.chips, { repair: false })).toEqual({ draft: { value: next, occ: [] }, repair: null });
+  });
+});
+
+describe('a word delete reaching into a label is planned over the browser’s own word (review 3469 F5)', () => {
+  const s = paste({ draft: emptyDraft('x  yz'), chips: emptyChips() }, 2, lines(14));
+  const end = 2 + s.token.length;
+
+  it('with the caret touching a label, it is Backspace’s or Delete’s plan', () => {
+    expect(planWordDelete(s.draft, end, { start: end - 6, end }, true, s.chips)).toEqual({ start: 2, end, text: '' });
+    expect(planWordDelete(s.draft, 2, { start: 2, end: 3 }, false, s.chips)).toEqual({ start: 2, end, text: '' });
+  });
+
+  it('a word range reaching into a label keeps its text and deletes the rest of the range', () => {
+    expect(planWordDelete(s.draft, end + 1, { start: end - 1, end: end + 1 }, true, s.chips))
+      .toEqual({ start: 2, end: end + 1, text: lines(14) });
+    expect(planWordDelete(s.draft, 1, { start: 1, end: 3 }, false, s.chips)).toEqual({ start: 1, end, text: lines(14) });
+  });
+
+  it('a word range outside labels, or none measured, is the browser’s own', () => {
+    expect(planWordDelete(s.draft, s.draft.value.length, { start: end + 1, end: s.draft.value.length }, true, s.chips)).toBeNull();
+    expect(planWordDelete(s.draft, end + 1, null, true, s.chips)).toBeNull();
   });
 });
 

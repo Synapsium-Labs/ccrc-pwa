@@ -4,8 +4,9 @@
 // send rules; Expand and Remove act from the row and leave focus and the caret in the field; Backspace and Delete
 // (planned at `beforeinput`) take a whole label with typed text kept on both sides; a key typed inside a label expands
 // it; an edit that lands anyway is repaired; a label that is only text stays text (review 3457 F4, A1); copy and cut
-// carry a chip's full text; undo brings a chip back; and the retry and draft-conflict paths re-send the expanded text
-// through the real session store. jsdom has no `execCommand`, so every edit here takes the composer's fallback path;
+// carry a chip's full text, and a drag of one is refused; undo and redo restore the draft the field held, by position
+// (review 3469 F1-F3); an input method's composition is never scripted and is repaired when it ends (F4); and the retry
+// and draft-conflict paths re-send the expanded text through the real session store. jsdom has no `execCommand`, so every edit here takes the composer's fallback path;
 // the browser leg (`browser/paste-chips.browser.test.ts`) measures the native one.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -263,7 +264,7 @@ describe('never lose pasted text silently', () => {
     caretAt(1);
     pasteText(text);
     const v = field().value;
-    edit(`${v.slice(0, 6)}X${v.slice(6)}`, 7, 'insertCompositionText');
+    edit(`${v.slice(0, 6)}X${v.slice(6)}`, 7, 'insertFromDrop');
     expect(field().value).toBe(`a${text}Xb`);
     expect([field().selectionStart, field().selectionEnd]).toEqual([1 + text.length + 1, 1 + text.length + 1]);
     expect(send(onSend)).toBe(`a${text}Xb`);
@@ -287,6 +288,167 @@ describe('never lose pasted text silently', () => {
     edit(token, token.length, 'insertText');
     expect(chipRow()).toBeNull();
     expect(send(onSend)).toBe(token);
+  });
+});
+
+describe('an input method’s composition is never scripted (review 3469 F4)', () => {
+  /** A composition event as Chrome sends one: composing, and not cancelable. */
+  const composing = (data: string): boolean => {
+    let browsers = true;
+    act(() => {
+      browsers = field().dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: false, inputType: 'insertCompositionText', data, isComposing: true,
+      }));
+    });
+    return browsers;
+  };
+
+  it('a composition beforeinput inside a label is left to the browser: no plan is performed', () => {
+    mount();
+    const text = lines(14);
+    edit('ab');
+    caretAt(1);
+    pasteText(text);
+    const v = field().value;
+    caretAt(6);
+    expect(composing('k')).toBe(true);
+    expect(field().value).toBe(v);
+    // Nor a cancelable one marked as composing.
+    let browsers = true;
+    act(() => {
+      browsers = field().dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: true, inputType: 'insertText', data: 'k', isComposing: true,
+      }));
+    });
+    expect(browsers).toBe(true);
+    expect(field().value).toBe(v);
+    // Nor one that cannot be cancelled, composing or not.
+    act(() => {
+      browsers = field().dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: false, inputType: 'insertText', data: 'k',
+      }));
+    });
+    expect(browsers).toBe(true);
+    expect(field().value).toBe(v);
+  });
+
+  it('a composition that lands inside a label is repaired when it ends, once, caret after it', () => {
+    const onSend = mount();
+    const text = lines(14);
+    edit('ab');
+    caretAt(1);
+    pasteText(text);
+    const v = field().value;
+    fireEvent.compositionStart(field());
+    edit(`${v.slice(0, 6)}k${v.slice(6)}`, 7, 'insertCompositionText');
+    // Mid-composition nothing is written back: the field holds what the input method made.
+    expect(field().value).toBe(`${v.slice(0, 6)}k${v.slice(6)}`);
+    edit(`${v.slice(0, 6)}か${v.slice(6)}`, 7, 'insertCompositionText');
+    fireEvent.compositionEnd(field());
+    expect(field().value).toBe(`a${text}かb`);
+    expect([field().selectionStart, field().selectionEnd]).toEqual([2 + text.length, 2 + text.length]);
+    expect(send(onSend)).toBe(`a${text}かb`);
+  });
+
+  it('a composition beside a label keeps the chip', () => {
+    const onSend = mount();
+    const text = lines(14);
+    edit('ab');
+    caretAt(1);
+    pasteText(text);
+    const v = field().value;
+    fireEvent.compositionStart(field());
+    edit(`${v.slice(0, -1)}か${v.slice(-1)}`, v.length, 'insertCompositionText');
+    fireEvent.compositionEnd(field());
+    expect(field().value).toBe(`a${label(1, 14)}かb`);
+    expect(chipRow()).toBeInTheDocument();
+    expect(send(onSend)).toBe(`a${text}かb`);
+  });
+});
+
+describe('undo and redo restore the draft the field held, by position (review 3469 F1-F3)', () => {
+  const nextToken = label(2, 20);
+  const holderText = `holder\n${lines(9, 'h')}\n${nextToken}\n${lines(9, 't')}`;
+  const nextText = lines(20, 'next');
+
+  it('F2: a long paste inside a label whose text holds the new label: the appended label is the chip', () => {
+    const onSend = mount();
+    pasteText(holderText);
+    caretAt(5);
+    pasteText(nextText);
+    expect(field().value).toBe(`${holderText}${nextToken}`);
+    expect(screen.getAllByRole('listitem').map((li) => li.querySelector('.paste-chip-n')?.textContent)).toEqual(['#2']);
+    expect(send(onSend)).toBe(`${holderText}${nextText}`);
+  });
+
+  it('F3 (a): Expand, delete everything, undo: the live chip returns at its own place', () => {
+    const onSend = mount();
+    pasteText(holderText);
+    caretAt(field().value.length);
+    pasteText(nextText);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand pasted text #1, 20 lines, into the message' }));
+    const expanded = field().value;
+    expect(expanded).toBe(`${holderText}${nextToken}`);
+    edit('', 0, 'deleteContentBackward');
+    edit(expanded, expanded.length, 'historyUndo');
+    expect(send(onSend)).toBe(`${holderText}${nextText}`);
+  });
+
+  it('F3 (b): a removed chip stays removed through undo and redo of an Expand that exposes its label', () => {
+    const onSend = mount();
+    pasteText(holderText);
+    caretAt(field().value.length);
+    pasteText(nextText);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove pasted text #2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand pasted text #1, 20 lines, into the message' }));
+    edit(label(1, 20), label(1, 20).length, 'historyUndo');
+    expect(chipRow()).toBeInTheDocument();
+    edit(holderText, holderText.length, 'historyRedo');
+    expect(chipRow()).toBeNull();
+    expect(send(onSend)).toBe(holderText);
+  });
+
+  it('F1: redo of an Expand whose text starts with [ gives that text once', () => {
+    const onSend = mount();
+    const text = `[12:00:01] log head\n${lines(20, 'br')}`;
+    edit('ab');
+    caretAt(1);
+    pasteText(text);
+    const labelled = field().value;
+    fireEvent.click(screen.getByRole('button', { name: 'Expand pasted text #1, 21 lines, into the message' }));
+    edit(labelled, 1 + label(1, 21).length, 'historyUndo');
+    expect(chipRow()).toBeInTheDocument();
+    edit(`a${text}b`, 1 + text.length, 'historyRedo');
+    expect(field().value).toBe(`a${text}b`);
+    expect(chipRow()).toBeNull();
+    expect(send(onSend)).toBe(`a${text}b`);
+  });
+
+  it('an undo past the oldest draft held, while the draft has pasted texts, is cancelled before it lands', () => {
+    mount();
+    pasteText(lines(30));
+    expect(beforeInput('historyUndo')).toBe(true);
+    edit('', 0, 'historyUndo');
+    expect(beforeInput('historyUndo')).toBe(false);
+    expect(beforeInput('historyRedo')).toBe(true);
+  });
+
+  it('after a send, a step to a draft the composer no longer holds brings no chip back: what shows is what is sent', () => {
+    const onSend = mount();
+    pasteText(lines(30));
+    const token = field().value;
+    edit(`${token}x`);
+    expect(send(onSend)).toBe(`${lines(30)}x`);
+    // Chrome's undo after a send is a no-op (browser leg); were a browser to restore the old value, it is text.
+    edit(token, token.length, 'historyUndo');
+    expect(chipRow()).toBeNull();
+    expect(send(onSend)).toBe(token);
+  });
+
+  it('with no pasted text in the draft, undo and redo are the browser’s own, as they always were', () => {
+    mount();
+    expect(beforeInput('historyUndo')).toBe(true);
+    expect(beforeInput('historyRedo')).toBe(true);
   });
 });
 
@@ -350,6 +512,17 @@ describe('copy and cut carry a chip’s full text, never its label', () => {
     pasteText(lines(14));
     expect(field().value).toBe(`ab${label(2, 14)}`);
     expect(send(onSend)).toBe(`ab${lines(14)}`);
+  });
+
+  it('a drag of a selection holding any part of a chip is refused; one holding none is the browser’s own (review 3469 A7)', () => {
+    mount();
+    edit('ab');
+    caretAt(1);
+    pasteText(lines(14));
+    caretAt(0, 4);
+    expect(fireEvent.dragStart(field())).toBe(false);
+    caretAt(0, 1);
+    expect(fireEvent.dragStart(field())).toBe(true);
   });
 
   it('copy of a selection with no chip is the browser’s own', () => {
