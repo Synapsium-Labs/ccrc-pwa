@@ -4,10 +4,10 @@
 // D-8757): Revert is drawn only where the read the sheet shows proves the fleet box ends a revert's hold by itself
 // (`revertHoldEndsOn`), and where the box says the class can revert. There is no Hold and no Release here: a hold made by
 // hand is made and released in the shell, and the sheet only shows one that stands, whatever the box. Where the box does not
-// end holds, the lane says so in one note (`MODELS_REVERT_UNOFFERED`) and offers no control. An ANTHROPIC lane (wave 9, Task A4.3;
-// the `anthropic` prop, which the screen sets from the roster's telemetry) draws the same cards with the lines
-// `anthropicFacts` returns (where the id came from, the held id, a class with no id, the supervisor note). Drawn in `AccountSheet`'s shell, as the re-auth and switch sheets
-// are: its live region announces each answer (ONE announcement per failure: the card's own note is text, not a second alert),
+// end holds, the lane says so in one note (`MODELS_REVERT_UNOFFERED`) and offers no control. An ANTHROPIC lane (wave 9,
+// Task A4.3; the `anthropic` prop, which the screen sets from the roster's telemetry) draws the same cards with the lines
+// `anthropicFacts` returns (where the id came from, the held id, a class with no id, the supervisor note). Drawn in
+// `AccountSheet`'s shell, as the re-auth and switch sheets are: its live region announces each answer (ONE announcement per failure: the card's own note is text, not a second alert),
 // its offline line sits above the body.
 //
 // ONE READ. The sheet reads through `useLaneModels` (`lib/useLaneModels.ts`), the same hook every other surface that names a
@@ -24,8 +24,8 @@
 // unknown (a timeout, a lost answer, a 200 this build cannot read, no answer at all), says what it knows and the row shows what
 // the lane holds now (F1). When the act settles the focus is on the class's card (F11).
 //
-// REVERT ASKS FIRST, and exists only where the read proves the box ends holds and says the class can revert (`classActs`), re-checked on the CURRENT read while
-// the confirm stands and again when it is confirmed (F13). A failed read of the lane is said in words with a Try again (F12).
+// REVERT ASKS FIRST, and exists only where the read proves the box ends holds and says the class can revert (`classActs`),
+// re-checked on the CURRENT read while the confirm stands and again when it is confirmed (F13). A failed read of the lane is said in words with a Try again (F12).
 // L4: it decides nothing about wording or refusals; every sentence, reader and per-class predicate is `modelsSheetWords.ts`.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, QuickConfirm, Skeleton } from '@ccrc/ui';

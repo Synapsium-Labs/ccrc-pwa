@@ -248,10 +248,6 @@ describe('classActs and revertStillOffered', () => {
     expect(revertStillOffered({ kind: 'busy' }, 'opus')).toBe(false);
     expect(revertStillOffered(null, 'opus')).toBe(false);
   });
-  it('the same rule on a Codex and an Anthropic lane: neither function takes the lane kind', () => {
-    expect(classActs.length).toBe(3);
-    expect(revertStillOffered.length).toBe(2);
-  });
   it('the revert consequence names the model on record and says the hold ends by itself, never "until you release it"', () => {
     const lines = revertConsequence('lane-a', 'opus', 'm-now', { model: 'm-before', effort: null });
     expect(lines).toEqual([

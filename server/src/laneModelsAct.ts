@@ -1,7 +1,7 @@
 // Programme model-class-advance, wave R4 (plan 2026-10-15-model-class-auto-advance-codex-arm.md, Task 19's POST as
-// re-planned, D-8686, D-8687, D-8693; revert-holds-until-newer, D-8757): what `POST /api/models/:lane` decides. Ring L1, context C1 (Fleet Registry &
-// Accounts): pure, imports `shared/` only, no fs, no fastify, no clock. The route (`laneModelsRoutes.ts`, L4) applies
-// these verdicts and decides nothing.
+// re-planned, D-8686, D-8687, D-8693; revert-holds-until-newer, D-8757): what `POST /api/models/:lane` decides. Ring L1,
+// context C1 (Fleet Registry & Accounts): pure, imports `shared/` only, no fs, no fastify, no clock. The route
+// (`laneModelsRoutes.ts`, L4) applies these verdicts and decides nothing.
 //
 // THREE DECISIONS, each one function:
 //  - `parseModelsActBody`: the body is exactly `{action: 'revert', class}`; the lane, action and class go through the op's

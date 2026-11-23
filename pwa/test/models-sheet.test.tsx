@@ -343,6 +343,20 @@ describe('ModelsSheet: a Revert settles only on the server\'s answer', () => {
     expect(peek(laneModelsKey('lane-a'))?.raw).toMatchObject({ action: 'revert', class: 'opus', models: after });
   });
 
+  it('while one class\'s revert is with the box, a SECOND revertable class\'s Revert is disabled too: one write at a time', async () => {
+    const d = deferred<unknown>();
+    const two = okAdvance({ sonnet: classAdv({ family: 'beta', previous: { model: 'model-5-beta', effort: null }, revertable: true }) });
+    mount(read(two), { act: () => d.promise });
+    await ready();
+    const other = within(rowOf('sonnet')).getByRole('button', { name: 'Revert the sonnet class' }) as HTMLButtonElement;
+    expect(other.disabled).toBe(false);
+    await confirmRevert('opus');
+    // the tapped class is busy; the other class is stood down, though it is not the one with the box
+    expect((within(rowOf('sonnet')).getByRole('button', { name: 'Revert the sonnet class', hidden: true }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(rowOf('sonnet')).getByRole('button', { name: 'Revert the sonnet class', hidden: true }).getAttribute('aria-busy')).not.toBe('true');
+    await act(async () => { d.reject(new ApiError(501, { ok: false, error: 'unsupported' })); await d.promise.catch(() => undefined); });
+  });
+
   it('shows the answer\'s read at once, and reads the lane again after EVERY act: the read that lands replaces it (F1 a)', async () => {
     const after = deferred<unknown>();
     let reads = 0;
