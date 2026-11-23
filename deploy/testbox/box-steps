@@ -343,7 +343,8 @@ tbs_units() {
   dropin ccrc-testbox-prepare@.service $'[Service]\n'"User=$PREFIX%i"$'\n'"IPAddressAllow=$proxy_net"$'\n'"RuntimeMaxSec=$max"
   dropin ccrc-testbox-run@.service $'[Service]\n'"User=$PREFIX%i"$'\n'"RuntimeMaxSec=$max"
   dropin ccrc-testbox-clean@.service $'[Service]\n'"RuntimeMaxSec=$max"
-  dropin ccrc-testbox-install.service $'[Service]\n'"User=${PREFIX}install"$'\n'"IPAddressAllow=$proxy_net"$'\n'"RuntimeMaxSec=$max"
+  # The install unit is a oneshot (its last step runs after npm ci exits), whose bound is TimeoutStartSec= (D-8964).
+  dropin ccrc-testbox-install.service $'[Service]\n'"User=${PREFIX}install"$'\n'"IPAddressAllow=$proxy_net"$'\n'"TimeoutStartSec=$max"
   caps=$'[Slice]\n'"MemoryMax=$(k CCRC_TESTBOX_RUN_MEMORY_MAX)"$'\n'"MemorySwapMax=$(k CCRC_TESTBOX_RUN_SWAP_MAX)"$'\n'"CPUQuota=$(k CCRC_TESTBOX_RUN_CPU_QUOTA)"
   dropin ccrc-testbox-run-.slice "$caps"
   dropin ccrc-testbox-install.slice "$caps"
